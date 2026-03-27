@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import os
+from typing import Any
 
 
 def first_text_content(result):
@@ -34,6 +35,118 @@ def extract_coordinates(payload):
     return float(latitude), float(longitude)
 
 
+def parse_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def destination_location(candidate: dict[str, Any]) -> str | None:
+    location = candidate.get("location")
+    if isinstance(location, str) and "," in location:
+        return location
+    coordinates = candidate.get("coordinates", {}) or {}
+    latitude = coordinates.get("latitude")
+    longitude = coordinates.get("longitude")
+    if latitude is None or longitude is None:
+        return None
+    return f"{longitude},{latitude}"
+
+
+def print_candidates(payload: dict[str, Any]) -> None:
+    recommendations = payload.get("recommendations", []) or []
+    if not recommendations:
+        print("No candidate destinations returned.")
+        return
+
+    print("\n=== Candidate Destinations ===")
+    for index, item in enumerate(recommendations, start=1):
+        summary = item.get("route_summary", {}) or {}
+        tags = item.get("tags", {}) or {}
+        print(
+            f"{index}. {item.get('name', 'Unknown')} | "
+            f"score={parse_float(item.get('score'), 0):.4f} | "
+            f"distance={parse_float(summary.get('distance_m'), 0):.0f}m | "
+            f"duration={parse_float(summary.get('duration_min'), 0):.1f}min | "
+            f"type={tags.get('type', 'unknown')}"
+        )
+
+
+def build_waypoint_sequence(route_payload: dict[str, Any]) -> list[dict[str, float]]:
+    waypoints = route_payload.get("coarse_waypoints", []) or []
+    sequence = []
+    for item in waypoints:
+        coordinate = item.get("coordinate", {}) or {}
+        latitude = coordinate.get("latitude")
+        longitude = coordinate.get("longitude")
+        if latitude is None or longitude is None:
+            location_text = item.get("location", "")
+            try:
+                lon_text, lat_text = str(location_text).split(",", 1)
+                longitude = float(lon_text)
+                latitude = float(lat_text)
+            except Exception:
+                continue
+        sequence.append({"longitude": float(longitude), "latitude": float(latitude)})
+    return sequence
+
+
+def input_or_keep(prompt: str, current: str) -> str:
+    entered = input(f"{prompt} [{current}]: ").strip()
+    return entered or current
+
+
+def input_int_or_keep(prompt: str, current: int) -> int:
+    entered = input(f"{prompt} [{current}]: ").strip()
+    if not entered:
+        return current
+    try:
+        return int(entered)
+    except ValueError:
+        print(f"Invalid number: {entered}. Keeping {current}.")
+        return current
+
+
+def input_mode_or_keep(current: str) -> str:
+    entered = input(f"New mode (car/foot/bike) [{current}]: ").strip().lower()
+    if not entered:
+        return current
+    if entered not in {"car", "foot", "bike"}:
+        print(f"Invalid mode: {entered}. Keeping {current}.")
+        return current
+    return entered
+
+
+async def call_tool_json(session: ClientSession, tool_name: str, arguments: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    result = await session.call_tool(tool_name, arguments)
+    raw_text = first_text_content(result)
+    return parse_first_text_payload(result), raw_text
+
+
+async def generate_candidate_destinations(
+    session: ClientSession,
+    prompt: str,
+    latitude: float,
+    longitude: float,
+    mode: str,
+    max_candidates: int,
+    radius: int,
+) -> tuple[dict[str, Any], str]:
+    return await call_tool_json(
+        session,
+        "recommend_destination_and_waypoints",
+        {
+            "user_instruction": prompt,
+            "current_latitude": latitude,
+            "current_longitude": longitude,
+            "mode": mode,
+            "max_candidates": max_candidates,
+            "search_radius": radius,
+        },
+    )
+
+
 async def run_demo(
     prompt: str,
     mode: str,
@@ -53,12 +166,11 @@ async def run_demo(
         async with ClientSession(read, write) as session:
             await session.initialize()
 
-            location_result = await session.call_tool(
+            location_payload, raw_location_text = await call_tool_json(
+                session,
                 "get_current_location_macos",
                 {"timeout_s": timeout_s},
             )
-            raw_location_text = first_text_content(location_result)
-            location_payload = parse_first_text_payload(location_result)
             coords = extract_coordinates(location_payload)
 
             if coords is None:
@@ -81,22 +193,119 @@ async def run_demo(
                 print("=== Current macOS Location ===")
                 print(json.dumps(location_payload, indent=2, ensure_ascii=True))
 
+            current_prompt = prompt
+            current_mode = mode
+            current_radius = radius
+            current_max_candidates = max_candidates
 
-            recommendation_result = await session.call_tool(
-                "recommend_destination_and_waypoints",
-                {
-                    "user_instruction": prompt,
-                    "current_latitude": latitude,
-                    "current_longitude": longitude,
-                    "mode": mode,
-                    "max_candidates": max_candidates,
-                    "search_radius": radius,
-                },
-            )
-            payload = parse_first_text_payload(recommendation_result)
+            while True:
+                print("\n=== Candidate Generation Request ===")
+                print(
+                    json.dumps(
+                        {
+                            "prompt": current_prompt,
+                            "mode": current_mode,
+                            "radius": current_radius,
+                            "max_candidates": current_max_candidates,
+                            "current_location": {"latitude": latitude, "longitude": longitude},
+                        },
+                        indent=2,
+                        ensure_ascii=True,
+                    )
+                )
 
-            print("\n=== Recommendation Result ===")
-            print(json.dumps(payload, indent=2, ensure_ascii=True))
+                payload, raw_text = await generate_candidate_destinations(
+                    session,
+                    prompt=current_prompt,
+                    latitude=latitude,
+                    longitude=longitude,
+                    mode=current_mode,
+                    max_candidates=current_max_candidates,
+                    radius=current_radius,
+                )
+                if not payload:
+                    print(f"Recommendation tool returned non-JSON payload: {raw_text}")
+                    return
+
+                print("\n=== Recommendation Result ===")
+                print(json.dumps(payload, indent=2, ensure_ascii=True))
+                print_candidates(payload)
+
+                recommendations = payload.get("recommendations", []) or []
+                if not recommendations:
+                    command = input("No candidates. Enter `p` to edit prompt, `r` radius, `m` mode, `q` quit: ").strip().lower()
+                    if command == "p":
+                        current_prompt = input_or_keep("New prompt", current_prompt)
+                    elif command == "r":
+                        current_radius = input_int_or_keep("New radius (meters)", current_radius)
+                    elif command == "m":
+                        current_mode = input_mode_or_keep(current_mode)
+                    elif command == "q":
+                        return
+                    continue
+
+                command = input(
+                    "Choose destination index, or `p` edit prompt, `r` radius, `m` mode, `c` max candidates, `g` regenerate, `q` quit: "
+                ).strip().lower()
+
+                if command == "q":
+                    return
+                if command == "p":
+                    current_prompt = input_or_keep("New prompt", current_prompt)
+                    continue
+                if command == "r":
+                    current_radius = input_int_or_keep("New radius (meters)", current_radius)
+                    continue
+                if command == "m":
+                    current_mode = input_mode_or_keep(current_mode)
+                    continue
+                if command == "c":
+                    current_max_candidates = input_int_or_keep("New max candidates", current_max_candidates)
+                    continue
+                if command == "g" or command == "":
+                    continue
+
+                try:
+                    selected_index = int(command)
+                except ValueError:
+                    print("Invalid input. Please enter an index or a command.")
+                    continue
+
+                if selected_index < 1 or selected_index > len(recommendations):
+                    print(f"Invalid index: {selected_index}")
+                    continue
+
+                selected = recommendations[selected_index - 1]
+                selected_location = destination_location(selected)
+                if not selected_location:
+                    print("Selected destination has no valid location field.")
+                    continue
+
+                origin_location = f"{longitude},{latitude}"
+                route_payload, route_raw_text = await call_tool_json(
+                    session,
+                    "get_coarse_waypoints",
+                    {
+                        "origin": origin_location,
+                        "destination": selected_location,
+                        "mode": current_mode,
+                    },
+                )
+                if not route_payload:
+                    print(f"get_coarse_waypoints returned non-JSON payload: {route_raw_text}")
+                    continue
+
+                final_payload = {
+                    "provider": payload.get("provider"),
+                    "selected_destination": selected,
+                    "route_summary": route_payload.get("route_summary", {}),
+                    "waypoint_sequence": build_waypoint_sequence(route_payload),
+                    "coarse_waypoints": route_payload.get("coarse_waypoints", []),
+                }
+
+                print("\n=== Selected Destination Route ===")
+                print(json.dumps(final_payload, indent=2, ensure_ascii=True))
+                return
 
 
 if __name__ == "__main__":

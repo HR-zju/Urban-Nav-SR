@@ -240,6 +240,33 @@ python examples/prompt_recommendation_client.py \
   --radius 2500
 ```
 
+#### macOS Interactive Candidate Selection Demo
+
+`macos_prompt_recommendation_client.py` demonstrates an interactive flow:
+- read current macOS location (or use fallback `--lat/--lon`)
+- generate candidate destinations first
+- modify prompt/mode/radius/max-candidates in terminal
+- manually pick a destination index
+- generate waypoints for the selected destination
+
+```bash
+python examples/macos_prompt_recommendation_client.py \
+  --prompt "Find a quiet cafe nearby" \
+  --mode foot \
+  --radius 2500
+```
+
+Optional fallback coordinates (non-macOS or when Location Services is unavailable):
+
+```bash
+python examples/macos_prompt_recommendation_client.py \
+  --prompt "Find a quiet cafe nearby" \
+  --mode foot \
+  --radius 2500 \
+  --lat 39.916527 \
+  --lon 116.397128
+```
+
 #### Image Understanding Demo
 
 `image_understanding_client.py` demonstrates the multimodal MCP tool:
