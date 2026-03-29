@@ -1,0 +1,81 @@
+client:
+  name: basic
+  file-system: device-agnostic
+tools: {}
+targets:
+  "NavAssistantApp-arm64-apple-macosx15.0-debug.exe": ["<NavAssistantApp-arm64-apple-macosx15.0-debug.exe>"]
+  "NavAssistantApp-arm64-apple-macosx15.0-debug.module": ["<NavAssistantApp-arm64-apple-macosx15.0-debug.module>"]
+  "PackageStructure": ["<PackageStructure>"]
+  "main": ["<NavAssistantApp-arm64-apple-macosx15.0-debug.exe>","<NavAssistantApp-arm64-apple-macosx15.0-debug.module>"]
+  "test": ["<NavAssistantApp-arm64-apple-macosx15.0-debug.exe>","<NavAssistantApp-arm64-apple-macosx15.0-debug.module>"]
+default: "main"
+nodes:
+  "/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/Sources/NavAssistantApp/":
+    is-directory-structure: true
+    content-exclusion-patterns: [".git",".build"]
+  "/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp":
+    is-mutated: true
+commands:
+  "/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp-entitlement.plist":
+    tool: write-auxiliary-file
+    inputs: ["<entitlement-plist>","<com.apple.security.get-task-allow>"]
+    outputs: ["/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp-entitlement.plist"]
+    description: "Write auxiliary file /Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp-entitlement.plist"
+
+  "/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/sources":
+    tool: write-auxiliary-file
+    inputs: ["<sources-file-list>","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/Sources/NavAssistantApp/AddressCandidateService.swift","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/Sources/NavAssistantApp/CandidateSelectionViewModel.swift","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/Sources/NavAssistantApp/ContentView.swift","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/Sources/NavAssistantApp/MapNavigationViewModel.swift","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/Sources/NavAssistantApp/MapPanelView.swift","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/Sources/NavAssistantApp/Models.swift","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/Sources/NavAssistantApp/NavAssistantDesktopApp.swift","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/Sources/NavAssistantApp/SpeechRecognitionManager.swift"]
+    outputs: ["/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/sources"]
+    description: "Write auxiliary file /Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/sources"
+
+  "/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.product/Objects.LinkFileList":
+    tool: write-auxiliary-file
+    inputs: ["<link-file-list>","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/AddressCandidateService.swift.o","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/CandidateSelectionViewModel.swift.o","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/ContentView.swift.o","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/MapNavigationViewModel.swift.o","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/MapPanelView.swift.o","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/Models.swift.o","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/NavAssistantDesktopApp.swift.o","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/SpeechRecognitionManager.swift.o"]
+    outputs: ["/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.product/Objects.LinkFileList"]
+    description: "Write auxiliary file /Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.product/Objects.LinkFileList"
+
+  "/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt":
+    tool: write-auxiliary-file
+    inputs: ["<swift-get-version>","/Library/Developer/CommandLineTools/usr/bin/swiftc"]
+    outputs: ["/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt"]
+    always-out-of-date: "true"
+    description: "Write auxiliary file /Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt"
+
+  "<NavAssistantApp-arm64-apple-macosx15.0-debug.exe>":
+    tool: phony
+    inputs: ["<NavAssistantApp-arm64-apple-macosx15.0-debug.exe-CodeSigning>"]
+    outputs: ["<NavAssistantApp-arm64-apple-macosx15.0-debug.exe>"]
+
+  "<NavAssistantApp-arm64-apple-macosx15.0-debug.module>":
+    tool: phony
+    inputs: ["/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/AddressCandidateService.swift.o","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/CandidateSelectionViewModel.swift.o","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/ContentView.swift.o","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/MapNavigationViewModel.swift.o","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/MapPanelView.swift.o","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/Models.swift.o","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/NavAssistantDesktopApp.swift.o","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/SpeechRecognitionManager.swift.o","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/Modules/NavAssistantApp.swiftmodule"]
+    outputs: ["<NavAssistantApp-arm64-apple-macosx15.0-debug.module>"]
+
+  "C.NavAssistantApp-arm64-apple-macosx15.0-debug.exe":
+    tool: shell
+    inputs: ["/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/AddressCandidateService.swift.o","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/CandidateSelectionViewModel.swift.o","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/ContentView.swift.o","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/MapNavigationViewModel.swift.o","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/MapPanelView.swift.o","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/Models.swift.o","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/NavAssistantDesktopApp.swift.o","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/SpeechRecognitionManager.swift.o","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.product/Objects.LinkFileList"]
+    outputs: ["/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp"]
+    description: "Linking ./.build/arm64-apple-macosx/debug/NavAssistantApp"
+    args: ["/Library/Developer/CommandLineTools/usr/bin/swiftc","-L","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug","-o","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp","-module-name","NavAssistantApp","-Xlinker","-no_warn_duplicate_libraries","-emit-executable","-Xlinker","-alias","-Xlinker","_NavAssistantApp_main","-Xlinker","_main","-Xlinker","-rpath","-Xlinker","@loader_path","@/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.product/Objects.LinkFileList","-target","arm64-apple-macosx14.0","-framework","AVFoundation","-framework","Speech","-framework","MapKit","-framework","CoreLocation","-Xlinker","-sectcreate","-Xlinker","__TEXT","-Xlinker","__info_plist","-Xlinker","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/Sources/NavAssistantApp/Info.plist","-Xlinker","-add_ast_path","-Xlinker","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/Modules/NavAssistantApp.swiftmodule","-F","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-sdk","/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk","-g","-Xlinker","-rpath","-Xlinker","/Library/Developer/CommandLineTools/Library/Developer/Frameworks"]
+
+  "C.NavAssistantApp-arm64-apple-macosx15.0-debug.exe-entitlements":
+    tool: shell
+    inputs: ["/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp-entitlement.plist"]
+    outputs: ["<NavAssistantApp-arm64-apple-macosx15.0-debug.exe-CodeSigning>"]
+    description: "Applying debug entitlements to ./.build/arm64-apple-macosx/debug/NavAssistantApp"
+    args: ["codesign","--force","--sign","-","--entitlements","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp-entitlement.plist","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp"]
+
+  "C.NavAssistantApp-arm64-apple-macosx15.0-debug.module":
+    tool: shell
+    inputs: ["/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/Sources/NavAssistantApp/AddressCandidateService.swift","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/Sources/NavAssistantApp/CandidateSelectionViewModel.swift","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/Sources/NavAssistantApp/ContentView.swift","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/Sources/NavAssistantApp/MapNavigationViewModel.swift","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/Sources/NavAssistantApp/MapPanelView.swift","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/Sources/NavAssistantApp/Models.swift","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/Sources/NavAssistantApp/NavAssistantDesktopApp.swift","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/Sources/NavAssistantApp/SpeechRecognitionManager.swift","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/sources"]
+    outputs: ["/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/AddressCandidateService.swift.o","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/CandidateSelectionViewModel.swift.o","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/ContentView.swift.o","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/MapNavigationViewModel.swift.o","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/MapPanelView.swift.o","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/Models.swift.o","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/NavAssistantDesktopApp.swift.o","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/SpeechRecognitionManager.swift.o","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/Modules/NavAssistantApp.swiftmodule"]
+    description: "Compiling Swift Module 'NavAssistantApp' (8 sources)"
+    args: ["/Library/Developer/CommandLineTools/usr/bin/swiftc","-module-name","NavAssistantApp","-emit-dependencies","-emit-module","-emit-module-path","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/Modules/NavAssistantApp.swiftmodule","-output-file-map","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/output-file-map.json","-incremental","-c","@/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/sources","-I","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/Modules","-target","arm64-apple-macosx14.0","-enable-batch-mode","-index-store-path","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/index/store","-Onone","-enable-testing","-j10","-DSWIFT_PACKAGE","-DDEBUG","-module-cache-path","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/ModuleCache","-parseable-output","-Xfrontend","-entry-point-function-name","-Xfrontend","NavAssistantApp_main","-color-diagnostics","-swift-version","5","-F","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-sdk","/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk","-g","-Xcc","-isysroot","-Xcc","/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk","-Xcc","-fPIC","-Xcc","-g","-package-name","nav_assistant"]
+
+  "PackageStructure":
+    tool: package-structure-tool
+    inputs: ["/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/Sources/NavAssistantApp/","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/Package.swift","/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/Package.resolved"]
+    outputs: ["<PackageStructure>"]
+    description: "Planning build"
+    allow-missing-inputs: true
+

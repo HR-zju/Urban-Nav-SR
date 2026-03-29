@@ -26,6 +26,7 @@ def get_current_location(timeout_s: float = 10.0) -> dict[str, Any]:
     try:
         from Foundation import NSObject, NSRunLoop, NSDate
         from CoreLocation import CLLocationManager
+        import objc
     except ImportError as exc:
         raise RuntimeError(
             "macOS location support requires PyObjC. "
@@ -36,7 +37,8 @@ def get_current_location(timeout_s: float = 10.0) -> dict[str, Any]:
 
     class LocationDelegate(NSObject):
         def init(self):
-            self = super().init()
+            # PyObjC Objective-C subclasses must use objc.super for init.
+            self = objc.super(LocationDelegate, self).init()
             return self
 
         def locationManager_didUpdateLocations_(self, manager, locations):
