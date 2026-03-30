@@ -11,7 +11,6 @@ import aiohttp
 
 from mcp_server.config import (
     default_category_keywords,
-    default_map_i18n_rules,
     default_search_categories,
     load_json_env,
 )
@@ -186,54 +185,10 @@ def dedupe_tokens(tokens: list[str]) -> list[str]:
     return deduped
 
 
-MAP_I18N_RULES = load_json_env("MAP_I18N_RULES_JSON", default_map_i18n_rules())
-
-
 def normalize_compare_text(text: str) -> str:
     normalized = normalize_ascii_text(text).lower()
     normalized = normalized.replace("_", " ").replace("-", " ")
     return collapse_whitespace(normalized)
-
-
-def build_poi_type_rules() -> list[tuple[str, list[str]]]:
-    raw_rules = MAP_I18N_RULES.get("poi_type_rules", [])
-    compiled: list[tuple[str, list[str]]] = []
-    for item in raw_rules:
-        if not isinstance(item, dict):
-            continue
-        label = str(item.get("label", "")).strip()
-        tokens = [normalize_compare_text(str(token)) for token in item.get("tokens", []) if str(token).strip()]
-        tokens = [token for token in tokens if token]
-        if not label or not tokens:
-            continue
-        compiled.append((label, tokens))
-    return compiled
-
-
-def build_nav_action_aliases() -> dict[str, list[str]]:
-    raw_aliases = MAP_I18N_RULES.get("nav_action_aliases", {})
-    aliases: dict[str, list[str]] = {}
-    if not isinstance(raw_aliases, dict):
-        return aliases
-    for action, values in raw_aliases.items():
-        normalized_values = [
-            normalize_compare_text(str(value))
-            for value in (values or [])
-            if str(value).strip()
-        ]
-        normalized_values = [value for value in normalized_values if value]
-        if normalized_values:
-            aliases[str(action).strip()] = normalized_values
-    return aliases
-
-
-POI_TYPE_RULES = build_poi_type_rules()
-NAV_ACTION_ALIASES = build_nav_action_aliases()
-ADDRESS_NEAR_TOKENS = {
-    normalize_compare_text(str(token))
-    for token in MAP_I18N_RULES.get("address_near_tokens", [])
-    if str(token).strip()
-}
 
 
 def normalize_poi_type(value: str, typecode: str = "") -> str:
@@ -249,65 +204,37 @@ def normalize_poi_type(value: str, typecode: str = "") -> str:
         normalized_segment = normalize_compare_text(cleaned)
         if not normalized_segment:
             continue
-        for label, rule_tokens in POI_TYPE_RULES:
-            if any(token in normalized_segment for token in rule_tokens):
-                tokens.append(label)
-                break
+        tokens.append(normalized_segment.replace(" ", "_"))
 
     tokens = dedupe_tokens(tokens)
     if tokens:
         return ";".join(tokens)
-    if not contains_cjk(raw):
-        return raw
     if typecode:
         return f"typecode_{typecode}"
-    return "poi"
+    if not contains_cjk(raw):
+        return raw
+    return "unknown"
 
 
 def normalize_navigation_action(*values: str) -> str:
-    fallback = ""
-    if values:
-        fallback = infer_action(str(values[0]), "go_straight")
-    for value in values:
-        raw = str(value or "").strip()
-        if not raw:
-            continue
-        normalized_raw = normalize_compare_text(raw)
-        for action, aliases in NAV_ACTION_ALIASES.items():
-            if any(alias in normalized_raw for alias in aliases):
-                return action
-    return fallback or "go_straight"
+    merged = " ".join(str(value or "").strip() for value in values if str(value or "").strip()).strip()
+    if not merged:
+        return "go_straight"
+    inferred = infer_action(merged, "")
+    if inferred and inferred != merged:
+        return inferred
+    normalized = normalize_compare_text(merged).replace(" ", "_")
+    if normalized in {"arrive", "turn_left", "turn_right", "go_straight", "bear_left", "bear_right", "keep_left", "keep_right", "u_turn"}:
+        return normalized
+    return "go_straight"
 
 
 def normalize_address_text(value: str) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
-    if not contains_cjk(raw):
-        return raw
-
-    parts = []
-    house_numbers = re.findall(r"(\d+)\s*(?:No\.?|#|\u53f7)", raw, flags=re.IGNORECASE)
-    floors = re.findall(r"([A-Za-z]*\d+)\s*(?:F|Floor|\u5c42)", raw, flags=re.IGNORECASE)
-    if house_numbers:
-        parts.append(f"No. {house_numbers[0]}")
-    if floors:
-        parts.append(f"Floor {floors[0].upper()}")
-    normalized_raw = normalize_compare_text(raw)
-    if any(token and token in normalized_raw for token in ADDRESS_NEAR_TOKENS):
-        parts.append("nearby")
-
-    normalized = ", ".join(parts)
-    return collapse_whitespace(normalized)
+    return str(value or "").strip()
 
 
 def normalize_road_text(value: str) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
-    if contains_cjk(raw):
-        return ""
-    return raw
+    return str(value or "").strip()
 
 
 def build_navigation_instruction(action: str, distance_m: int = 0, road: str = "") -> str:
@@ -860,29 +787,65 @@ class AMapClient(BaseHTTPMapClient):
 
     async def geocode(self, query: str) -> list[dict[str, Any]]:
         session = self.require_session()
+        results: list[dict[str, Any]] = []
+
+        # Phase 1: address geocoding (works well for concrete addresses).
         async with session.get(
             "https://restapi.amap.com/v3/geocode/geo",
             params={"key": self.api_key, "address": query},
         ) as response:
             data = await response.json(content_type=None)
-            if response.status != 200 or data.get("status") != "1":
-                raise Exception(f"AMap geocode failed: {data.get('info', response.status)}")
+            if response.status == 200 and data.get("status") == "1":
+                for item in data.get("geocodes", []):
+                    lat, lon = self._split_location(item.get("location", ""))
+                    if lat is None or lon is None:
+                        continue
+                    results.append(
+                        {
+                            "display_name": item.get("formatted_address", query),
+                            "lat": str(lat),
+                            "lon": str(lon),
+                            "source": "amap_geocode",
+                            "raw": item,
+                        }
+                    )
 
-        results = []
-        for item in data.get("geocodes", []):
-            lat, lon = self._split_location(item.get("location", ""))
+        if results:
+            return results
+
+        # Phase 2: POI text search for named places/landmarks (e.g. "West Lake").
+        async with session.get(
+            "https://restapi.amap.com/v3/place/text",
+            params={
+                "key": self.api_key,
+                "keywords": query,
+                "offset": 10,
+                "page": 1,
+            },
+        ) as response:
+            data = await response.json(content_type=None)
+            if response.status != 200 or data.get("status") != "1":
+                raise Exception(f"AMap geocode/place-text failed: {data.get('info', response.status)}")
+
+        poi_results: list[dict[str, Any]] = []
+        for poi in data.get("pois", []):
+            lat, lon = self._split_location(poi.get("location", ""))
             if lat is None or lon is None:
                 continue
-            results.append(
+            name = str(poi.get("name") or query).strip() or query
+            address = str(poi.get("address") or "").strip()
+            display_name = name if not address else f"{name} ({address})"
+            poi_results.append(
                 {
-                    "display_name": item.get("formatted_address", query),
+                    "display_name": display_name,
                     "lat": str(lat),
                     "lon": str(lon),
-                    "source": "amap",
-                    "raw": item,
+                    "source": "amap_poi_text",
+                    "raw": poi,
                 }
             )
-        return results
+
+        return poi_results
 
     async def reverse_geocode(self, lat: float, lon: float) -> dict[str, Any]:
         session = self.require_session()

@@ -58,35 +58,9 @@ def default_category_keywords() -> dict[str, str]:
 
 def default_map_i18n_rules() -> dict[str, Any]:
     return {
-        "poi_type_rules": [
-            {"label": "cafe", "tokens": ["cafe", "coffee", "\u5496\u5561"]},
-            {"label": "bookstore", "tokens": ["bookstore", "library", "\u4e66\u5e97", "\u56fe\u4e66\u9986"]},
-            {"label": "tea_shop", "tokens": ["tea", "milk tea", "\u8336", "\u5976\u8336"]},
-            {"label": "convenience_store", "tokens": ["convenience", "\u4fbf\u5229\u5e97"]},
-            {"label": "supermarket", "tokens": ["supermarket", "\u8d85\u5e02"]},
-            {"label": "parking", "tokens": ["parking", "\u505c\u8f66"]},
-            {"label": "ev_charging_station", "tokens": ["charging", "ev", "\u5145\u7535"]},
-            {"label": "food_and_drink", "tokens": ["restaurant", "food", "dessert", "\u9910\u996e", "\u9910\u5385", "\u5feb\u9910", "\u751c\u54c1"]},
-            {"label": "shopping", "tokens": ["shopping", "mall", "\u8d2d\u7269", "\u5546\u573a"]},
-            {"label": "transportation", "tokens": ["transport", "bus", "subway", "train", "airport", "\u4ea4\u901a", "\u516c\u4ea4", "\u5730\u94c1", "\u706b\u8f66", "\u673a\u573a"]},
-            {"label": "lodging", "tokens": ["hotel", "lodging", "\u9152\u5e97", "\u5bbe\u9986", "\u4f4f\u5bbf"]},
-            {"label": "healthcare", "tokens": ["hospital", "pharmacy", "medical", "\u533b\u9662", "\u836f\u5e97", "\u533b\u7597"]},
-            {"label": "education_and_culture", "tokens": ["school", "museum", "education", "culture", "\u5b66\u6821", "\u535a\u7269\u9986", "\u6559\u80b2", "\u6587\u5316", "\u79d1\u6559"]},
-            {"label": "leisure_and_scenic", "tokens": ["park", "scenic", "attraction", "\u516c\u56ed", "\u98ce\u666f", "\u666f\u70b9"]},
-            {"label": "financial_services", "tokens": ["bank", "finance", "insurance", "\u94f6\u884c", "\u91d1\u878d", "\u4fdd\u9669"]},
-        ],
-        "nav_action_aliases": {
-            "arrive": ["arrive", "destination", "\u5230\u8fbe", "\u76ee\u7684\u5730"],
-            "turn_left": ["left", "turn left", "\u5de6\u8f6c"],
-            "turn_right": ["right", "turn right", "\u53f3\u8f6c"],
-            "go_straight": ["straight", "continue", "\u76f4\u884c"],
-            "bear_left": ["bear left", "\u5411\u5de6\u524d\u65b9"],
-            "bear_right": ["bear right", "\u5411\u53f3\u524d\u65b9"],
-            "keep_left": ["keep left", "\u9760\u5de6"],
-            "keep_right": ["keep right", "\u9760\u53f3"],
-            "u_turn": ["u-turn", "uturn", "\u8c03\u5934"],
-        },
-        "address_near_tokens": ["near", "\u8fd1"],
+        "poi_type_rules": [],
+        "nav_action_aliases": {},
+        "address_near_tokens": [],
     }
 
 
@@ -103,6 +77,7 @@ def default_intent_rules() -> dict[str, Any]:
             {"type": "education", "tokens": ["school", "university", "college"]},
             {"type": "cafe", "tokens": ["cafe", "coffee"]},
             {"type": "restaurant", "tokens": ["restaurant", "food", "eat"]},
+            {"type": "drink_retail", "tokens": ["thirsty", "drink", "beverage", "water", "juice", "tea", "boba"]},
         ],
         "destination_keywords": {
             "parking": ["parking"],
@@ -117,6 +92,7 @@ def default_intent_rules() -> dict[str, Any]:
             "education": "school|university|college",
             "cafe": "cafe|bookstore",
             "restaurant": "restaurant|food court",
+            "drink_retail": "convenience store|cafe|tea shop|juice bar|beverage store",
             "poi": default_search_keywords(),
         },
         "time_optimization_tokens": ["fastest", "quick", "shortest time"],
@@ -148,6 +124,7 @@ def default_few_shot_examples() -> list[dict[str, Any]]:
             "request": "Find a quiet place to work nearby with coffee and good access",
             "output": {
                 "destination_type": "workspace",
+                "destination_kind": "generic_poi",
                 "search_keywords": "cafe|coworking space|bookstore",
                 "mode": "car",
                 "radius_m": 2500,
@@ -165,6 +142,7 @@ def default_few_shot_examples() -> list[dict[str, Any]]:
             "request": "Recommend an EV charging stop near me and avoid paid facilities",
             "output": {
                 "destination_type": "charging",
+                "destination_kind": "generic_poi",
                 "search_keywords": "charging station|charging point",
                 "mode": "car",
                 "radius_m": 5000,
@@ -182,6 +160,7 @@ def default_few_shot_examples() -> list[dict[str, Any]]:
             "request": "Suggest a park for a short walk within 15 minutes",
             "output": {
                 "destination_type": "park",
+                "destination_kind": "generic_poi",
                 "search_keywords": "park|garden|green space",
                 "mode": "foot",
                 "radius_m": 1800,
@@ -196,9 +175,28 @@ def default_few_shot_examples() -> list[dict[str, Any]]:
             },
         },
         {
+            "request": "I want to go to West Lake in Hangzhou",
+            "output": {
+                "destination_type": "named_place",
+                "destination_kind": "regional_scenic_area",
+                "search_keywords": "West Lake",
+                "mode": "foot",
+                "radius_m": 10000,
+                "optimize_for": "balanced",
+                "max_candidates": 5,
+                "hard_constraints": {
+                    "max_route_duration_min": None,
+                    "max_route_distance_m": None,
+                    "must_include_keywords": [],
+                    "exclude_keywords": [],
+                },
+            },
+        },
+        {
             "request": "Find a grocery option for a bike trip with minimal route distance",
             "output": {
                 "destination_type": "grocery",
+                "destination_kind": "generic_poi",
                 "search_keywords": "supermarket|convenience store|grocery",
                 "mode": "bike",
                 "radius_m": 3500,
@@ -208,6 +206,24 @@ def default_few_shot_examples() -> list[dict[str, Any]]:
                     "max_route_duration_min": None,
                     "max_route_distance_m": 5000,
                     "must_include_keywords": ["market"],
+                    "exclude_keywords": [],
+                },
+            },
+        },
+        {
+            "request": "I'm thirsty",
+            "output": {
+                "destination_type": "drink_retail",
+                "destination_kind": "generic_poi",
+                "search_keywords": "convenience store|cafe|tea shop|juice bar|beverage store",
+                "mode": "foot",
+                "radius_m": 2500,
+                "optimize_for": "distance",
+                "max_candidates": 5,
+                "hard_constraints": {
+                    "max_route_duration_min": None,
+                    "max_route_distance_m": None,
+                    "must_include_keywords": [],
                     "exclude_keywords": [],
                 },
             },
@@ -263,6 +279,7 @@ def normalize_few_shot_output(raw: Any) -> dict[str, Any] | None:
 
     default_rules = default_intent_rules()
     destination_type = str(raw.get("destination_type", "poi")).strip() or "poi"
+    destination_kind = str(raw.get("destination_kind", "generic_poi")).strip() or "generic_poi"
     search_keywords = join_search_keywords(
         raw.get("search_keywords") or raw.get("keywords"),
         default=default_rules.get("destination_search_keywords", {}).get(destination_type, default_search_keywords()),
@@ -286,6 +303,7 @@ def normalize_few_shot_output(raw: Any) -> dict[str, Any] | None:
 
     return {
         "destination_type": destination_type,
+        "destination_kind": destination_kind,
         "search_keywords": search_keywords,
         "mode": mode,
         "radius_m": int(radius_m),
