@@ -122,7 +122,8 @@ def parse_args():
         help="Save overlay video to overlay/<input_mp4_basename>_overlay.mp4",
     )
     p.add_argument("--simple_vis", action='store_true', help="Show simple 2D trajectory debug window")
-    p.add_argument("--sample_fps", type=int, default=5, help="Number of frames per second to sample into the model buffer (default 5)")
+    p.add_argument("--sample_fps", type=int, default=5, help="Number of frames per second to run model inference (default 5)")
+    p.add_argument("--output_fps", type=int, default=20, help="Output video/display FPS (default 20Hz)")
     return p.parse_args()
 
 
@@ -153,9 +154,11 @@ def main():
     fps = cap.get(cv2.CAP_PROP_FPS) or 20.0
     print(f"Opened {args.mp4}, fps={fps}")
 
-    # manipulate buffer length based on desired sample_fps (similar to ROS: image_callback ~ sample_fps)
+    # Stride for running model inference (we still decode every frame, but only
+    # run ONNX every sample_stride frames and reuse the last prediction in
+    # between, so the final video can stay at output_fps while compute stays lower).
     sample_stride = max(1, int(round(fps / args.sample_fps)))
-    print(f"Original FPS: {fps}, Sampling for {args.sample_fps}Hz every {sample_stride} frames.")
+    print(f"Original FPS: {fps}, running inference at ~{args.sample_fps}Hz (every {sample_stride} frames), output video at {args.output_fps}Hz.")
 
     buffer_len = args.frames
     frame_buffer = deque(maxlen=buffer_len)
@@ -175,6 +178,10 @@ def main():
     device = torch.device(args.device if torch.cuda.is_available() and args.device == 'cuda' else 'cpu')
 
     frame_count = 0
+    # cache last successful waypoint prediction (robot frame, Nx2) so that
+    # frames without a fresh inference can still be overlaid using the
+    # previous trajectory.
+    last_wp_np = None
 
     try:
         while True:
@@ -185,10 +192,6 @@ def main():
 
             frame_count += 1
 
-            # 仅按 sample_stride 采样一部分帧，模拟 ROS 中较低频率的 image_callback
-            if frame_count % sample_stride != 0:
-                continue
-
             # Convert BGR -> RGB and resize to 1920x1080 if needed (same as ROS pipeline)
             frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
             h0, w0 = frame_rgb.shape[:2]
@@ -197,70 +200,78 @@ def main():
 
             # to torch (C,H,W) float [0,1]
             frame_t = torch.from_numpy(frame_rgb).permute(2, 0, 1).float() / 255.0
-            frame_buffer.append(frame_t)
+            # 只有在采样点上才将帧送入模型缓冲区，以保持与原始 5Hz
+            # 脚本相同的时序（缓冲中仍是稀疏的 5Hz 帧），这样 20Hz
+            # 输出只是插帧显示，不会改变推理所用的历史窗口。
+            is_sample_frame = (frame_count % sample_stride == 0)
+            if is_sample_frame:
+                frame_buffer.append(frame_t)
 
-            # 如果缓冲未满，就先显示原始帧（或简单跳过显示）
-            if len(frame_buffer) < buffer_len:
+            # If buffer not yet full, we can't run the model; just show raw frame
+            if len(frame_buffer) < buffer_len and last_wp_np is None:
                 vis_img = frame_bgr
             else:
                 # 构建 batch: (N, C, H, W)
                 video_frames = torch.stack(list(frame_buffer), dim=0).to(device)
 
-                # resize frames to model input (288,512)
-                video_frames_small = torch.nn.functional.interpolate(
-                    video_frames, size=(288, 512), mode='bilinear', align_corners=False
-                )
-
-                # convert fisheye->pinhole (expects N,C,H,W on device)
-                fov_x = args.fov_x if args.fov_x is not None else math.degrees(2 * math.atan(1920 / (2 * 790)))
-                fov_y = args.fov_y if args.fov_y is not None else math.degrees(2 * math.atan(1080 / (2 * 790)))
-                pinhole = convert_fisheye_to_pinhole(
-                    K,
-                    dist,
-                    device,
-                    video_frames_small,
-                    fov_x=fov_x,
-                    fov_y=fov_y,
-                )
-
-                # onnx expects (B, T, C, H, W) with B=1, T=buffer_len
-                observation = pinhole.unsqueeze(0).cpu().numpy().astype(np.float32)
-
-                outputs = session.run(
-                    None,
-                    {"observation": observation, "embodiment_id": embodiment_id, "metric_spacing": metric_spacing},
-                )
-
-                # parse outputs (copying logic from test script)
-                traj_raw = outputs[0][:, 1:]
-                score_raw = outputs[1][:, 1:]
-                traj_t = torch.from_numpy(traj_raw)
-                score_t = torch.from_numpy(score_raw)
-                traj_sel, score_sel = trajectory_nms(traj_t, score_t)
-                traj_sel = traj_sel[0]
-                score_sel = score_sel[0]
-                score_sel = torch.softmax(score_sel, dim=0)
-                traj_final = traj_sel[torch.argmax(score_sel)]
-                wp_pred = traj_final[..., :2].unsqueeze(0)
-                wp_pred = torch.cat(
-                    [torch.zeros_like(wp_pred[..., 0:1, :]), wp_pred[..., :-1, :]], dim=-2
-                )
-                wp_pred[..., 0] = wp_pred[..., 0].clamp(0.0, 20.0)
-                wp_np = wp_pred.detach()[0, :, :2].cpu().numpy()
-
-                # 使用当前采样帧（对应 batch 的最后一帧）进行可视化，仿照 ROS 的 process_batch
-                try:
-                    vis_img = project_waypoints_to_fisheye_image_with_polygon_new(
-                        wp_np, intrinsic_params, frame_rgb, save_fig=False
+                    # resize frames to model input (288,512)
+                    video_frames_small = torch.nn.functional.interpolate(
+                        video_frames, size=(288, 512), mode='bilinear', align_corners=False
                     )
-                except Exception as e:
-                    print(f"[overlay] draw error: {e}")
+
+                    # convert fisheye->pinhole (expects N,C,H,W on device)
+                    fov_x = args.fov_x if args.fov_x is not None else math.degrees(2 * math.atan(1920 / (2 * 790)))
+                    fov_y = args.fov_y if args.fov_y is not None else math.degrees(2 * math.atan(1080 / (2 * 790)))
+                    pinhole = convert_fisheye_to_pinhole(
+                        K,
+                        dist,
+                        device,
+                        video_frames_small,
+                        fov_x=fov_x,
+                        fov_y=fov_y,
+                    )
+
+                    # onnx expects (B, T, C, H, W) with B=1, T=buffer_len
+                    observation = pinhole.unsqueeze(0).cpu().numpy().astype(np.float32)
+
+                    outputs = session.run(
+                        None,
+                        {"observation": observation, "embodiment_id": embodiment_id, "metric_spacing": metric_spacing},
+                    )
+
+                    # parse outputs (copying logic from test script)
+                    traj_raw = outputs[0][:, 1:]
+                    score_raw = outputs[1][:, 1:]
+                    traj_t = torch.from_numpy(traj_raw)
+                    score_t = torch.from_numpy(score_raw)
+                    traj_sel, score_sel = trajectory_nms(traj_t, score_t)
+                    traj_sel = traj_sel[0]
+                    score_sel = score_sel[0]
+                    score_sel = torch.softmax(score_sel, dim=0)
+                    traj_final = traj_sel[torch.argmax(score_sel)]
+                    wp_pred = traj_final[..., :2].unsqueeze(0)
+                    wp_pred = torch.cat(
+                        [torch.zeros_like(wp_pred[..., 0:1, :]), wp_pred[..., :-1, :]], dim=-2
+                    )
+                    wp_pred[..., 0] = wp_pred[..., 0].clamp(0.0, 20.0)
+                    last_wp_np = wp_pred.detach()[0, :, :2].cpu().numpy()
+
+                # 使用当前帧进行可视化：如果有 last_wp_np，就叠加轨迹；否则显示原始帧
+                if last_wp_np is not None:
+                    try:
+                        vis_img = project_waypoints_to_fisheye_image_with_polygon_new(
+                            last_wp_np, intrinsic_params, frame_rgb, save_fig=False
+                        )
+                    except Exception as e:
+                        print(f"[overlay] draw error: {e}")
+                        vis_img = frame_bgr
+                else:
                     vis_img = frame_bgr
 
             # optional simple 2D debug visualization
-            if args.simple_vis and len(frame_buffer) == buffer_len:
+            if args.simple_vis and len(frame_buffer) == buffer_len and last_wp_np is not None:
                 try:
-                    traj_canvas = draw_simple_traj(wp_np)
+                    traj_canvas = draw_simple_traj(last_wp_np)
                     cv2.imshow("traj_2d", traj_canvas)
                 except Exception:
                     pass
@@ -276,7 +287,7 @@ def main():
                     out_dir = os.path.join(os.getcwd(), "overlay")
                     os.makedirs(out_dir, exist_ok=True)
                     out_path = os.path.join(out_dir, f"{base}_overlay.mp4")
-                    out_fps = float(args.sample_fps)
+                    out_fps = float(args.output_fps)
                     print(
                         f"[overlay] initializing VideoWriter: path={out_path}, size=({w}x{h}), fps={out_fps}"
                     )
@@ -290,8 +301,8 @@ def main():
                     if frames_written % 30 == 0:
                         print(f"[overlay] frames written: {frames_written}")
 
-            # 适当等待以接近真实的 sample_fps 播放速度
-            if cv2.waitKey(int(1000 / max(1, args.sample_fps))) & 0xFF == ord("q"):
+            # 适当等待以接近期望的输出帧率（默认 20Hz）
+            if cv2.waitKey(int(1000 / max(1, args.output_fps))) & 0xFF == ord("q"):
                 break
 
     finally:
