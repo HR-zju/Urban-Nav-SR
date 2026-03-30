@@ -14,6 +14,10 @@ final class SpeechRecognitionManager: ObservableObject {
     private var speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh_CN"))
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
+    private var activeMode: RecognitionOutputMode = .streaming
+    private var activeSessionID = UUID()
+    private var isManuallyStopping = false
+    private var stopCleanupTask: Task<Void, Never>?
 
     private var hasRequiredUsageDescriptions: Bool {
         let info = Bundle.main.infoDictionary ?? [:]
@@ -61,9 +65,15 @@ final class SpeechRecognitionManager: ObservableObject {
             return
         }
         lastError = nil
+        activeMode = mode
+        isManuallyStopping = false
+        stopCleanupTask?.cancel()
+        stopCleanupTask = nil
 
         recognitionTask?.cancel()
         recognitionTask = nil
+        activeSessionID = UUID()
+        let sessionID = activeSessionID
 
         request = SFSpeechAudioBufferRecognitionRequest()
         guard let request else {
@@ -83,6 +93,7 @@ final class SpeechRecognitionManager: ObservableObject {
             audioEngine.prepare()
             try audioEngine.start()
         } catch {
+            inputNode.removeTap(onBus: 0)
             lastError = "启动录音失败: \(error.localizedDescription)"
             return
         }
@@ -90,17 +101,21 @@ final class SpeechRecognitionManager: ObservableObject {
         recognitionTask = speechRecognizer?.recognitionTask(with: request) { [weak self] result, error in
             guard let self else { return }
 
-            if let error {
-                Task { @MainActor in
-                    self.lastError = "识别失败: \(error.localizedDescription)"
-                    self.stopRecognition()
-                }
-                return
-            }
-
-            guard let result else { return }
-
             Task { @MainActor in
+                guard self.activeSessionID == sessionID else { return }
+
+                if let error {
+                    if self.shouldIgnoreRecognitionError(error) {
+                        self.finishRecognitionSession(sessionID: sessionID, cancelTask: false)
+                    } else {
+                        self.lastError = "识别失败: \(error.localizedDescription)"
+                        self.finishRecognitionSession(sessionID: sessionID, cancelTask: true)
+                    }
+                    return
+                }
+
+                guard let result else { return }
+
                 let spoken = result.bestTranscription.formattedString
                 switch mode {
                 case .streaming:
@@ -116,6 +131,10 @@ final class SpeechRecognitionManager: ObservableObject {
                         self.liveText = spoken
                     }
                 }
+
+                if result.isFinal {
+                    self.finishRecognitionSession(sessionID: sessionID, cancelTask: false)
+                }
             }
         }
 
@@ -124,13 +143,15 @@ final class SpeechRecognitionManager: ObservableObject {
 
     func stopRecognition() {
         guard isRunning else { return }
-        audioEngine.stop()
+        isManuallyStopping = true
+        isRunning = false
+
+        if audioEngine.isRunning {
+            audioEngine.stop()
+        }
         audioEngine.inputNode.removeTap(onBus: 0)
         request?.endAudio()
-        recognitionTask?.cancel()
-        recognitionTask = nil
-        request = nil
-        isRunning = false
+        scheduleStopCleanup(for: activeSessionID)
     }
 
     var combinedText: String {
@@ -141,5 +162,63 @@ final class SpeechRecognitionManager: ObservableObject {
             return liveText
         }
         return "\(committedText)\n\(liveText)"
+    }
+
+    private func scheduleStopCleanup(for sessionID: UUID) {
+        stopCleanupTask?.cancel()
+        stopCleanupTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            await MainActor.run {
+                guard let self else { return }
+                guard self.activeSessionID == sessionID, self.isManuallyStopping else { return }
+                self.flushPendingSentenceTextIfNeeded()
+                self.finishRecognitionSession(sessionID: sessionID, cancelTask: true)
+            }
+        }
+    }
+
+    private func flushPendingSentenceTextIfNeeded() {
+        guard activeMode == .sentence else { return }
+        let pending = liveText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !pending.isEmpty else { return }
+        if !committedText.isEmpty {
+            committedText += "\n"
+        }
+        committedText += pending
+        liveText = ""
+    }
+
+    private func finishRecognitionSession(sessionID: UUID, cancelTask: Bool) {
+        guard activeSessionID == sessionID else { return }
+        stopCleanupTask?.cancel()
+        stopCleanupTask = nil
+
+        if audioEngine.isRunning {
+            audioEngine.stop()
+        }
+        audioEngine.inputNode.removeTap(onBus: 0)
+        request?.endAudio()
+
+        if cancelTask {
+            recognitionTask?.cancel()
+        }
+        recognitionTask = nil
+        request = nil
+        isRunning = false
+        isManuallyStopping = false
+        activeSessionID = UUID()
+    }
+
+    private func shouldIgnoreRecognitionError(_ error: Error) -> Bool {
+        if isManuallyStopping {
+            return true
+        }
+
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled {
+            return true
+        }
+
+        return nsError.domain == "kAFAssistantErrorDomain" && nsError.code == 203
     }
 }

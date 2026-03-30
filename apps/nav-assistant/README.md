@@ -26,6 +26,7 @@ apps/nav-assistant/
 ## 运行方式
 
 ```bash
+conda activate openstreet
 swift build --package-path apps/nav-assistant
 ./apps/nav-assistant/Scripts/run-app-bundle.sh
 ```

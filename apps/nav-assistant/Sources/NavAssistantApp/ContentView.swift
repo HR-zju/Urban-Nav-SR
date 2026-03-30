@@ -277,7 +277,6 @@ struct ContentView: View {
     private func toggleContinueDialogRecording() {
         if speech.isRunning && recordingTarget == .continueDialog {
             speech.stopRecognition()
-            recordingTarget = .mainText
             return
         }
         if speech.isRunning {
