@@ -1523,7 +1523,7 @@ class DestinationRecommendationEngine:
         route_failures = []
         route_candidates = deduped[:eval_limit]
         progress_total = max(1, len(route_candidates))
-        route_concurrency_default = "2" if self.provider in {"amap", "baidu"} else "4"
+        route_concurrency_default = "2" if self.provider in {"amap", "baidu", "google"} else "4"
         route_concurrency = int(os.getenv("ROUTE_EVAL_CONCURRENCY", route_concurrency_default) or route_concurrency_default)
 
         async def _evaluate_candidate(index: int, candidate: dict[str, Any]) -> tuple[str, int, dict[str, Any]]:

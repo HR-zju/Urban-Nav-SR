@@ -321,6 +321,138 @@ def build_coarse_waypoint_record(
     return record
 
 
+def parse_google_duration_s(value: Any, default: int = 0) -> int:
+    raw = str(value or "").strip()
+    if not raw:
+        return default
+    if raw.endswith("s"):
+        raw = raw[:-1]
+    return normalize_duration_s(raw, default)
+
+
+def decode_google_polyline(encoded: str) -> list[list[float]]:
+    if not encoded:
+        return []
+
+    coordinates: list[list[float]] = []
+    index = 0
+    latitude = 0
+    longitude = 0
+
+    while index < len(encoded):
+        shift = 0
+        result = 0
+        while True:
+            if index >= len(encoded):
+                return coordinates
+            byte = ord(encoded[index]) - 63
+            index += 1
+            result |= (byte & 0x1F) << shift
+            shift += 5
+            if byte < 0x20:
+                break
+        delta_lat = ~(result >> 1) if result & 1 else result >> 1
+        latitude += delta_lat
+
+        shift = 0
+        result = 0
+        while True:
+            if index >= len(encoded):
+                return coordinates
+            byte = ord(encoded[index]) - 63
+            index += 1
+            result |= (byte & 0x1F) << shift
+            shift += 5
+            if byte < 0x20:
+                break
+        delta_lon = ~(result >> 1) if result & 1 else result >> 1
+        longitude += delta_lon
+        coordinates.append([longitude / 1e5, latitude / 1e5])
+
+    return coordinates
+
+
+def extract_google_lat_lon(value: Any) -> tuple[float | None, float | None]:
+    if not isinstance(value, dict):
+        return None, None
+
+    if "latitude" in value and "longitude" in value:
+        try:
+            return float(value["latitude"]), float(value["longitude"])
+        except Exception:
+            return None, None
+
+    if "lat" in value and "lng" in value:
+        try:
+            return float(value["lat"]), float(value["lng"])
+        except Exception:
+            return None, None
+
+    lat_lng = value.get("latLng") or value.get("lat_lng")
+    if isinstance(lat_lng, dict):
+        return extract_google_lat_lon(lat_lng)
+
+    location = value.get("location")
+    if isinstance(location, dict):
+        return extract_google_lat_lon(location)
+
+    return None, None
+
+
+def parse_google_places(
+    places: list[dict[str, Any]],
+    *,
+    origin_lat: float,
+    origin_lon: float,
+    limit: int = 10,
+    provider: str = "google",
+) -> list[dict[str, Any]]:
+    normalized = []
+    for place in places:
+        latitude, longitude = extract_google_lat_lon(place.get("location") or place)
+        if latitude is None or longitude is None:
+            continue
+
+        display_name = place.get("displayName", {})
+        if isinstance(display_name, dict):
+            name = str(display_name.get("text") or "").strip()
+        else:
+            name = str(display_name or "").strip()
+        if not name:
+            name = str(place.get("name") or "Unnamed")
+
+        address = normalize_address_text(
+            str(place.get("formattedAddress") or place.get("shortFormattedAddress") or "")
+        )
+        primary_type = str(place.get("primaryType") or "").strip()
+        types = [str(item).strip() for item in (place.get("types") or []) if str(item).strip()]
+        type_raw = primary_type or ";".join(types)
+        distance_m = round(haversine_m(origin_lat, origin_lon, latitude, longitude))
+        provider_poi_id = str(place.get("id") or place.get("name") or format_location(longitude, latitude))
+        normalized.append(
+            build_semantic_poi_record(
+                provider=provider,
+                provider_poi_id=provider_poi_id,
+                name=name,
+                longitude=longitude,
+                latitude=latitude,
+                distance_m=distance_m,
+                poi_type=normalize_poi_type(type_raw or "unknown"),
+                address=address,
+                raw=place,
+                extra={
+                    "type_raw": type_raw,
+                    "address_raw": address,
+                    "types": types,
+                    "primary_type": primary_type,
+                },
+            )
+        )
+
+    normalized.sort(key=lambda item: item["distance_m"])
+    return normalized[: max(1, limit)]
+
+
 def parse_amap_pois(
     pois: list[dict[str, Any]],
     *,
@@ -526,6 +658,66 @@ def parse_baidu_steps(route_data: dict[str, Any], *, origin: str, destination: s
         "route_summary": {
             "distance_m": normalize_distance_m(best_route.get("distance")),
             "duration_s": normalize_duration_s(best_route.get("duration")),
+            "step_count": len(coarse_waypoints),
+        },
+        "coarse_waypoints": coarse_waypoints,
+    }
+
+
+def parse_google_steps(route_data: dict[str, Any], *, origin: str, destination: str, mode: str) -> dict[str, Any]:
+    routes = route_data.get("routes", []) or []
+    if not routes:
+        return {
+            "provider": "google",
+            "origin": origin,
+            "destination": destination,
+            "mode": mode,
+            "route_summary": {"distance_m": 0, "duration_s": 0, "step_count": 0},
+            "coarse_waypoints": [],
+        }
+
+    route = routes[0]
+    coarse_waypoints = []
+    for leg in route.get("legs", []) or []:
+        for step in leg.get("steps", []) or []:
+            coords = decode_google_polyline(((step.get("polyline") or {}).get("encodedPolyline") or ""))
+            latitude, longitude = extract_google_lat_lon(step.get("endLocation") or {})
+            if latitude is None or longitude is None:
+                if not coords:
+                    continue
+                longitude, latitude = coords[-1]
+
+            navigation = step.get("navigationInstruction", {}) or {}
+            instruction_raw = str(navigation.get("instructions") or "").strip()
+            maneuver_raw = str(navigation.get("maneuver") or step.get("maneuver") or "").strip()
+            distance_m = normalize_distance_m(step.get("distanceMeters"))
+            duration_s = parse_google_duration_s(step.get("staticDuration") or step.get("duration"))
+            action = normalize_navigation_action(maneuver_raw.replace("_", " ").lower(), instruction_raw)
+            instruction = instruction_raw or build_navigation_instruction(action, distance_m=distance_m)
+            coarse_waypoints.append(
+                build_coarse_waypoint_record(
+                    longitude=longitude,
+                    latitude=latitude,
+                    instruction=instruction,
+                    action=action,
+                    road="",
+                    distance_m=distance_m,
+                    duration_s=duration_s,
+                    extra={
+                        "instruction_raw": instruction_raw,
+                        "maneuver_raw": maneuver_raw,
+                    },
+                )
+            )
+
+    return {
+        "provider": "google",
+        "origin": origin,
+        "destination": destination,
+        "mode": mode,
+        "route_summary": {
+            "distance_m": normalize_distance_m(route.get("distanceMeters")),
+            "duration_s": parse_google_duration_s(route.get("duration")),
             "step_count": len(coarse_waypoints),
         },
         "coarse_waypoints": coarse_waypoints,
@@ -1318,6 +1510,380 @@ class BaiduClient(BaseHTTPMapClient):
         }
 
 
+class GoogleMapsClient(BaseHTTPMapClient):
+    def __init__(self, api_key: str, *, language: str = "", region: str = "") -> None:
+        super().__init__()
+        self.api_key = api_key
+        self.language = language.strip()
+        self.region = region.strip().upper()
+
+    @staticmethod
+    def _normalize_query(query: str) -> str:
+        tokens = [token.strip() for token in str(query or "").replace("|", " ").split() if token.strip()]
+        return collapse_whitespace(" ".join(tokens))
+
+    @staticmethod
+    def _travel_mode(mode: str) -> str:
+        return {
+            "car": "DRIVE",
+            "foot": "WALK",
+            "bike": "BICYCLE",
+        }.get(mode, "DRIVE")
+
+    def _places_headers(self, field_mask: str) -> dict[str, str]:
+        return {
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": self.api_key,
+            "X-Goog-FieldMask": field_mask,
+        }
+
+    def _routes_headers(self, field_mask: str) -> dict[str, str]:
+        return {
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": self.api_key,
+            "X-Goog-FieldMask": field_mask,
+        }
+
+    async def _text_search_places(
+        self,
+        *,
+        query: str,
+        latitude: float | None = None,
+        longitude: float | None = None,
+        radius: int | None = None,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        session = self.require_session()
+        body: dict[str, Any] = {
+            "textQuery": self._normalize_query(query),
+            "pageSize": max(1, min(limit, 20)),
+        }
+        if latitude is not None and longitude is not None and radius:
+            body["locationBias"] = {
+                "circle": {
+                    "center": {
+                        "latitude": latitude,
+                        "longitude": longitude,
+                    },
+                    "radius": float(radius),
+                }
+            }
+        if self.language:
+            body["languageCode"] = self.language
+        if self.region:
+            body["regionCode"] = self.region
+
+        async with session.post(
+            "https://places.googleapis.com/v1/places:searchText",
+            json=body,
+            headers=self._places_headers(
+                "places.id,places.name,places.displayName,places.formattedAddress,places.shortFormattedAddress,"
+                "places.location,places.primaryType,places.types"
+            ),
+        ) as response:
+            data = await response.json(content_type=None)
+            if response.status != 200:
+                raise Exception(f"Google Places text search failed: {data}")
+        return data.get("places", []) or []
+
+    async def _compute_routes(
+        self,
+        *,
+        from_lat: float,
+        from_lon: float,
+        to_lat: float,
+        to_lon: float,
+        mode: str,
+        include_steps: bool,
+    ) -> dict[str, Any]:
+        session = self.require_session()
+        body: dict[str, Any] = {
+            "origin": {
+                "location": {
+                    "latLng": {
+                        "latitude": from_lat,
+                        "longitude": from_lon,
+                    }
+                }
+            },
+            "destination": {
+                "location": {
+                    "latLng": {
+                        "latitude": to_lat,
+                        "longitude": to_lon,
+                    }
+                }
+            },
+            "travelMode": self._travel_mode(mode),
+            "units": "METRIC",
+        }
+        if self.language:
+            body["languageCode"] = self.language
+
+        field_mask = ["routes.distanceMeters", "routes.duration", "routes.polyline.encodedPolyline"]
+        if include_steps:
+            field_mask.extend(
+                [
+                    "routes.legs.steps.distanceMeters",
+                    "routes.legs.steps.staticDuration",
+                    "routes.legs.steps.polyline.encodedPolyline",
+                    "routes.legs.steps.navigationInstruction.instructions",
+                    "routes.legs.steps.navigationInstruction.maneuver",
+                    "routes.legs.steps.startLocation",
+                    "routes.legs.steps.endLocation",
+                ]
+            )
+
+        async with session.post(
+            "https://routes.googleapis.com/directions/v2:computeRoutes",
+            json=body,
+            headers=self._routes_headers(",".join(field_mask)),
+        ) as response:
+            data = await response.json(content_type=None)
+            if response.status != 200:
+                raise Exception(f"Google Routes computeRoutes failed: {data}")
+        return data
+
+    async def geocode(self, query: str) -> list[dict[str, Any]]:
+        session = self.require_session()
+        params: dict[str, Any] = {
+            "address": query,
+            "key": self.api_key,
+        }
+        if self.language:
+            params["language"] = self.language
+        if self.region:
+            params["region"] = self.region
+
+        async with session.get(
+            "https://maps.googleapis.com/maps/api/geocode/json",
+            params=params,
+        ) as response:
+            data = await response.json(content_type=None)
+            status = str(data.get("status") or "")
+            if response.status != 200 or status not in {"OK", "ZERO_RESULTS"}:
+                raise Exception(f"Google geocode failed: {status or response.status}")
+
+        results = []
+        for item in data.get("results", []) or []:
+            geometry = item.get("geometry", {}) or {}
+            location = geometry.get("location", {}) or {}
+            latitude, longitude = extract_google_lat_lon(location)
+            if latitude is None or longitude is None:
+                continue
+            results.append(
+                {
+                    "display_name": str(item.get("formatted_address") or query),
+                    "lat": str(latitude),
+                    "lon": str(longitude),
+                    "source": "google_geocode",
+                    "raw": item,
+                }
+            )
+        return results
+
+    async def reverse_geocode(self, lat: float, lon: float) -> dict[str, Any]:
+        session = self.require_session()
+        params: dict[str, Any] = {
+            "latlng": f"{lat},{lon}",
+            "key": self.api_key,
+        }
+        if self.language:
+            params["language"] = self.language
+        if self.region:
+            params["region"] = self.region
+
+        async with session.get(
+            "https://maps.googleapis.com/maps/api/geocode/json",
+            params=params,
+        ) as response:
+            data = await response.json(content_type=None)
+            status = str(data.get("status") or "")
+            if response.status != 200 or status not in {"OK", "ZERO_RESULTS"}:
+                raise Exception(f"Google reverse geocode failed: {status or response.status}")
+
+        result = (data.get("results", []) or [{}])[0]
+        return {
+            "display_name": str(result.get("formatted_address") or "Unknown location"),
+            "address": result.get("address_components", []),
+            "source": "google",
+        }
+
+    async def search_semantic_pois(
+        self,
+        location: str,
+        keywords: str,
+        radius: int = 1000,
+        sortrule: str = "distance",
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        origin_lon, origin_lat = parse_location_text(location)
+        places = await self._text_search_places(
+            query=keywords,
+            latitude=origin_lat,
+            longitude=origin_lon,
+            radius=int(radius),
+            limit=limit,
+        )
+        parsed = parse_google_places(
+            places,
+            origin_lat=origin_lat,
+            origin_lon=origin_lon,
+            limit=limit,
+            provider="google",
+        )
+        if sortrule == "distance":
+            parsed.sort(key=lambda item: item["distance_m"])
+        return parsed
+
+    async def get_coarse_waypoints(
+        self,
+        origin: str,
+        destination: str,
+        mode: str = "foot",
+    ) -> dict[str, Any]:
+        origin_lon, origin_lat = parse_location_text(origin)
+        destination_lon, destination_lat = parse_location_text(destination)
+        route_data = await self._compute_routes(
+            from_lat=origin_lat,
+            from_lon=origin_lon,
+            to_lat=destination_lat,
+            to_lon=destination_lon,
+            mode=mode,
+            include_steps=True,
+        )
+        return parse_google_steps(route_data, origin=origin, destination=destination, mode=mode)
+
+    async def get_route(
+        self,
+        from_lat: float,
+        from_lon: float,
+        to_lat: float,
+        to_lon: float,
+        mode: str = "car",
+        steps: bool = False,
+        overview: str = "overview",
+        annotations: bool = True,
+    ) -> dict[str, Any]:
+        route_data = await self._compute_routes(
+            from_lat=from_lat,
+            from_lon=from_lon,
+            to_lat=to_lat,
+            to_lon=to_lon,
+            mode=mode,
+            include_steps=steps,
+        )
+        routes = route_data.get("routes", []) or []
+        if not routes:
+            return {"routes": [], "waypoints": []}
+
+        route = routes[0]
+        route_coords = decode_google_polyline(((route.get("polyline") or {}).get("encodedPolyline") or ""))
+        legs = []
+        for leg in route.get("legs", []) or []:
+            leg_steps = []
+            for step in leg.get("steps", []) or []:
+                step_coords = decode_google_polyline(((step.get("polyline") or {}).get("encodedPolyline") or ""))
+                latitude, longitude = extract_google_lat_lon(step.get("endLocation") or {})
+                maneuver = step.get("navigationInstruction", {}) or {}
+                instruction = str(maneuver.get("instructions") or "").strip()
+                maneuver_payload: dict[str, Any] = {"instruction": instruction}
+                if latitude is not None and longitude is not None:
+                    maneuver_payload["location"] = [longitude, latitude]
+                elif step_coords:
+                    maneuver_payload["location"] = step_coords[-1]
+
+                leg_steps.append(
+                    {
+                        "maneuver": maneuver_payload,
+                        "distance": float(step.get("distanceMeters", 0) or 0),
+                        "duration": float(parse_google_duration_s(step.get("staticDuration") or step.get("duration"))),
+                        "name": "",
+                        "geometry": {"type": "LineString", "coordinates": step_coords},
+                    }
+                )
+            legs.append({"steps": leg_steps})
+
+        return {
+            "routes": [
+                {
+                    "distance": float(route.get("distanceMeters", 0) or 0),
+                    "duration": float(parse_google_duration_s(route.get("duration"))),
+                    "legs": legs,
+                    "geometry": {"type": "LineString", "coordinates": route_coords},
+                }
+            ],
+            "waypoints": [
+                {"location": [from_lon, from_lat], "name": "origin"},
+                {"location": [to_lon, to_lat], "name": "destination"},
+            ],
+            "source": "google",
+        }
+
+    async def get_nearby_pois(
+        self,
+        lat: float,
+        lon: float,
+        radius: float = 1000,
+        categories: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        categories = categories or default_search_categories()
+        results_by_id: dict[str, dict[str, Any]] = {}
+        for category in categories:
+            places = await self._text_search_places(
+                query=_category_keyword(category),
+                latitude=lat,
+                longitude=lon,
+                radius=int(radius),
+                limit=20,
+            )
+            for poi in parse_google_places(
+                places,
+                origin_lat=lat,
+                origin_lon=lon,
+                limit=20,
+                provider="google",
+            ):
+                poi_id = poi.get("provider_poi_id") or f"google-{poi.get('location', '')}-{poi.get('name', '')}"
+                tags = {
+                    "name": poi.get("name", "Unnamed"),
+                    category: poi.get("type", "unknown"),
+                    "type": poi.get("type", "unknown"),
+                    "address": poi.get("address", ""),
+                    "source": "google",
+                }
+                results_by_id[str(poi_id)] = {
+                    "id": str(poi_id),
+                    "lat": poi["coordinates"]["latitude"],
+                    "lon": poi["coordinates"]["longitude"],
+                    "tags": tags,
+                }
+
+        return list(results_by_id.values())
+
+    async def search_features_by_category(
+        self,
+        bbox: tuple[float, float, float, float],
+        category: str,
+        subcategories: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        center_lon = (bbox[0] + bbox[2]) / 2
+        center_lat = (bbox[1] + bbox[3]) / 2
+        rough_radius = max(200, int(max(abs(bbox[2] - bbox[0]), abs(bbox[3] - bbox[1])) * 111000))
+        categories = subcategories if subcategories else [category]
+        pois = await self.get_nearby_pois(center_lat, center_lon, rough_radius, categories)
+        return [
+            {
+                "id": poi.get("id"),
+                "type": "node",
+                "lat": poi.get("lat"),
+                "lon": poi.get("lon"),
+                "tags": poi.get("tags", {}),
+            }
+            for poi in pois
+        ]
+
+
 def create_map_client() -> tuple[MapProviderClient, str]:
     provider = os.getenv("MAP_PROVIDER", "osm").strip().lower()
     if provider == "amap":
@@ -1330,21 +1896,34 @@ def create_map_client() -> tuple[MapProviderClient, str]:
         if not baidu_ak:
             raise RuntimeError("MAP_PROVIDER=baidu requires BAIDU_AK")
         return BaiduClient(ak=baidu_ak), "baidu"
+    if provider == "google":
+        google_key = os.getenv("GOOGLE_MAPS_API_KEY", "").strip()
+        if not google_key:
+            raise RuntimeError("MAP_PROVIDER=google requires GOOGLE_MAPS_API_KEY")
+        return GoogleMapsClient(
+            api_key=google_key,
+            language=os.getenv("GOOGLE_MAPS_LANGUAGE", "").strip(),
+            region=os.getenv("GOOGLE_MAPS_REGION", "").strip(),
+        ), "google"
     return OSMClient(), "osm"
 
 
 __all__ = [
     "AMapClient",
     "BaiduClient",
+    "GoogleMapsClient",
     "MapProviderClient",
     "OSMClient",
     "create_map_client",
+    "decode_google_polyline",
     "format_location",
     "infer_action",
     "parse_amap_pois",
     "parse_amap_steps",
     "parse_baidu_pois",
     "parse_baidu_steps",
+    "parse_google_places",
+    "parse_google_steps",
     "parse_location_text",
     "parse_polyline",
     "strip_html",

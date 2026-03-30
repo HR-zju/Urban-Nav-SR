@@ -80,7 +80,7 @@ Legacy compatibility tools are still exposed but are no longer the recommended p
 - `get_route_directions`
 - `search_category`
 
-### Provider Configuration (OSM / AMap / Baidu)
+### Provider Configuration (OSM / AMap / Baidu / Google Maps)
 
 By default the server uses OpenStreetMap data sources. You can switch to AMap:
 
@@ -97,6 +97,27 @@ export MAP_PROVIDER=baidu
 export BAIDU_AK=your_baidu_ak
 osm-mcp-server
 ```
+
+You can also switch to Google Maps Platform:
+
+```bash
+export MAP_PROVIDER=google
+export GOOGLE_MAPS_API_KEY=your_google_maps_api_key
+
+# Optional: bias geocoding / place search / route instructions language.
+export GOOGLE_MAPS_LANGUAGE=en
+
+# Optional: region bias for geocoding / places, for example CN / US / SG.
+export GOOGLE_MAPS_REGION=CN
+
+osm-mcp-server
+```
+
+Google provider notes:
+- Geocoding uses Google Geocoding API
+- Nearby / semantic POI retrieval uses Places API (New) text search
+- Routing and coarse waypoints use Routes API `computeRoutes`
+- For domestic China place names, Chinese queries are often more stable than English transliterations
 
 Optional LLM parsing (for better intent extraction):
 
