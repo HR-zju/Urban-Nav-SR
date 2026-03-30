@@ -325,39 +325,55 @@ async def run_demo(
                     print("Selected destination has no valid location field.")
                     continue
 
-                origin_location = f"{longitude},{latitude}"
-                route_payload, route_raw_text = await call_tool_json(
-                    session,
-                    "get_coarse_waypoints",
-                    {
-                        "origin": origin_location,
-                        "destination": selected_location,
-                        "mode": current_mode,
-                    },
+                reused_recommended_route = (
+                    selected_index == 1
+                    and isinstance(payload.get("route_summary"), dict)
+                    and isinstance(payload.get("key_waypoints"), list)
+                    and bool(payload.get("route_summary"))
                 )
-                if not route_payload:
-                    if non_interactive:
-                        result = {
-                            "provider": payload.get("provider"),
-                            "recommendations": recommendations,
-                            "chosen_destination": selected,
-                            "key_waypoints": [],
-                            "route_summary": None,
-                            "message": f"get_coarse_waypoints returned non-JSON payload: {route_raw_text}",
-                        }
-                        print(json.dumps(result, ensure_ascii=True))
-                        return
-                    print(f"get_coarse_waypoints returned non-JSON payload: {route_raw_text}")
-                    continue
 
-                final_payload = {
-                    "provider": payload.get("provider"),
-                    "recommendations": recommendations,
-                    "chosen_destination": selected,
-                    "key_waypoints": build_waypoint_sequence(route_payload),
-                    "route_summary": route_payload.get("route_summary", {}),
-                    "message": None,
-                }
+                if reused_recommended_route:
+                    final_payload = {
+                        "provider": payload.get("provider"),
+                        "recommendations": recommendations,
+                        "chosen_destination": selected,
+                        "key_waypoints": payload.get("key_waypoints", []),
+                        "route_summary": payload.get("route_summary", {}),
+                        "message": None,
+                    }
+                else:
+                    origin_location = f"{longitude},{latitude}"
+                    route_payload, route_raw_text = await call_tool_json(
+                        session,
+                        "get_coarse_waypoints",
+                        {
+                            "origin": origin_location,
+                            "destination": selected_location,
+                            "mode": current_mode,
+                        },
+                    )
+                    if not route_payload:
+                        if non_interactive:
+                            result = {
+                                "provider": payload.get("provider"),
+                                "recommendations": recommendations,
+                                "chosen_destination": selected,
+                                "key_waypoints": [],
+                                "route_summary": None,
+                                "message": f"get_coarse_waypoints returned non-JSON payload: {route_raw_text}",
+                            }
+                            print(json.dumps(result, ensure_ascii=True))
+                            return
+                        print(f"get_coarse_waypoints returned non-JSON payload: {route_raw_text}")
+                        continue
+                    final_payload = {
+                        "provider": payload.get("provider"),
+                        "recommendations": recommendations,
+                        "chosen_destination": selected,
+                        "key_waypoints": build_waypoint_sequence(route_payload),
+                        "route_summary": route_payload.get("route_summary", {}),
+                        "message": None,
+                    }
 
                 if not json_only:
                     print("\n=== Selected Destination Route ===")

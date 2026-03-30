@@ -9,6 +9,7 @@ import json
 import math
 import os
 import re
+from time import perf_counter
 
 from mcp_server.config import (
     default_intent_rules,
@@ -339,6 +340,26 @@ def _candidate_structured_text(candidate: dict[str, Any]) -> str:
     if isinstance(raw, dict):
         parts.append(str(raw.get("type", "")))
     return " ".join(part for part in parts if part).lower()
+
+
+def _estimated_route_distance_m(direct_distance_m: float, mode: str) -> float:
+    detour_factors = {
+        "foot": float(os.getenv("ESTIMATED_ROUTE_DETOUR_FACTOR_FOOT", "1.25") or 1.25),
+        "bike": float(os.getenv("ESTIMATED_ROUTE_DETOUR_FACTOR_BIKE", "1.2") or 1.2),
+        "car": float(os.getenv("ESTIMATED_ROUTE_DETOUR_FACTOR_CAR", "1.35") or 1.35),
+    }
+    factor = detour_factors.get(mode, 1.25)
+    return max(float(direct_distance_m or 0.0) * factor, float(direct_distance_m or 0.0))
+
+
+def _estimated_route_duration_s(route_distance_m: float, mode: str) -> float:
+    speed_mps = {
+        "foot": float(os.getenv("ESTIMATED_SPEED_MPS_FOOT", "1.3") or 1.3),
+        "bike": float(os.getenv("ESTIMATED_SPEED_MPS_BIKE", "4.2") or 4.2),
+        "car": float(os.getenv("ESTIMATED_SPEED_MPS_CAR", "8.5") or 8.5),
+    }
+    speed = max(0.5, speed_mps.get(mode, 1.3))
+    return float(route_distance_m or 0.0) / speed
 
 
 def _contains_cjk(text: str) -> bool:
@@ -1568,6 +1589,7 @@ class DestinationRecommendationEngine:
         mode: str | None = None,
         ctx: Any = None,
     ) -> dict[str, Any]:
+        overall_started_at = perf_counter()
         eval_limit = int(os.getenv("ROUTE_EVAL_LIMIT", "25"))
         if self.provider == "amap":
             eval_limit = min(eval_limit, int(os.getenv("ROUTE_EVAL_LIMIT_AMAP", "8")))
@@ -1578,6 +1600,7 @@ class DestinationRecommendationEngine:
         translated_instruction = None
         english_localization_active = False
         if self.provider in {"amap", "baidu"} and _looks_english_instruction(user_instruction):
+            localization_started_at = perf_counter()
             translated_instruction = await translate_instruction_for_cn_map(
                 user_instruction=user_instruction,
                 provider=self.provider,
@@ -1587,10 +1610,17 @@ class DestinationRecommendationEngine:
                 english_localization_active = True
                 await _ctx_info(
                     ctx,
-                    f"Localized English instruction for {self.provider}: {translated_instruction}",
+                    f"Localized English instruction for {self.provider} in {perf_counter() - localization_started_at:.2f}s: {translated_instruction}",
+                )
+            else:
+                await _ctx_warning(
+                    ctx,
+                    f"English instruction localization for {self.provider} failed after {perf_counter() - localization_started_at:.2f}s; continuing with original instruction.",
                 )
 
+        parse_started_at = perf_counter()
         parsed = await self.intent_parser.parse(working_instruction)
+        await _ctx_info(ctx, f"Intent parse completed in {perf_counter() - parse_started_at:.2f}s.")
         intent_source = str(parsed.get("intent_source") or "")
         if intent_source.startswith("heuristic_llm_"):
             error_detail = str(parsed.get("llm_error") or "").strip()
@@ -1647,6 +1677,7 @@ class DestinationRecommendationEngine:
         )
 
         normalized_candidates: list[dict[str, Any]] = []
+        retrieval_started_at = perf_counter()
         if explicit_destination:
             locality_hints: list[str] = []
             try:
@@ -1724,6 +1755,10 @@ class DestinationRecommendationEngine:
             )
             for candidate in normalized_candidates:
                 candidate["query_affinity"] = _query_affinity_score(candidate, query_terms=query_terms)
+        await _ctx_info(
+            ctx,
+            f"Candidate retrieval completed in {perf_counter() - retrieval_started_at:.2f}s with {len(normalized_candidates)} raw candidates.",
+        )
 
         deduped = []
         seen: set[str] = set()
@@ -1758,6 +1793,7 @@ class DestinationRecommendationEngine:
                 ]
 
         if deduped and explicit_destination:
+            rerank_started_at = perf_counter()
             rerank_input = [
                 {
                     "id": item["id"],
@@ -1777,6 +1813,10 @@ class DestinationRecommendationEngine:
                 user_instruction=working_instruction,
                 parsed_intent=parsed,
                 candidates=rerank_input,
+            )
+            await _ctx_info(
+                ctx,
+                f"Candidate rerank completed in {perf_counter() - rerank_started_at:.2f}s for {len(rerank_input)} candidates.",
             )
             if rerank_meta and rerank_meta.get("ranked_candidate_ids"):
                 order_map = {
@@ -1802,83 +1842,40 @@ class DestinationRecommendationEngine:
         stage1_filtered = []
         stage1_rejected = []
         route_failures = []
-        route_candidates = deduped[:eval_limit]
-        progress_total = max(1, len(route_candidates))
-        route_concurrency_default = "2" if self.provider in {"amap", "baidu", "google"} else "4"
-        route_concurrency = int(os.getenv("ROUTE_EVAL_CONCURRENCY", route_concurrency_default) or route_concurrency_default)
+        lightweight_scoring_started_at = perf_counter()
+        progress_total = max(1, len(deduped))
 
-        async def _evaluate_candidate(index: int, candidate: dict[str, Any]) -> tuple[str, int, dict[str, Any]]:
+        for index, candidate in enumerate(deduped):
             await _ctx_report_progress(ctx, index, progress_total)
-            retry_limit = int(os.getenv("ROUTE_RETRY_LIMIT", "2"))
-            retry_backoff_s = float(os.getenv("ROUTE_RETRY_BACKOFF_S", "0.35"))
-
-            route_data = None
-            for attempt in range(retry_limit + 1):
-                try:
-                    route_data = await self.map_client.get_coarse_waypoints(
-                        origin=origin_location,
-                        destination=candidate["location"],
-                        mode=chosen_mode,
-                    )
-                    break
-                except Exception as retry_exc:
-                    message = str(retry_exc)
-                    qps_limited = (
-                        "CUQPS_HAS_EXCEEDED_THE_LIMIT" in message
-                        or "QPS" in message.upper()
-                        or "RATE LIMIT" in message.upper()
-                    )
-                    if qps_limited and attempt < retry_limit:
-                        await asyncio.sleep(retry_backoff_s * (attempt + 1))
-                        continue
-                    return (
-                        "route_failure",
-                        index,
-                        {
-                            "id": candidate["id"],
-                            "name": candidate["name"],
-                            "reason": "route_exception",
-                            "detail": str(retry_exc),
-                        },
-                    )
-
-            route_summary = route_data.get("route_summary", {}) or {}
-            distance_m = float(route_summary.get("distance_m", 0) or 0)
-            duration_s = float(route_summary.get("duration_s", 0) or 0)
-            if distance_m <= 0 and duration_s <= 0:
-                return (
-                    "route_failure",
-                    index,
-                    {
-                        "id": candidate["id"],
-                        "name": candidate["name"],
-                        "reason": "empty_route_summary",
-                    },
-                )
+            direct_distance_m = round(
+                candidate.get("direct_distance_m")
+                or haversine_m(
+                    current_latitude,
+                    current_longitude,
+                    candidate["latitude"],
+                    candidate["longitude"],
+                ),
+                1,
+            )
+            estimated_distance_m = round(_estimated_route_distance_m(direct_distance_m, chosen_mode), 1)
+            estimated_duration_s = round(_estimated_route_duration_s(estimated_distance_m, chosen_mode), 1)
 
             if destination_kind == "regional_scenic_area":
                 text_blob = _candidate_structured_text(candidate["raw_candidate"])
             else:
                 text_blob = _candidate_text_blob(candidate["raw_candidate"])
+
             staged = {
                 "candidate": candidate,
-                "route": route_data,
+                "route": None,
                 "text_blob": text_blob,
                 "summary": {
-                    "distance_m": round(distance_m, 1),
-                    "duration_s": round(duration_s, 1),
-                    "duration_min": round(duration_s / 60, 1),
+                    "distance_m": estimated_distance_m,
+                    "duration_s": estimated_duration_s,
+                    "duration_min": round(estimated_duration_s / 60, 1),
                 },
-                "direct_distance_m": round(
-                    candidate.get("direct_distance_m")
-                    or haversine_m(
-                        current_latitude,
-                        current_longitude,
-                        candidate["latitude"],
-                        candidate["longitude"],
-                    ),
-                    1,
-                ),
+                "summary_source": "estimated",
+                "direct_distance_m": direct_distance_m,
                 "keyword_score": clamp_score(
                     keyword_match_score(text_blob, keywords)
                     + _semantic_candidate_bias(
@@ -1898,36 +1895,20 @@ class DestinationRecommendationEngine:
 
             passed, reason = apply_hard_constraints(staged, hard_constraints)
             if passed:
-                return ("accepted", index, staged)
-            return (
-                "rejected",
-                index,
-                {
-                    "id": candidate["id"],
-                    "name": candidate["name"],
-                    "reason": reason,
-                },
-            )
+                stage1_filtered.append(staged)
+            else:
+                stage1_rejected.append(
+                    {
+                        "id": candidate["id"],
+                        "name": candidate["name"],
+                        "reason": reason,
+                    }
+                )
 
-        route_results = await _run_limited(
-            [_evaluate_candidate(index, candidate) for index, candidate in enumerate(route_candidates)],
-            concurrency=route_concurrency,
+        await _ctx_info(
+            ctx,
+            f"Lightweight candidate scoring completed in {perf_counter() - lightweight_scoring_started_at:.2f}s for {len(deduped)} candidates.",
         )
-
-        ordered_results = [
-            result
-            for result in route_results
-            if not isinstance(result, Exception)
-        ]
-        ordered_results.sort(key=lambda item: item[1])
-
-        for status, _index, payload in ordered_results:
-            if status == "accepted":
-                stage1_filtered.append(payload)
-            elif status == "rejected":
-                stage1_rejected.append(payload)
-            elif status == "route_failure":
-                route_failures.append(payload)
 
         scored = soft_rank(stage1_filtered, optimize_for)
         picked = scored[:top_k]
@@ -1951,6 +1932,7 @@ class DestinationRecommendationEngine:
                     "candidate_kind": candidate.get("candidate_kind", "unknown"),
                     "is_concrete_destination": candidate.get("is_concrete_destination", False),
                     "query_affinity": round(float(candidate.get("query_affinity", 0.0) or 0.0), 4),
+                    "route_summary_source": item.get("summary_source", "estimated"),
                     "location": candidate["location"],
                 }
             )
@@ -1972,6 +1954,51 @@ class DestinationRecommendationEngine:
                 "message": "No candidates matched constraints.",
             }
 
+        chosen_route_data = None
+        chosen_route_summary = recommendations[0]["route_summary"].copy()
+        chosen_route_started_at = perf_counter()
+        try:
+            chosen_route_data = await self.map_client.get_coarse_waypoints(
+                origin=origin_location,
+                destination=recommendations[0]["location"],
+                mode=chosen_mode,
+            )
+            actual_summary = (chosen_route_data.get("route_summary", {}) or {})
+            actual_distance_m = float(actual_summary.get("distance_m", 0) or 0)
+            actual_duration_s = float(actual_summary.get("duration_s", 0) or 0)
+            if actual_distance_m > 0 or actual_duration_s > 0:
+                chosen_route_summary = {
+                    "distance_m": round(actual_distance_m, 1),
+                    "duration_s": round(actual_duration_s, 1),
+                    "duration_min": round(actual_duration_s / 60, 1),
+                }
+                recommendations[0]["route_summary"] = chosen_route_summary
+                recommendations[0]["route_summary_source"] = "actual"
+            else:
+                route_failures.append(
+                    {
+                        "id": recommendations[0]["id"],
+                        "name": recommendations[0]["name"],
+                        "reason": "empty_route_summary",
+                    }
+                )
+                chosen_route_data = None
+        except Exception as exc:
+            route_failures.append(
+                {
+                    "id": recommendations[0]["id"],
+                    "name": recommendations[0]["name"],
+                    "reason": "route_exception",
+                    "detail": str(exc),
+                }
+            )
+            chosen_route_data = None
+
+        await _ctx_info(
+            ctx,
+            f"Chosen-destination route computation completed in {perf_counter() - chosen_route_started_at:.2f}s.",
+        )
+
         result = {
             # Rich semantic waypoints for explainability and debugging.
             "provider": self.provider,
@@ -1984,9 +2011,9 @@ class DestinationRecommendationEngine:
             "parsed_intent": parsed,
             "recommendations": recommendations,
             "chosen_destination": recommendations[0],
-            "key_waypoints": extract_key_waypoints(picked[0]["route"]),
-            "waypoint_sequence": extract_waypoint_sequence(picked[0]["route"]),
-            "route_summary": recommendations[0]["route_summary"],
+            "key_waypoints": extract_key_waypoints(chosen_route_data or {}),
+            "waypoint_sequence": extract_waypoint_sequence(chosen_route_data or {}),
+            "route_summary": chosen_route_summary,
             "meta": {
                 "candidate_count": len(deduped),
                 "evaluated_count": len(stage1_filtered) + len(stage1_rejected),
@@ -1997,6 +2024,8 @@ class DestinationRecommendationEngine:
                 "selection_top_k": top_k,
                 "optimization_target": optimize_for,
                 "destination_kind": destination_kind,
+                "candidate_routing_mode": "estimated",
+                "chosen_destination_routing_mode": "actual" if chosen_route_data else "estimated_fallback",
             },
             "hard_constraint_rejections": stage1_rejected,
             "route_failures": route_failures,
@@ -2005,6 +2034,7 @@ class DestinationRecommendationEngine:
         }
 
         if english_localization_active:
+            result_localization_started_at = perf_counter()
             translated_bundle = await translate_result_bundle_to_english(
                 result_bundle={
                     "recommendations": [
@@ -2026,18 +2056,22 @@ class DestinationRecommendationEngine:
                             "address": (result["chosen_destination"].get("tags") or {}).get("address", ""),
                         },
                     },
-                    "key_waypoints": [
-                        {
-                            "instruction": item.get("instruction", ""),
-                            "road": item.get("road", ""),
-                        }
-                        for item in result.get("key_waypoints", [])
-                    ],
                     "semantic_rerank": result.get("semantic_rerank") or {},
                 }
             )
             if translated_bundle:
                 result = _apply_english_translations(result, translated_bundle)
+                await _ctx_info(
+                    ctx,
+                    f"English result localization completed in {perf_counter() - result_localization_started_at:.2f}s.",
+                )
+            else:
+                await _ctx_warning(
+                    ctx,
+                    f"English result localization failed after {perf_counter() - result_localization_started_at:.2f}s; returning provider-language text.",
+                )
+
+        await _ctx_info(ctx, f"Recommendation pipeline completed in {perf_counter() - overall_started_at:.2f}s.")
 
         return result
 
