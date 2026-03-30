@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+import ast
 import inspect
 import json
 import os
@@ -25,7 +26,15 @@ from mcp_server.config import (
 )
 
 
-JSON_OBJECT_PATTERN = re.compile(r"\{[\s\S]*\}")
+JSON_FENCE_PATTERN = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
+DESTINATION_KIND_VALUES = {
+    "generic_poi",
+    "named_landmark",
+    "regional_scenic_area",
+    "administrative_area",
+    "road_or_route_label",
+    "specific_poi",
+}
 
 
 @dataclass(frozen=True)
@@ -116,6 +125,243 @@ def _extract_text_from_responses_response(response: Any) -> str:
     return ""
 
 
+def _remove_trailing_commas(text: str) -> str:
+    return re.sub(r",(\s*[}\]])", r"\1", text)
+
+
+def _iter_balanced_json_objects(text: str, max_objects: int = 20) -> list[str]:
+    objects: list[str] = []
+    if not text:
+        return objects
+
+    depth = 0
+    start_index: int | None = None
+    in_string = False
+    quote_char = ""
+    escaped = False
+
+    for index, char in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+                continue
+            if char == "\\":
+                escaped = True
+                continue
+            if char == quote_char:
+                in_string = False
+                quote_char = ""
+            continue
+
+        if char in {'"', "'"}:
+            in_string = True
+            quote_char = char
+            continue
+
+        if char == "{":
+            if depth == 0:
+                start_index = index
+            depth += 1
+            continue
+
+        if char == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start_index is not None:
+                candidate = text[start_index : index + 1].strip()
+                if candidate:
+                    objects.append(candidate)
+                    if len(objects) >= max_objects:
+                        break
+                start_index = None
+
+    return objects
+
+
+def _parse_candidate_json_object(candidate: str) -> dict[str, Any] | None:
+    text = str(candidate or "").strip()
+    if not text:
+        return None
+
+    parse_attempts = [text, _remove_trailing_commas(text)]
+    for attempt in parse_attempts:
+        try:
+            parsed = json.loads(attempt)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            continue
+
+    # Last-resort parser for Python-dict-like outputs from LLMs.
+    try:
+        parsed = ast.literal_eval(text)
+    except Exception:
+        return None
+    if isinstance(parsed, dict):
+        return parsed
+    return None
+
+
+def _extract_json_candidates(text: str) -> list[str]:
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    def _push(raw: str) -> None:
+        candidate = str(raw or "").strip()
+        if not candidate or candidate in seen:
+            return
+        seen.add(candidate)
+        candidates.append(candidate)
+
+    raw_text = str(text or "").strip()
+    _push(raw_text)
+
+    for match in JSON_FENCE_PATTERN.finditer(raw_text):
+        _push(match.group(1))
+
+    for candidate in _iter_balanced_json_objects(raw_text):
+        _push(candidate)
+
+    return candidates
+
+
+def _parse_json_object_from_text(text: str) -> dict[str, Any]:
+    candidates = _extract_json_candidates(text)
+    for candidate in candidates:
+        parsed = _parse_candidate_json_object(candidate)
+        if parsed is not None:
+            return parsed
+
+    preview = str(text or "").strip().replace("\n", " ")
+    if len(preview) > 240:
+        preview = preview[:240] + "..."
+    raise ValueError(f"No valid JSON object parsed from LLM response: {preview}")
+
+
+def extract_explicit_destination_query(user_instruction: str) -> str:
+    text = str(user_instruction or "").strip()
+    if not text:
+        return ""
+
+    english_patterns = [
+        r"\b(?:go\s+to|head\s+to|visit|reach)\s+(?:the\s+)?([A-Za-z][A-Za-z0-9\s\-\']{1,80})",
+        r"\b(?:want\s+to\s+go\s+to|would\s+like\s+to\s+go\s+to)\s+(?:the\s+)?([A-Za-z][A-Za-z0-9\s\-\']{1,80})",
+    ]
+    for pattern in english_patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if not match:
+            continue
+        candidate = re.sub(r"\s+", " ", match.group(1)).strip(" .,!?:;")
+        candidate = re.sub(r"\b(?:nearby|around me|close by|please|now)$", "", candidate, flags=re.IGNORECASE).strip()
+        if candidate:
+            return candidate
+
+    chinese_patterns = [
+        r"(?:\u60f3\u53bb|\u524d\u5f80|\u53bb)([\u3400-\u9fffA-Za-z0-9\s]{1,40})",
+    ]
+    for pattern in chinese_patterns:
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        candidate = re.sub(r"\s+", " ", match.group(1)).strip(" .,!?:;\u3002\uff01\uff1f")
+        if candidate:
+            return candidate
+
+    return ""
+
+
+def infer_destination_kind(
+    *,
+    user_instruction: str,
+    destination_type: str = "",
+    search_keywords: str = "",
+) -> str:
+    explicit_query = extract_explicit_destination_query(user_instruction)
+    query = explicit_query or str(search_keywords or "").strip()
+    query_key = re.sub(r"\s+", " ", query).strip().lower()
+    destination_key = re.sub(r"\s+", " ", str(destination_type or "").strip()).lower()
+
+    admin_tokens = (
+        "district",
+        "county",
+        "province",
+        "city",
+        "township",
+        "subdistrict",
+        "\u533a",
+        "\u53bf",
+        "\u7701",
+        "\u5e02",
+        "\u8857\u9053",
+        "\u9547",
+    )
+    road_tokens = (
+        "road",
+        "street",
+        "avenue",
+        "lane",
+        "route",
+        "\u8def",
+        "\u8857",
+        "\u5927\u8857",
+        "\u5df7",
+        "\u9053",
+    )
+    scenic_region_tokens = (
+        "lake",
+        "park",
+        "scenic",
+        "scenic area",
+        "mountain",
+        "beach",
+        "island",
+        "campus",
+        "old town",
+        "resort",
+        "\u6e56",
+        "\u516c\u56ed",
+        "\u666f\u533a",
+        "\u98ce\u666f",
+        "\u5c71",
+        "\u6d77\u6ee9",
+        "\u5c9b",
+        "\u6821\u533a",
+        "\u53e4\u9547",
+    )
+    generic_poi_tokens = (
+        "cafe",
+        "coffee",
+        "restaurant",
+        "parking",
+        "charging",
+        "pharmacy",
+        "bookstore",
+        "store",
+        "shop",
+        "hospital",
+        "\u5496\u5561",
+        "\u9910\u5385",
+        "\u505c\u8f66",
+        "\u5145\u7535",
+        "\u836f\u5e97",
+        "\u4e66\u5e97",
+        "\u5546\u5e97",
+    )
+
+    if query_key and any(token in query_key for token in admin_tokens):
+        return "administrative_area"
+    if query_key and any(token in query_key for token in road_tokens):
+        return "road_or_route_label"
+    if explicit_query and query_key and any(token in query_key for token in scenic_region_tokens):
+        return "regional_scenic_area"
+    if destination_key in {"tourist attraction", "tourist_attraction", "scenic attraction", "scenic_attraction"}:
+        return "regional_scenic_area" if explicit_query else "specific_poi"
+    if explicit_query:
+        return "named_landmark"
+    if query_key and any(token in query_key for token in generic_poi_tokens):
+        return "generic_poi"
+    return "generic_poi"
+
+
 def _create_async_client(settings: LLMSettings) -> Any:
     if AsyncOpenAI is None:
         return None
@@ -146,6 +392,30 @@ class BaseLLMService:
 class IntentParser(BaseLLMService):
     """Parse recommendation instructions with an LLM and a heuristic fallback."""
 
+    async def _call_llm_with_fallback(self, client: Any, user_instruction: str) -> tuple[str, str]:
+        preferred_style = self.settings.api_style
+        fallback_style = "responses" if preferred_style == "chat_completions" else "chat_completions"
+        styles = [preferred_style, fallback_style]
+
+        errors: list[str] = []
+        for style in styles:
+            try:
+                if style == "responses":
+                    content = await self._call_responses_api(client, user_instruction)
+                else:
+                    content = await self._call_chat_completions(client, user_instruction)
+
+                if str(content or "").strip():
+                    return content, style
+                errors.append(f"{style}: empty_content")
+            except Exception as exc:
+                errors.append(f"{style}: {exc}")
+
+        raise RuntimeError(" | ".join(errors) if errors else "unknown_llm_call_error")
+
+    def _extract_explicit_destination_query(self, user_instruction: str) -> str:
+        return extract_explicit_destination_query(user_instruction)
+
     def heuristic_parse(self, user_instruction: str) -> dict[str, Any]:
         rules = load_json_env("INTENT_RULES_JSON", default_intent_rules())
         text = user_instruction.lower()
@@ -158,12 +428,18 @@ class IntentParser(BaseLLMService):
 
         destination_type = "poi"
         search_keywords = rules.get("destination_search_keywords", {}).get("poi", default_search_keywords())
-        for destination_rule in rules.get("destination_rules", []):
-            tokens = destination_rule.get("tokens", [])
-            if any(token.lower() in text for token in tokens):
-                destination_type = destination_rule.get("type", "poi")
-                search_keywords = rules.get("destination_search_keywords", {}).get(destination_type, search_keywords)
-                break
+
+        explicit_query = self._extract_explicit_destination_query(user_instruction)
+        if explicit_query:
+            destination_type = "named_place"
+            search_keywords = explicit_query
+        else:
+            for destination_rule in rules.get("destination_rules", []):
+                tokens = destination_rule.get("tokens", [])
+                if any(token.lower() in text for token in tokens):
+                    destination_type = destination_rule.get("type", "poi")
+                    search_keywords = rules.get("destination_search_keywords", {}).get(destination_type, search_keywords)
+                    break
 
         optimize_for = "distance"
         if any(token.lower() in text for token in rules.get("time_optimization_tokens", [])):
@@ -175,12 +451,18 @@ class IntentParser(BaseLLMService):
 
         return {
             "destination_type": destination_type,
+            "destination_kind": infer_destination_kind(
+                user_instruction=user_instruction,
+                destination_type=destination_type,
+                search_keywords=search_keywords,
+            ),
             "search_keywords": search_keywords,
             "mode": mode,
             "radius_m": radius,
             "optimize_for": optimize_for,
             "max_candidates": rules.get("default_max_candidates", 5),
             "hard_constraints": rules.get("default_hard_constraints", {}),
+            "intent_source": "heuristic",
         }
 
     def build_messages(self, user_instruction: str) -> list[dict[str, str]]:
@@ -190,13 +472,23 @@ class IntentParser(BaseLLMService):
                 "content": (
                 "You are an intent parser for map recommendation and routing. "
                 "Return JSON only. The JSON schema must contain exactly these top-level keys: "
-                "destination_type, search_keywords, mode, radius_m, optimize_for, "
+                "destination_type, destination_kind, search_keywords, mode, radius_m, optimize_for, "
                 "max_candidates, hard_constraints. "
+                "Allowed destination_kind values: generic_poi, named_landmark, regional_scenic_area, "
+                "administrative_area, road_or_route_label, specific_poi. "
                 "Allowed mode values: car, foot, bike. "
                 "Allowed optimize_for values: time, distance, balanced. "
                 "radius_m and max_candidates must be integers. "
                 "search_keywords must be a provider-facing keyword string, preferably pipe-delimited, "
                 "for example 'bookstore|cafe' or 'convenience store|tea shop'. "
+                "If the user gives an explicit destination name (for example 'West Lake' or 'Times Square'), "
+                "set destination_type appropriately, use destination_kind=named_landmark or "
+                "destination_kind=regional_scenic_area when the destination is a broad scenic region, and put that destination name directly into "
+                "search_keywords instead of generic categories. "
+                "For broad need-based requests such as thirsty, hungry, tired, need coffee, need groceries, or need a restroom, "
+                "output broad retrievable provider-facing search_keywords that cover several suitable POI types. "
+                "Use hard_constraints only for constraints that are explicitly stated by the user. "
+                "Do not invent max route duration, max route distance, must_include_keywords, or exclude_keywords from vague preferences alone. "
                 "hard_constraints must include keys: max_route_duration_min, max_route_distance_m, "
                 "must_include_keywords, exclude_keywords. "
                 "Do not add explanation or markdown."
@@ -308,6 +600,14 @@ class IntentParser(BaseLLMService):
             normalized["optimize_for"] = optimize_for
 
         destination_type = str(normalized.get("destination_type", "poi")).strip() or "poi"
+        destination_kind = str(normalized.get("destination_kind", "")).strip().lower()
+        if destination_kind not in DESTINATION_KIND_VALUES:
+            destination_kind = infer_destination_kind(
+                user_instruction=user_instruction,
+                destination_type=destination_type,
+                search_keywords=str(normalized.get("search_keywords") or normalized.get("keywords") or ""),
+            )
+        normalized["destination_kind"] = destination_kind
         normalized["search_keywords"] = join_search_keywords(
             normalized.get("search_keywords") or normalized.get("keywords"),
             default=default_intent_rules().get("destination_search_keywords", {}).get(
@@ -357,27 +657,221 @@ class IntentParser(BaseLLMService):
 
     async def parse(self, user_instruction: str) -> dict[str, Any]:
         if not self.is_available():
-            return self.heuristic_parse(user_instruction)
+            parsed = self.heuristic_parse(user_instruction)
+            parsed["intent_source"] = "heuristic_no_llm"
+            return parsed
 
         client = _create_async_client(self.settings)
         try:
-            if self.settings.api_style == "responses":
-                content = await self._call_responses_api(client, user_instruction)
-            else:
-                content = await self._call_chat_completions(client, user_instruction)
+            try:
+                content, api_style_used = await self._call_llm_with_fallback(client, user_instruction)
+            except Exception as exc:
+                parsed = self.heuristic_parse(user_instruction)
+                parsed["intent_source"] = "heuristic_llm_api_error"
+                parsed["llm_error"] = str(exc)
+                return parsed
 
-            match = JSON_OBJECT_PATTERN.search(content)
-            if not match:
-                return self.heuristic_parse(user_instruction)
+            try:
+                parsed = _parse_json_object_from_text(content)
+            except Exception as exc:
+                fallback = self.heuristic_parse(user_instruction)
+                fallback["intent_source"] = "heuristic_llm_parse_error"
+                fallback["llm_error"] = str(exc)
+                return fallback
 
-            parsed = json.loads(match.group(0))
-            if not isinstance(parsed, dict):
-                return self.heuristic_parse(user_instruction)
-            return self._normalize_llm_output(user_instruction, parsed)
+            normalized = self._normalize_llm_output(user_instruction, parsed)
+            normalized["intent_source"] = "llm"
+            normalized["llm_api_style_used"] = api_style_used
+            return normalized
         except Exception:
-            return self.heuristic_parse(user_instruction)
+            parsed = self.heuristic_parse(user_instruction)
+            parsed["intent_source"] = "heuristic_llm_error"
+            return parsed
         finally:
             await _close_async_client(client)
+
+
+class CandidateReranker(BaseLLMService):
+    """Rerank map candidates by semantic relevance to the user request."""
+
+    def build_messages(
+        self,
+        *,
+        user_instruction: str,
+        parsed_intent: dict[str, Any],
+        candidates: list[dict[str, Any]],
+    ) -> list[dict[str, str]]:
+        simplified_candidates = [
+            {
+                "id": str(item.get("id", "")),
+                "name": str(item.get("name", "")),
+                "type": str(item.get("type", "")),
+                "address": str(item.get("address", "")),
+                "distance_m": item.get("distance_m"),
+                "candidate_kind": str(item.get("candidate_kind", "")),
+                "is_concrete_destination": bool(item.get("is_concrete_destination", False)),
+                "query_affinity": item.get("query_affinity"),
+                "anchor_name": str(item.get("anchor_name", "")),
+                "anchor_distance_m": item.get("anchor_distance_m"),
+            }
+            for item in candidates
+        ]
+        return [
+            {
+                "role": "system",
+                "content": (
+                    "You rank map destination candidates for an embodied navigation system. "
+                    "Return JSON only with exactly two keys: ranked_candidate_ids and summary. "
+                    "ranked_candidate_ids must be an array of candidate ids ordered best to worst. "
+                    "Prefer destinations that truly satisfy the user's semantic intent. "
+                    "If the user asks for a landmark, scenic area, lake, park, tourist attraction, or named place, "
+                    "rank concrete navigable scenic destinations ahead of administrative regions, roads, "
+                    "institutions, hotels, stores, residences, or branded places that only contain the same "
+                    "words in their names or addresses. For regional scenic areas, prioritize the destination "
+                    "itself or canonical sub-features directly attached to that area. Do not rank merely nearby "
+                    "scenic places highly unless the candidate is clearly part of the requested area."
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "user_instruction": user_instruction,
+                        "parsed_intent": parsed_intent,
+                        "candidates": simplified_candidates,
+                    },
+                    ensure_ascii=True,
+                ),
+            },
+        ]
+
+    async def _call_chat_completions(
+        self,
+        client: Any,
+        *,
+        user_instruction: str,
+        parsed_intent: dict[str, Any],
+        candidates: list[dict[str, Any]],
+    ) -> str:
+        response = await client.chat.completions.create(
+            model=self.settings.model,
+            temperature=self.settings.temperature,
+            messages=self.build_messages(
+                user_instruction=user_instruction,
+                parsed_intent=parsed_intent,
+                candidates=candidates,
+            ),
+        )
+        return _extract_text_from_chat_response(response)
+
+    async def _call_responses_api(
+        self,
+        client: Any,
+        *,
+        user_instruction: str,
+        parsed_intent: dict[str, Any],
+        candidates: list[dict[str, Any]],
+    ) -> str:
+        response = await client.responses.create(
+            model=self.settings.model,
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": json.dumps(
+                                {
+                                    "instruction": (
+                                        "Rerank these destination candidates by semantic relevance and "
+                                        "return JSON only with ranked_candidate_ids and summary."
+                                    ),
+                                    "user_instruction": user_instruction,
+                                    "parsed_intent": parsed_intent,
+                                    "candidates": candidates,
+                                },
+                                ensure_ascii=True,
+                            ),
+                        }
+                    ],
+                }
+            ],
+        )
+        return _extract_text_from_responses_response(response)
+
+    async def _call_llm_with_fallback(
+        self,
+        client: Any,
+        *,
+        user_instruction: str,
+        parsed_intent: dict[str, Any],
+        candidates: list[dict[str, Any]],
+    ) -> tuple[str, str]:
+        preferred_style = self.settings.api_style
+        fallback_style = "responses" if preferred_style == "chat_completions" else "chat_completions"
+        styles = [preferred_style, fallback_style]
+
+        errors: list[str] = []
+        for style in styles:
+            try:
+                if style == "responses":
+                    content = await self._call_responses_api(
+                        client,
+                        user_instruction=user_instruction,
+                        parsed_intent=parsed_intent,
+                        candidates=candidates,
+                    )
+                else:
+                    content = await self._call_chat_completions(
+                        client,
+                        user_instruction=user_instruction,
+                        parsed_intent=parsed_intent,
+                        candidates=candidates,
+                    )
+                if str(content or "").strip():
+                    return content, style
+                errors.append(f"{style}: empty_content")
+            except Exception as exc:
+                errors.append(f"{style}: {exc}")
+
+        raise RuntimeError(" | ".join(errors) if errors else "unknown_llm_call_error")
+
+    async def rerank(
+        self,
+        *,
+        user_instruction: str,
+        parsed_intent: dict[str, Any],
+        candidates: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        if not candidates or not self.is_available():
+            return None
+
+        client = _create_async_client(self.settings)
+        try:
+            content, api_style_used = await self._call_llm_with_fallback(
+                client,
+                user_instruction=user_instruction,
+                parsed_intent=parsed_intent,
+                candidates=candidates,
+            )
+            parsed = _parse_json_object_from_text(content)
+        except Exception:
+            return None
+        finally:
+            await _close_async_client(client)
+
+        ranked_ids = [
+            str(item).strip()
+            for item in parsed.get("ranked_candidate_ids", [])
+            if str(item).strip()
+        ]
+        if not ranked_ids:
+            return None
+        return {
+            "ranked_candidate_ids": ranked_ids,
+            "summary": str(parsed.get("summary", "")).strip(),
+            "api_style": api_style_used,
+        }
 
 
 class VisionAnalyzer(BaseLLMService):
@@ -494,6 +988,19 @@ async def parse_instruction_with_llm(user_instruction: str) -> dict[str, Any]:
     return await IntentParser().parse(user_instruction)
 
 
+async def rerank_candidates_with_llm(
+    *,
+    user_instruction: str,
+    parsed_intent: dict[str, Any],
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    return await CandidateReranker().rerank(
+        user_instruction=user_instruction,
+        parsed_intent=parsed_intent,
+        candidates=candidates,
+    )
+
+
 async def analyze_image_with_llm(
     image_url: str,
     question: str = "What is in this image?",
@@ -509,9 +1016,13 @@ async def analyze_image_with_llm(
 
 
 __all__ = [
+    "CandidateReranker",
     "IntentParser",
     "LLMSettings",
     "VisionAnalyzer",
     "analyze_image_with_llm",
+    "extract_explicit_destination_query",
+    "infer_destination_kind",
     "parse_instruction_with_llm",
+    "rerank_candidates_with_llm",
 ]
