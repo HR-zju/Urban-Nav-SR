@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Protocol
+import asyncio
 import math
 import os
 import re
@@ -729,7 +730,18 @@ class BaseHTTPMapClient:
         self.session: aiohttp.ClientSession | None = None
 
     async def connect(self) -> None:
-        self.session = aiohttp.ClientSession()
+        total_timeout_s = float(os.getenv("MAP_HTTP_TOTAL_TIMEOUT_S", "60") or 60)
+        connect_timeout_s = float(os.getenv("MAP_HTTP_CONNECT_TIMEOUT_S", "12") or 12)
+        sock_read_timeout_raw = os.getenv("MAP_HTTP_SOCK_READ_TIMEOUT_S", "").strip()
+        sock_read_timeout_s = float(sock_read_timeout_raw) if sock_read_timeout_raw else None
+        trust_env = os.getenv("MAP_HTTP_TRUST_ENV", "1").strip().lower() not in {"0", "false", "no"}
+
+        timeout = aiohttp.ClientTimeout(
+            total=total_timeout_s,
+            connect=connect_timeout_s,
+            sock_read=sock_read_timeout_s,
+        )
+        self.session = aiohttp.ClientSession(timeout=timeout, trust_env=trust_env)
 
     async def disconnect(self) -> None:
         if self.session:
@@ -941,20 +953,32 @@ class OSMClient(BaseHTTPMapClient):
         subcategories: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         session = self.require_session()
+        bbox_text = f"{bbox[1]},{bbox[0]},{bbox[3]},{bbox[2]}"
+        selectors: list[str] = []
         if subcategories:
-            subcategory_filters = " or ".join([f'"{category}"="{sub}"' for sub in subcategories])
-            query_filter = f"({subcategory_filters})"
+            for sub in subcategories:
+                selectors.extend(
+                    [
+                        f'node["{category}"="{sub}"]({bbox_text});',
+                        f'way["{category}"="{sub}"]({bbox_text});',
+                        f'relation["{category}"="{sub}"]({bbox_text});',
+                    ]
+                )
         else:
-            query_filter = f'"{category}"'
+            selectors.extend(
+                [
+                    f'node["{category}"]({bbox_text});',
+                    f'way["{category}"]({bbox_text});',
+                    f'relation["{category}"]({bbox_text});',
+                ]
+            )
 
         query = f"""
         [out:json];
         (
-          node[{query_filter}]({bbox[1]},{bbox[0]},{bbox[3]},{bbox[2]});
-          way[{query_filter}]({bbox[1]},{bbox[0]},{bbox[3]},{bbox[2]});
-          relation[{query_filter}]({bbox[1]},{bbox[0]},{bbox[3]},{bbox[2]});
+          {' '.join(selectors)}
         );
-        out body;
+        out center tags;
         """
 
         async with session.post("https://overpass-api.de/api/interpreter", data={"data": query}) as response:
@@ -1581,7 +1605,10 @@ class GoogleMapsClient(BaseHTTPMapClient):
                 "places.location,places.primaryType,places.types"
             ),
         ) as response:
-            data = await response.json(content_type=None)
+            try:
+                data = await response.json(content_type=None)
+            except Exception:
+                data = await response.text()
             if response.status != 200:
                 raise Exception(f"Google Places text search failed: {data}")
         return data.get("places", []) or []
@@ -1639,7 +1666,10 @@ class GoogleMapsClient(BaseHTTPMapClient):
             json=body,
             headers=self._routes_headers(",".join(field_mask)),
         ) as response:
-            data = await response.json(content_type=None)
+            try:
+                data = await response.json(content_type=None)
+            except Exception:
+                data = await response.text()
             if response.status != 200:
                 raise Exception(f"Google Routes computeRoutes failed: {data}")
         return data
@@ -1655,14 +1685,20 @@ class GoogleMapsClient(BaseHTTPMapClient):
         if self.region:
             params["region"] = self.region
 
-        async with session.get(
-            "https://maps.googleapis.com/maps/api/geocode/json",
-            params=params,
-        ) as response:
-            data = await response.json(content_type=None)
-            status = str(data.get("status") or "")
-            if response.status != 200 or status not in {"OK", "ZERO_RESULTS"}:
-                raise Exception(f"Google geocode failed: {status or response.status}")
+        try:
+            async with session.get(
+                "https://maps.googleapis.com/maps/api/geocode/json",
+                params=params,
+            ) as response:
+                data = await response.json(content_type=None)
+                status = str(data.get("status") or "")
+                if response.status != 200 or status not in {"OK", "ZERO_RESULTS"}:
+                    raise Exception(f"Google geocode failed: {status or response.status}")
+        except (aiohttp.ClientConnectionError, aiohttp.ClientConnectorError, asyncio.TimeoutError) as exc:
+            raise Exception(
+                "Google geocode endpoint unreachable. If you are in a restricted network, "
+                "set HTTPS_PROXY/HTTP_PROXY and keep MAP_HTTP_TRUST_ENV=1."
+            ) from exc
 
         results = []
         for item in data.get("results", []) or []:
@@ -1693,14 +1729,20 @@ class GoogleMapsClient(BaseHTTPMapClient):
         if self.region:
             params["region"] = self.region
 
-        async with session.get(
-            "https://maps.googleapis.com/maps/api/geocode/json",
-            params=params,
-        ) as response:
-            data = await response.json(content_type=None)
-            status = str(data.get("status") or "")
-            if response.status != 200 or status not in {"OK", "ZERO_RESULTS"}:
-                raise Exception(f"Google reverse geocode failed: {status or response.status}")
+        try:
+            async with session.get(
+                "https://maps.googleapis.com/maps/api/geocode/json",
+                params=params,
+            ) as response:
+                data = await response.json(content_type=None)
+                status = str(data.get("status") or "")
+                if response.status != 200 or status not in {"OK", "ZERO_RESULTS"}:
+                    raise Exception(f"Google reverse geocode failed: {status or response.status}")
+        except (aiohttp.ClientConnectionError, aiohttp.ClientConnectorError, asyncio.TimeoutError) as exc:
+            raise Exception(
+                "Google reverse geocode endpoint unreachable. If you are in a restricted network, "
+                "set HTTPS_PROXY/HTTP_PROXY and keep MAP_HTTP_TRUST_ENV=1."
+            ) from exc
 
         result = (data.get("results", []) or [{}])[0]
         return {
@@ -1718,13 +1760,19 @@ class GoogleMapsClient(BaseHTTPMapClient):
         limit: int = 10,
     ) -> list[dict[str, Any]]:
         origin_lon, origin_lat = parse_location_text(location)
-        places = await self._text_search_places(
-            query=keywords,
-            latitude=origin_lat,
-            longitude=origin_lon,
-            radius=int(radius),
-            limit=limit,
-        )
+        try:
+            places = await self._text_search_places(
+                query=keywords,
+                latitude=origin_lat,
+                longitude=origin_lon,
+                radius=int(radius),
+                limit=limit,
+            )
+        except (aiohttp.ClientConnectionError, aiohttp.ClientConnectorError, asyncio.TimeoutError) as exc:
+            raise Exception(
+                "Google Places endpoint unreachable. If you are in a restricted network, "
+                "set HTTPS_PROXY/HTTP_PROXY and keep MAP_HTTP_TRUST_ENV=1."
+            ) from exc
         parsed = parse_google_places(
             places,
             origin_lat=origin_lat,
@@ -1744,14 +1792,20 @@ class GoogleMapsClient(BaseHTTPMapClient):
     ) -> dict[str, Any]:
         origin_lon, origin_lat = parse_location_text(origin)
         destination_lon, destination_lat = parse_location_text(destination)
-        route_data = await self._compute_routes(
-            from_lat=origin_lat,
-            from_lon=origin_lon,
-            to_lat=destination_lat,
-            to_lon=destination_lon,
-            mode=mode,
-            include_steps=True,
-        )
+        try:
+            route_data = await self._compute_routes(
+                from_lat=origin_lat,
+                from_lon=origin_lon,
+                to_lat=destination_lat,
+                to_lon=destination_lon,
+                mode=mode,
+                include_steps=True,
+            )
+        except (aiohttp.ClientConnectionError, aiohttp.ClientConnectorError, asyncio.TimeoutError) as exc:
+            raise Exception(
+                "Google Routes endpoint unreachable. If you are in a restricted network, "
+                "set HTTPS_PROXY/HTTP_PROXY and keep MAP_HTTP_TRUST_ENV=1."
+            ) from exc
         return parse_google_steps(route_data, origin=origin, destination=destination, mode=mode)
 
     async def get_route(
@@ -1765,14 +1819,20 @@ class GoogleMapsClient(BaseHTTPMapClient):
         overview: str = "overview",
         annotations: bool = True,
     ) -> dict[str, Any]:
-        route_data = await self._compute_routes(
-            from_lat=from_lat,
-            from_lon=from_lon,
-            to_lat=to_lat,
-            to_lon=to_lon,
-            mode=mode,
-            include_steps=steps,
-        )
+        try:
+            route_data = await self._compute_routes(
+                from_lat=from_lat,
+                from_lon=from_lon,
+                to_lat=to_lat,
+                to_lon=to_lon,
+                mode=mode,
+                include_steps=steps,
+            )
+        except (aiohttp.ClientConnectionError, aiohttp.ClientConnectorError, asyncio.TimeoutError) as exc:
+            raise Exception(
+                "Google Routes endpoint unreachable. If you are in a restricted network, "
+                "set HTTPS_PROXY/HTTP_PROXY and keep MAP_HTTP_TRUST_ENV=1."
+            ) from exc
         routes = route_data.get("routes", []) or []
         if not routes:
             return {"routes": [], "waypoints": []}

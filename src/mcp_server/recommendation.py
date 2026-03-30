@@ -21,6 +21,8 @@ from mcp_server.llm import (
     extract_explicit_destination_query,
     infer_destination_kind,
     rerank_candidates_with_llm,
+    translate_instruction_for_cn_map,
+    translate_result_bundle_to_english,
 )
 from mcp_server.map_providers import MapProviderClient
 
@@ -339,6 +341,17 @@ def _candidate_structured_text(candidate: dict[str, Any]) -> str:
     return " ".join(part for part in parts if part).lower()
 
 
+def _contains_cjk(text: str) -> bool:
+    return bool(re.search(r"[\u3400-\u9fff]", str(text or "")))
+
+
+def _looks_english_instruction(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value or _contains_cjk(value):
+        return False
+    return len(re.findall(r"[A-Za-z]", value)) >= 4
+
+
 async def _run_limited(coroutines: list[Any], concurrency: int) -> list[Any]:
     if not coroutines:
         return []
@@ -355,6 +368,94 @@ async def _run_limited(coroutines: list[Any], concurrency: int) -> list[Any]:
 
 def _normalize_text_key(value: str) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip()).lower()
+
+
+def _is_identifier_like_name(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return True
+    return bool(re.fullmatch(r"[0-9][0-9\-_:.]*", text))
+
+
+def _humanize_type_label(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    primary = text.split(";", 1)[0].replace("_", " ").replace("-", " ").strip()
+    if not primary:
+        return ""
+    primary = re.sub(r"\s+", " ", primary)
+    return primary.title()
+
+
+def _display_name_from_tags(
+    *,
+    tags: dict[str, Any],
+    fallback_type: str = "",
+) -> str:
+    raw_name = str(tags.get("name") or "").strip()
+    if raw_name and not _is_identifier_like_name(raw_name):
+        return raw_name
+
+    for key in ("tourism", "leisure", "natural", "historic", "type"):
+        label = _humanize_type_label(str(tags.get(key) or ""))
+        if label:
+            return f"Unnamed {label}".strip()
+
+    label = _humanize_type_label(fallback_type)
+    if label:
+        return f"Unnamed {label}".strip()
+    return "Unnamed Place"
+
+
+def _apply_english_translations(
+    result: dict[str, Any],
+    translated_bundle: dict[str, Any],
+) -> dict[str, Any]:
+    translated_recommendations = translated_bundle.get("recommendations")
+    if isinstance(translated_recommendations, list):
+        translated_map = {
+            str(item.get("id", "")): item
+            for item in translated_recommendations
+            if isinstance(item, dict) and str(item.get("id", "")).strip()
+        }
+        for recommendation in result.get("recommendations", []) or []:
+            translated = translated_map.get(str(recommendation.get("id", "")))
+            if not translated:
+                continue
+            if isinstance(translated.get("name"), str) and translated.get("name"):
+                recommendation["name"] = translated["name"]
+            translated_tags = translated.get("tags")
+            if isinstance(translated_tags, dict) and isinstance(recommendation.get("tags"), dict):
+                for field in ("type", "address"):
+                    if isinstance(translated_tags.get(field), str):
+                        recommendation["tags"][field] = translated_tags[field]
+
+    translated_chosen = translated_bundle.get("chosen_destination")
+    if isinstance(translated_chosen, dict) and isinstance(result.get("chosen_destination"), dict):
+        if isinstance(translated_chosen.get("name"), str) and translated_chosen.get("name"):
+            result["chosen_destination"]["name"] = translated_chosen["name"]
+        translated_tags = translated_chosen.get("tags")
+        if isinstance(translated_tags, dict) and isinstance(result["chosen_destination"].get("tags"), dict):
+            for field in ("type", "address"):
+                if isinstance(translated_tags.get(field), str):
+                    result["chosen_destination"]["tags"][field] = translated_tags[field]
+
+    translated_waypoints = translated_bundle.get("key_waypoints")
+    if isinstance(translated_waypoints, list):
+        for original, translated in zip(result.get("key_waypoints", []) or [], translated_waypoints):
+            if not isinstance(translated, dict):
+                continue
+            for field in ("instruction", "road"):
+                if isinstance(translated.get(field), str):
+                    original[field] = translated[field]
+
+    translated_rerank = translated_bundle.get("semantic_rerank")
+    if isinstance(translated_rerank, dict) and isinstance(result.get("semantic_rerank"), dict):
+        if isinstance(translated_rerank.get("summary"), str):
+            result["semantic_rerank"]["summary"] = translated_rerank["summary"]
+
+    return result
 
 
 def _split_camel_case(value: str) -> str:
@@ -1089,9 +1190,9 @@ def _normalize_nearby_poi_candidates(
         if lat is None or lon is None:
             continue
 
-        name = str(tags.get("name") or item.get("id") or "Unnamed").strip() or "Unnamed"
-        provider_poi_id = str(item.get("id") or f"{source_prefix}:{lon}:{lat}:{name}")
         poi_type = str(tags.get("type") or "").strip()
+        name = _display_name_from_tags(tags=tags, fallback_type=poi_type)
+        provider_poi_id = str(item.get("id") or f"{source_prefix}:{lon}:{lat}:{name}")
         address = str(tags.get("address") or "").strip()
         normalized.append(
             _annotate_candidate(
@@ -1125,10 +1226,79 @@ def _normalize_nearby_poi_candidates(
     return normalized
 
 
+def _bbox_from_center(lat: float, lon: float, radius_m: float) -> tuple[float, float, float, float]:
+    lat_delta = radius_m / 111000
+    lon_divisor = max(0.2, math.cos(math.radians(lat)))
+    lon_delta = radius_m / (111000 * lon_divisor)
+    return (lon - lon_delta, lat - lat_delta, lon + lon_delta, lat + lat_delta)
+
+
+def _normalize_feature_candidates(
+    features: list[dict[str, Any]],
+    *,
+    current_latitude: float,
+    current_longitude: float,
+    destination_kind: str,
+    source_prefix: str,
+) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for item in features:
+        center = item.get("center", {}) or {}
+        lat = item.get("lat", center.get("lat"))
+        lon = item.get("lon", center.get("lon"))
+        if lat is None or lon is None:
+            continue
+
+        tags = item.get("tags", {}) or {}
+        name = str(tags.get("name") or item.get("id") or "Unnamed").strip() or "Unnamed"
+        provider_poi_id = str(item.get("id") or f"{source_prefix}:{lon}:{lat}:{name}")
+
+        poi_type_parts = []
+        for key in ("tourism", "leisure", "natural", "historic"):
+            value = str(tags.get(key) or "").strip()
+            if value:
+                poi_type_parts.append(value)
+        poi_type = ";".join(poi_type_parts) or "unknown"
+        name = _display_name_from_tags(tags=tags, fallback_type=poi_type)
+        address = str(tags.get("addr:full") or tags.get("address") or "").strip()
+
+        normalized.append(
+            _annotate_candidate(
+                {
+                    "id": provider_poi_id,
+                    "name": name,
+                    "latitude": float(lat),
+                    "longitude": float(lon),
+                    "location": f"{float(lon)},{float(lat)}",
+                    "tags": {
+                        "type": poi_type,
+                        "address": address,
+                        "provider": source_prefix,
+                        "provider_poi_id": provider_poi_id,
+                    },
+                    "raw_candidate": {
+                        "name": name,
+                        "type": poi_type,
+                        "address": address,
+                        "provider": source_prefix,
+                        "raw": item,
+                    },
+                    "direct_distance_m": round(
+                        haversine_m(current_latitude, current_longitude, float(lat), float(lon)),
+                        1,
+                    ),
+                },
+                destination_kind=destination_kind,
+            )
+        )
+    return normalized
+
+
 async def _expand_regional_scenic_area_candidates(
     *,
     base_candidates: list[dict[str, Any]],
     map_client: MapProviderClient,
+    provider: str,
     current_latitude: float,
     current_longitude: float,
     radius: float,
@@ -1219,6 +1389,80 @@ async def _expand_regional_scenic_area_candidates(
                 anchor_distance_m=anchor_distance_m,
             ):
                 expanded.append(candidate)
+
+    concrete_count = sum(1 for candidate in expanded if candidate.get("is_concrete_destination"))
+    if provider == "osm" and concrete_count < 3 and anchors:
+        feature_queries = []
+        for anchor in anchors[:2]:
+            bbox = _bbox_from_center(
+                float(anchor["latitude"]),
+                float(anchor["longitude"]),
+                max(search_radius * 1.25, 1400),
+            )
+            feature_queries.extend(
+                [
+                    (anchor, bbox, "tourism", ["attraction", "viewpoint", "museum", "gallery", "theme_park"]),
+                    (anchor, bbox, "leisure", ["park", "garden", "nature_reserve"]),
+                ]
+            )
+
+        async def _fetch_anchor_features(
+            anchor: dict[str, Any],
+            bbox: tuple[float, float, float, float],
+            category: str,
+            subcategories: list[str],
+        ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+            features = await map_client.search_features_by_category(
+                bbox=bbox,
+                category=category,
+                subcategories=subcategories,
+            )
+            return anchor, features
+
+        feature_results = await _run_limited(
+            [
+                _fetch_anchor_features(anchor, bbox, category, subcategories)
+                for anchor, bbox, category, subcategories in feature_queries
+            ],
+            concurrency=expand_concurrency,
+        )
+
+        for result in feature_results:
+            if isinstance(result, Exception):
+                await _ctx_warning(ctx, f"OSM regional feature expansion failed: {result}")
+                continue
+
+            anchor, features = result
+            normalized_features = _normalize_feature_candidates(
+                features,
+                current_latitude=current_latitude,
+                current_longitude=current_longitude,
+                destination_kind="regional_scenic_area",
+                source_prefix="osm_feature_expansion",
+            )
+            for candidate in normalized_features:
+                anchor_distance_m = haversine_m(
+                    float(anchor["latitude"]),
+                    float(anchor["longitude"]),
+                    float(candidate["latitude"]),
+                    float(candidate["longitude"]),
+                )
+                direct_affinity = _query_affinity_score(candidate, query_terms=query_terms, anchor_terms=anchor_terms)
+                inherited_affinity = clamp_score(
+                    max(
+                        direct_affinity,
+                        float(anchor.get("query_affinity", 0.0) or 0.0) * 0.65,
+                    )
+                )
+                candidate["query_affinity"] = max(float(candidate.get("query_affinity", 0.0) or 0.0), inherited_affinity)
+                candidate["anchor_name"] = anchor.get("name", "")
+                candidate["anchor_distance_m"] = round(anchor_distance_m, 1)
+                if _regional_expansion_acceptance(
+                    candidate,
+                    query_affinity=float(candidate["query_affinity"]),
+                    anchor_distance_m=anchor_distance_m,
+                ):
+                    expanded.append(candidate)
 
     deduped: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -1329,7 +1573,24 @@ class DestinationRecommendationEngine:
             eval_limit = min(eval_limit, int(os.getenv("ROUTE_EVAL_LIMIT_AMAP", "8")))
         default_opt_target = os.getenv("DEFAULT_OPTIMIZE_FOR", "distance").strip() or "distance"
 
-        parsed = await self.intent_parser.parse(user_instruction)
+        original_instruction = user_instruction
+        working_instruction = user_instruction
+        translated_instruction = None
+        english_localization_active = False
+        if self.provider in {"amap", "baidu"} and _looks_english_instruction(user_instruction):
+            translated_instruction = await translate_instruction_for_cn_map(
+                user_instruction=user_instruction,
+                provider=self.provider,
+            )
+            if translated_instruction:
+                working_instruction = translated_instruction
+                english_localization_active = True
+                await _ctx_info(
+                    ctx,
+                    f"Localized English instruction for {self.provider}: {translated_instruction}",
+                )
+
+        parsed = await self.intent_parser.parse(working_instruction)
         intent_source = str(parsed.get("intent_source") or "")
         if intent_source.startswith("heuristic_llm_"):
             error_detail = str(parsed.get("llm_error") or "").strip()
@@ -1341,7 +1602,7 @@ class DestinationRecommendationEngine:
         search_keywords = parsed.get("search_keywords", "")
         keywords = parsed.get("keywords") or split_search_keywords(search_keywords)
         hard_constraints = _operationalize_hard_constraints(
-            user_instruction,
+            working_instruction,
             parsed=parsed,
             hard_constraints=parsed.get("hard_constraints") or default_intent_rules()["default_hard_constraints"],
         )
@@ -1371,10 +1632,13 @@ class DestinationRecommendationEngine:
         origin_location = f"{current_longitude},{current_latitude}"
         poi_limit = max(top_k, min(eval_limit, 25))
         destination_type = str(parsed.get("destination_type", "poi")).strip().lower()
-        destination_kind = _resolve_destination_kind(user_instruction, parsed)
-        query_terms = _collect_query_terms(user_instruction, parsed)
+        destination_kind = _resolve_destination_kind(working_instruction, parsed)
+        query_terms = _collect_query_terms(working_instruction, parsed)
         parsed["destination_kind"] = destination_kind
-        explicit_destination = _is_explicit_destination_request(user_instruction, parsed)
+        explicit_destination = _is_explicit_destination_request(working_instruction, parsed)
+        if translated_instruction:
+            parsed["provider_instruction_zh"] = translated_instruction
+            parsed["original_user_instruction"] = original_instruction
         rerank_meta: dict[str, Any] | None = None
 
         await _ctx_info(
@@ -1394,7 +1658,7 @@ class DestinationRecommendationEngine:
 
             queries = _named_place_queries(
                 semantic_keywords,
-                user_instruction=user_instruction,
+                user_instruction=working_instruction,
                 locality_hints=locality_hints,
             )
             await _ctx_info(ctx, f"Named-place retrieval via geocode, queries={queries}")
@@ -1424,6 +1688,7 @@ class DestinationRecommendationEngine:
                 grounded_candidates = await _expand_regional_scenic_area_candidates(
                     base_candidates=normalized_candidates,
                     map_client=self.map_client,
+                    provider=self.provider,
                     current_latitude=current_latitude,
                     current_longitude=current_longitude,
                     radius=radius,
@@ -1432,6 +1697,16 @@ class DestinationRecommendationEngine:
                 )
                 if grounded_candidates:
                     normalized_candidates = grounded_candidates
+                elif normalized_candidates and not any(
+                    candidate.get("is_concrete_destination")
+                    and candidate.get("candidate_kind") in {"scenic_destination", "named_landmark", "specific_poi"}
+                    for candidate in normalized_candidates
+                ):
+                    await _ctx_info(
+                        ctx,
+                        "Named-place grounding produced only non-concrete regional candidates; fallback to semantic POI search.",
+                    )
+                    normalized_candidates = []
             if not normalized_candidates:
                 await _ctx_info(ctx, "Named-place geocode returned no candidates; fallback to semantic POI search.")
 
@@ -1475,6 +1750,12 @@ class DestinationRecommendationEngine:
             ]
             if concrete_candidates:
                 deduped = concrete_candidates
+            else:
+                deduped = [
+                    candidate
+                    for candidate in deduped
+                    if candidate.get("candidate_kind") not in {"administrative_area", "road_label", "institution", "commercial_place"}
+                ]
 
         if deduped and explicit_destination:
             rerank_input = [
@@ -1493,7 +1774,7 @@ class DestinationRecommendationEngine:
                 for item in deduped[: min(len(deduped), 10)]
             ]
             rerank_meta = await rerank_candidates_with_llm(
-                user_instruction=user_instruction,
+                user_instruction=working_instruction,
                 parsed_intent=parsed,
                 candidates=rerank_input,
             )
@@ -1678,7 +1959,8 @@ class DestinationRecommendationEngine:
             return {
                 "provider": self.provider,
                 "input": {
-                    "user_instruction": user_instruction,
+                    "user_instruction": original_instruction,
+                    "provider_instruction": translated_instruction or original_instruction,
                     "current_latitude": current_latitude,
                     "current_longitude": current_longitude,
                 },
@@ -1690,11 +1972,12 @@ class DestinationRecommendationEngine:
                 "message": "No candidates matched constraints.",
             }
 
-        return {
+        result = {
             # Rich semantic waypoints for explainability and debugging.
             "provider": self.provider,
             "input": {
-                "user_instruction": user_instruction,
+                "user_instruction": original_instruction,
+                "provider_instruction": translated_instruction or original_instruction,
                 "current_latitude": current_latitude,
                 "current_longitude": current_longitude,
             },
@@ -1720,6 +2003,43 @@ class DestinationRecommendationEngine:
             "semantic_rerank": rerank_meta,
             "timestamp": datetime.now().isoformat(),
         }
+
+        if english_localization_active:
+            translated_bundle = await translate_result_bundle_to_english(
+                result_bundle={
+                    "recommendations": [
+                        {
+                            "id": item["id"],
+                            "name": item["name"],
+                            "tags": {
+                                "type": (item.get("tags") or {}).get("type", ""),
+                                "address": (item.get("tags") or {}).get("address", ""),
+                            },
+                        }
+                        for item in result["recommendations"]
+                    ],
+                    "chosen_destination": {
+                        "id": result["chosen_destination"]["id"],
+                        "name": result["chosen_destination"]["name"],
+                        "tags": {
+                            "type": (result["chosen_destination"].get("tags") or {}).get("type", ""),
+                            "address": (result["chosen_destination"].get("tags") or {}).get("address", ""),
+                        },
+                    },
+                    "key_waypoints": [
+                        {
+                            "instruction": item.get("instruction", ""),
+                            "road": item.get("road", ""),
+                        }
+                        for item in result.get("key_waypoints", [])
+                    ],
+                    "semantic_rerank": result.get("semantic_rerank") or {},
+                }
+            )
+            if translated_bundle:
+                result = _apply_english_translations(result, translated_bundle)
+
+        return result
 
 
 __all__ = [

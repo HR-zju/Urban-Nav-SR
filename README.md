@@ -118,6 +118,16 @@ Google provider notes:
 - Nearby / semantic POI retrieval uses Places API (New) text search
 - Routing and coarse waypoints use Routes API `computeRoutes`
 - For domestic China place names, Chinese queries are often more stable than English transliterations
+- If your network reaches Google through a proxy, set `HTTPS_PROXY` / `HTTP_PROXY`.
+  The server now honors proxy env vars by default (`MAP_HTTP_TRUST_ENV=1`).
+- Optional HTTP timeout controls:
+
+```bash
+export MAP_HTTP_TOTAL_TIMEOUT_S=60
+export MAP_HTTP_CONNECT_TIMEOUT_S=12
+# Optional; unset by default
+export MAP_HTTP_SOCK_READ_TIMEOUT_S=30
+```
 
 Optional LLM parsing (for better intent extraction):
 
