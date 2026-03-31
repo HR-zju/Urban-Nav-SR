@@ -1,22 +1,11 @@
-虚拟环境 foundation_nav python=3.10 
+# Environment
+mamba env [foundation_nav python=3.10 ] 
 
-其中需要注意的pip环境
-
-[onnxruntime-gpu 适配cuda 11](https://onnxruntime.ai/docs/install/#cuda-11x)
-
-[torch torchvision和cuda版本对应](https://pytorch.org/get-started/previous-versions/)
-
-[tochcodec的版本和torch还有torchvision的版本对应](https://pypi.org/project/torchcodec/)
-
-[mkl版本降级适配mamba安装的torch](https://blog.csdn.net/mr_hore/article/details/138961434)
-
-> 降级numpy numpy在2.0以后发生了ABI的重大修改，pytorch版本不适配
-pip install "numpy<2.0"
-
+# Install
 ``` 
 # 隔离本地环境 或者不用
 # export PYTHONNOUSERSITE=1  
- # 安装cuda和cudnn
+ # install cuda和cudnn
 mamba install cudatoolkit=11.8 cudnn=8.9.7 -c nvidia 
 # onnx runtime 依赖
 pip install coloredlogs flatbuffers numpy packaging protobuf sympy 
@@ -26,21 +15,13 @@ pip install onnxruntime-gpu --index-url https://aiinfra.pkgs.visualstudio.com/Pu
 pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu118
 # 安装torchcodec
 pip install torchcodec==0.2.1 --index-url https://download.pytorch.org/whl/cu118
-# 需要使用的其他包
+# other packages
 pip install "pytorch-lightning>=2.5.0" six pyyaml tqdm scipy matplotlib
-# 安装unitree sdk
+# install unitree sdk
 https://github.com/unitreerobotics/unitree_sdk2_python
 ```
-```
-# 如果使用mamba安装的pytorch需要mkl降级
-conda install mkl=2024.0
-# 如果报错pkg_resources不存在
-pip install "setuptools<70.0.0"
-```
 
-
-版本总结：
-
+## env version conclusion：
 ```bash
 > pip list | grep orch
 pytorch-lightning                        2.6.1
@@ -53,8 +34,7 @@ torchvision                              0.21.0+cu118
 numpy                                    1.26.4
 ```
 
-验证
-
+## environment validation
 ```bash
 import torch
 import torchvision
@@ -70,4 +50,51 @@ pr = ort.get_available_providers()
 print(pr)
 if 'CUDAExecutionProvider' in pr:
     print("已激活")
+```
+
+# Deployment
+## docker ros2 + pytorch conda env
+```
+# 确定容器工具安装完成
+nvidia-container-toolkit --version
+# 拉取ros2镜像
+docker pull osrf/ros:humble-desktop
+# 构建容器
+docker run -it \
+  --name sr_ros2 \
+  --gpus all \
+  --network host \
+  --privileged \
+  --env CONN_TYPE="cyclonedds" \
+  --env WEBRTC_SERVER_HOST=0.0.0.0 \
+  --env WEBRTC_SERVER_PORT=${WEBRTC_SERVER_PORT:-9991} \
+  --env DISPLAY=${DISPLAY:-} \
+  --volume /tmp/.X11-unix:/tmp/.X11-unix \
+  --volume ${HOME}/.Xauthority:/root/.Xauthority:rw \
+  --volume ${HOME}:${HOME} \
+  --device /dev/input:/dev/input \
+  osrf/ros:humble-desktop \
+  /bin/bash
+  
+# 激活环境
+/home/nuvo/miniforge3/bin/mamba shell init --shell bash
+# 唤醒mamba环境
+source ~/.bashrc
+```
+# Usage
+```
+# test runner scripts
+python run_onnx_from_mp4.py --mp4 front/front.mp4 --onnx onnx_ckpts/s1_ours_coco_sft_stage2_goal_less.onnx --saveOverlay --sample_fps 5
+```
+
+
+# troubleshooting
+
+``` 
+# 降级numpy numpy在2.0以后发生了ABI的重大修改，pytorch版本不适配
+pip install "numpy<2.0"
+# if install pytorch by mamba install may need degrade mkl
+conda install mkl=2024.0
+# 如果报错pkg_resources不存在
+pip install "setuptools<70.0.0"
 ```
