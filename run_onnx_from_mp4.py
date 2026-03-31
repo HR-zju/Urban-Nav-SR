@@ -182,6 +182,10 @@ def main():
     # frames without a fresh inference can still be overlaid using the
     # previous trajectory.
     last_wp_np = None
+    # cache last successful waypoint prediction (robot frame, Nx2) so that
+    # frames without a fresh inference can still be overlaid using the
+    # previous trajectory.
+    last_wp_np = None
 
     try:
         while True:
@@ -218,7 +222,22 @@ def main():
                     video_frames_small = torch.nn.functional.interpolate(
                         video_frames, size=(288, 512), mode='bilinear', align_corners=False
                     )
+                    # resize frames to model input (288,512)
+                    video_frames_small = torch.nn.functional.interpolate(
+                        video_frames, size=(288, 512), mode='bilinear', align_corners=False
+                    )
 
+                    # convert fisheye->pinhole (expects N,C,H,W on device)
+                    fov_x = args.fov_x if args.fov_x is not None else math.degrees(2 * math.atan(1920 / (2 * 790)))
+                    fov_y = args.fov_y if args.fov_y is not None else math.degrees(2 * math.atan(1080 / (2 * 790)))
+                    pinhole = convert_fisheye_to_pinhole(
+                        K,
+                        dist,
+                        device,
+                        video_frames_small,
+                        fov_x=fov_x,
+                        fov_y=fov_y,
+                    )
                     # convert fisheye->pinhole (expects N,C,H,W on device)
                     fov_x = args.fov_x if args.fov_x is not None else math.degrees(2 * math.atan(1920 / (2 * 790)))
                     fov_y = args.fov_y if args.fov_y is not None else math.degrees(2 * math.atan(1080 / (2 * 790)))
@@ -233,12 +252,34 @@ def main():
 
                     # onnx expects (B, T, C, H, W) with B=1, T=buffer_len
                     observation = pinhole.unsqueeze(0).cpu().numpy().astype(np.float32)
+                    # onnx expects (B, T, C, H, W) with B=1, T=buffer_len
+                    observation = pinhole.unsqueeze(0).cpu().numpy().astype(np.float32)
 
                     outputs = session.run(
                         None,
                         {"observation": observation, "embodiment_id": embodiment_id, "metric_spacing": metric_spacing},
                     )
+                    outputs = session.run(
+                        None,
+                        {"observation": observation, "embodiment_id": embodiment_id, "metric_spacing": metric_spacing},
+                    )
 
+                    # parse outputs (copying logic from test script)
+                    traj_raw = outputs[0][:, 1:]
+                    score_raw = outputs[1][:, 1:]
+                    traj_t = torch.from_numpy(traj_raw)
+                    score_t = torch.from_numpy(score_raw)
+                    traj_sel, score_sel = trajectory_nms(traj_t, score_t)
+                    traj_sel = traj_sel[0]
+                    score_sel = score_sel[0]
+                    score_sel = torch.softmax(score_sel, dim=0)
+                    traj_final = traj_sel[torch.argmax(score_sel)]
+                    wp_pred = traj_final[..., :2].unsqueeze(0)
+                    wp_pred = torch.cat(
+                        [torch.zeros_like(wp_pred[..., 0:1, :]), wp_pred[..., :-1, :]], dim=-2
+                    )
+                    wp_pred[..., 0] = wp_pred[..., 0].clamp(0.0, 20.0)
+                    last_wp_np = wp_pred.detach()[0, :, :2].cpu().numpy()
                     # parse outputs (copying logic from test script)
                     traj_raw = outputs[0][:, 1:]
                     score_raw = outputs[1][:, 1:]

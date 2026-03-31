@@ -1559,7 +1559,7 @@ scenario_name_list = random.sample(scenario_name_list_all, 15)
 # ]
 
 # 配置开关：是否保存预测结果（True=保存GT+预测, False=只保存GT）
-SAVE_PREDICTIONS = False
+SAVE_PREDICTIONS = True
 
 for scenario_name in tqdm.tqdm(scenario_name_list):
     h=horizons[0]
