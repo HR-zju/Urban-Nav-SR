@@ -92,6 +92,7 @@ final class CandidateSelectionViewModel: ObservableObject {
         isPlanning = true
         planningError = nil
         statusText = "正在调用 MCP 规划..."
+        selectedCandidate = nil
         lastConfirmedText = normalized
         refinementMessages = []
         let planningPrompt = buildPlanningPrompt(baseRequirement: normalized, refinements: [])
@@ -134,6 +135,7 @@ final class CandidateSelectionViewModel: ObservableObject {
         isPlanning = true
         planningError = nil
         statusText = "正在根据继续对话更新候选..."
+        selectedCandidate = nil
         defer { isPlanning = false }
 
         let mergedPrompt = buildPlanningPrompt(

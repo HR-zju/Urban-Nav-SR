@@ -164,6 +164,11 @@ final class SpeechRecognitionManager: ObservableObject {
         return "\(committedText)\n\(liveText)"
     }
 
+    func resetTranscript() {
+        committedText = ""
+        liveText = ""
+    }
+
     private func scheduleStopCleanup(for sessionID: UUID) {
         stopCleanupTask?.cancel()
         stopCleanupTask = Task { [weak self] in

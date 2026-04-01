@@ -3,6 +3,7 @@ import MapKit
 
 struct MapPanelView: View {
     @ObservedObject var viewModel: MapNavigationViewModel
+    let isVoiceOnlyMode: Bool
 
     @State private var initialCameraPosition: MapCameraPosition = .automatic
     @State private var mapReloadToken = UUID()
@@ -12,20 +13,26 @@ struct MapPanelView: View {
             Text("地图导航")
                 .font(.headline)
 
-            HStack {
-                TextField("输入目标地址", text: $viewModel.targetAddress)
-                    .textFieldStyle(.roundedBorder)
-                Button("路径规划") {
-                    Task { await viewModel.searchAddressAndRoute() }
+            if isVoiceOnlyMode {
+                Text("盲人语音模式已启用，地图仅保留为可视化参考，主要交互请在左侧通过语音完成。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                HStack {
+                    TextField("输入目标地址", text: $viewModel.targetAddress)
+                        .textFieldStyle(.roundedBorder)
+                    Button("路径规划") {
+                        Task { await viewModel.searchAddressAndRoute() }
+                    }
                 }
-            }
 
-            HStack {
-                Button("请求定位权限") {
-                    viewModel.requestLocationPermission()
-                }
-                Button("定位当前位置") {
-                    viewModel.locateCurrentPosition()
+                HStack {
+                    Button("请求定位权限") {
+                        viewModel.requestLocationPermission()
+                    }
+                    Button("定位当前位置") {
+                        viewModel.locateCurrentPosition()
+                    }
                 }
             }
 

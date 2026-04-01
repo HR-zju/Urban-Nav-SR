@@ -49,5 +49,11 @@
     "object": "/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/SpeechRecognitionManager.swift.o",
     "swiftmodule": "/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/SpeechRecognitionManager~partial.swiftmodule",
     "swift-dependencies": "/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/SpeechRecognitionManager.swiftdeps"
+  },
+  "/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/Sources/NavAssistantApp/VoiceInteractionManager.swift": {
+    "dependencies": "/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/VoiceInteractionManager.d",
+    "object": "/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/VoiceInteractionManager.swift.o",
+    "swiftmodule": "/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/VoiceInteractionManager~partial.swiftmodule",
+    "swift-dependencies": "/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/VoiceInteractionManager.swiftdeps"
   }
 }

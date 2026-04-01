@@ -8,6 +8,13 @@ enum RecognitionOutputMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum AppInteractionMode: String, CaseIterable, Identifiable {
+    case standard = "标准模式"
+    case voiceOnly = "盲人语音模式"
+
+    var id: String { rawValue }
+}
+
 struct ConfirmedTextRecord: Identifiable {
     let id = UUID()
     let text: String
