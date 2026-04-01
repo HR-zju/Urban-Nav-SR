@@ -23,11 +23,12 @@ struct ContentView: View {
     var body: some View {
         HSplitView {
             leftPanel
-                .frame(minWidth: 520)
-            MapPanelView(viewModel: mapVM, isVoiceOnlyMode: interactionMode == .voiceOnly)
-                .frame(minWidth: 420)
+                .frame(minWidth: 500, idealWidth: 560)
+            MapPanelView(viewModel: mapVM, isVoiceOnlyMode: isVoiceOnlyMode)
+                .frame(minWidth: 500)
         }
-        .frame(minWidth: 980, minHeight: 680)
+        .background(Color.navWindow)
+        .frame(minWidth: 1180, minHeight: 760)
         .onChange(of: speech.combinedText) { _, newValue in
             guard interactionMode == .standard else { return }
             switch recordingTarget {
@@ -100,28 +101,56 @@ struct ContentView: View {
         }
     }
 
+    private var isVoiceOnlyMode: Bool {
+        interactionMode == .voiceOnly
+    }
+
     private var leftPanel: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 18) {
+                overviewSection
                 modeSection
-                if interactionMode == .voiceOnly {
+                if isVoiceOnlyMode {
                     blindVoiceSection
+                    blindCommandSection
                 } else {
-                    speechSection
-                    editableTextSection
+                    requestSection
                     continueDialogSection
                     candidateSection
                 }
             }
-            .padding()
+            .padding(20)
+        }
+        .background(Color.navWindow)
+    }
+
+    private var overviewSection: some View {
+        NavPanel(
+            title: isVoiceOnlyMode ? "语音导航指挥台" : "桌面导航工作台",
+            subtitle: isVoiceOnlyMode
+                ? "把定位、录音、候选播报和路线播报集中到一个可预测区域，降低视觉切换成本。"
+                : "围绕“说出需求 -> 确认候选 -> 查看路线”展开，保留桌面端精细编辑与地图联动。",
+            tone: isVoiceOnlyMode ? .accent : .neutral,
+            accessory: {
+                NavStatusBadge(text: overallStatusText, tone: overallStatusTone, systemImage: overallStatusSymbol)
+            }
+        ) {
+            HStack(spacing: 12) {
+                NavMetricBadge(label: "当前模式", value: interactionMode.rawValue, emphasized: true)
+                NavMetricBadge(label: "当前位置", value: mapVM.userCoordinate == nil ? "未定位" : "已获取")
+                NavMetricBadge(
+                    label: isVoiceOnlyMode ? "当前阶段" : "路线状态",
+                    value: isVoiceOnlyMode ? blindPhase.shortTitle : routeReadinessText
+                )
+            }
         }
     }
 
     private var modeSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("交互模式")
-                .font(.headline)
-
+        NavPanel(
+            title: "模式与可达性",
+            subtitle: "保留标准桌面工作流，同时把盲人友好模式提升为独立而清晰的操作入口。"
+        ) {
             Picker("交互模式", selection: $interactionMode) {
                 ForEach(AppInteractionMode.allCases) { mode in
                     Text(mode.rawValue).tag(mode)
@@ -129,310 +158,385 @@ struct ContentView: View {
             }
             .pickerStyle(.segmented)
 
-            Text(interactionMode == .voiceOnly
-                 ? "盲人语音模式使用按钮触发录音，系统会把候选和路线结果用语音播报出来。"
-                 : "标准模式保留文本编辑、候选列表和地图联动。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            HStack(alignment: .top, spacing: 12) {
+                ForEach(AppInteractionMode.allCases) { mode in
+                    ModeSummaryCard(mode: mode, isSelected: interactionMode == mode)
+                }
+            }
         }
-        .padding(10)
-        .background(.thinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var requestSection: some View {
+        NavPanel(
+            title: "导航需求",
+            subtitle: "先录入本次目的地需求，再确认规划。键盘和语音可以随时混合使用。",
+            accessory: {
+                NavStatusBadge(text: speechStatusText, tone: speechStatusTone, systemImage: speechStatusSymbol)
+            }
+        ) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("识别输出")
+                            .font(.caption.weight(.semibold))
+                        Text(outputMode.summary)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Picker("输出模式", selection: $outputMode) {
+                        ForEach(RecognitionOutputMode.allCases) { mode in
+                            Text(mode.rawValue).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 210)
+
+                    Spacer()
+
+                    Button(speech.isRunning && recordingTarget == .mainText ? "停止录音" : "开始录音") {
+                        toggleMainRecording()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .disabled(candidateVM.isPlanning)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("导航需求文本")
+                        .font(.caption.weight(.semibold))
+
+                    TextEditor(text: $editableText)
+                        .font(.body)
+                        .scrollContentBackground(.hidden)
+                        .frame(minHeight: 110, maxHeight: 150)
+                        .padding(8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(Color.navRaisedBackground)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .stroke(Color.navBorder.opacity(0.6), lineWidth: 1)
+                        )
+                }
+
+                HStack(spacing: 10) {
+                    Button("同步最新识别文本") {
+                        editableText = speech.combinedText
+                    }
+
+                    Spacer()
+
+                    Button(candidateVM.isPlanning ? "正在规划…" : "确认并规划") {
+                        Task { await submitConfirmedText(editableText) }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .disabled(candidateVM.isPlanning || editableText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+
+                if let latest = confirmedRecords.first {
+                    NavTranscriptBubble(title: "最近一次确认", text: latest.text)
+                }
+
+                if let error = speech.lastError {
+                    NavInfoBanner(text: error, tone: .danger)
+                }
+
+                NavInfoBanner(text: speech.authorizationSummary, tone: .neutral)
+            }
+        }
     }
 
     private var blindVoiceSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("语音交互模式已开启")
-                    .font(.headline)
-                Spacer()
-                if speech.isRunning {
-                    Text("● 正在录音")
-                        .font(.caption2.bold())
-                        .foregroundStyle(.orange)
-                } else if voice.isSpeaking {
-                    Text("● 正在播报")
-                        .font(.caption2.bold())
-                        .foregroundStyle(.green)
-                }
+        NavPanel(
+            title: "盲人友好模式",
+            subtitle: "用更大的主要操作、更清晰的阶段反馈和更完整的播报记录，让无障碍流程更可预测。",
+            tone: .accent,
+            accessory: {
+                NavStatusBadge(text: blindPhase.shortTitle, tone: blindPhase.tone, systemImage: blindPhase.systemImage)
             }
-
-            Text("盲人模式下由用户主动按按钮录音。你可以先定位，再按录音按钮说出目的地；有候选后也可以再次按录音按钮说“选择第一个”或补充要求。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            statusBlock(title: "当前阶段", text: blindPhase.description)
-            statusBlock(title: "候选状态", text: candidateVM.statusText)
-            statusBlock(title: "定位状态", text: mapVM.statusText)
-
-            HStack(spacing: 10) {
-                Button("请求定位权限") {
-                    mapVM.requestLocationPermission()
-                    if interactionMode == .voiceOnly {
-                        blindSpeak("已请求定位权限。")
-                    }
+        ) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 12) {
+                    NavMetricBadge(label: "当前阶段", value: blindPhase.shortTitle, emphasized: true)
+                    NavMetricBadge(label: "候选结果", value: candidateVM.candidates.isEmpty ? "等待候选" : "已有 \(candidateVM.candidates.count) 项")
+                    NavMetricBadge(label: "定位状态", value: mapVM.userCoordinate == nil ? "未获取位置" : "位置已就绪")
                 }
 
-                Button("定位当前位置") {
-                    blindPhase = .waitingForLocation
-                    mapVM.locateCurrentPosition()
-                    if interactionMode == .voiceOnly {
-                        blindSpeak("正在定位当前位置。")
-                    }
-                }
-            }
-
-            HStack(spacing: 10) {
-                Button(speech.isRunning ? "结束录音" : "按按钮开始录音") {
+                Button {
                     toggleBlindRecording()
+                } label: {
+                    Label(
+                        speech.isRunning ? "结束录音" : "按按钮开始录音",
+                        systemImage: speech.isRunning ? "stop.circle.fill" : "waveform.circle.fill"
+                    )
+                    .frame(maxWidth: .infinity)
                 }
+                .buttonStyle(.borderedProminent)
+                .tint(speech.isRunning ? .orange : Color.accentColor)
                 .controlSize(.large)
                 .disabled(candidateVM.isPlanning || voice.isSpeaking)
 
-                Button("停止播报") {
-                    voice.stopSpeaking()
-                    if blindPhase == .announcingCandidates || blindPhase == .announcingRoute {
-                        blindPhase = .readyToRecord
+                HStack(spacing: 10) {
+                    Button("停止播报") {
+                        voice.stopSpeaking()
+                        if blindPhase == .announcingCandidates || blindPhase == .announcingRoute {
+                            blindPhase = .readyToRecord
+                        }
                     }
-                }
-                .disabled(!voice.isSpeaking)
-            }
+                    .disabled(!voice.isSpeaking)
 
-            Text("按录音按钮后可直接说：带我去最近的地铁站、选择第一个、更近一点、重播候选、重播路线、重新定位、退出盲人模式。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            if let pendingBlindNavigationRequest, !pendingBlindNavigationRequest.isEmpty {
-                statusBlock(title: "已缓存需求", text: pendingBlindNavigationRequest)
-            }
-
-            if let planningError = candidateVM.planningError {
-                Text(planningError)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            }
-
-            if let speechError = speech.lastError {
-                Text(speechError)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            }
-
-            if !voice.lastSpokenText.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("最近播报内容")
-                        .font(.caption.bold())
-                    Text(voice.lastSpokenText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(8)
-                .background(.background.secondary)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-            }
-        }
-        .padding(12)
-        .background(.thinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-    }
-
-    private func statusBlock(title: String, text: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption.bold())
-            Text(text)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(8)
-        .background(.background.secondary)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-
-    private var speechSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("语音识别")
-                    .font(.headline)
-                Spacer()
-                if speech.isRunning {
-                    Text(recordingTarget == .mainText ? "● 主识别录音中" : "● 对话录音中")
-                        .font(.caption2.bold())
-                        .foregroundStyle(.orange)
-                }
-            }
-
-            HStack {
-                Picker("输出模式", selection: $outputMode) {
-                    ForEach(RecognitionOutputMode.allCases) { mode in
-                        Text(mode.rawValue).tag(mode)
+                    Button("请求定位权限") {
+                        mapVM.requestLocationPermission()
+                        if isVoiceOnlyMode {
+                            blindSpeak("已请求定位权限。")
+                        }
                     }
+
+                    Button("定位当前位置") {
+                        blindPhase = .waitingForLocation
+                        mapVM.locateCurrentPosition()
+                        if isVoiceOnlyMode {
+                            blindSpeak("正在定位当前位置。")
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 180)
 
-                Button(speech.isRunning && recordingTarget == .mainText ? "停止录音" : "开始录音") {
-                    toggleMainRecording()
+                NavTranscriptBubble(title: "候选状态", text: candidateVM.statusText)
+                NavTranscriptBubble(title: "定位状态", text: mapVM.statusText)
+
+                if let pendingBlindNavigationRequest, !pendingBlindNavigationRequest.isEmpty {
+                    NavInfoBanner(text: "已缓存导航需求：\(pendingBlindNavigationRequest)", tone: .accent)
                 }
-            }
 
-            if let error = speech.lastError {
-                Text(error).font(.caption).foregroundStyle(.red)
-            }
+                if let planningError = candidateVM.planningError {
+                    NavInfoBanner(text: planningError, tone: .danger)
+                }
 
-            Text(speech.authorizationSummary)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+                if let speechError = speech.lastError {
+                    NavInfoBanner(text: speechError, tone: .danger)
+                }
+
+                if !voice.lastSpokenText.isEmpty {
+                    NavTranscriptBubble(title: "最近一次播报", text: voice.lastSpokenText)
+                }
+
+                NavInfoBanner(text: speech.authorizationSummary, tone: .neutral)
+            }
         }
-        .padding(10)
-        .background(.thinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
-    private var editableTextSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("识别结果（可编辑）")
-                .font(.subheadline)
-
-            TextEditor(text: $editableText)
-                .font(.body.monospaced())
-                .frame(minHeight: 60, maxHeight: 90)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(.quaternary, lineWidth: 1)
-                )
-
-            HStack(spacing: 10) {
-                Button("同步识别文本") {
-                    editableText = speech.combinedText
-                }
-                .controlSize(.small)
-
-                Button(candidateVM.isPlanning ? "规划中…" : "确认文本并规划") {
-                    Task { await submitConfirmedText(editableText) }
-                }
-                .disabled(candidateVM.isPlanning || editableText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                .controlSize(.small)
-            }
-
-            if let latest = confirmedRecords.first {
-                Text("最近确认：\(latest.text)")
-                    .lineLimit(1)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+    private var blindCommandSection: some View {
+        NavPanel(
+            title: "可用语音命令",
+            subtitle: "关键命令按“定位、选项、重播、细化需求”分组，减少记忆负担。"
+        ) {
+            VStack(alignment: .leading, spacing: 10) {
+                NavCommandHintRow(title: "开始导航", example: "带我去最近的地铁站")
+                NavCommandHintRow(title: "选择候选", example: "选择第一个")
+                NavCommandHintRow(title: "继续缩小范围", example: "更近一点，不要商场")
+                NavCommandHintRow(title: "重播与恢复", example: "重播候选、重播路线、重新定位、退出盲人模式")
             }
         }
-        .padding(10)
-        .background(.thinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
     private var continueDialogSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("继续对话")
-                .font(.subheadline)
-
-            TextField("例如：更近一点、不要商场、优先地铁站附近", text: $continueDialogInput)
-                .textFieldStyle(.roundedBorder)
-
-            HStack(spacing: 10) {
-                Button(speech.isRunning && recordingTarget == .continueDialog ? "停止对话录音" : "对话录音") {
-                    toggleContinueDialogRecording()
+        NavPanel(
+            title: "继续筛选",
+            subtitle: "当候选已经出现后，用补充偏好快速缩小范围，而不是重新开始。"
+        ) {
+            VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("补充约束")
+                        .font(.caption.weight(.semibold))
+                    TextField("例如：更近一点、不要商场、优先地铁站附近", text: $continueDialogInput)
+                        .textFieldStyle(.roundedBorder)
                 }
-                .controlSize(.small)
 
-                Button("继续对话并更新候选") {
-                    let message = continueDialogInput
-                    continueDialogInput = ""
-                    Task {
-                        await replanWithDialog(message)
+                HStack(spacing: 10) {
+                    Button(speech.isRunning && recordingTarget == .continueDialog ? "停止对话录音" : "对话录音") {
+                        toggleContinueDialogRecording()
                     }
-                }
-                .controlSize(.small)
-                .disabled(
-                    candidateVM.isPlanning
-                    || continueDialogInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    || candidateVM.candidates.isEmpty
-                )
-            }
+                    .disabled(candidateVM.isPlanning)
 
-            if !candidateVM.dialogHistory.isEmpty {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 6) {
-                        ForEach(Array(candidateVM.dialogHistory.enumerated()), id: \.offset) { _, msg in
-                            Text(msg)
-                                .font(.caption)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(.background.secondary)
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                    Spacer()
+
+                    Button(candidateVM.isPlanning ? "正在更新…" : "更新候选") {
+                        let message = continueDialogInput
+                        continueDialogInput = ""
+                        Task {
+                            await replanWithDialog(message)
                         }
                     }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(
+                        candidateVM.isPlanning
+                        || continueDialogInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || candidateVM.candidates.isEmpty
+                    )
                 }
-                .frame(maxHeight: 110)
+
+                if !candidateVM.dialogHistory.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("最近上下文")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        ForEach(Array(candidateVM.dialogHistory.suffix(4).enumerated()), id: \.offset) { _, message in
+                            NavTranscriptBubble(title: "上下文记录", text: message)
+                        }
+                    }
+                } else {
+                    ContentUnavailableView(
+                        "等待补充约束",
+                        systemImage: "ellipsis.message",
+                        description: Text("先完成一次候选规划，随后可以继续用自然语言补充条件。")
+                    )
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 4)
+                }
             }
         }
-        .padding(10)
-        .background(.thinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
     private var candidateSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("候选地址")
-                .font(.headline)
-
-            Text(candidateVM.statusText)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            if let planningError = candidateVM.planningError {
-                Text(planningError).font(.caption).foregroundStyle(.red)
+        NavPanel(
+            title: "候选目的地",
+            subtitle: "优先显示最符合当前需求的选项，并突出距离、耗时和匹配度。",
+            accessory: {
+                NavStatusBadge(text: candidateStatusText, tone: candidateStatusTone, systemImage: candidateStatusSymbol)
             }
+        ) {
+            VStack(alignment: .leading, spacing: 14) {
+                NavTranscriptBubble(title: "规划状态", text: candidateVM.statusText)
 
-            if candidateVM.candidates.isEmpty && !candidateVM.isPlanning {
-                Text("点击「确认文本并规划」自动获取候选地址")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            ForEach(candidateVM.candidates) { candidate in
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(candidate.title).font(.body.bold())
-                        Text(candidate.subtitle).font(.caption).foregroundStyle(.secondary)
-                        HStack(spacing: 8) {
-                            if let d = candidate.distanceM {
-                                Text(String(format: "%.2f km", d / 1000.0))
-                            }
-                            if let t = candidate.durationMin {
-                                Text(String(format: "%.1f 分钟", t))
-                            }
-                            if let s = candidate.score {
-                                Text(String(format: "score %.2f", s))
-                            }
-                        }
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                    }
-                    Spacer()
-                    Button("选择") {
-                        Task {
-                            await selectCandidate(candidate)
-                        }
-                    }
-                    .disabled(candidateVM.isPlanning)
+                if let planningError = candidateVM.planningError {
+                    NavInfoBanner(text: planningError, tone: .danger)
                 }
-                .padding(8)
-                .background(.background.secondary)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                if candidateVM.candidates.isEmpty && !candidateVM.isPlanning {
+                    ContentUnavailableView(
+                        "尚未生成候选",
+                        systemImage: "mappin.slash",
+                        description: Text("先确认导航需求，系统会返回候选目的地与路线摘要。")
+                    )
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                } else {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        ForEach(Array(candidateVM.candidates.enumerated()), id: \.element.id) { index, candidate in
+                            CandidateCard(
+                                candidate: candidate,
+                                rank: index + 1,
+                                isSelected: candidateVM.selectedCandidate?.id == candidate.id,
+                                isBusy: candidateVM.isPlanning
+                            ) {
+                                Task {
+                                    await selectCandidate(candidate)
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
-        .padding(12)
-        .background(.thinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var overallStatusText: String {
+        if speech.isRunning {
+            return recordingTarget == .continueDialog ? "对话录音中" : "录音中"
+        }
+        if voice.isSpeaking {
+            return "正在播报"
+        }
+        if candidateVM.isPlanning {
+            return "规划中"
+        }
+        return "已就绪"
+    }
+
+    private var overallStatusTone: NavSurfaceTone {
+        if speech.isRunning {
+            return .warning
+        }
+        if voice.isSpeaking {
+            return .success
+        }
+        if candidateVM.isPlanning {
+            return .accent
+        }
+        return .neutral
+    }
+
+    private var overallStatusSymbol: String {
+        if speech.isRunning {
+            return "mic.fill"
+        }
+        if voice.isSpeaking {
+            return "speaker.wave.2.fill"
+        }
+        if candidateVM.isPlanning {
+            return "arrow.trianglehead.2.clockwise"
+        }
+        return "checkmark.circle.fill"
+    }
+
+    private var speechStatusText: String {
+        if speech.isRunning {
+            return recordingTarget == .continueDialog ? "对话录音中" : "主需求录音中"
+        }
+        return "等待开始录音"
+    }
+
+    private var speechStatusTone: NavSurfaceTone {
+        speech.isRunning ? .warning : .neutral
+    }
+
+    private var speechStatusSymbol: String {
+        speech.isRunning ? "waveform" : "mic"
+    }
+
+    private var routeReadinessText: String {
+        if mapVM.routeSummary != nil || mapVM.route != nil || mapVM.routeWaypoints.count >= 2 {
+            return "路线已生成"
+        }
+        if mapVM.destinationCoordinate != nil {
+            return "目的地已锁定"
+        }
+        return "等待规划"
+    }
+
+    private var candidateStatusText: String {
+        if candidateVM.isPlanning {
+            return "正在规划"
+        }
+        if candidateVM.candidates.isEmpty {
+            return "等待候选"
+        }
+        return "\(candidateVM.candidates.count) 个候选"
+    }
+
+    private var candidateStatusTone: NavSurfaceTone {
+        if candidateVM.planningError != nil {
+            return .danger
+        }
+        if candidateVM.isPlanning {
+            return .accent
+        }
+        return candidateVM.candidates.isEmpty ? .neutral : .success
+    }
+
+    private var candidateStatusSymbol: String {
+        if candidateVM.planningError != nil {
+            return "xmark.octagon.fill"
+        }
+        if candidateVM.isPlanning {
+            return "arrow.trianglehead.2.clockwise"
+        }
+        return candidateVM.candidates.isEmpty ? "mappin.slash" : "mappin.and.ellipse"
     }
 
     private func toggleMainRecording() {
@@ -726,6 +830,97 @@ struct ContentView: View {
     }
 }
 
+private struct ModeSummaryCard: View {
+    let mode: AppInteractionMode
+    let isSelected: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(mode.rawValue, systemImage: mode.systemImage)
+                .font(.subheadline.weight(.semibold))
+            Text(mode.summary)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.navRaisedBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(isSelected ? Color.accentColor.opacity(0.35) : Color.navBorder.opacity(0.55), lineWidth: 1)
+        )
+    }
+}
+
+private struct CandidateCard: View {
+    let candidate: AddressCandidate
+    let rank: Int
+    let isSelected: Bool
+    let isBusy: Bool
+    let onSelect: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        NavStatusBadge(
+                            text: rank == 1 ? "最佳匹配" : "候选 \(rank)",
+                            tone: rank == 1 ? .accent : .neutral,
+                            systemImage: rank == 1 ? "sparkles" : "mappin.circle"
+                        )
+                        if isSelected {
+                            NavStatusBadge(text: "当前路线", tone: .success, systemImage: "checkmark.circle.fill")
+                        }
+                    }
+
+                    Text(candidate.title)
+                        .font(.headline)
+
+                    Label(candidate.displaySubtitle, systemImage: "mappin.and.ellipse")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                if isSelected {
+                    Button("已选中") {}
+                        .buttonStyle(.bordered)
+                        .disabled(true)
+                } else {
+                    Button("选择此项") {
+                        onSelect()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isBusy)
+                }
+            }
+
+            if !candidate.metricPairs.isEmpty {
+                HStack(spacing: 8) {
+                    ForEach(candidate.metricPairs, id: \.label) { pair in
+                        NavMetricBadge(label: pair.label, value: pair.value)
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.navRaisedBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(isSelected ? Color.accentColor.opacity(0.35) : Color.navBorder.opacity(0.55), lineWidth: 1)
+        )
+    }
+}
+
 private enum RecordingTarget {
     case mainText
     case continueDialog
@@ -743,6 +938,59 @@ private enum BlindWorkflowPhase {
     case planning
     case announcingCandidates
     case announcingRoute
+
+    var shortTitle: String {
+        switch self {
+        case .inactive:
+            return "未启用"
+        case .readyToRecord:
+            return "等待录音"
+        case .waitingForLocation:
+            return "等待定位"
+        case .recording:
+            return "正在录音"
+        case .planning:
+            return "正在规划"
+        case .announcingCandidates:
+            return "播报候选"
+        case .announcingRoute:
+            return "播报路线"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .inactive:
+            return "eye.slash"
+        case .readyToRecord:
+            return "waveform.circle"
+        case .waitingForLocation:
+            return "location.circle"
+        case .recording:
+            return "mic.circle.fill"
+        case .planning:
+            return "arrow.trianglehead.2.clockwise.circle"
+        case .announcingCandidates:
+            return "list.bullet.circle"
+        case .announcingRoute:
+            return "point.topleft.down.curvedto.point.bottomright.up.circle"
+        }
+    }
+
+    var tone: NavSurfaceTone {
+        switch self {
+        case .inactive:
+            return .neutral
+        case .readyToRecord:
+            return .accent
+        case .waitingForLocation, .recording:
+            return .warning
+        case .planning:
+            return .accent
+        case .announcingCandidates, .announcingRoute:
+            return .success
+        }
+    }
 
     var description: String {
         switch self {

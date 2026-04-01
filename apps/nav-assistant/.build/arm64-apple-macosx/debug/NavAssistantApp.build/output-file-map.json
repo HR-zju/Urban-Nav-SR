@@ -38,6 +38,12 @@
     "swiftmodule": "/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/Models~partial.swiftmodule",
     "swift-dependencies": "/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/Models.swiftdeps"
   },
+  "/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/Sources/NavAssistantApp/NavAssistantDesignSystem.swift": {
+    "dependencies": "/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/NavAssistantDesignSystem.d",
+    "object": "/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/NavAssistantDesignSystem.swift.o",
+    "swiftmodule": "/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/NavAssistantDesignSystem~partial.swiftmodule",
+    "swift-dependencies": "/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/NavAssistantDesignSystem.swiftdeps"
+  },
   "/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/Sources/NavAssistantApp/NavAssistantDesktopApp.swift": {
     "dependencies": "/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/NavAssistantDesktopApp.d",
     "object": "/Users/minruiliu/Nav/OpenStreetMcp/apps/nav-assistant/.build/arm64-apple-macosx/debug/NavAssistantApp.build/NavAssistantDesktopApp.swift.o",

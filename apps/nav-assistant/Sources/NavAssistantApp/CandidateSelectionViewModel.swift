@@ -7,7 +7,7 @@ final class CandidateSelectionViewModel: ObservableObject {
     @Published var dialogHistory: [String] = []
     @Published var candidates: [AddressCandidate] = []
     @Published var selectedCandidate: AddressCandidate?
-    @Published var statusText = "等待输入 prompt"
+    @Published var statusText = "等待输入导航需求"
     @Published var isPlanning = false
     @Published var planningError: String?
     @Published var lastPlanningResult: MCPRecommendationResponse?
