@@ -53,6 +53,7 @@ import importlib
 import yaml
 import logging
 from torch.utils.data import DataLoader
+import time
 
 # from e2enav.models.base_model import BaseModel
 
@@ -1035,7 +1036,16 @@ class ImagePoseSyncNode(Node):
                 [[0.]]
             ).reshape(1, 1).astype(np.int64)
             # print(input.shape)
+            t0 = time.perf_counter()
             output = session.run(None, {"observation": input.unsqueeze(0).cpu().numpy(), "embodiment_id": embodiment_id, 'metric_spacing': metric_spacing})
+            t1 = time.perf_counter()
+            infer_dt = max(t1 - t0, 1e-8)
+            infer_fps = 1.0 / infer_dt
+            print(
+                f"[perf] onnx inference: {infer_dt*1000:.2f} ms, "
+                f"fps={infer_fps:.2f}"
+            )
+
             # print(output)
             traj_raw = output[0][:, 1:] # [0]
             score_raw = output[1][:, 1:] # [0]

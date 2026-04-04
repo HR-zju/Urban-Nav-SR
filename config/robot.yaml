@@ -1,0 +1,15 @@
+# linear 5 nd angular speed limits for the robot
+max_v: 1.1 #0.7 # m/s for coco
+max_w: 0.45 #0.65 flowpilot 0.5 # rad/s for coco
+# observation rate fo the robot
+frame_rate: 5 # Hz
+graph_rate: 0.3333 # Hz  
+
+# topic names (modify for different robots/nodes)
+vel_teleop_topic: /cmd_vel_mux/input/teleop 
+# vel_navi_topic: /go2_high_level
+vel_navi_topic: /cmd_vel
+# vel_navi_topic: /robot0/cmd_vel
+vel_recovery_topic: /cmd_vel_mux/input/recovery
+
+
