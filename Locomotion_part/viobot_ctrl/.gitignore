@@ -1,0 +1,91 @@
+############################
+# ROS 2 / colcon
+############################
+build/
+install/
+log/
+
+# colcon metadata
+.colcon/
+.colcon_install_layout
+
+############################
+# ROS logs / runtime
+############################
+*.log
+*.bag
+*.db3
+
+############################
+# Python
+############################
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pyc.*
+*.egg-info/
+dist/
+build/
+
+############################
+# C++
+############################
+*.o
+*.so
+*.a
+*.out
+*.exe
+
+############################
+# CMake
+############################
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+############################
+# VSCode
+############################
+.vscode/
+
+############################
+# CLion / JetBrains
+############################
+.idea/
+cmake-build-*/
+
+############################
+# System files
+############################
+.DS_Store
+Thumbs.db
+
+############################
+# Git submodule (optional)
+############################
+# Ignore submodule build artifacts if needed
+src/*/build/
+src/*/install/
+src/*/log/
+
+############################
+# Environment / local config
+############################
+.env
+*.local
+
+############################
+# ROS2 generated messages (optional)
+############################
+*.msg~
+*.srv~
+
+############################
+# Coverage / test
+############################
+coverage/
+*.gcda
+*.gcno
+*.gcov
