@@ -2,7 +2,11 @@ name: ROS2 CI
 
 on:
   push:
+    paths:
+      - 'Locomotion_part/viobot_ctrl/**'
   pull_request:
+    paths:
+      - 'Locomotion_part/viobot_ctrl/**'
 
 jobs:
   build:
@@ -20,12 +24,13 @@ jobs:
         run: |
           apt-get update
           rosdep update
-          rosdep install --from-paths src --ignore-src -r -y
+          rosdep install --from-paths Locomotion_part/viobot_ctrl/src --ignore-src -r -y
 
       - name: Build workspace
         shell: bash # 指定使用 bash 解释器
         run: |
           source /opt/ros/humble/setup.bash
           colcon build \
+            --base-paths Locomotion_part/viobot_ctrl/src \
             --event-handlers console_direct+ \
             --cmake-args -DCMAKE_BUILD_TYPE=Release

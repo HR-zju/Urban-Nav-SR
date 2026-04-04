@@ -1,9 +1,14 @@
 ############################
 # ROS 2 / colcon
 ############################
-build/
-install/
-log/
+# Root workspace build folders (used by CI)
+/build/
+/install/
+/log/
+# Local package build folders
+Locomotion_part/viobot_ctrl/build/
+Locomotion_part/viobot_ctrl/install/
+Locomotion_part/viobot_ctrl/log/
 
 # colcon metadata
 .colcon/
@@ -61,14 +66,6 @@ cmake-build-*/
 ############################
 .DS_Store
 Thumbs.db
-
-############################
-# Git submodule (optional)
-############################
-# Ignore submodule build artifacts if needed
-src/*/build/
-src/*/install/
-src/*/log/
 
 ############################
 # Environment / local config
