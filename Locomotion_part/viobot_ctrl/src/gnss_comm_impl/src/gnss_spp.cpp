@@ -226,40 +226,36 @@ namespace gnss_comm
                     good_G.row(i) = G.row(origin_idx);
                     good_b(i) = b(origin_idx);
                     // compose weight
+                    // 高度角 + 观测噪声 联合加权
                     const double el = all_sv_azel[origin_idx].y();
                     double sin_el = std::sin(el);
-                    double elevation_factor = sin_el * sin_el + 0.05;
 
-                    // 观测噪声
                     int l1_idx = -1;
                     L1_freq(this_obs, &l1_idx);
                     LOG_IF(FATAL, l1_idx < 0) << "[gnss_comm::psr_pos] no L1 observation found.\n";
 
-                    double std_obs = this_obs->psr_std[l1_idx];
-                    if (std_obs <= 0) std_obs = 1.0;
+                    // 高度角方差模型
+                    // 采用经典模型: a^2 / sin^2(el)。低高度角赋予更大的方差
+                    double el_var = (0.5 * 0.5) / (sin_el * sin_el + 0.05);
 
+                    // 观测噪声方差
+                    double std_obs = this_obs->psr_std[l1_idx];
+                    if (std_obs <= 0) std_obs = 1.0; // 默认 1m 的先验测距白噪声
                     double obs_var = std_obs * std_obs;
 
-                    // 星历误差
+                    // 广播星历误差方差 (URA)
                     double raw_ura = valid_ephems[origin_idx]->ura;
-{
-    LOG(INFO) << "URA = " << raw_ura;
-}
-                    // 提取合法的广播 URA，滤除离谱的死值
                     double ura_std = (raw_ura >= 0.5 && raw_ura < 50.0) ? raw_ura : 2.0;
                     const uint32_t obs_sys = satsys(this_obs->sat, NULL);
                     if (obs_sys == SYS_GAL) ura_std = std::max(ura_std - 1.0, 1.0);
                     if (obs_sys == SYS_GLO) ura_std = std::max(ura_std, 3.0);
-
                     double ura_var = ura_std * ura_std;
 
-                    // 总方差
-                    double total_var = obs_var + ura_var;
-                    total_var = std::max(total_var, 1e-4);
+                    // 总方差叠加与定权
+                    double total_var = obs_var + el_var + ura_var;
+                    total_var = std::max(total_var, 1e-4); // 防止数值异常下溢
 
-                    // elevation 加权
-                    double weight = elevation_factor / total_var;
-                    good_W(i, i) = weight;
+                    good_W(i, i) = 1.0 / total_var;
                 }
                 uint32_t tmp_count = good_num;
                 // add extra pseudo measurement to contraint unobservable clock bias
