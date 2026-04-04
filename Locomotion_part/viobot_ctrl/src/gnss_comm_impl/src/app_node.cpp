@@ -450,3 +450,38 @@ bool GnssSppNode::is_valid_obs_msg(const gnss_comm::msg::GnssObsMsg &msg, std::s
 
     return true;
 }
+void GnssSppNode::cleanup_ephem_callback()
+{
+    auto logger = this->get_logger();
+    int removed_count = 0;
+
+    // 获取当前系统时间并转换为 GNSS 时间 (GPST)
+    auto now_ros = this->now();
+    double now_unix = now_ros.seconds();
+    
+    std::lock_guard<std::mutex> lock(ephem_mutex_);
+    
+    auto it = ephem_map_.begin();
+    while (it != ephem_map_.end())
+    {
+        const auto& ephem = it->second;
+        
+        // 计算星历年龄
+        // 将 ephem->toe 转换为 Unix 时间戳对比
+        double ephem_toe_unix = gnss_comm::time2sec(ephem->toe); 
+        double age = std::abs(now_unix - ephem_toe_unix);
+
+        // 判定是否过期
+        if (age > MAX_EPHEM_AGE_SEC)
+        {
+            RCLCPP_INFO(logger, "Cleaning up expired ephem: Sat=%u, Age=%.1f hours", 
+                        it->first, age / 3600.0);
+            it = ephem_map_.erase(it);
+            removed_count++;
+        } else{
+            ++it;
+        }
+    }
+
+    if (removed_count > 0) RCLCPP_INFO(logger, "Ephem cleanup finished. Removed %d stale entries.", removed_count);
+}
