@@ -367,7 +367,7 @@ class ImagePoseSyncNode(Node):
 
         self.localodom_sub = self.create_subscription(
             Odometry,
-            '/utlidar/local_odom',
+            '/mfla/dr_odom',
             self.localodom_callback,
             20  # 适当调整队列大小
         )
@@ -375,7 +375,7 @@ class ImagePoseSyncNode(Node):
         # 订阅里程计话题
         self.odom_sub = self.create_subscription(
             Odometry,
-            '/utlidar/robot_odom',
+            '/mfla/dr_odom',
             self.odom_callback,
             100  # 适当调整队列大小
         )
@@ -676,7 +676,7 @@ class ImagePoseSyncNode(Node):
             return
         
         filename = "robot_poses.txt"
-        timestamped_filename = f"/home/mayukai/code/logs/navflow{timestamp}.txt"
+        timestamped_filename = f"/home/nuvo/SR/foundation-policy/logs/navflow{timestamp}.txt"
 
         try:
             with open(filename, 'w') as f:
@@ -1215,7 +1215,7 @@ class DictNamespace(argparse.Namespace):
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Test UrbanNav model')
-    parser.add_argument('--config', type=str, default='mix_data_350.yaml', help='Path to config file')
+    # parser.add_argument('--config', type=str, default='mix_data_350.yaml', help='Path to config file')
     parser.add_argument('--checkpoint', type=str, default=None, help='Path to model checkpoint. If not provided, the latest checkpoint will be used.')
     parser.add_argument('--save_predictions', action='store_true', help='Whether to save predictions')
     parser.add_argument('--distance_threshold', type=float, default=10, help='defult=1m')
@@ -1344,7 +1344,7 @@ if __name__ == '__main__':
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
     args = parse_args()
-    config = load_yaml_config(args.config)
+    # config = load_yaml_config(args.config)
 
     # model_cls = get_class_from_str(config['model']['model_path'])
     # load ckpt
@@ -1384,7 +1384,7 @@ if __name__ == '__main__':
     # ros
     rclpy.init(args=None)
     # Fixed network interface (sys.argv[1]) for Unitree SDK channel init
-    ChannelFactoryInitialize(0, "wlp0s20f3")
+    # ChannelFactoryInitialize(0, "wlp0s20f3")
     node = ImagePoseSyncNode(args.distance_threshold)
     try:
         rclpy.spin(node)
