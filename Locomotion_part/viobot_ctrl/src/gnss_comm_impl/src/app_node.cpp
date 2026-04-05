@@ -196,8 +196,12 @@ void GnssSppNode::meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPt
     fix_msg.altitude = alt;
     // 由于此处是单点定位(SPP)且未单独提取协方差矩阵，声明为未知协方差
     fix_msg.position_covariance_type = sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_UNKNOWN;
-
     pub_spp_fix_->publish(fix_msg);
+
+    // Save to KML
+    if (kml_exporter_) {
+        kml_exporter_->add_point(lat_deg, lon_deg, alt);
+    }
 }
 /**
 * @brief 提取双频数据并构造无电离层组合 (IF) 单频观测值

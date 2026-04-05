@@ -15,12 +15,14 @@
 #include "gnss_comm_impl/gnss_ros.hpp"
 #include "gnss_comm_impl/gnss_spp.hpp"
 #include "gnss_comm_impl/gnss_utility.hpp"
+#include "gnss_comm_impl/kml_exporter.hpp"
 
 class GnssSppNode : public rclcpp::Node
 {
 public:
     GnssSppNode() : Node("gnss_spp_node")
     {
+        kml_exporter_ = std::make_unique<gnss_comm::KmlExporter>(".");
         sub_ephem_ = this->create_subscription<gnss_comm::msg::GnssEphemMsg>(
             "/baton/gnss/ephem", 10,
             std::bind(&GnssSppNode::ephem_callback, this, std::placeholders::_1));
@@ -65,4 +67,6 @@ private:
     rclcpp::TimerBase::SharedPtr cleanup_timer_;
     std::mutex ephem_mutex_; // 保护 ephem_map_
     std::unordered_map<uint32_t, gnss_comm::EphemBasePtr> ephem_map_;
+
+    std::unique_ptr<gnss_comm::KmlExporter> kml_exporter_;
 };

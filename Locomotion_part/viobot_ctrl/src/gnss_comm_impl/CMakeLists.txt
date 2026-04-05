@@ -25,6 +25,7 @@ set(SOURCE_FILES
   src/gnss_spp.cpp
   src/gnss_utility.cpp
   src/rinex_helper.cpp
+  src/kml_exporter.cpp
 )
 
 add_executable(app_node ${SOURCE_FILES})
