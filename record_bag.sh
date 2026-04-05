@@ -1,5 +1,5 @@
 #!/bin/zsh
-
+# notice running this script out of docker container, and running ./record_bag.sh <bag_name> 
 # Create a new tmux session
 session_name="record_bag_$(date +%s)"
 tmux new-session -d -s $session_name
@@ -17,6 +17,7 @@ tmux selectp -t 1
 tmux splitw -h -p 66 
 tmux selectp -t 4
 tmux splitw -h -p 50 
+tmux select-layout tiled
 
 
 # [ 0 ] [ 2 ] [ 3 ]
@@ -25,6 +26,10 @@ tmux splitw -h -p 50
 
 # Run the realsense2 launch command in the first pane
 tmux select-pane -t 0
+tmux send-keys "tmux set -g mouse on" Enter
+tmux send-keys "sudo nvidia-smi -pm 1" Enter
+tmux send-keys "sudo nvidia-smi -pl 100" Enter
+tmux send-keys "docker start ros1toros2" Enter
 tmux send-keys "docker exec -it ros1toros2 zsh" Enter
 sleep 1
 tmux send-keys "ros2 launch realsense2_camera rs_launch.py \
@@ -51,11 +56,12 @@ tmux send-keys "python test_nav_flow_il_realsense.py" Enter
 
 
 # run teleop in the fourth pane
-# tmux select-pane -t 3
-# tmux send-keys "docker exec -it unitree bash" Enter
-# tmux send-keys "cd driver_ws/" Enter
-# tmux send-keys "source devel/setup.bash" Enter
-# tmux send-keys "roslaunch joystick_control seekur_joy.launch" Enter 
+tmux select-pane -t 3
+tmux send-keys "docker exec -it unitree bash" Enter
+sleep 1
+tmux send-keys "cd driver_ws/" Enter
+tmux send-keys "source devel/setup.bash" Enter
+tmux send-keys "roslaunch joystick_control seekur_joy.launch" Enter 
 
 # run pd controller in the fifth pane
 tmux select-pane -t 4

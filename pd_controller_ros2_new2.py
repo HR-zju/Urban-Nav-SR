@@ -230,21 +230,31 @@ class PDController(Node):
         self.current_w = 0
 
     def callback_enable(self, msg: Bool):
-        self.flag = not self.flag
+        # self.flag = True
         # print(self.flag)
         
         # 发布autopilot状态
-        state_msg = UInt8()
-        if self.flag:
-            state_msg.data = 2  # ENGAGED
-        else:
-            state_msg.data = 0  # UNAVAILABLE
-        self.autopilot_state_pub.publish(state_msg)
-        self.get_logger().info(f"Published autopilot state: {state_msg.data}")
+        # state_msg = UInt8()
+        # if self.flag:
+        #     state_msg.data = 2  # ENGAGED
+        # else:
+        #     state_msg.data = 0  # UNAVAILABLE
+        # self.autopilot_state_pub.publish(state_msg)
+        self.flag = True
+        self.update_autopilot_state(2)
+        self.get_logger().info("Autonomy ENABLED. State: 2")
 
     def callback_disable(self, msg: Bool):
         # self.flag = False
-        pass
+        # pass
+        self.flag = False
+        self.update_autopilot_state(0) # 0 代表 UNAVAILABLE
+        self.get_logger().info("Autonomy DISABLED. State: 0")
+
+    def update_autopilot_state(self, state_value):
+        state_msg = UInt8()
+        state_msg.data = state_value
+        self.autopilot_state_pub.publish(state_msg)
 
     def callback_drive(self, waypoint_msg: Float32MultiArray):
         """Callback function for the waypoint subscriber"""
