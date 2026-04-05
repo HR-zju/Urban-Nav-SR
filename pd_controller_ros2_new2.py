@@ -213,7 +213,7 @@ class PDController(Node):
         self.waypoint_sub = self.create_subscription(Float32MultiArray, WAYPOINT_TOPIC, self.callback_drive, 10)
         self.reached_goal_sub = self.create_subscription(Bool, REACHED_GOAL_TOPIC, self.callback_reached_goal, 10)
         self.vel_pub = self.create_publisher(Twist, VEL_TOPIC, 10)
-        self.cmd_enable_pub = self.create_publisher(Bool, 'cmd_vel/autonomy_enable', 10)
+        self.cmd_enable_pub = self.create_publisher(Bool, '/cmd_vel/autonomy_enable', 10)
         self.autopilot_state_pub = self.create_publisher(UInt8, '/autopilot/state', 10)
         self.autonomy_sub1 = self.create_subscription(
                     Bool, '/joystick_services/autonomy', self.callback_enable, 10)
