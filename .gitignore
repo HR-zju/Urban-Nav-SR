@@ -12,3 +12,5 @@
 /vis
 *.txt
 bags/
+test_images_frame/
+logs/

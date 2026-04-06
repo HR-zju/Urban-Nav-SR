@@ -15,14 +15,16 @@ import argparse
 import math
 import os
 from collections import deque
-import numpy as np
-import cv2
-import onnxruntime as ort
-import torch
+import queue
 import threading
 import time
 
 import ast
+
+import cv2
+import numpy as np
+import onnxruntime as ort
+import torch
 
 # Dynamically load only the visualization function from vis_gt_single_gt.py
 def load_function_from_file(filepath, func_name):
@@ -163,13 +165,119 @@ def main():
     buffer_len = args.frames
     frame_buffer = deque(maxlen=buffer_len)
 
-    # video writer (single-threaded, writes one frame per inference batch)
-    writer = None
+    # ====================
+    # Asynchronous video writer setup
+    # ====================
+    class AsyncVideoWriter:
+        """Background VideoWriter with dynamic size check and bounded queue.
+
+        This keeps disk I/O off the main loop and avoids header corruption by
+        draining the queue on shutdown.
+        """
+
+        def __init__(self, out_path: str, fps: float, fourcc: int, max_queue: int = 128):
+            self.out_path = out_path
+            self.fps = float(fps)
+            self.fourcc = fourcc
+            self.max_queue = max_queue
+
+            self._queue: "queue.Queue[np.ndarray]" = queue.Queue(maxsize=max_queue)
+            self._stop_event = threading.Event()
+            self._thread = threading.Thread(target=self._worker, daemon=True)
+
+            self._writer = None
+            self._writer_size = None  # (w, h)
+            self._frames_written = 0
+            self._init_error_logged = False
+
+        def start(self):
+            self._thread.start()
+
+        def _ensure_writer(self, frame_bgr: np.ndarray):
+            if self._writer is not None:
+                return
+
+            h, w = frame_bgr.shape[:2]
+            self._writer_size = (w, h)
+            os.makedirs(os.path.dirname(self.out_path), exist_ok=True)
+            self._writer = cv2.VideoWriter(self.out_path, self.fourcc, self.fps, self._writer_size)
+
+            if not self._writer.isOpened():
+                if not self._init_error_logged:
+                    print(f"[overlay] ERROR: failed to open VideoWriter at {self.out_path}")
+                    self._init_error_logged = True
+                self._writer = None
+
+        def write(self, frame_bgr: np.ndarray):
+            """Queue a frame for writing.
+
+            This blocks if the queue is full, naturally back-pressuring the
+            producer and preventing unbounded memory growth.
+            """
+            if self._stop_event.is_set():
+                return
+            try:
+                # Copy to decouple from caller's buffer mutations
+                self._queue.put(frame_bgr.copy(), block=True)
+            except Exception as e:
+                print(f"[overlay] queue put error: {e}")
+
+        def _resize_if_needed(self, frame_bgr: np.ndarray) -> np.ndarray:
+            if self._writer_size is None:
+                return frame_bgr
+            h, w = frame_bgr.shape[:2]
+            w0, h0 = self._writer_size
+            if (w, h) != (w0, h0):
+                # Dynamic resampling to avoid FFmpeg 'Failed to write frame' when size changes
+                frame_resized = cv2.resize(frame_bgr, (w0, h0), interpolation=cv2.INTER_LINEAR)
+                return frame_resized
+            return frame_bgr
+
+        def _worker(self):
+            while not self._stop_event.is_set() or not self._queue.empty():
+                try:
+                    frame_bgr = self._queue.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+
+                try:
+                    if self._writer is None:
+                        self._ensure_writer(frame_bgr)
+                        if self._writer is None:
+                            # Cannot write; drop frame but continue draining queue
+                            self._queue.task_done()
+                            continue
+
+                    frame_bgr = self._resize_if_needed(frame_bgr)
+                    self._writer.write(frame_bgr)
+                    self._frames_written += 1
+                    if self._frames_written % 30 == 0:
+                        print(f"[overlay] frames written (async): {self._frames_written}")
+                except Exception as e:
+                    # Avoid spamming FFmpeg warnings; log once per failure type
+                    print(f"[overlay] write error: {e}")
+                finally:
+                    self._queue.task_done()
+
+            if self._writer is not None:
+                self._writer.release()
+                self._writer = None
+
+        def close(self):
+            self._stop_event.set()
+            # Wait for all pending frames to be written
+            try:
+                self._queue.join()
+            except Exception:
+                pass
+            if self._thread.is_alive():
+                self._thread.join(timeout=2.0)
+
+    async_writer = None
     out_path = None
-    frames_written = 0
     if args.saveOverlay:
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        print("[overlay] saveOverlay enabled, will write video when first overlay frame is ready")
+        print("[overlay] saveOverlay enabled, will write video asynchronously when first overlay frame is ready")
 
     # prepare metric_spacing and embodiment id as in test script
     metric_spacing = np.array([[0., 0.51, -0.26, 0.26]], dtype=np.float32).reshape(1, 4)
@@ -187,14 +295,54 @@ def main():
     # previous trajectory.
     last_wp_np = None
 
+    # ====================
+    # Decode thread: read frames from VideoCapture into a bounded queue
+    # ====================
+    raw_frame_queue: "queue.Queue[tuple[int, np.ndarray] | None]" = queue.Queue(maxsize=buffer_len * 4)
+    stop_event = threading.Event()
+
+    def decode_loop():
+        nonlocal cap
+        local_count = 0
+        try:
+            while not stop_event.is_set():
+                ret, frame_bgr = cap.read()
+                if not ret:
+                    # Signal end of stream
+                    raw_frame_queue.put(None)
+                    print("End of video or cannot fetch frame (decoder)")
+                    break
+                local_count += 1
+                # Bounded queue prevents unbounded growth if downstream is slow
+                raw_frame_queue.put((local_count, frame_bgr))
+        finally:
+            cap.release()
+
+    decode_thread = threading.Thread(target=decode_loop, name="decode_thread", daemon=True)
+    decode_thread.start()
+
     try:
         while True:
-            ret, frame_bgr = cap.read()
-            if not ret:
-                print("End of video or cannot fetch frame")
+            try:
+                item = raw_frame_queue.get(timeout=1.0)
+            except queue.Empty:
+                # No frames currently available; keep polling unless stop requested
+                if stop_event.is_set():
+                    break
+                continue
+
+            if item is None:
+                # Decoder signaled end of stream
                 break
 
-            frame_count += 1
+            frame_count, frame_bgr = item
+
+            # ========== Color space handling ==========
+            # 1) cap.read() gives BGR (frame_bgr) – this is what we use for display/writing.
+            # 2) For the model and waypoint projection we work in RGB, but
+            #    project_waypoints_to_fisheye_image_with_polygon_new expects an
+            #    RGB numpy array and internally converts to BGR for OpenCV.
+            #    So: BGR (capture) → RGB (model/vis input) → BGR (vis output).
 
             # Convert BGR -> RGB and resize to 1920x1080 if needed (same as ROS pipeline)
             frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
@@ -213,7 +361,7 @@ def main():
 
             # If buffer not yet full, we can't run the model; just show raw frame
             if len(frame_buffer) < buffer_len and last_wp_np is None:
-                vis_img = frame_bgr
+                vis_img_bgr = frame_bgr
             else:
                 # 构建 batch: (N, C, H, W)
                 video_frames = torch.stack(list(frame_buffer), dim=0).to(device)
@@ -300,14 +448,19 @@ def main():
                 # 使用当前帧进行可视化：如果有 last_wp_np，就叠加轨迹；否则显示原始帧
                 if last_wp_np is not None:
                     try:
-                        vis_img = project_waypoints_to_fisheye_image_with_polygon_new(
-                            last_wp_np, intrinsic_params, frame_rgb, save_fig=False
+                        # IMPORTANT: pass RGB frame into the helper, which
+                        # internally converts RGB→BGR and returns a BGR image
+                        vis_img_bgr = project_waypoints_to_fisheye_image_with_polygon_new(
+                            last_wp_np,
+                            intrinsic_params,
+                            frame_rgb,
+                            save_fig=False,
                         )
                     except Exception as e:
                         print(f"[overlay] draw error: {e}")
-                        vis_img = frame_bgr
+                        vis_img_bgr = frame_bgr
                 else:
-                    vis_img = frame_bgr
+                    vis_img_bgr = frame_bgr
 
             # optional simple 2D debug visualization
             if args.simple_vis and len(frame_buffer) == buffer_len and last_wp_np is not None:
@@ -317,39 +470,38 @@ def main():
                 except Exception:
                     pass
 
-            # show (single-threaded, approximate sample_fps display)
-            cv2.imshow("overlay", vis_img)
+            # show (approximate sample_fps display); vis_img_bgr is always BGR here
+            cv2.imshow("overlay", vis_img_bgr)
 
-            # lazy-init video writer when we know frame size
+            # Asynchronous video writing: queue frames to background writer
             if args.saveOverlay:
-                if writer is None:
-                    h, w = vis_img.shape[:2]
+                if async_writer is None:
                     base = os.path.splitext(os.path.basename(args.mp4))[0]
                     out_dir = os.path.join(os.getcwd(), "overlay")
-                    os.makedirs(out_dir, exist_ok=True)
                     out_path = os.path.join(out_dir, f"{base}_overlay.mp4")
                     out_fps = float(args.output_fps)
                     print(
-                        f"[overlay] initializing VideoWriter: path={out_path}, size=({w}x{h}), fps={out_fps}"
+                        f"[overlay] initializing AsyncVideoWriter: path={out_path}, fps={out_fps}"
                     )
-                    writer = cv2.VideoWriter(out_path, fourcc, out_fps, (w, h))
-                    if not writer.isOpened():
-                        print(f"[overlay] ERROR: failed to open VideoWriter at {out_path}")
+                    async_writer = AsyncVideoWriter(out_path, out_fps, fourcc)
+                    async_writer.start()
 
-                if writer is not None and writer.isOpened():
-                    writer.write(vis_img)
-                    frames_written += 1
-                    if frames_written % 30 == 0:
-                        print(f"[overlay] frames written: {frames_written}")
+                if async_writer is not None:
+                    async_writer.write(vis_img_bgr)
 
             # 适当等待以接近期望的输出帧率（默认 20Hz）
             if cv2.waitKey(int(1000 / max(1, args.output_fps))) & 0xFF == ord("q"):
                 break
 
+    except KeyboardInterrupt:
+        print("Interrupted by user, shutting down gracefully...")
     finally:
-        cap.release()
-        if writer is not None:
-            writer.release()
+        # Signal decode and writer threads to stop and flush
+        stop_event.set()
+        if decode_thread.is_alive():
+            decode_thread.join(timeout=2.0)
+        if async_writer is not None:
+            async_writer.close()
         cv2.destroyAllWindows()
 
 
