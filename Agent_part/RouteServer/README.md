@@ -1,89 +1,72 @@
-# OpenStreetMap (OSM) MCP Server
+# UrbanNav MCP Server
 
-An OpenStreetMap MCP server implementation that enhances LLM capabilities with location-based services and geospatial data.
+`osm-mcp-server` 是一个面向位置理解、目的地推荐、路线规划和地图可视化的 MCP server。  
+虽然包名历史上沿用了 `osm-mcp-server`，但当前代码已经支持多地图 provider：
 
-## Demo
+- `osm`
+- `amap`
+- `baidu`
+- `google`
 
-### Meeting Point Optimization
-![Meeting Point Use Case](demo/use-case-meeting.gif)
+项目重点不是“单纯查地图”，而是把自然语言需求转换成：
 
-### Neighborhood Analysis
-![Neighborhood Analysis Use Case](demo/use-case-neighborhood.gif)
+- 候选目的地召回
+- 语义重排
+- 路线规划
+- BEV 路线可视化
 
-### Parking Search
-![Parking Search Use Case](demo/use-case-parking.gif)
+同时仓库还包含一个 macOS SwiftUI 客户端 `apps/nav-assistant/`，用于语音输入、候选选择和地图展示。
 
+## 核心能力
 
-## Installation
+- 自然语言目的地推荐：`recommend_destination_and_waypoints`
+- 语义 POI 检索：`search_nearby_pois`
+- 粗粒度路线步骤：`get_coarse_waypoints`
+- AMap 静态 BEV 路线图：`render_bev_route_snapshot`
+- 图像理解：`analyze_image`
+- 地址正反解码：`geocode_address` / `reverse_geocode`
+- 会议点推荐、停车、充电、通勤、学区、社区分析等辅助工具
 
-### In MCP Hosts like Claude Desktop, Cursor, Windsurf, etc.
-- `osm-mcp-server`: The main server, available for public use.
-  
-  ```json
-  "mcpServers": {
-    "osm-mcp-server": {
-      "command": "uvx",
-      "args": [
-        "osm-mcp-server"
-      ]
-    }
-  }
-  ```
+## 当前推荐链路
 
-## Features
+当前推荐流程已经改成两阶段：
 
-This server provides LLMs with tools to interact with OpenStreetMap data, enabling location-based applications to:
+1. 候选阶段  
+   只做意图解析、候选召回、语义排序、轻量距离/时长估计
 
-- Search nearby POIs with provider-facing semantic keywords
-- Generate coarse semantic waypoints for hierarchical navigation
-- Parse free-form user instructions and recommend destinations with route key waypoints
-- Geocode addresses and place names to coordinates
-- Reverse geocode coordinates to addresses
-- Suggest optimal meeting points for multiple people
-- Explore areas and get comprehensive location information
-- Find schools and educational institutions near a location
-- Analyze commute options between home and work
-- Locate EV charging stations with connector and power filtering
-- Perform neighborhood livability analysis for real estate
-- Find parking facilities with availability and fee information
-- Analyze remote images with a multimodal LLM endpoint
+2. 路线阶段  
+   只对最终 `chosen_destination` 计算一次真实路线  
+   用户在交互里改选其他候选时，再单独请求该候选的路线
 
-## Components
+这样做的目的是避免对每个候选都调用一次地图 route API，降低延迟。
 
-### Resources
+## Provider 支持
 
-The server implements location-based resources:
-- `location://place/{query}`: Get information about places by name or address
-- `location://map/{style}/{z}/{x}/{y}`: Get styled map tiles at specified coordinates
+### OSM
 
-### Tools
+默认 provider。
 
-The primary domestic-map-first workflow is built around these tools:
-- `search_nearby_pois`: Search nearby POIs with provider-facing semantic keywords such as `bookstore|cafe`
-- `get_coarse_waypoints`: Return macro semantic route steps instead of dense geometry
-- `recommend_destination_and_waypoints`: Parse natural-language prompts, rank destinations, and return key route waypoints
-- `render_bev_route_snapshot`: For `MAP_PROVIDER=amap`, build a refreshable AMap static BEV route image URL from origin/destination
+- Geocoding: Nominatim
+- Routing: OSRM
+- Nearby/category search: Overpass
 
-Additional tools remain available:
-- `geocode_address`: Convert text to geographic coordinates
-- `reverse_geocode`: Convert coordinates to human-readable addresses
-- `suggest_meeting_point`: Find optimal meeting spots for multiple people
-- `explore_area`: Get comprehensive data about a neighborhood
-- `find_schools_nearby`: Locate educational institutions near a specific location
-- `analyze_commute`: Compare transportation options between home and work
-- `find_ev_charging_stations`: Locate EV charging infrastructure with filtering
-- `analyze_neighborhood`: Evaluate neighborhood livability for real estate
-- `find_parking_facilities`: Locate parking options near a destination
-- `analyze_image`: Send an image URL plus a question to a multimodal LLM and return the answer
+启动：
 
-Legacy compatibility tools are still exposed but are no longer the recommended path for new integrations:
-- `find_nearby_places`
-- `get_route_directions`
-- `search_category`
+```bash
+export MAP_PROVIDER=osm
+osm-mcp-server
+```
 
-### Provider Configuration (OSM / AMap / Baidu / Google Maps)
+### AMap
 
-By default the server uses OpenStreetMap data sources. You can switch to AMap:
+适合中国大陆场景。
+
+- Geocoding / reverse geocoding
+- POI around / text search
+- Walking / driving coarse route
+- Static map BEV snapshot
+
+启动：
 
 ```bash
 export MAP_PROVIDER=amap
@@ -91,7 +74,7 @@ export AMAP_KEY=your_amap_key
 osm-mcp-server
 ```
 
-You can also switch to Baidu Maps:
+### Baidu
 
 ```bash
 export MAP_PROVIDER=baidu
@@ -99,168 +82,197 @@ export BAIDU_AK=your_baidu_ak
 osm-mcp-server
 ```
 
-You can also switch to Google Maps Platform:
+### Google Maps
 
 ```bash
 export MAP_PROVIDER=google
 export GOOGLE_MAPS_API_KEY=your_google_maps_api_key
-
-# Optional: bias geocoding / place search / route instructions language.
 export GOOGLE_MAPS_LANGUAGE=en
-
-# Optional: region bias for geocoding / places, for example CN / US / SG.
 export GOOGLE_MAPS_REGION=CN
-
 osm-mcp-server
 ```
 
-Google provider notes:
-- Geocoding uses Google Geocoding API
-- Nearby / semantic POI retrieval uses Places API (New) text search
-- Routing and coarse waypoints use Routes API `computeRoutes`
-- For domestic China place names, Chinese queries are often more stable than English transliterations
-- If your network reaches Google through a proxy, set `HTTPS_PROXY` / `HTTP_PROXY`.
-  The server now honors proxy env vars by default (`MAP_HTTP_TRUST_ENV=1`).
-- Optional HTTP timeout controls:
+Google provider 当前使用：
+
+- Geocoding API
+- Places API (New)
+- Routes API
+
+注意：
+
+- 需要在对应 Google Cloud project 里启用这些 API
+- 在受限网络环境下，通常还需要设置 `HTTPS_PROXY` / `HTTP_PROXY`
+
+## LLM 能力
+
+LLM 主要用于：
+
+- 自然语言意图解析
+- 候选语义重排
+- 英文指令到中文 provider-facing query 的本地化
+- 中文结果回英文
+- 图像理解
+
+支持 OpenAI-compatible endpoint，也支持 Volcengine ARK。
+
+### OpenAI-compatible
 
 ```bash
-export MAP_HTTP_TOTAL_TIMEOUT_S=60
-export MAP_HTTP_CONNECT_TIMEOUT_S=12
-# Optional; unset by default
-export MAP_HTTP_SOCK_READ_TIMEOUT_S=30
-```
-
-Optional LLM parsing (for better intent extraction):
-
-```bash
-# OpenAI-compatible default
 export LLM_API_KEY=your_api_key
 export LLM_MODEL=gpt-4o-mini
 export LLM_API_BASE_URL=https://api.openai.com/v1
+```
 
-# Doubao / Volcengine ARK via Responses API
+### Volcengine ARK / Doubao
+
+```bash
 export LLM_PROVIDER=ark
 export ARK_API_KEY=your_ark_api_key
 export LLM_MODEL=doubao-seed-2-0-pro-260215
-# Optional override; this is the default when LLM_PROVIDER=ark
 export LLM_API_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
-# Default in code is now chat_completions; keep this if you want to be explicit.
 export LLM_API_STYLE=chat_completions
-# Optional: you can still switch to Responses API manually.
-# export LLM_API_STYLE=responses
 ```
 
-Optional prompt-engineering configuration:
+常用调优参数：
 
 ```bash
-# Few-shot examples for instruction parsing (JSON array).
-# Schema per item:
-# {
-#   "request": "natural language request",
-#   "output": {
-#     "destination_type": "string",
-#     "search_keywords": "string|string",
-#     "mode": "car|foot|bike",
-#     "radius_m": 1000,
-#     "optimize_for": "time|distance|balanced",
-#     "max_candidates": 5,
-#     "hard_constraints": {
-#       "max_route_duration_min": 20,
-#       "max_route_distance_m": 4000,
-#       "must_include_keywords": ["string", ...],
-#       "exclude_keywords": ["string", ...]
-#     }
-#   }
-# }
-export LLM_FEW_SHOT_EXAMPLES_JSON='[
-  {
-    "request": "Find a quiet place to work nearby with coffee",
-    "output": {
-      "destination_type": "workspace",
-      "search_keywords": "cafe|coworking space|bookstore",
-      "mode": "car",
-      "radius_m": 2500,
-      "optimize_for": "balanced",
-      "max_candidates": 5,
-      "hard_constraints": {
-        "max_route_duration_min": 25,
-        "max_route_distance_m": null,
-        "must_include_keywords": ["coffee"],
-        "exclude_keywords": []
-      }
-    }
-  }
-]'
-
-# Few-shot examples from file (recommended)
-export LLM_FEW_SHOT_EXAMPLES_FILE=config/llm_few_shot_examples.json
-
-# Optional cap for prompt size (defaults to 6)
+export LLM_TIMEOUT_S=20
 export LLM_FEW_SHOT_MAX_EXAMPLES=6
-
-# Hard-constraint and soft-ranking controls
-export ROUTE_EVAL_LIMIT=25
-export RANKING_WEIGHTS_JSON='{"time":0.5,"distance":0.3,"proximity":0.1,"keyword":0.1}'
 ```
 
+如果意图解析经常超时，可以先降到：
 
-## Local Testing
+```bash
+export LLM_FEW_SHOT_MAX_EXAMPLES=2
+```
 
-### Running the Server
+## 安装
 
-To run the server locally:
-
-1. Install the package in development mode:
+### 本地开发安装
 
 ```bash
 pip install -e .
 ```
 
-2. Start the server:
+如需 macOS CoreLocation：
 
 ```bash
-osm-mcp-server
+pip install -e ".[macos]"
 ```
 
-3. The server will start and listen for MCP requests on the standard input/output.
+### 在 MCP Host 中使用
 
-### Testing with Example Clients
+```json
+{
+  "mcpServers": {
+    "osm-mcp-server": {
+      "command": "uvx",
+      "args": ["osm-mcp-server"]
+    }
+  }
+}
+```
 
-The repository includes example clients in the `examples/` directory.
+本地未发布开发版本可用：
 
-#### Basic Client Example
+```json
+{
+  "mcpServers": {
+    "osm-mcp-server": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/path/to/open-streetmap-mcp",
+        "run",
+        "osm-mcp-server"
+      ]
+    }
+  }
+}
+```
 
-`client.py` demonstrates the recommended domestic-map-first workflow:
+## 主要工具
+
+### 推荐与规划
+
+- `recommend_destination_and_waypoints`
+  - 输入自然语言需求和当前位置
+  - 返回候选目的地、选中目的地、路线摘要、关键点、细 polyline
+
+- `get_coarse_waypoints`
+  - 输入起终点
+  - 返回 provider route 的语义步骤和 coarse waypoints
+
+- `render_bev_route_snapshot`
+  - 仅在 `MAP_PROVIDER=amap` 下可用
+  - 根据起终点和路线 polyline 生成高德静态 BEV 图 URL
+  - 可按固定频率轮询刷新
+
+### 检索与解析
+
+- `search_nearby_pois`
+- `geocode_address`
+- `reverse_geocode`
+- `find_nearby_places`
+- `search_category`
+
+### 其他分析工具
+
+- `analyze_image`
+- `suggest_meeting_point`
+- `find_schools_nearby`
+- `analyze_commute`
+- `find_ev_charging_stations`
+- `analyze_neighborhood`
+- `find_parking_facilities`
+
+## 路线与 BEV 输出说明
+
+### 1. 推荐返回的路线信息
+
+`recommend_destination_and_waypoints` 现在会返回：
+
+- `recommendations[*].route_summary`
+  候选阶段默认是轻量估计值
+
+- `chosen_destination`
+  只对它计算一次真实路线
+
+- `key_waypoints`
+  粗粒度关键路径点
+
+- `route_polyline`
+  更细的路线 polyline，适合地图渲染
+
+### 2. AMap 静态 BEV 图
+
+`render_bev_route_snapshot` 返回：
+
+- `image_url`
+- `image_url_cache_busted`
+- `route_polyline`
+- `refresh_interval_s`
+
+它不是视频流，而是“静态图按频率刷新”。
+
+### 3. macOS app 本地渲染
+
+`apps/nav-assistant/` 现在优先使用服务端返回的 `route_polyline` 在 `MapKit` 里本地渲染，只有拿不到细 polyline 时才退回 `key_waypoints`。
+
+这意味着当前仓库里有两种 BEV 展示方式：
+
+- AMap static map URL
+- macOS app 本地 `MapPolyline`
+
+## 示例客户端
+
+### 基础示例
 
 ```bash
 python examples/client.py
 ```
 
-This will:
-- Connect to the locally running server
-- Get information about San Francisco
-- Search nearby POIs with semantic keywords
-- Request coarse semantic waypoints to a selected destination
-- Run the full recommendation workflow
-
-#### LLM Integration Example
-
-`location_assistant_client.py` provides a helper class designed for LLM integration:
-
-```bash
-python examples/location_assistant_client.py
-```
-
-This example shows how an LLM can use the Location Assistant to:
-- Get location information from text queries
-- Search nearby semantic POIs
-- Get coarse semantic waypoints
-- Find optimal meeting points
-- Explore neighborhoods
-
-#### Prompt Recommendation Demo
-
-`prompt_recommendation_client.py` demonstrates free-form prompt recommendation and waypoint sequence output:
+### Prompt 推荐
 
 ```bash
 python examples/prompt_recommendation_client.py \
@@ -272,36 +284,24 @@ python examples/prompt_recommendation_client.py \
   --radius 2500
 ```
 
-#### macOS Interactive Candidate Selection Demo
-
-`macos_prompt_recommendation_client.py` demonstrates an interactive flow:
-- read current macOS location (or use fallback `--lat/--lon`)
-- generate candidate destinations first
-- modify prompt/mode/radius/max-candidates in terminal
-- manually pick a destination index
-- generate waypoints for the selected destination
+### macOS 交互式推荐
 
 ```bash
 python examples/macos_prompt_recommendation_client.py \
-  --prompt "Find a quiet cafe nearby" \
+  --prompt "我想去西湖" \
   --mode foot \
-  --radius 2500
+  --radius 3000 \
+  --lat 30.2645 \
+  --lon 120.1180
 ```
 
-Optional fallback coordinates (non-macOS or when Location Services is unavailable):
+这个脚本会：
 
-```bash
-python examples/macos_prompt_recommendation_client.py \
-  --prompt "Find a quiet cafe nearby" \
-  --mode foot \
-  --radius 2500 \
-  --lat 39.916527 \
-  --lon 116.397128
-```
+- 用当前位置生成候选
+- 先返回候选列表
+- 只在用户确认选项后再补该候选路线
 
-#### Image Understanding Demo
-
-`image_understanding_client.py` demonstrates the multimodal MCP tool:
+### 图像理解
 
 ```bash
 python examples/image_understanding_client.py \
@@ -309,85 +309,112 @@ python examples/image_understanding_client.py \
   --question "What place is shown in this image?"
 ```
 
-### Writing Your Own Client
+### AMap BEV 快照轮询
 
-To create your own client:
+```bash
+export MAP_PROVIDER=amap
+export AMAP_KEY=your_amap_key
 
-1. Import the MCP client:
-```python
-from mcp.client import Client
+python examples/amap_bev_snapshot_client.py \
+  --prompt "I want to go to the WestLake" \
+  --lat 30.2645 \
+  --lon 120.1180 \
+  --mode foot \
+  --refresh-interval-s 3 \
+  --iterations 5
 ```
 
-2. Initialize the client with your server URL:
-```python
-client = Client("http://localhost:8000")
+## macOS 客户端
+
+SwiftUI 客户端位于：
+
+- [`apps/nav-assistant/`](apps/nav-assistant/)
+
+主要功能：
+
+- 语音输入 / 文本输入
+- 候选目的地选择
+- 规划结果桥接
+- MapKit 路线可视化
+
+运行说明见：
+
+- [`apps/nav-assistant/README.md`](apps/nav-assistant/README.md)
+
+## 性能与超时调优
+
+### 地图 HTTP
+
+```bash
+export MAP_HTTP_TOTAL_TIMEOUT_S=60
+export MAP_HTTP_CONNECT_TIMEOUT_S=12
+export MAP_HTTP_SOCK_READ_TIMEOUT_S=30
+export MAP_HTTP_TRUST_ENV=1
 ```
 
-3. Invoke tools or access resources:
-```python
-# Example: Geocode an address
-results = await client.invoke_tool("geocode_address", {"address": "New York City"})
+### 代理
+
+如果地图或 Google API 走代理：
+
+```bash
+export HTTPS_PROXY=http://127.0.0.1:7890
+export HTTP_PROXY=http://127.0.0.1:7890
 ```
 
-#### Claude Desktop config for local server
+### 推荐链路
 
-On MacOS: `~/Library/Application\ Support/Claude/claude_desktop_config.json`
-On Windows: `%APPDATA%/Claude/claude_desktop_config.json`
+```bash
+export GEOCODE_CONCURRENCY=4
+export REGIONAL_EXPANSION_CONCURRENCY=3
+export ROUTE_EVAL_CONCURRENCY=2
+```
 
-<details>
-  <summary>Development/Unpublished Servers Configuration</summary>
-  
-  ```json
-  "mcpServers": {
-    "osm-mcp-server": {
-      "command": "uv",
-      "args": [
-        "--directory",
-        "/path/to/osm-mcp-server",
-        "run",
-        "osm-mcp-server"
-      ]
-    }
-  }
-  ```
-</details>
+虽然代码里保留了这些并发参数，但当前推荐主链路已经改成“只对最终 chosen destination 算真实路线”，所以真正的热点不再是“多候选逐个 route planning”。
 
+### 静态图路线采样
 
+```bash
+export STATIC_ROUTE_MAX_POINTS=240
+export AMAP_STATIC_ROUTE_MAX_POINTS=240
+```
 
-## Development
+如果你想让静态 BEV 图尽量保留更多原始 polyline 点，可以把它们再调高。
 
-### Building and Publishing
+## 英文输入与中文地图 provider
 
-To prepare the package for distribution:
+对 `amap` / `baidu`：
 
-1. Sync dependencies and update lockfile:
+- 英文输入会先翻译成中文用于 provider 检索
+- 输出结果会尝试再翻回英文
+
+如果结果翻译失败，系统会退回 provider 原始语言文本，但检索仍然会继续。
+
+## 已知限制
+
+- `render_bev_route_snapshot` 目前只支持 `MAP_PROVIDER=amap`
+- AMap 静态图是“静态图轮询刷新”，不是原生导航 SDK 视频流
+- 英文地名在大陆 provider 上通常不如中文稳定
+- Google provider 依赖额外 API 开通和网络可达性
+- Swift app 的本地 polyline 渲染更适合交互式地图，静态图更适合截图或外部展示
+
+## 开发与调试
+
+### 运行 server
+
+```bash
+osm-mcp-server
+```
+
+### 构建分发
+
 ```bash
 uv sync
-```
-
-2. Build package distributions:
-```bash
 uv build
 ```
 
-This will create source and wheel distributions in the `dist/` directory.
-
-3. Publish to PyPI:
-```bash
-uv publish
-```
-
-Note: You'll need to set PyPI credentials via environment variables or command flags.
-
-### Debugging
-
-Since MCP servers run over stdio, debugging can be challenging. For the best debugging
-experience, we strongly recommend using the [MCP Inspector](https://github.com/modelcontextprotocol/inspector).
-
-You can launch the MCP Inspector via [`npm`](https://docs.npmjs.com/downloading-and-installing-node-js-and-npm) with this command:
+### MCP Inspector
 
 ```bash
-npx @modelcontextprotocol/inspector uv --directory /path/to/osm-mcp-server run osm-mcp-server
+npx @modelcontextprotocol/inspector uv --directory /path/to/open-streetmap-mcp run osm-mcp-server
 ```
 
-Upon launching, the Inspector will display a URL that you can access in your browser to begin debugging.

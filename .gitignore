@@ -86,3 +86,5 @@ coverage/
 *.gcda
 *.gcno
 *.gcov
+
+Agent_part/RouteServer/apps/nav-assistant/.build/
