@@ -14,3 +14,8 @@
 bags/
 test_images_frame/
 logs/
+
+.vscode/
+__pycache__/
+*.pyc
+.DS_Store
