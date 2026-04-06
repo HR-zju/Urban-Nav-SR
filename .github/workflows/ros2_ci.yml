@@ -1,0 +1,36 @@
+name: ROS2 CI
+
+on:
+  push:
+    paths:
+      - 'Locomotion_part/viobot_ctrl/**'
+  pull_request:
+    paths:
+      - 'Locomotion_part/viobot_ctrl/**'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    # 直接使用官方的 Humble 容器环境
+    container:
+      image: osrf/ros:humble-desktop
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 在容器中不需要 setup-ros 步骤了，环境已经是现成的，默认是 root 用户
+      - name: Install dependencies
+        run: |
+          apt-get update
+          rosdep update
+          rosdep install --from-paths Locomotion_part/viobot_ctrl/src --ignore-src -r -y
+
+      - name: Build workspace
+        shell: bash # 指定使用 bash 解释器
+        run: |
+          source /opt/ros/humble/setup.bash
+          colcon build \
+            --base-paths Locomotion_part/viobot_ctrl/src \
+            --event-handlers console_direct+ \
+            --cmake-args -DCMAKE_BUILD_TYPE=Release
