@@ -56,7 +56,7 @@ void GnssSppNode::meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPt
         std::string reject_reason;
         if (!this->is_valid_obs_msg(obs_msg, &reject_reason))
         {
-            RCLCPP_DEBUG(this->get_logger(),
+            RCLCPP_DEBUG(logger,
                 "Filtered invalid obs (sat=%u): %s", obs_msg.sat, reject_reason.c_str());
             continue;
         }
@@ -196,11 +196,117 @@ void GnssSppNode::meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPt
     fix_msg.altitude = alt;
     // 由于此处是单点定位(SPP)且未单独提取协方差矩阵，声明为未知协方差
     fix_msg.position_covariance_type = sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_UNKNOWN;
+    pub_spp_fix_raw_->publish(fix_msg);
+
+    // stereo算法启动后收集SPP初始位置
+    if (is_algo_running_ && !is_origin_set_) {
+
+        // 首先使用滑动窗口确认SPP是否稳定
+        init_ecef_buffer_.push_back(ecef_pos);
+        if (init_ecef_buffer_.size() > INIT_WINDOW_SIZE) init_ecef_buffer_.pop_front();
+
+        // 评估稳定性
+        if (init_ecef_buffer_.size() == INIT_WINDOW_SIZE) {
+            // a. 计算均值
+            Eigen::Vector3d mean_ecef = Eigen::Vector3d::Zero();
+            for (const auto& pos : init_ecef_buffer_) {
+                mean_ecef += pos;
+            }
+            mean_ecef /= INIT_WINDOW_SIZE;
+
+            // b. 计算方差和标准差
+            double variance = 0.0;
+            for (const auto& pos : init_ecef_buffer_) {
+                // squaredNorm() 是求两点距离的平方
+                variance += (pos - mean_ecef).squaredNorm(); 
+            }
+            variance /= INIT_WINDOW_SIZE;
+            double std_dev = std::sqrt(variance);
+
+            // 判断是否小于稳定阈值
+            if (std_dev < STABILITY_THRESHOLD) {
+                // 信号稳定，可以设定原点
+                origin_ecef_ = mean_ecef;
+                origin_lla_  = gnss_comm::ecef2geo(origin_ecef_);
+                R_enu2ecef_  = gnss_comm::geo2rotation(origin_lla_);
+                is_origin_set_ = true;
+                
+                RCLCPP_INFO(this->get_logger(), 
+                    "Fusion Origin Set Securely! StdDev: %.2f m. LLA: [%.8f, %.8f, %.2f]", 
+                    std_dev, origin_lla_[0], origin_lla_[1], origin_lla_[2]);
+                
+                // 释放内存
+                init_ecef_buffer_.clear(); 
+            } else {
+                // 信号在漂移，打印警告信息
+                RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                    "Waiting for GNSS to stabilize... Current StdDev: %.2f m (Threshold: %.2f m)", 
+                    std_dev, STABILITY_THRESHOLD);
+            }
+        }
+    }
+
+    // Save to KML if fusion hasn't taken over
+    if (kml_exporter_ && !is_origin_set_) {
+        kml_exporter_->add_point(lat_deg, lon_deg, alt);
+    }
+}
+
+void GnssSppNode::algo_status_callback(const system_ctrl::msg::AlgoStatus::ConstSharedPtr msg)
+{
+    if (msg->algo_status == "1") {
+        is_algo_running_ = true;
+    } else {
+        is_algo_running_ = false;
+        // reset origin
+        is_origin_set_ = false;
+        init_ecef_buffer_.clear();
+        
+    }
+}
+
+void GnssSppNode::odom_callback(const nav_msgs::msg::Odometry::ConstSharedPtr msg)
+{
+    if (!is_algo_running_ || !is_origin_set_) return;
+
+    // Extract position
+    double x = msg->pose.pose.position.x;
+    double y = msg->pose.pose.position.y;
+    double z = msg->pose.pose.position.z;
+
+    // ENU mapping from ROS base_link (X forward, Y left, Z up) if initial yaw=0 points North
+    double enu_e = -y;
+    double enu_n = x;
+    double enu_u = z;
+    Eigen::Vector3d enu_pos(enu_e, enu_n, enu_u);
+
+    // Transform relatively to ECEF
+    Eigen::Vector3d delta_ecef = R_enu2ecef_ * enu_pos;
+    Eigen::Vector3d cur_ecef = origin_ecef_ + delta_ecef;
+
+    // Convert ECEF back to Geodetic LLA
+    Eigen::Vector3d cur_lla = gnss_comm::ecef2geo(cur_ecef);
+
+    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                            "SPP Succeeded | Lat: %.8f, Lon: %.8f, Alt: %.2f m | Stereo3",
+                            cur_lla[0], cur_lla[1], cur_lla[2]);
+
+    // Publish high precision fused nav sat fix
+    sensor_msgs::msg::NavSatFix fix_msg;
+    fix_msg.header = msg->header;
+    fix_msg.header.frame_id = "gnss_link"; 
+    fix_msg.status.status = sensor_msgs::msg::NavSatStatus::STATUS_FIX;
+    fix_msg.status.service = sensor_msgs::msg::NavSatStatus::SERVICE_GPS;
+    fix_msg.latitude = cur_lla[0];
+    fix_msg.longitude = cur_lla[1];
+    fix_msg.altitude = cur_lla[2];
+    fix_msg.position_covariance_type = sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_UNKNOWN;
+    
     pub_spp_fix_->publish(fix_msg);
 
     // Save to KML
     if (kml_exporter_) {
-        kml_exporter_->add_point(lat_deg, lon_deg, alt);
+        kml_exporter_->add_point(cur_lla[0], cur_lla[1], cur_lla[2]);
     }
 }
 /**

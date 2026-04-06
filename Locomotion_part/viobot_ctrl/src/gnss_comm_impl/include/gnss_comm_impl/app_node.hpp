@@ -7,10 +7,13 @@
 #include <string>
 #include <memory>
 #include <mutex>
+#include <deque>
 
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <gnss_comm/msg/gnss_ephem_msg.hpp>
 #include <gnss_comm/msg/gnss_meas_msg.hpp>
+#include <nav_msgs/msg/odometry.hpp>
+#include <system_ctrl/msg/algo_status.hpp>
 
 #include "gnss_comm_impl/gnss_ros.hpp"
 #include "gnss_comm_impl/gnss_spp.hpp"
@@ -30,6 +33,17 @@ public:
         sub_meas_ = this->create_subscription<gnss_comm::msg::GnssMeasMsg>(
             "/baton/gnss/meas", 10,
             std::bind(&GnssSppNode::meas_callback, this, std::placeholders::_1));
+        
+        sub_odom_ = this->create_subscription<nav_msgs::msg::Odometry>(
+            "/baton/stereo3/odometry", 10,
+            std::bind(&GnssSppNode::odom_callback, this, std::placeholders::_1));
+
+        sub_algo_status_ = this->create_subscription<system_ctrl::msg::AlgoStatus>(
+            "/baton/algo_status", 10,
+            std::bind(&GnssSppNode::algo_status_callback, this, std::placeholders::_1));
+
+        pub_spp_fix_raw_ = this->create_publisher<sensor_msgs::msg::NavSatFix>(
+            "/baton/gnss/spp_fix_raw", 10);
         
         pub_spp_fix_ = this->create_publisher<sensor_msgs::msg::NavSatFix>(
             "/baton/gnss/spp_fix", 10);
@@ -52,6 +66,8 @@ private:
 
     void ephem_callback(const gnss_comm::msg::GnssEphemMsg::ConstSharedPtr msg);
     void meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPtr msg);
+    void odom_callback(const nav_msgs::msg::Odometry::ConstSharedPtr msg);
+    void algo_status_callback(const system_ctrl::msg::AlgoStatus::ConstSharedPtr msg);
     
 private:
     void filter_iono_free(const std::vector<gnss_comm::ObsPtr>& obs_in, const std::vector<gnss_comm::EphemBasePtr>& ephem_in, std::vector<gnss_comm::ObsPtr>& obs_out, std::vector<gnss_comm::EphemBasePtr>& ephem_out);
@@ -62,6 +78,10 @@ private:
 
     rclcpp::Subscription<gnss_comm::msg::GnssEphemMsg>::SharedPtr sub_ephem_;
     rclcpp::Subscription<gnss_comm::msg::GnssMeasMsg>::SharedPtr  sub_meas_;
+    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr      sub_odom_;
+    rclcpp::Subscription<system_ctrl::msg::AlgoStatus>::SharedPtr sub_algo_status_;
+    
+    rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr     pub_spp_fix_raw_;
     rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr     pub_spp_fix_;
 
     rclcpp::TimerBase::SharedPtr cleanup_timer_;
@@ -69,4 +89,15 @@ private:
     std::unordered_map<uint32_t, gnss_comm::EphemBasePtr> ephem_map_;
 
     std::unique_ptr<gnss_comm::KmlExporter> kml_exporter_;
+
+    // 融合Stereo3和SPP
+    std::deque<Eigen::Vector3d> init_ecef_buffer_; // 滑动窗口缓存
+    const size_t INIT_WINDOW_SIZE = 10;            // 需要多少帧连续稳定的数据
+    const double STABILITY_THRESHOLD = 1.0;        // 稳定阈值
+
+    bool is_algo_running_ = false;
+    bool is_origin_set_   = false;
+    Eigen::Vector3d origin_ecef_{0.0, 0.0, 0.0};
+    Eigen::Vector3d origin_lla_{0.0, 0.0, 0.0};
+    Eigen::Matrix3d R_enu2ecef_{Eigen::Matrix3d::Identity()};
 };

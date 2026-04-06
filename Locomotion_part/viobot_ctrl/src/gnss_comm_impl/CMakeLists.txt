@@ -14,6 +14,8 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(gnss_comm REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(system_ctrl REQUIRED)
 
 # 查找第三方系统依赖
 find_package(Eigen3 REQUIRED)
@@ -44,6 +46,8 @@ ament_target_dependencies(app_node
   rclcpp
   sensor_msgs
   gnss_comm
+  nav_msgs
+  system_ctrl
 )
 
 install(TARGETS app_node
