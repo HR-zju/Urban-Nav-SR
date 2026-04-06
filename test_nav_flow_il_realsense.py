@@ -677,7 +677,7 @@ class ImagePoseSyncNode(Node):
             return
         
         filename = "robot_poses.txt"
-        timestamped_filename = f"/home/nuvo/SR/foundation-policy/logs/navflow{timestamp}.txt"
+        timestamped_filename = f"/home/zjy/code/myk/fundation_navigation_model_go2/fundation_navigation_model_go2/logs/navflow{timestamp}.txt"
 
         try:
             with open(filename, 'w') as f:
@@ -887,157 +887,155 @@ class ImagePoseSyncNode(Node):
 
     def process_batch(self, batch):
         global image_count
-        """处理收集到的5帧图像和位姿"""
+        """Process a collected batch of images and poses for ONNX inference."""
         self.get_logger().info(f"Processing batch of {len(batch)} frames")
-        # 在这里添加你的处理逻辑
-        # breakpoint()
+
+        # --- STEP 1: Create a snapshot of the current batch ---
+        # Use list() to convert the deque to a static list so that subsequent
+        # ONNX inference (which can take ~250 ms) is not affected by new
+        # frames being pushed into self.image_batch by ROS callbacks.
         with self.lock:
-            
-            image_list = []
-            pose_list = []
-            # process poses and curr pose
-            for image, pose, localpose in self.image_batch:
-                image_list.append(image)
-                pose_list.append([pose.pose.position.x, pose.pose.position.y, pose.pose.position.z, pose.pose.orientation.x, pose.pose.orientation.y, pose.pose.orientation.z,
-                                 pose.pose.orientation.w]) 
-            last_localpose = [localpose.pose.position.x, localpose.pose.position.y, localpose.pose.position.z, localpose.pose.orientation.w, localpose.pose.orientation.x, localpose.pose.orientation.y,
-                                 localpose.pose.orientation.z]
-            input_poses = np.array(pose_list)
-            current_pose = input_poses[-1]
-            # pose_list = self.transform_poses(input_poses, current_pose)[:, [0, 1]], 
-            post_odom_temp = self.transform_poses(input_poses, current_pose)[:, [0, 1]]
-            target_diff_temp = self.transform_target_pose(np.array(target_xy[0]), current_pose)[np.newaxis, [0, 1]]
-            # robot -> camera
-            post_odom =  post_odom_temp.copy()
-            target_diff = target_diff_temp.copy()
-            post_odom[:, 0] = -post_odom_temp[:, 1]
-            post_odom[:, 1] = post_odom_temp[:, 0]
-            target_diff[:, 0] = -target_diff_temp[:, 1]
-            target_diff[:, 1] = target_diff_temp[:, 0]
+            current_batch_snapshot = list(batch)
 
-            self.get_logger().info(f"delta (x,y) = {target_diff[0][0], target_diff[0][1]}")
+        if not current_batch_snapshot:
+            self.get_logger().warning("Empty batch snapshot, skip processing")
+            return
 
+        # Anchor all saved data (image, poses, etc.) to the latest frame
+        # in the snapshot. This represents the current time for inference.
+        snap_image, snap_pose, snap_localpose = current_batch_snapshot[-1]
 
-            transformed_input_positions = np.concatenate([
-                    post_odom, 
-                    target_diff
-                ], axis=0)
-            
-            step_scale = torch.tensor(np.linalg.norm(np.diff(post_odom, axis=0), axis=1).mean())
-            step_scale = torch.clamp(step_scale, min=1e-2)
-            step_scale = torch.tensor(1)
-            # transformed_input_positions = np.concatenate([
-            #                 self.transform_poses(input_poses, current_pose)[:, [0, 1]], 
-            #                 self.transform_target_pose(np.array(target_xy[0]), current_pose)[np.newaxis, [0, 1]]
-            #             ], axis=0)
-            transformed_input_positions /= 0.25
-                # pose_list.append([pose.pose.position.x, pose.pose.position.y])
+        # --- STEP 2: Prepare tensors and poses from the snapshot ---
+        image_list = []
+        pose_list = []
+        for image, pose, localpose in current_batch_snapshot:
+            image_list.append(image)
+            pose_list.append([
+                pose.pose.position.x,
+                pose.pose.position.y,
+                pose.pose.position.z,
+                pose.pose.orientation.x,
+                pose.pose.orientation.y,
+                pose.pose.orientation.z,
+                pose.pose.orientation.w,
+            ])
 
-        # relative_pose = [target_xy[0][0]-pose_list[-1][0], target_xy[0][1]-pose_list[-1][1]]
-        # self.get_logger().info(f"delta (x,y) = {relative_pose[0], relative_pose[1]}")
-        # self.get_logger().info(f"target (x,y) = {target_xy[0][0], target_xy[0][1]}")
+        # Record the local pose snapshot aligned with the last image in
+        # the batch; this will be saved for later visualization/analysis.
+        last_localpose_snapshot = [
+            snap_localpose.pose.position.x,
+            snap_localpose.pose.position.y,
+            snap_localpose.pose.position.z,
+            snap_localpose.pose.orientation.w,
+            snap_localpose.pose.orientation.x,
+            snap_localpose.pose.orientation.y,
+            snap_localpose.pose.orientation.z,
+        ]
 
-        # pose_list.append(relative_pose)
-        # breakpoint()
+        input_poses = np.array(pose_list)
+        current_pose = input_poses[-1]
+        # Transform poses into the current pose frame and then into
+        # the robot->camera coordinate system.
+        post_odom_temp = self.transform_poses(input_poses, current_pose)[:, [0, 1]]
+        target_diff_temp = self.transform_target_pose(
+            np.array(target_xy[0]), current_pose
+        )[np.newaxis, [0, 1]]
+
+        # robot -> camera
+        post_odom = post_odom_temp.copy()
+        target_diff = target_diff_temp.copy()
+        post_odom[:, 0] = -post_odom_temp[:, 1]
+        post_odom[:, 1] = post_odom_temp[:, 0]
+        target_diff[:, 0] = -target_diff_temp[:, 1]
+        target_diff[:, 1] = target_diff_temp[:, 0]
+
+        self.get_logger().info(
+            f"delta (x,y) = {target_diff[0][0], target_diff[0][1]}"
+        )
+
+        transformed_input_positions = np.concatenate([post_odom, target_diff], axis=0)
+
+        # Original step scale computation (kept for consistency).
+        step_scale = torch.tensor(
+            np.linalg.norm(np.diff(post_odom, axis=0), axis=1).mean()
+        )
+        step_scale = torch.clamp(step_scale, min=1e-2)
+        step_scale = torch.tensor(1)
+
+        transformed_input_positions /= 0.25
+
+        # --- STEP 3: Build tensors for ONNX model input ---
         video_frames = torch.stack(image_list, dim=0).unsqueeze(0).to(device)
-        input_positions = torch.tensor(transformed_input_positions).unsqueeze(0).to(device)
-        # breakpoint()
-        # video_frames = torch.rand([1, 5, 3, 360, 640])  # 或 torch.randn
-        # input_positions = torch.zeros([1, 6, 2])       # 可能需要调整数量
-        # input_positions[0, 5, 0] = 4
-        # input_positions[0, 5, 1] = 0
+        input_positions = (
+            torch.tensor(transformed_input_positions).unsqueeze(0).to(device)
+        )
 
         video_frames = video_frames.to(device)
-        # print(video_frames.shape)
         video_frames_raw = video_frames.clone()
         video_frames = torch.nn.functional.interpolate(
-            video_frames[0],
-            (288, 512)
+            video_frames[0], (288, 512)
         ).unsqueeze(0)
-        # For pinhole camera (e.g., RealSense), we do not need fisheye-to-pinhole undistortion
+
+        # For pinhole camera (e.g., RealSense), we do not need fisheye-to-pinhole
+        # undistortion. The fisheye conversion is kept commented out here.
         # video_frames = convert_fisheye_to_pinhole(
         #     K=K_global,
         #     dist=dist_global,
         #     device=video_frames.device,
         #     fisheye_tensor=video_frames[0],
-        #     fov_x=math.degrees(2 * math.atan(1920 / (2 * 790))),  # Horizontal FOV (wider)
-        #     fov_y=math.degrees(2 * math.atan(1080 / (2 * 790)))   # Vertical FOV (narrower)
+        #     fov_x=math.degrees(2 * math.atan(1920 / (2 * 790))),
+        #     fov_y=math.degrees(2 * math.atan(1080 / (2 * 790)))
         # ).unsqueeze(0)
-        # print(video_frames.shape, video_frames.max(), video_frames.min())
+
         input_positions = input_positions.to(torch.float32).to(device)
-        # breakpoint(): 1, 5, 3, H, W 0-1
-        # new_xy = [old_y, -old_x]
-        # video frames
+
+        # Build goal and past trajectory features from poses.
         goal = input_positions[:, -1, :]
         goal = torch.cat(
-            [
-                goal[:, 1:2],
-                -goal[:, 0:1]#.clamp(-4., 4.)
-            ], dim=1
-        ).reshape(1, 2) #* 0.25 #* 50
+            [goal[:, 1:2], -goal[:, 0:1]], dim=1
+        ).reshape(1, 2)
         dis = torch.norm(goal, dim=1)
-        goal[..., 0] = goal[..., 0].clamp(0.1, 500.)
-        goal[..., 1] = goal[..., 1].clamp(-50., 50.)
+        goal[..., 0] = goal[..., 0].clamp(0.1, 500.0)
+        goal[..., 1] = goal[..., 1].clamp(-50.0, 50.0)
         if torch.abs(torch.arctan2(goal[0, 1], goal[0, 0])) < np.pi / 9:
             goal[..., 1] = 0.0
+
         past_traj = torch.cat(
             [
                 input_positions[:, :-2, 1:2],
-                -input_positions[:, :-2, 0:1]
-            ], dim=2
+                -input_positions[:, :-2, 0:1],
+            ],
+            dim=2,
         ).reshape(1, -1, 2) * 0.25
-        past_traj = torch.cat(
-            [
-                # torch.zeros_like(past_traj)[:, :6],
-                past_traj
-            ],dim=1
-        ) #* 0.0
-        
-        # if dis <= 20 and dis > 0:
-        #     scale_goal = 20. / dis
-        # else:
-        #     scale_goal = 1.
-        goal = goal #* 10 #* scale_goal
+        past_traj = torch.cat([past_traj], dim=1)
+
         goal = torch.stack(
             [
-                dis.clamp(0.1, 200.) / 200,
+                dis.clamp(0.1, 200.0) / 200.0,
                 torch.cos(torch.arctan2(goal[:, 1], goal[:, 0])),
                 torch.sin(torch.arctan2(goal[:, 1], goal[:, 0])),
-            ], dim=-1
-        ) 
-        
-        past_mask = torch.ones([1, 21]).float().to(device)
-        # past_mask[:, :6] = 0.
-        video_frames = torch.cat(
-            [
-                # torch.zeros_like(video_frames)[:, :6],
-                video_frames
-            ], dim=1
+            ],
+            dim=-1,
         )
-        #input = torch.nn.functional.interpolate(
-        #    video_frames[0],
-        #    (288, 512)
-        #)
+
+        past_mask = torch.ones([1, 21]).float().to(device)
+        video_frames = torch.cat([video_frames], dim=1)
+
         input = video_frames[0]
         with torch.no_grad():
-            # obs = {
-            #     'observation': video_frames[:, -21:],
-            #     'past_mask': torch.ones([1, 15], device='cuda').bool(),
-            #     'future_mask': torch.ones([1, 15], device='cuda').bool(),
-            #     'metric_spacing': torch.ones([1, ], device='cuda').float() * 0.25,
-            # }
-
-            # past_mask = None
-            # wp_pred  = model.model.forward_test(obs, infer_only=True)['trajectory'] * 0.25
-            metric_spacing = np.array(
-                    [[0., 0.51, -0.26, 0.26]]
-            ).reshape(1, 4).astype(np.float32)
-            embodiment_id = np.array(
-                [[0.]]
-            ).reshape(1, 1).astype(np.int64)
-            # print(input.shape)
+            metric_spacing = np.array([[0.0, 0.51, -0.26, 0.26]]).reshape(1, 4).astype(
+                np.float32
+            )
+            embodiment_id = np.array([[0.0]]).reshape(1, 1).astype(np.int64)
             t0 = time.perf_counter()
-            output = session.run(None, {"observation": input.unsqueeze(0).cpu().numpy(), "embodiment_id": embodiment_id, 'metric_spacing': metric_spacing})
+            output = session.run(
+                None,
+                {
+                    "observation": input.unsqueeze(0).cpu().numpy(),
+                    "embodiment_id": embodiment_id,
+                    "metric_spacing": metric_spacing,
+                },
+            )
             t1 = time.perf_counter()
             infer_dt = max(t1 - t0, 1e-8)
             infer_fps = 1.0 / infer_dt
@@ -1046,172 +1044,115 @@ class ImagePoseSyncNode(Node):
                 f"fps={infer_fps:.2f}"
             )
 
-            # print(output)
-            traj_raw = output[0][:, 1:] # [0]
-            score_raw = output[1][:, 1:] # [0]
+            traj_raw = output[0][:, 1:]
+            score_raw = output[1][:, 1:]
             traj_raw = torch.from_numpy(traj_raw)
             score_raw = torch.from_numpy(score_raw)
 
             traj, score = trajectory_nms(traj_raw, score_raw)
-            traj = traj[0] #* 2
+            traj = traj[0]
             score = score[0]
             score = torch.softmax(score, dim=0)
-            #traj = traj[score > 0.1]
-            #if torch.any(traj[:, -1, 0] > 1):
-            #    score = score[traj[:, -1, 0] > 1.0]
-            #    traj = traj[traj[:, -1, 0] > 1.0]
-            #score = score / score.sum()
-            #traj_final = (traj * score.unsqueeze(-1).unsqueeze(-1)).sum(0) / score.sum()
             traj_final = traj[torch.argmax(score)]
             wp_pred = traj_final[..., :2].unsqueeze(0)
 
-            # x_sorted = torch.argsort(wp_pred[0, :, 0])
-            # wp_pred = wp_pred[0, x_sorted, :]
-            # wp_pred = wp_pred.unsqueeze(0)
-            # dis = torch.linalg.norm(wp_pred[0, 1:, :2] - wp_pred[0, :-1, :2], dim=-1)
-
-            # valid_idx = torch.tensor(
-            #     [
-            #         True, False, False, True, False, False, True, False, True, False, True, False, True, True, True
-            #     ]
-            # ).to(wp_pred.device)
-            # wp_pred = wp_pred[0, valid_idx, :]
-            # wp_pred = wp_pred.unsqueeze(0)
             wp_pred = torch.cat(
                 [
                     torch.zeros_like(wp_pred[..., 0:1, :]),
-                    wp_pred[..., :-1, :]
-                ], dim=-2
+                    wp_pred[..., :-1, :],
+                ],
+                dim=-2,
             )
-            wp_pred[... , 0] = wp_pred[..., 0].clamp(0., 20.)
-        # output_path = os.path.join(folder_path, f'wp_{image_count}.npy')
+            wp_pred[..., 0] = wp_pred[..., 0].clamp(0.0, 20.0)
 
-        # np.save(output_path, reg.cpu().detach().numpy())
-        # np.save(output_path.replace('wp', 'cls'), cls_.cpu().detach().numpy())
-        # np.save(output_path.replace('wp', 'img'), video_frames[0][-1].permute(1, 2, 0).detach().cpu().numpy())
-
-        # print('arrive_pred = {}'.format(arrive_pred))
         wp_pred = wp_pred.detach()[..., :2]
-        # print(wp_pred.shape)
-        #wp_pred = self.resample_waypoints_equal_distance(wp_pred, num_points=8)
 
         wp_pred = torch.cat(
             [
-                -wp_pred[:, :, 1:2],#-torch.tan((wp_pred[:, :, 2:3].mean() * 10).clamp(-torch.pi, torch.pi)) * wp_pred[:, :, 0:1],
-                wp_pred[:, :, 0:1]
-            ], dim=-1
+                -wp_pred[:, :, 1:2],
+                wp_pred[:, :, 0:1],
+            ],
+            dim=-1,
         )
-        # print(wp_pred)
-        # wp_pred *= 0.5
+
         waypoint_msg = Float32MultiArray()
-        # waypoint_msg.data = wp_pred[0][2].tolist()
-        # breakpoint()
         wp_pred = wp_pred.detach().cpu().numpy()
         wp_pred_show = wp_pred
-        
-        # plotting
 
-    #     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
-    #     plt.subplots_adjust(wspace=0.3)
-        img_np = video_frames_raw[0][-1].permute(1, 2, 0).detach().cpu().numpy()
-        # print(img_np.dtype, traj.shape, score.shape)
-    
+        # --- STEP 4: Save snapshot image and associated data ---
+        img_np = snap_image.permute(1, 2, 0).detach().cpu().numpy()
         if img_np.dtype == np.float32 or img_np.dtype == np.float64:
             img_np = (img_np * 255).astype(np.uint8)
-    #     ax1.imshow(img_np)
-    #     ax1.axis('off')
-    #     ax2.axis('equal')
-    #     ax2.plot(wp_pred_show[0][:, 0], wp_pred_show[0][:, 1],
-    #                 's-', label='Predicted Waypoints', color='#DB6057')
-    #     # ax2.plot(target_diff[0][0], target_diff[0][1],
-    #     #             marker='*', markersize=15, label='Target Coordinate', color='#A157DB')
-    #     ax2.legend()
-    #     ax2.set_title('Coordinates', fontsize=20)
-    #     ax2.set_xlabel('X (m)', fontsize=20)
-    #     ax2.set_ylabel('Y (m)', fontsize=20)
-    #     ax2.tick_params(axis='both', labelsize=18)
-    #     ax2.grid(True)
+
         enable_state = np.array(self.enable_2)
-        folder_path = f"vis/navflow{timestamp}"  # 替换为你的文件夹路径
+        folder_path = f"vis/navflow{timestamp}"
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
-        else:
-            pass
-        # goal_current_save = input_positions[:, -1, :].clone().cpu().numpy() * 0.25
 
-    # while True:
-        # plt.pause(0.1)  # 每隔0.1秒刷新一次，保持窗口打开
-        # output_path = os.path.join('vis', f'sample_{0}.png')
-        output_path = os.path.join(folder_path, f'sample_{image_count}.png')
+        output_path = os.path.join(folder_path, f"sample_{image_count}.png")
         cv2.imwrite(output_path, img_np[..., ::-1])
-        pose = np.array(self.last_localposition).reshape(-1,)
-        last_localpose = np.array(last_localpose).reshape(7, )
-        # print(
-        #     last_localpose, pose, goal_current_save
-        # )
-        np.save(os.path.join(folder_path, f'sample_{image_count}_traj.npy'), traj_raw.numpy())
-        np.save(os.path.join(folder_path, f'sample_{image_count}_score.npy'), score_raw.numpy())
-        np.save(os.path.join(folder_path, f'sample_{image_count}_auto.npy'), enable_state)
-        # np.save(os.path.join(folder_path, f'sample_{image_count}_goal.npy'), goal_current_save)
-        np.save(os.path.join(folder_path, f'sample_{image_count}_pose.npy'), pose)
-        np.save(os.path.join(folder_path, f'sample_{image_count}_pose_aligned.npy'), last_localpose)
+
+        # Save pose snapshots so that the trajectory coordinates are fully
+        # aligned with the image used for inference.
+        pose_snapshot_np = np.array(
+            [
+                snap_pose.pose.position.x,
+                snap_pose.pose.position.y,
+                snap_pose.pose.position.z,
+                snap_pose.pose.orientation.w,
+                snap_pose.pose.orientation.x,
+                snap_pose.pose.orientation.y,
+                snap_pose.pose.orientation.z,
+            ]
+        )
+
+        np.save(
+            os.path.join(folder_path, f"sample_{image_count}_traj.npy"),
+            traj_raw.numpy(),
+        )
+        np.save(
+            os.path.join(folder_path, f"sample_{image_count}_score.npy"),
+            score_raw.numpy(),
+        )
+        np.save(
+            os.path.join(folder_path, f"sample_{image_count}_auto.npy"),
+            enable_state,
+        )
+        np.save(
+            os.path.join(folder_path, f"sample_{image_count}_pose.npy"),
+            pose_snapshot_np,
+        )
+        np.save(
+            os.path.join(folder_path, f"sample_{image_count}_pose_aligned.npy"),
+            np.array(last_localpose_snapshot),
+        )
 
         image_count += 1
 
-    #     plt.savefig(output_path)
-        # plt.close(fig)
-        # waypoint_msg.data = [wp_pred[0,:,1], -wp_pred[0, :, 0]]
-
-        # waypoint_msg.data = [
-        #     # wp_pred[0][0][1], -wp_pred[0][0][0],
-        #     # wp_pred[0][1][1], -wp_pred[0][1][0],
-
-        #     wp_pred[0][4][1], -wp_pred[0][4][0],
-        #     # wp_pred[0][3][1], -wp_pred[0][3][0],
-        #     # wp_pred[0][4][1], -wp_pred[0][4][0],
-        # # ]
-        # if wp_pred[0, -1, 1] < 2.0:
-        #     wp_pred *= 0.0
-
-        # wp_pred *= 0.04
-
+        # --- STEP 5: Publish waypoint message ---
         wp_pred = wp_pred.tolist()
 
-        self.get_logger().info(f"waypoint (x,y) = {wp_pred[0][-1][1], -wp_pred[0][-1][0]}")
+        self.get_logger().info(
+            f"waypoint (x,y) = {wp_pred[0][-1][1], -wp_pred[0][-1][0]}"
+        )
         if wp_pred[0][-1][1] > 0.1:
             tmp_list = []
             for i in range(0, len(wp_pred[0]), 2):
-                tmp_list += [
-                    wp_pred[0][i][1]
-                ]
-                tmp_list += [
-                    -wp_pred[0][i][0]
-                ]
+                tmp_list += [wp_pred[0][i][1]]
+                tmp_list += [-wp_pred[0][i][0]]
             waypoint_msg.data = tmp_list
         else:
             tmp_list = []
             for i in range(0, len(wp_pred[0]), 2):
-                tmp_list += [
-                    0.0
-                ]
-                tmp_list += [
-                    0.0
-                ]
+                tmp_list += [0.0]
+                tmp_list += [0.0]
             waypoint_msg.data = tmp_list
+
         self.waypoint_pub.publish(waypoint_msg)
-        reached_goal = False #(distances <1 ) #closest_node == goal_node
+        reached_goal = False
         reached_goal_msg = Bool()
         reached_goal_msg.data = bool(reached_goal)
         self.goal_pub.publish(reached_goal_msg)
-        # 3rd point to ctronl
-        
-        # with self.lock:
-        #     for i, (img, pose) in enumerate(batch):
-        #         # breakpoint()
-        #         self.get_logger().info(
-        #             f"Frame {i+1}: Image stamp: {img.shape}, "
-        #             f"Pose position: x={pose.pose.position.x:.2f}, y={pose.pose.position.y:.2f}, z={pose.pose.position.z:.2f}"
-        #         )
 
 
 class DictNamespace(argparse.Namespace):

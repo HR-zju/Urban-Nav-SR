@@ -13,6 +13,7 @@ import shutil
 import tempfile
 import subprocess
 from pathlib import Path
+from datetime import datetime
 
 import numpy as np
 import cv2
@@ -86,9 +87,15 @@ def main():
         raise FileNotFoundError(folder)
 
     vis_file = Path(__file__).resolve().parent.parent / 'vis_gt_single_gt.py'
-    vis_func = load_vis_function(str(vis_file), 'project_waypoints_to_fisheye_image_with_polygon_new')
+    vis_func = load_vis_function(
+        str(vis_file),
+        'project_waypoints_to_fisheye_image_with_polygon_new',
+    )
 
     intrinsic = [args.intrinsic_f, 1920.0 / 2.0, 1080.0 / 2.0, 0.0]
+
+    # collect messages for a run-level summary
+    summary_lines = []
 
     overlays = []
     i = 0
@@ -99,7 +106,12 @@ def main():
         if not img_path.exists():
             break
         if not traj_path.exists():
-            print(f"skip {i}: traj missing")
+            msg = (
+                f"[skip] sample_{i}: trajectory file missing. "
+                f"img={img_path}, traj={traj_path}"
+            )
+            print(msg)
+            summary_lines.append(msg)
             i += 1
             continue
         img_bgr = cv2.imread(str(img_path))
@@ -108,7 +120,13 @@ def main():
         try:
             traj_t = ensure_traj_tensor(traj_np)
         except Exception as e:
-            print(f"bad traj {i}: {e}")
+            shape = getattr(traj_np, 'shape', None)
+            msg = (
+                f"[error] bad traj for sample_{i}: cannot convert to "
+                f"tensor. path={traj_path}, shape={shape}, error={e}"
+            )
+            print(msg)
+            summary_lines.append(msg)
             i += 1
             continue
         B, N, T, D = traj_t.shape
@@ -116,23 +134,47 @@ def main():
             score_np = np.load(str(score_path), allow_pickle=False)
             score_t = ensure_score_tensor(score_np, N)
         else:
+            msg = (
+                f"[warn] sample_{i}: score file missing, using zeros. "
+                f"expected path={score_path}"
+            )
+            print(msg)
+            summary_lines.append(msg)
             score_t = torch.zeros((B, N), dtype=torch.float32)
         try:
             selected_trajs, _ = trajectory_nms(traj_t, score_t)
         except Exception as e:
-            print(f"trajectory_nms failed {i}: {e}")
+            msg = (
+                f"[error] trajectory_nms failed for sample_{i}: {e}. "
+                f"traj_shape={traj_t.shape}, score_shape={score_t.shape}. "
+                "Falling back to first trajectory without NMS."
+            )
+            print(msg)
+            summary_lines.append(msg)
             selected_trajs = traj_t[:, :1, :, :]
         chosen = selected_trajs[0, 0].cpu().numpy()
         wp = chosen[:, :2]
         try:
-            out_img = vis_func(wp.astype(np.float32), intrinsic, img_rgb, save_fig=False)
+            out_img = vis_func(
+                wp.astype(np.float32),
+                intrinsic,
+                img_rgb,
+                save_fig=False,
+            )
         except Exception as e:
-            print(f"projection failed {i}: {e}")
+            msg = (
+                f"[error] projection failed for sample_{i}: {e}. "
+                f"Will save raw image without trajectory overlay."
+            )
+            print(msg)
+            summary_lines.append(msg)
             out_img = img_bgr
         out_path = folder / f'sample_{i}_overlay.png'
         cv2.imwrite(str(out_path), out_img)
         overlays.append(out_path)
-        print(f"wrote {out_path}")
+        msg = f"wrote {out_path}"
+        print(msg)
+        summary_lines.append(msg)
         if args.show:
             cv2.imshow('overlay', out_img)
             cv2.waitKey(1)
@@ -141,23 +183,55 @@ def main():
         cv2.destroyAllWindows()
 
     if not overlays:
-        print('no overlays')
-        return
+        msg = 'no overlays'
+        print(msg)
+        summary_lines.append(msg)
+    else:
+        tmpdir = Path(tempfile.mkdtemp(prefix='vis_seq_'))
+        for idx, p in enumerate(overlays):
+            dst = tmpdir / f'{idx:06d}.png'
+            shutil.copy(str(p), str(dst))
+        out_mp4 = Path(args.out) if args.out else folder / 'overlay_video.mp4'
+        cmd = [
+            'ffmpeg',
+            '-y',
+            '-framerate',
+            str(args.fps),
+            '-i',
+            str(tmpdir / '%06d.png'),
+            '-c:v',
+            'libx264',
+            '-pix_fmt',
+            'yuv420p',
+            str(out_mp4),
+        ]
+        print('running:', ' '.join(cmd))
+        try:
+            subprocess.run(cmd, check=True)
+            msg = f'wrote {out_mp4}'
+            print(msg)
+            summary_lines.append(msg)
+        except subprocess.CalledProcessError as e:
+            msg = f'ffmpeg failed {e}'
+            print(msg)
+            summary_lines.append(msg)
+        if not args.keep_tmp:
+            shutil.rmtree(tmpdir)
 
-    tmpdir = Path(tempfile.mkdtemp(prefix='vis_seq_'))
-    for idx, p in enumerate(overlays):
-        dst = tmpdir / f'{idx:06d}.png'
-        shutil.copy(str(p), str(dst))
-    out_mp4 = Path(args.out) if args.out else folder / 'overlay_video.mp4'
-    cmd = ['ffmpeg', '-y', '-framerate', str(args.fps), '-i', str(tmpdir / '%06d.png'), '-c:v', 'libx264', '-pix_fmt', 'yuv420p', str(out_mp4)]
-    print('running:', ' '.join(cmd))
+    # write run summary to logs/summary file
     try:
-        subprocess.run(cmd, check=True)
-        print('wrote', out_mp4)
-    except subprocess.CalledProcessError as e:
-        print('ffmpeg failed', e)
-    if not args.keep_tmp:
-        shutil.rmtree(tmpdir)
+        log_dir = Path('logs')
+        log_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        base = folder.name
+        summary_path = log_dir / f'vis_batch_{base}_{stamp}_summary.txt'
+        with open(summary_path, 'w', encoding='utf-8') as f:
+            f.write(f'folder: {folder}\n')
+            for line in summary_lines:
+                f.write(line + '\n')
+        print(f'[summary] wrote {summary_path}')
+    except Exception as e:
+        print(f'[summary] failed to write summary file: {e}')
 
 
 if __name__ == '__main__':

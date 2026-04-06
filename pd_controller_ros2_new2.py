@@ -72,67 +72,63 @@ def pure_pursuit_control(waypoints, wheelbase=0.456, lookahead_dist=1.0):
 
 
 def pd_controller(waypoint, current_v, current_w) -> Tuple[float, float]:
-    """PD controller for the robot"""
-    waypoint_raw = np.array(waypoint).reshape(-1,2)[-1].astype(float)
-    waypoint = waypoint[:10]
-    #waypoint_raw = 
-    wp = np.array(waypoint).reshape(-1,2) #[:10]
-    if len(waypoint) !=2:
-        if False: #len(waypoint) >= 8:
-            waypoint = waypoint[4:6]# * 0.25
-        else:
-            # print(waypoint)
-            waypoint = waypoint[-2:]
-    assert len(waypoint) == 2 or len(waypoint) == 4, "waypoint must be a 2D or 4D vector"
-    if len(waypoint) == 2:
-        dx, dy = waypoint
-        # dx *= 0.25
-        # dy *=0.25
-    else:
-        dx, dy, hx, hy = waypoint
-    # this controller only uses the predicted heading if dx and dy near zero
-    if len(waypoint) == 4 and np.abs(dx) < EPS and np.abs(dy) < EPS:
-        v = 0
-        w = clip_angle(np.arctan2(hy, hx))/DT        
-    elif np.abs(dx) < EPS:
-        v =  0
-        w = np.sign(dy) * np.pi/20#/(2*DT)
-    else:
-        v = dx / DT / 2
-        dxr, dyr = waypoint_raw
-        #dxr = waypoint_raw[0]
-        w = np.arctan(dyr/dxr) / DT / 2.
-        
-        #if np.arctan(dy/dx) < np.pi / 40 and np.arctan(dy/dx) > -np.pi / 40:
-        #    w = 0
+    """PD controller for the robot.
 
-    dxmean = np.mean(
-        wp[::2][1:] - wp[::2][:-1]
-    )
-    cur = estimate_curvature(wp, len(wp) //2)
+    Select a lookahead point based on physical distance and compute
+    linear/angular velocity from that point, with smoothing.
+    """
+
+    waypoints = np.asarray(waypoint, dtype=float).reshape(-1, 2)
+    if waypoints.shape[0] == 0:
+        return 0.0, 0.0
+
+    # --- choose lookahead point based on distance ---
+    dists = np.hypot(waypoints[:, 0], waypoints[:, 1])
+
+    target_idx = None
+    for i, dist in enumerate(dists):
+        if 1.5 <= dist <= 2.0:
+            target_idx = i
+            break
+
+    # if no point falls into [1.5, 2.0] m, fall back to the endpoint
+    if target_idx is None:
+        target_idx = len(waypoints) - 1
+
+    dx, dy = waypoints[target_idx]
+
+    # --- base control from lookahead point ---
+    v = dx / DT / 2.0
+    w = np.arctan2(dy, dx) / DT / 2.0
+
+    # --- simple progress metric along x for stop condition ---
+    if waypoints.shape[0] > 1:
+        dx_steps = waypoints[1:, 0] - waypoints[:-1, 0]
+        dxmean = float(np.mean(dx_steps))
+    else:
+        dxmean = 0.0
+
     max_v = current_v + 0.4
     min_v = current_v - 0.5
-    max_w = current_w + 0.2
-    min_w = current_w - 0.2
-    #v = v * np.exp(-2 * cur)
+    # angular rate limits (kept for possible future use)
+    # max_w = current_w + 0.2
+    # min_w = current_w - 0.2
+
+    # acceleration smoothing and limits on linear velocity
     v = np.clip(v, min_v, max_v)
     v = np.clip(v, 0., MAX_V)
-    #if np.abs(w) < 0.02:
-    #    w = 0.
-    #if v > 0.5:
-    #    w = w * np.exp(-0.5 * v)
 
-    if dxmean < 0.15 and np.abs(w) < 0.05: #dxmean < 0.15 and np.abs(w) < 0.05:
-       v *= 0.
-    # w = w * np.exp(-0.2 * v)
+    # stop when almost at the end and turning is small
+    if dxmean < 0.15 and np.abs(w) < 0.05:
+        v *= 0.0
+
+    # penalize linear velocity when angular velocity is large
     if np.abs(w) > 0.1:
-        v*=np.exp(-0.02 * np.abs(w))
+        v *= np.exp(-0.02 * np.abs(w))
+
     w = np.clip(w, -MAX_W, MAX_W)
-    #v = v * np.exp(-1 * np.abs(cur)).clip(0.7, 1.)
-   # w = np.clip(w, min_w, max_w)
-    # if np.abs(w) < 0.1:
-    #     w = 0.
-    return v, w
+
+    return float(v), float(w)
 
 
 def estimate_curvature(waypoints, idx, eps=1e-6):
@@ -242,6 +238,10 @@ class PDController(Node):
         # self.autopilot_state_pub.publish(state_msg)
         self.flag = True
         self.update_autopilot_state(2)
+        self.current_v = 0.0
+        self.current_w = 0.0
+        self.vel_msg = Twist()
+        self.vel_pub.publish(self.vel_msg)
         self.get_logger().info("Autonomy ENABLED. State: 2")
 
     def callback_disable(self, msg: Bool):
@@ -249,6 +249,13 @@ class PDController(Node):
         # pass
         self.flag = False
         self.update_autopilot_state(0) # 0 代表 UNAVAILABLE
+        # send disable command immediately to stop the robot
+        dis_msg = Bool()
+        dis_msg.data = False
+        self.cmd_enable_pub.publish(dis_msg)
+        # send stop command immediately
+        self.vel_msg = Twist()
+        self.vel_pub.publish(self.vel_msg)
         self.get_logger().info("Autonomy DISABLED. State: 0")
 
     def update_autopilot_state(self, state_value):
@@ -286,7 +293,17 @@ class PDController(Node):
     #     self.cmd_enable_pub.publish(msg2)
 
     def timer_callback(self):
-        v, w = 0,0
+        if not self.flag:
+        msg2 = Bool()
+        msg2.data = False
+        self.cmd_enable_pub.publish(msg2)
+        
+        # force stop the robot immediately
+        stop_vel = Twist()
+        self.vel_pub.publish(stop_vel)
+        return 
+
+        v, w = 0.0, 0.0
         x_stop = False
         if self.reached_goal:
             # breakpoint()
