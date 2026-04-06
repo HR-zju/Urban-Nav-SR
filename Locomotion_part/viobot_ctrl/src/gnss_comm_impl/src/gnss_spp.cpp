@@ -333,10 +333,10 @@ namespace gnss_comm
                 uint32_t faulty_sat = valid_obs[max_res_idx]->sat;
                 uint32_t faulty_sys = satsys(faulty_sat, NULL);
                 
-                LOG(INFO) << "[gnss_comm::psr_pos] RAIM FAULT DETECTED: Excluded Sat " 
-                        << faulty_sat << " (Sys " << faulty_sys << ") "
-                        << "| Post-fit Residual: " << std::fixed << std::setprecision(2) 
-                        << max_residual << " m.";
+                // LOG(INFO) << "[gnss_comm::psr_pos] RAIM FAULT DETECTED: Excluded Sat " 
+                //         << faulty_sat << " (Sys " << faulty_sys << ") "
+                //         << "| Post-fit Residual: " << std::fixed << std::setprecision(2) 
+                //         << max_residual << " m.";
 
                 // 剔除异常卫星，并进入下一轮 while 循环重新解算
                 valid_obs.erase(valid_obs.begin() + max_res_idx);

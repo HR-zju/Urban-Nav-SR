@@ -25,7 +25,7 @@ class GnssSppNode : public rclcpp::Node
 public:
     GnssSppNode() : Node("gnss_spp_node")
     {
-        kml_exporter_ = std::make_unique<gnss_comm::KmlExporter>(".");
+        kml_exporter_ = std::make_unique<gnss_comm::KmlExporter>("/home/symc/data/kml");
         sub_ephem_ = this->create_subscription<gnss_comm::msg::GnssEphemMsg>(
             "/baton/gnss/ephem", 10,
             std::bind(&GnssSppNode::ephem_callback, this, std::placeholders::_1));

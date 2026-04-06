@@ -254,7 +254,7 @@ void GnssSppNode::meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPt
 
 void GnssSppNode::algo_status_callback(const system_ctrl::msg::AlgoStatus::ConstSharedPtr msg)
 {
-    if (msg->algo_status == "1") {
+    if (msg->algo_status == "stereo3_running" || msg->algo_status == "stereo4_running") {
         is_algo_running_ = true;
     } else {
         is_algo_running_ = false;
