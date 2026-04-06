@@ -2013,6 +2013,14 @@ class DestinationRecommendationEngine:
             "chosen_destination": recommendations[0],
             "key_waypoints": extract_key_waypoints(chosen_route_data or {}),
             "waypoint_sequence": extract_waypoint_sequence(chosen_route_data or {}),
+            "route_polyline": [
+                {
+                    "longitude": float(point[0]),
+                    "latitude": float(point[1]),
+                }
+                for point in ((chosen_route_data or {}).get("route_polyline") or [])
+                if isinstance(point, (list, tuple)) and len(point) == 2
+            ],
             "route_summary": chosen_route_summary,
             "meta": {
                 "candidate_count": len(deduped),

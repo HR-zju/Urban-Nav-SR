@@ -20,7 +20,12 @@ from mcp.server.fastmcp import Context, FastMCP
 
 from mcp_server.llm import analyze_image_with_llm
 from mcp_server.macos_location import get_current_location
-from mcp_server.map_providers import MapProviderClient, create_map_client
+from mcp_server.map_providers import (
+    MapProviderClient,
+    build_amap_staticmap_url,
+    create_map_client,
+    parse_location_text,
+)
 from mcp_server.recommendation import DestinationRecommendationEngine
 
 # Create application context
@@ -256,6 +261,114 @@ async def get_coarse_waypoints(
         destination=destination,
         mode=mode,
     )
+
+
+@mcp.tool()
+async def render_bev_route_snapshot(
+    origin: str,
+    destination: str,
+    ctx: Context,
+    mode: str = "foot",
+    refresh_interval_s: float = 5.0,
+    size: str = "800*600",
+    scale: int = 2,
+    zoom: Optional[int] = None,
+    traffic: bool = False,
+) -> Dict[str, Any]:
+    """
+    Render an AMap static bird's-eye-view route snapshot and return a refreshable image URL.
+
+    This tool computes the current route from origin to destination using the active AMap
+    provider, then builds an AMap static-map URL with the route polyline overlaid. Call it
+    periodically (for example every 2-5 seconds) with updated origin coordinates to obtain
+    refreshed BEV planning images.
+
+    Args:
+        origin: Start point in "longitude,latitude" format
+        destination: End point in "longitude,latitude" format
+        mode: Travel mode ("foot", "car", "bike")
+        refresh_interval_s: Suggested polling interval in seconds
+        size: Static image size in "width*height" format
+        scale: Static map scale, typically 1 or 2
+        zoom: Optional zoom level override
+        traffic: Whether to enable traffic layer
+
+    Returns:
+        Static map URL, route summary, route polyline, and refresh metadata
+    """
+    app_context = ctx.request_context.lifespan_context
+    if app_context.provider != "amap":
+        raise RuntimeError("render_bev_route_snapshot currently requires MAP_PROVIDER=amap")
+
+    await ctx.info(f"Rendering AMap BEV snapshot: mode={mode}, refresh_interval_s={refresh_interval_s}")
+    route_data = await app_context.osm_client.get_coarse_waypoints(
+        origin=origin,
+        destination=destination,
+        mode=mode,
+    )
+
+    route_polyline = route_data.get("route_polyline") or []
+    if not route_polyline:
+        coarse_waypoints = route_data.get("coarse_waypoints", []) or []
+        route_polyline = [
+            [
+                float((item.get("coordinate", {}) or {}).get("longitude")),
+                float((item.get("coordinate", {}) or {}).get("latitude")),
+            ]
+            for item in coarse_waypoints
+            if isinstance(item, dict)
+            and (item.get("coordinate", {}) or {}).get("longitude") is not None
+            and (item.get("coordinate", {}) or {}).get("latitude") is not None
+        ]
+    if not route_polyline:
+        raise RuntimeError("No route polyline available for BEV snapshot rendering.")
+
+    amap_key = os.getenv("AMAP_KEY", "").strip()
+    if not amap_key:
+        raise RuntimeError("AMAP_KEY is required for AMap static BEV snapshots.")
+
+    image_url = build_amap_staticmap_url(
+        api_key=amap_key,
+        path_coords=route_polyline,
+        origin=origin,
+        destination=destination,
+        size=size,
+        scale=scale,
+        zoom=zoom,
+        traffic=1 if traffic else 0,
+    )
+    cache_busted_url = f"{image_url}&_ts={int(datetime.now().timestamp())}"
+
+    origin_lon, origin_lat = parse_location_text(origin)
+    destination_lon, destination_lat = parse_location_text(destination)
+
+    return {
+        "provider": app_context.provider,
+        "snapshot_provider": "amap_staticmap",
+        "origin": {
+            "location": origin,
+            "coordinates": {"latitude": origin_lat, "longitude": origin_lon},
+        },
+        "destination": {
+            "location": destination,
+            "coordinates": {"latitude": destination_lat, "longitude": destination_lon},
+        },
+        "mode": mode,
+        "route_summary": route_data.get("route_summary", {}),
+        "route_polyline": [
+            {"longitude": float(point[0]), "latitude": float(point[1])}
+            for point in route_polyline
+            if isinstance(point, (list, tuple)) and len(point) == 2
+        ],
+        "image_url": image_url,
+        "image_url_cache_busted": cache_busted_url,
+        "refresh_interval_s": max(0.5, float(refresh_interval_s)),
+        "generated_at": datetime.now().isoformat(),
+        "usage": {
+            "polling": "Call this tool again with updated origin coordinates at refresh_interval_s cadence.",
+            "recommended_refresh_after_s": max(0.5, float(refresh_interval_s)),
+        },
+    }
 
 @mcp.tool()
 async def find_nearby_places(

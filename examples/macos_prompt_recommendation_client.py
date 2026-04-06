@@ -338,6 +338,7 @@ async def run_demo(
                         "recommendations": recommendations,
                         "chosen_destination": selected,
                         "key_waypoints": payload.get("key_waypoints", []),
+                        "route_polyline": payload.get("route_polyline", []),
                         "route_summary": payload.get("route_summary", {}),
                         "message": None,
                     }
@@ -371,6 +372,7 @@ async def run_demo(
                         "recommendations": recommendations,
                         "chosen_destination": selected,
                         "key_waypoints": build_waypoint_sequence(route_payload),
+                        "route_polyline": route_payload.get("route_polyline", []),
                         "route_summary": route_payload.get("route_summary", {}),
                         "message": None,
                     }

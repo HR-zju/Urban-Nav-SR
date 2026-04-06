@@ -97,6 +97,7 @@ struct MCPAddressCandidateService: AddressCandidateService {
                 recommendations: fallbackRecommendations,
                 chosenDestination: fallbackRecommendations.first,
                 keyWaypoints: [],
+                routePolyline: [],
                 routeSummary: fallbackRecommendations.first?.routeSummary,
                 message: error.localizedDescription
             )
@@ -426,6 +427,7 @@ struct MockAddressCandidateService: AddressCandidateService {
             recommendations: recommendations,
             chosenDestination: recommendations.isEmpty ? nil : recommendations[normalizedIndex - 1],
             keyWaypoints: [],
+            routePolyline: [],
             routeSummary: recommendations.isEmpty ? nil : recommendations[normalizedIndex - 1].routeSummary,
             message: nil
         )

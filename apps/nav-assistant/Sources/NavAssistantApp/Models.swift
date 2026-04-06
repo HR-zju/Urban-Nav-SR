@@ -98,6 +98,7 @@ struct MCPRecommendationResponse: Codable {
     let recommendations: [MCPRecommendationItem]
     let chosenDestination: MCPRecommendationItem?
     let keyWaypoints: [MCPWaypoint]
+    let routePolyline: [MCPCoordinates]
     let routeSummary: MCPRouteSummary?
     let message: String?
 
@@ -106,6 +107,7 @@ struct MCPRecommendationResponse: Codable {
         case recommendations
         case chosenDestination = "chosen_destination"
         case keyWaypoints = "key_waypoints"
+        case routePolyline = "route_polyline"
         case routeSummary = "route_summary"
         case message
     }

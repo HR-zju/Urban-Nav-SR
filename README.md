@@ -62,6 +62,7 @@ The primary domestic-map-first workflow is built around these tools:
 - `search_nearby_pois`: Search nearby POIs with provider-facing semantic keywords such as `bookstore|cafe`
 - `get_coarse_waypoints`: Return macro semantic route steps instead of dense geometry
 - `recommend_destination_and_waypoints`: Parse natural-language prompts, rank destinations, and return key route waypoints
+- `render_bev_route_snapshot`: For `MAP_PROVIDER=amap`, build a refreshable AMap static BEV route image URL from origin/destination
 
 Additional tools remain available:
 - `geocode_address`: Convert text to geographic coordinates

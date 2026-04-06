@@ -111,9 +111,13 @@ final class MapNavigationViewModel: NSObject, ObservableObject {
         targetAddress = chosen.name
         routeSummary = result.routeSummary ?? chosen.routeSummary
 
-        routeWaypoints = result.keyWaypoints.map {
+        let finePolyline = result.routePolyline.map {
             CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude)
         }
+        let coarsePolyline = result.keyWaypoints.map {
+            CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude)
+        }
+        routeWaypoints = finePolyline.count >= 2 ? finePolyline : coarsePolyline
 
         if routeWaypoints.count >= 2 {
             route = nil
@@ -125,7 +129,9 @@ final class MapNavigationViewModel: NSObject, ObservableObject {
                     durationMin: nil
                 )
             }
-            statusText = "规划完成，已使用 MCP 路线关键点展示"
+            statusText = finePolyline.count >= 2
+                ? "规划完成，已使用 MCP 细粒度 polyline 展示"
+                : "规划完成，已使用 MCP 路线关键点展示"
             return
         }
 

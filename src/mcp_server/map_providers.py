@@ -322,6 +322,79 @@ def build_coarse_waypoint_record(
     return record
 
 
+def dedupe_route_coordinates(coords: list[list[float]]) -> list[list[float]]:
+    deduped: list[list[float]] = []
+    for item in coords:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            continue
+        longitude = float(item[0])
+        latitude = float(item[1])
+        if deduped and abs(deduped[-1][0] - longitude) < 1e-9 and abs(deduped[-1][1] - latitude) < 1e-9:
+            continue
+        deduped.append([longitude, latitude])
+    return deduped
+
+
+def sample_route_coordinates(coords: list[list[float]], max_points: int | None = None) -> list[list[float]]:
+    cleaned = dedupe_route_coordinates(coords)
+    if max_points is None or max_points <= 0:
+        max_points = int(os.getenv("STATIC_ROUTE_MAX_POINTS", "240") or 240)
+    if len(cleaned) <= max_points:
+        return cleaned
+    stride = max(1, math.ceil(len(cleaned) / max_points))
+    sampled = cleaned[::stride]
+    if sampled[-1] != cleaned[-1]:
+        sampled.append(cleaned[-1])
+    return sampled[:max_points]
+
+
+def encode_polyline_text(coords: list[list[float]]) -> str:
+    return ";".join(f"{point[0]},{point[1]}" for point in coords if len(point) == 2)
+
+
+def build_amap_staticmap_url(
+    *,
+    api_key: str,
+    path_coords: list[list[float]],
+    origin: str | None = None,
+    destination: str | None = None,
+    size: str = "800*600",
+    scale: int = 2,
+    zoom: int | None = None,
+    traffic: int = 0,
+) -> str:
+    if not api_key:
+        raise RuntimeError("AMAP_KEY is required to build AMap static map URLs.")
+
+    sampled_coords = sample_route_coordinates(
+        path_coords,
+        max_points=int(os.getenv("AMAP_STATIC_ROUTE_MAX_POINTS", os.getenv("STATIC_ROUTE_MAX_POINTS", "240")) or 240),
+    )
+    if not sampled_coords:
+        raise ValueError("No route coordinates available for AMap static map rendering.")
+
+    params: list[tuple[str, str]] = [
+        ("key", api_key),
+        ("size", size),
+        ("scale", str(max(1, min(int(scale), 2)))),
+        ("traffic", str(1 if int(traffic) else 0)),
+        ("paths", f"6,0x2E8B57,1,,:{encode_polyline_text(sampled_coords)}"),
+    ]
+    if zoom is not None:
+        params.append(("zoom", str(int(zoom))))
+
+    marker_parts: list[str] = []
+    if origin:
+        marker_parts.append(f"mid,0x2E86FF,S:{origin}")
+    if destination:
+        marker_parts.append(f"mid,0xFF5533,D:{destination}")
+    if marker_parts:
+        params.append(("markers", "|".join(marker_parts)))
+
+    query = "&".join(f"{key}={value}" for key, value in params)
+    return f"https://restapi.amap.com/v3/staticmap?{query}"
+
+
 def parse_google_duration_s(value: Any, default: int = 0) -> int:
     raw = str(value or "").strip()
     if not raw:
@@ -560,10 +633,12 @@ def parse_amap_steps(route_data: dict[str, Any], *, origin: str, destination: st
 
     path = paths[0]
     coarse_waypoints = []
+    route_coords: list[list[float]] = []
     for step in path.get("steps", []) or []:
         coords = parse_polyline(step.get("polyline", ""))
         if not coords:
             continue
+        route_coords.extend(coords)
         longitude, latitude = coords[-1]
         instruction_raw = str(step.get("instruction") or "").strip()
         action_raw = str(step.get("action") or step.get("assistant_action") or "").strip()
@@ -602,6 +677,8 @@ def parse_amap_steps(route_data: dict[str, Any], *, origin: str, destination: st
             "step_count": len(coarse_waypoints),
         },
         "coarse_waypoints": coarse_waypoints,
+        "route_polyline": dedupe_route_coordinates(route_coords),
+        "route_polyline_text": encode_polyline_text(dedupe_route_coordinates(route_coords)),
     }
 
 
@@ -620,10 +697,12 @@ def parse_baidu_steps(route_data: dict[str, Any], *, origin: str, destination: s
 
     best_route = routes[0]
     coarse_waypoints = []
+    route_coords: list[list[float]] = []
     for step in best_route.get("steps", []) or []:
         coords = parse_polyline(step.get("path", ""))
         if not coords:
             continue
+        route_coords.extend(coords)
         longitude, latitude = coords[-1]
         instruction_raw = strip_html(str(step.get("instruction") or "")).strip()
         action_raw = str(step.get("turn_type") or "").strip()
@@ -662,6 +741,8 @@ def parse_baidu_steps(route_data: dict[str, Any], *, origin: str, destination: s
             "step_count": len(coarse_waypoints),
         },
         "coarse_waypoints": coarse_waypoints,
+        "route_polyline": dedupe_route_coordinates(route_coords),
+        "route_polyline_text": encode_polyline_text(dedupe_route_coordinates(route_coords)),
     }
 
 
@@ -679,6 +760,7 @@ def parse_google_steps(route_data: dict[str, Any], *, origin: str, destination: 
 
     route = routes[0]
     coarse_waypoints = []
+    route_coords = decode_google_polyline(((route.get("polyline") or {}).get("encodedPolyline") or ""))
     for leg in route.get("legs", []) or []:
         for step in leg.get("steps", []) or []:
             coords = decode_google_polyline(((step.get("polyline") or {}).get("encodedPolyline") or ""))
@@ -722,6 +804,8 @@ def parse_google_steps(route_data: dict[str, Any], *, origin: str, destination: 
             "step_count": len(coarse_waypoints),
         },
         "coarse_waypoints": coarse_waypoints,
+        "route_polyline": dedupe_route_coordinates(route_coords),
+        "route_polyline_text": encode_polyline_text(dedupe_route_coordinates(route_coords)),
     }
 
 
