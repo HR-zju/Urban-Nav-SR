@@ -548,7 +548,7 @@ bool GnssSppNode::is_valid_obs_msg(const gnss_comm::msg::GnssObsMsg &msg, std::s
         if (msg.cn0[i] < 40.0 || msg.cn0[i] > 65.0) return reject("cn0[" + std::to_string(i) + "] out of range: " + std::to_string(msg.cn0[i]));
 
         // 伪距标准差不能为负
-        if (msg.psr_std[i] < 0.0 || msg.psr_std[i] > 10.0) return reject("psr_std[" + std::to_string(i) + "] < 0");
+        if (msg.psr_std[i] < 0.0 || msg.psr_std[i] > 10.0) return reject("psr_std[" + std::to_string(i) + "] out of range: " + std::to_string(msg.psr_std[i]));
 
         // 载波相位标准差不能为负
         if (msg.cp_std[i] < 0.0) return reject("cp_std[" + std::to_string(i) + "] < 0");

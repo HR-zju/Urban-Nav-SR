@@ -1,3 +1,4 @@
+#pragma once
 #include <rclcpp/rclcpp.hpp>
 #include <Eigen/Dense>
 
@@ -92,8 +93,8 @@ private:
 
     // 融合Stereo3和SPP
     std::deque<Eigen::Vector3d> init_ecef_buffer_; // 滑动窗口缓存
-    const size_t INIT_WINDOW_SIZE = 10;            // 需要多少帧连续稳定的数据
-    const double STABILITY_THRESHOLD = 1.0;        // 稳定阈值
+    static constexpr size_t INIT_WINDOW_SIZE = 10; // 需要多少帧连续稳定的数据
+    static constexpr double STABILITY_THRESHOLD = 1.0; // 稳定阈值
 
     bool is_algo_running_ = false;
     bool is_origin_set_   = false;
