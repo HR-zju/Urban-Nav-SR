@@ -64,6 +64,7 @@ private:
     static constexpr double MAX_EARTH_RADIUS  = 7.0e6;
     static constexpr size_t MIN_SAT_COUNT     = 4;      // SPP 至少需要4颗星
     static constexpr int CLEANUP_INTERVAL_SEC = 3600;       // 清理执行频率：1小时一次
+    static constexpr int MAX_HATCH_WINDOW     = 100;    // Hatch滤波最大平滑窗口(历元数)
 
     void ephem_callback(const gnss_comm::msg::GnssEphemMsg::ConstSharedPtr msg);
     void meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPtr msg);
@@ -88,6 +89,14 @@ private:
     rclcpp::TimerBase::SharedPtr cleanup_timer_;
     std::mutex ephem_mutex_; // 保护 ephem_map_
     std::unordered_map<uint32_t, gnss_comm::EphemBasePtr> ephem_map_;
+
+    struct HatchState {
+        double p_smooth = 0.0;
+        double cp_prev = 0.0;
+        int count = 0;
+        double last_time = 0.0;
+    };
+    std::unordered_map<uint32_t, HatchState> hatch_states_;
 
     std::unique_ptr<gnss_comm::KmlExporter> kml_exporter_;
 

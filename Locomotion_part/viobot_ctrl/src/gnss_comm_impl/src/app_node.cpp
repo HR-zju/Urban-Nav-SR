@@ -324,33 +324,142 @@ void GnssSppNode::filter_iono_free(
     for (size_t i = 0; i < obs_in.size(); ++i)
     {
         const auto& obs = obs_in[i];
-        
-        int idx1 = -1; // 用于记录最高频率索引
-        int idx2 = -1; // 用于记录最低频率索引
-        double f_max = 0.0;
-        double f_min = 1e12; // 初始设为一个极大的值
+        auto find_freq_idx = [&](double target_f) -> int {
+            double min_diff = 1e12;
+            int idx = -1;
 
-        // 遍历所有可用频率，寻找频率跨度最大的一对，频差越大，IF噪声放大越小
-        for (size_t j = 0; j < obs->freqs.size(); ++j)
-        {
-            double f = obs->freqs[j];
-            
-            // 过滤掉异常的 0 值频率
-            if (f < 1e8) continue; 
+            for (size_t j = 0; j < obs->freqs.size(); ++j) {
+                double f = obs->freqs[j];
 
-            if (f > f_max) {
-                f_max = f;
-                idx1 = j;
+                if (f < 1e8) continue;
+                if (obs->psr[j] == 0.0) continue;
+
+                double diff = std::abs(f - target_f);
+                if (diff < min_diff) {
+                    min_diff = diff;
+                    idx = static_cast<int>(j);
+                }
             }
-            if (f < f_min) {
-                f_min = f;
-                idx2 = j;
+            return idx;
+        };
+        int idx1 = -1; // 用于记录高频率索引
+        int idx2 = -1; // 用于记录低频率索引
+
+        // 获取卫星系统
+        int sys = gnss_comm::satsys(obs->sat, nullptr);
+        // 根据不同系统分配目标频率
+        
+        switch (sys)
+        {
+            case SYS_GPS:
+            case SYS_QZS:
+            {
+                // L1 + L2
+                idx1 = find_freq_idx(FREQ1);
+                idx2 = find_freq_idx(FREQ2);
+
+                // fallback: L1 + L5
+                if (idx1 == -1 || idx2 == -1) {
+                    idx1 = find_freq_idx(FREQ1);
+                    idx2 = find_freq_idx(FREQ5);
+                }
+                break;
+            }
+
+            case SYS_GAL:
+            {
+                // E1 + E5a
+                idx1 = find_freq_idx(FREQ1);
+                idx2 = find_freq_idx(FREQ5);
+
+                // fallback: E1 + E5b
+                if (idx1 == -1 || idx2 == -1) {
+                    idx1 = find_freq_idx(FREQ1);
+                    idx2 = find_freq_idx(FREQ7);
+                }
+                break;
+            }
+
+            case SYS_BDS:
+            {
+                // 优先：B1 + B2 (兼容老设备)
+                idx1 = find_freq_idx(FREQ1_BDS);
+                idx2 = find_freq_idx(FREQ2_BDS);
+
+                // fallback: B1 + B3
+                if (idx1 == -1 || idx2 == -1) {
+                    idx1 = find_freq_idx(FREQ1_BDS);
+                    idx2 = find_freq_idx(FREQ3_BDS);
+                }
+
+                // fallback: GPS L1/L2（部分接收机混合输出）
+                if (idx1 == -1 || idx2 == -1) {
+                    idx1 = find_freq_idx(FREQ1);
+                    idx2 = find_freq_idx(FREQ2);
+                }
+                break;
+            }
+
+            case SYS_IRN:
+            {
+                // L5 + S
+                idx1 = find_freq_idx(FREQ5);
+                idx2 = find_freq_idx(FREQ9);
+                break;
+            }
+
+            case SYS_SBS:
+            {
+                // L1 + L5
+                idx1 = find_freq_idx(FREQ1);
+                idx2 = find_freq_idx(FREQ5);
+                break;
+            }
+
+            case SYS_GLO:
+            {
+                // GLONASS 不能用 target frequency！
+                // 直接选两个有效频点（通常 index 就是 G1/G2）
+
+                std::vector<int> valid_idx;
+                for (size_t j = 0; j < obs->freqs.size(); ++j) {
+                    if (obs->freqs[j] < 1e8) continue;
+                    if (obs->psr[j] == 0.0) continue;
+                    valid_idx.push_back(static_cast<int>(j));
+                }
+
+                if (valid_idx.size() >= 2) {
+                    idx1 = valid_idx[0];
+                    idx2 = valid_idx[1];
+                }
+                break;
+            }
+
+            default:
+            {
+                // fallback: 选频率差最大的两个
+                double max_diff = 0.0;
+
+                for (size_t i = 0; i < obs->freqs.size(); ++i) {
+                    if (obs->freqs[i] < 1e8) continue;
+
+                    for (size_t j = i + 1; j < obs->freqs.size(); ++j) {
+                        if (obs->freqs[j] < 1e8) continue;
+
+                        double diff = std::abs(obs->freqs[i] - obs->freqs[j]);
+                        if (diff > max_diff) {
+                            max_diff = diff;
+                            idx1 = static_cast<int>(i);
+                            idx2 = static_cast<int>(j);
+                        }
+                    }
+                }
+                break;
             }
         }
 
-        // 确保找到了两个不同的频率，并且频差足够大
-        // 避免误将同频段的两个相近信号进行组合，导致噪声爆炸
-        if (idx1 != -1 && idx2 != -1 && idx1 != idx2 && (f_max - f_min) > 1e8)
+        // 确保找到了两个不同的频率
+        if (idx1 != -1 && idx2 != -1 && idx1 != idx2)
         {
             double f1 = obs->freqs[idx1];
             double f2 = obs->freqs[idx2];
@@ -369,14 +478,43 @@ void GnssSppNode::filter_iono_free(
             double p_if = alpha * p1 + beta * p2;
             double std_if = std::sqrt(alpha * alpha * std1 * std1 + beta * beta * std2 * std2);
 
+            // Hatch filter 相位平滑伪距
+            // 将载波相位从 cycle 转换为 m
+            double cp1_m = obs->cp[idx1] * (LIGHT_SPEED / f1);
+            double cp2_m = obs->cp[idx2] * (LIGHT_SPEED / f2);
+            double cp_if = alpha * cp1_m + beta * cp2_m;
+
+            double current_time = obs->time.time + obs->time.sec;
+            auto& state = hatch_states_[obs->sat];
+
+            // 检查周跳、相位无效等重置条件
+            bool cycle_slip = (obs->LLI[idx1] != 0) || (obs->LLI[idx2] != 0);
+            if (obs->cp[idx1] == 0.0 || obs->cp[idx2] == 0.0) cycle_slip = true;
+
+            // 如果发生周跳、时间间隔过大(>2.5秒) 或 刚初始化，则重置滤波器
+            if (state.count == 0 || cycle_slip || std::abs(current_time - state.last_time) > 2.5) {
+                state.p_smooth = p_if;
+                state.cp_prev  = cp_if;
+                state.count    = 1;
+            } else {
+                state.count = std::min(state.count + 1, MAX_HATCH_WINDOW);
+                double k = static_cast<double>(state.count);
+                // Hatch滤波递推公式: P_smooth(k) = 1/k * P_raw(k) + (k-1)/k * (P_smooth(k-1) + cp_if(k) - cp_if(k-1))
+                state.p_smooth = (1.0 / k) * p_if + ((k - 1.0) / k) * (state.p_smooth + cp_if - state.cp_prev);
+                state.cp_prev = cp_if;
+            }
+            // 粗略估计平滑后的标准差
+            double smoothed_std_if = std_if / std::sqrt(static_cast<double>(state.count));
+            state.last_time = current_time;
+
             auto if_obs = std::make_shared<gnss_comm::Obs>();
             if_obs->time = obs->time;
             if_obs->sat  = obs->sat;
             
             // 将组合伪距作为单频数据喂入，标称频率设为最高频 f1
             if_obs->freqs.push_back(f1);
-            if_obs->psr.push_back(p_if);
-            if_obs->psr_std.push_back(std_if);
+            if_obs->psr.push_back(state.p_smooth);
+            if_obs->psr_std.push_back(smoothed_std_if);
 
             if_obs->CN0.push_back(obs->CN0[idx1]); 
             if_obs->status.push_back(obs->status[idx1]);
@@ -557,7 +695,7 @@ bool GnssSppNode::is_valid_obs_msg(const gnss_comm::msg::GnssObsMsg &msg, std::s
         if (msg.dopp_std[i] < 0.0) return reject("dopp_std[" + std::to_string(i) + "] < 0");
 
         // 检查 status bit_0（伪距有效位）
-        bool psr_valid = (msg.status[i] & 0x01) != 0;
+        // bool psr_valid = (msg.status[i] & 0x01) != 0;
         // if (!psr_valid) continue;
         
         // 伪距值应在合理范围：约 20,000 km ~ 30,000 km 的轨道对应
