@@ -5,10 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 import ast
+import base64
 import inspect
 import json
+import mimetypes
 import os
 import re
+from pathlib import Path
 
 try:
     from openai import AsyncOpenAI
@@ -381,6 +384,17 @@ def _create_async_client(settings: LLMSettings) -> Any:
         base_url=settings.base_url,
         api_key=settings.api_key,
         timeout=settings.timeout_s,
+        max_retries=0,
+    )
+
+
+def _create_async_client_with_timeout(settings: LLMSettings, timeout_s: float) -> Any:
+    if AsyncOpenAI is None:
+        return None
+    return AsyncOpenAI(
+        base_url=settings.base_url,
+        api_key=settings.api_key,
+        timeout=timeout_s,
         max_retries=0,
     )
 
@@ -889,6 +903,15 @@ class CandidateReranker(BaseLLMService):
 class VisionAnalyzer(BaseLLMService):
     """Analyze an image through the configured multimodal LLM endpoint."""
 
+    def _vision_timeout_s(self) -> float:
+        raw = os.getenv("LLM_VISION_TIMEOUT_S", "").strip()
+        if raw:
+            try:
+                return max(5.0, float(raw))
+            except ValueError:
+                pass
+        return max(60.0, self.settings.timeout_s)
+
     def build_messages(
         self,
         image_url: str,
@@ -976,7 +999,7 @@ class VisionAnalyzer(BaseLLMService):
         if not self.is_available():
             raise RuntimeError("LLM image analysis is not configured. Set ARK_API_KEY or LLM_API_KEY.")
 
-        client = _create_async_client(self.settings)
+        client = _create_async_client_with_timeout(self.settings, self._vision_timeout_s())
         try:
             if self.settings.api_style == "responses":
                 answer = await self._call_responses_api(client, image_url, question, detail, system_prompt)
@@ -1195,6 +1218,41 @@ async def analyze_image_with_llm(
     )
 
 
+def local_image_path_to_data_url(image_path: str) -> str:
+    path = Path(str(image_path or "").strip()).expanduser()
+    if not str(path):
+        raise ValueError("image_path is required")
+    if not path.exists():
+        raise FileNotFoundError(f"image_path does not exist: {path}")
+    if not path.is_file():
+        raise ValueError(f"image_path is not a file: {path}")
+
+    mime_type, _ = mimetypes.guess_type(path.name)
+    if not mime_type or not mime_type.startswith("image/"):
+        mime_type = "image/jpeg"
+
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
+
+
+async def analyze_local_image_with_llm(
+    image_path: str,
+    question: str = "What is in this image?",
+    detail: str = "auto",
+    system_prompt: str | None = None,
+) -> dict[str, Any]:
+    data_url = local_image_path_to_data_url(image_path)
+    result = await VisionAnalyzer().analyze(
+        image_url=data_url,
+        question=question,
+        detail=detail,
+        system_prompt=system_prompt,
+    )
+    result["image_path"] = str(Path(image_path).expanduser())
+    result["image_source"] = "local_path"
+    return result
+
+
 async def translate_instruction_for_cn_map(
     *,
     user_instruction: str,
@@ -1220,8 +1278,10 @@ __all__ = [
     "MapLocalizationService",
     "VisionAnalyzer",
     "analyze_image_with_llm",
+    "analyze_local_image_with_llm",
     "extract_explicit_destination_query",
     "infer_destination_kind",
+    "local_image_path_to_data_url",
     "parse_instruction_with_llm",
     "rerank_candidates_with_llm",
     "translate_instruction_for_cn_map",

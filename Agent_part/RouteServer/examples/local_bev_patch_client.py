@@ -178,12 +178,15 @@ async def run_demo(
                 "chosen_destination": recommendation.get("chosen_destination", {}),
                 "turn_semantics": ((patch_payload.get("local_bev_context", {}) or {}).get("turn_semantics")),
                 "corridor_type": ((patch_payload.get("local_bev_context", {}) or {}).get("corridor_type")),
+                "proposal_count": len(patch_payload.get("prompt_proposals", []) or []),
                 "svg_data_url": patch_payload.get("svg_data_url"),
             }
             print("=== LocalBEV Patch Summary ===")
             print(json.dumps(summary, indent=2, ensure_ascii=True))
             print("\n=== LocalBEVContext ===")
             print(json.dumps(patch_payload.get("local_bev_context", {}), indent=2, ensure_ascii=True))
+            print("\n=== Prompt Proposals ===")
+            print(json.dumps(patch_payload.get("prompt_proposals", []), indent=2, ensure_ascii=True))
 
             if open_patch:
                 svg_data_url = str(patch_payload.get("svg_data_url") or "").strip()

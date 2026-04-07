@@ -19,7 +19,7 @@ from urllib.parse import quote
 import aiohttp
 from mcp.server.fastmcp import Context, FastMCP
 
-from mcp_server.llm import analyze_image_with_llm
+from mcp_server.llm import analyze_image_with_llm, analyze_local_image_with_llm
 from mcp_server.macos_location import get_current_location
 from mcp_server.map_providers import (
     MapProviderClient,
@@ -34,7 +34,11 @@ from mcp_server.route_context import (
     build_local_bev_context,
     build_route_context,
     build_route_state,
+    generate_bev_prompt_proposals as build_bev_prompt_proposals,
     local_bev_context_to_dict,
+    pov_prompt_candidate_bundle_to_dict,
+    project_bev_prompt_proposals_to_pov,
+    prompt_proposal_bundle_to_dict,
     route_context_to_dict,
     route_state_to_dict,
 )
@@ -211,9 +215,21 @@ def _build_bev_sector_path(
     return " ".join(points)
 
 
+def _proposal_style(proposal_type: str) -> tuple[str, float]:
+    mapping = {
+        "corridor_sector": ("#14b8a6", 0.16),
+        "turn_sector": ("#f59e0b", 0.16),
+        "connector_merge_sector": ("#a855f7", 0.16),
+        "entrance_candidate_sector": ("#06b6d4", 0.14),
+        "crossing_candidate_sector": ("#ef4444", 0.14),
+    }
+    return mapping.get(proposal_type, ("#94a3b8", 0.12))
+
+
 def _build_local_bev_svg(
     *,
     local_bev_context: Dict[str, Any],
+    prompt_proposals: Optional[List[Dict[str, Any]]] = None,
     width: int = 640,
     height: int = 640,
 ) -> str:
@@ -250,6 +266,38 @@ def _build_local_bev_svg(
         f'<rect x="0" y="0" width="{width}" height="{height}" fill="#020617" />',
         f'<polygon points="{corridor_path}" fill="#60a5fa" fill-opacity="0.10" stroke="none" />',
         f'<polygon points="{turn_path}" fill="#f59e0b" fill-opacity="0.10" stroke="none" />',
+    ]
+
+    for index, proposal in enumerate(prompt_proposals or []):
+        center_deg = float(proposal.get("sector_center_deg", 0.0))
+        span_deg = float(proposal.get("sector_span_deg", 35.0))
+        range_m = proposal.get("range_m") or [0.0, local_bev_context.get("lookahead_m", 20.0)]
+        radius_m = max(float(range_m[-1]), 6.0)
+        color, opacity = _proposal_style(str(proposal.get("proposal_type", "")))
+        proposal_path = _build_bev_sector_path(
+            bbox=bbox,
+            width=width,
+            height=height,
+            center_deg=center_deg,
+            span_deg=span_deg,
+            radius_m=radius_m,
+        )
+        label_point = _project_bev_point(
+            {"x_m": math.sin(math.radians(center_deg)) * min(radius_m + 1.5, float(local_bev_context.get("lookahead_m", 20.0)) + 2.0),
+             "y_m": math.cos(math.radians(center_deg)) * min(radius_m + 1.5, float(local_bev_context.get("lookahead_m", 20.0)) + 2.0)},
+            bbox=bbox,
+            width=width,
+            height=height,
+        )
+        parts.extend([
+            f'<polygon points="{proposal_path}" fill="{color}" fill-opacity="{opacity}" stroke="{color}" stroke-opacity="0.55" stroke-width="1" />',
+            (
+                f'<text x="{label_point[0]:.1f}" y="{label_point[1]:.1f}" fill="{color}" font-size="11" '
+                f'font-family="monospace">{proposal.get("proposal_type", "proposal")} {float(proposal.get("priority", 0.0)):.2f}</text>'
+            ),
+        ])
+
+    parts.extend([
         _svg_polyline_from_bev(route_polyline_local, bbox=bbox, width=width, height=height, stroke="#22c55e", stroke_width=4),
         _svg_polyline_from_bev(local_segment_bev, bbox=bbox, width=width, height=height, stroke="#3b82f6", stroke_width=5),
         _svg_polyline_from_bev(connector_bev, bbox=bbox, width=width, height=height, stroke="#fb923c", stroke_width=4, dasharray="8 6"),
@@ -264,7 +312,7 @@ def _build_local_bev_svg(
         '<text x="24" y="28" fill="#e2e8f0" font-size="14" font-family="monospace">Local BEV Context</text>',
         f'<text x="24" y="50" fill="#94a3b8" font-size="12" font-family="monospace">turn={local_bev_context.get("turn_semantics", "unknown")} corridor={local_bev_context.get("corridor_type", "unknown")}</text>',
         '</svg>',
-    ]
+    ])
     return "".join(part for part in parts if part)
 
 # Define lifespan manager
@@ -410,6 +458,39 @@ async def analyze_image(
     await ctx.info(f"Analyzing image with detail={detail}")
     return await analyze_image_with_llm(
         image_url=image_url,
+        question=question,
+        detail=detail,
+        system_prompt=system_prompt,
+    )
+
+
+@mcp.tool()
+async def analyze_local_image(
+    image_path: str,
+    ctx: Context,
+    question: str = "What is in this image?",
+    detail: str = "auto",
+    system_prompt: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Analyze a local image file with the configured multimodal LLM endpoint.
+
+    This tool reads a local image path, converts it into an inline data URL,
+    and sends it to the configured multimodal model. It is useful for local
+    FPV / PoV experiments where the image is not publicly hosted.
+
+    Args:
+        image_path: Absolute or user-resolvable local image path
+        question: Prompt or question about the image
+        detail: Vision detail level ("auto", "low", "high")
+        system_prompt: Optional system instruction override
+
+    Returns:
+        Provider/model metadata and the model's answer
+    """
+    await ctx.info(f"Analyzing local image with detail={detail}")
+    return await analyze_local_image_with_llm(
+        image_path=image_path,
         question=question,
         detail=detail,
         system_prompt=system_prompt,
@@ -731,6 +812,107 @@ async def get_route_state(
 
 
 @mcp.tool()
+async def generate_bev_prompt_proposals(
+    gps: Dict[str, float],
+    route_polyline: List[Dict[str, Any]] | List[List[float]],
+    coarse_waypoints: List[Dict[str, Any]],
+    ctx: Context,
+    heading_deg: Optional[float] = None,
+    lookahead_m: float = 20.0,
+    off_route_threshold_m: float = 20.0,
+    front_extent_m: float = 30.0,
+    back_extent_m: float = 10.0,
+    side_extent_m: float = 15.0,
+) -> Dict[str, Any]:
+    """
+    Generate PromptProposal v1 from RouteContext and LocalBEVContext only.
+
+    This is a route-prior-only proposal generator. It does not inspect RGB.
+    It emits a structured BEV proposal list for downstream projection or arbitration.
+    """
+    await ctx.info(
+        "Generating BEV prompt proposals "
+        f"heading={heading_deg if heading_deg is not None else 'none'} "
+        f"lookahead_m={lookahead_m:.1f}"
+    )
+    state = build_route_state(
+        gps=gps,
+        heading_deg=heading_deg,
+        route_polyline=route_polyline,
+        coarse_waypoints=coarse_waypoints,
+        lookahead_m=lookahead_m,
+        off_route_threshold_m=off_route_threshold_m,
+        front_extent_m=front_extent_m,
+        back_extent_m=back_extent_m,
+        side_extent_m=side_extent_m,
+    )
+    proposal_bundle = build_bev_prompt_proposals(
+        route_context=state.route_context,
+        local_bev_context=state.local_bev_context,
+    )
+    return {
+        "route_context": route_context_to_dict(state.route_context),
+        "local_bev_context": local_bev_context_to_dict(state.local_bev_context),
+        "prompt_proposals": prompt_proposal_bundle_to_dict(proposal_bundle).get("proposals", []),
+    }
+
+
+@mcp.tool()
+async def generate_pov_prompt_candidates(
+    gps: Dict[str, float],
+    route_polyline: List[Dict[str, Any]] | List[List[float]],
+    coarse_waypoints: List[Dict[str, Any]],
+    ctx: Context,
+    heading_deg: Optional[float] = None,
+    lookahead_m: float = 20.0,
+    off_route_threshold_m: float = 20.0,
+    front_extent_m: float = 30.0,
+    back_extent_m: float = 10.0,
+    side_extent_m: float = 15.0,
+    image_width: int = 1280,
+    image_height: int = 720,
+) -> Dict[str, Any]:
+    """
+    Generate PoV Prompt Projection v1 candidates from BEV prompt proposals.
+
+    This is a weak geometric projection from ego-BEV proposal sectors into image-plane
+    candidate prompts. It does not use RGB and should be treated as a teacher prior.
+    """
+    await ctx.info(
+        "Generating PoV prompt candidates "
+        f"heading={heading_deg if heading_deg is not None else 'none'} "
+        f"image={image_width}x{image_height}"
+    )
+    state = build_route_state(
+        gps=gps,
+        heading_deg=heading_deg,
+        route_polyline=route_polyline,
+        coarse_waypoints=coarse_waypoints,
+        lookahead_m=lookahead_m,
+        off_route_threshold_m=off_route_threshold_m,
+        front_extent_m=front_extent_m,
+        back_extent_m=back_extent_m,
+        side_extent_m=side_extent_m,
+    )
+    proposal_bundle = build_bev_prompt_proposals(
+        route_context=state.route_context,
+        local_bev_context=state.local_bev_context,
+    )
+    candidate_bundle = project_bev_prompt_proposals_to_pov(
+        route_context=state.route_context,
+        prompt_proposals=proposal_bundle.proposals,
+        image_width=image_width,
+        image_height=image_height,
+    )
+    return {
+        "route_context": route_context_to_dict(state.route_context),
+        "local_bev_context": local_bev_context_to_dict(state.local_bev_context),
+        "prompt_proposals": prompt_proposal_bundle_to_dict(proposal_bundle).get("proposals", []),
+        "pov_prompt_candidates": pov_prompt_candidate_bundle_to_dict(candidate_bundle).get("candidates", []),
+    }
+
+
+@mcp.tool()
 async def render_local_bev_patch(
     gps: Dict[str, float],
     route_polyline: List[Dict[str, Any]] | List[List[float]],
@@ -770,14 +952,21 @@ async def render_local_bev_patch(
     )
     route_state_dict = route_state_to_dict(route_state)
     local_bev_context = route_state_dict.get("local_bev_context", {}) or {}
+    proposal_bundle = build_bev_prompt_proposals(
+        route_context=route_state.route_context,
+        local_bev_context=route_state.local_bev_context,
+    )
+    prompt_proposals = prompt_proposal_bundle_to_dict(proposal_bundle).get("proposals", [])
     svg = _build_local_bev_svg(
         local_bev_context=local_bev_context,
+        prompt_proposals=prompt_proposals,
         width=max(256, int(width)),
         height=max(256, int(height)),
     )
     return {
         "local_bev_context": local_bev_context,
         "route_context": route_state_dict.get("route_context", {}),
+        "prompt_proposals": prompt_proposals,
         "svg": svg,
         "svg_data_url": f"data:image/svg+xml;charset=utf-8,{quote(svg)}",
         "generated_at": datetime.now().isoformat(),
@@ -788,6 +977,10 @@ async def render_local_bev_patch(
                 "orange": "connector",
                 "blue sector": "corridor prior",
                 "orange sector": "turn prior",
+                "teal sector": "corridor proposal",
+                "purple sector": "connector proposal",
+                "cyan sector": "entrance proposal",
+                "red sector": "crossing proposal",
                 "C": "current pose",
                 "M": "matched point",
                 "W": "next waypoint",

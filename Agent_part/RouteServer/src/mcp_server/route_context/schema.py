@@ -111,6 +111,46 @@ class RouteState:
     local_bev_context: LocalBEVContext
 
 
+@dataclass
+class PromptProposal:
+    proposal_id: str
+    proposal_type: str
+    frame: str
+    sector_center_deg: float
+    sector_span_deg: float
+    range_m: list[float]
+    priority: float
+    geometry_source: str
+    semantic_tag: str
+    rationale: str
+    prompt_text: str
+    debug: dict[str, Any]
+
+
+@dataclass
+class PromptProposalBundle:
+    proposals: list[PromptProposal]
+
+
+@dataclass
+class PoVPromptCandidate:
+    proposal_id: str
+    source_bev_proposal_id: str
+    prompt_type: str
+    frame: str
+    center_uv: list[float]
+    span_px: float
+    direction_vec: list[float]
+    priority: float
+    projection_confidence: float
+    debug: dict[str, Any]
+
+
+@dataclass
+class PoVPromptCandidateBundle:
+    candidates: list[PoVPromptCandidate]
+
+
 def route_context_to_dict(context: RouteContext) -> dict[str, Any]:
     return asdict(context)
 
@@ -121,3 +161,11 @@ def local_bev_context_to_dict(context: LocalBEVContext) -> dict[str, Any]:
 
 def route_state_to_dict(state: RouteState) -> dict[str, Any]:
     return asdict(state)
+
+
+def prompt_proposal_bundle_to_dict(bundle: PromptProposalBundle) -> dict[str, Any]:
+    return asdict(bundle)
+
+
+def pov_prompt_candidate_bundle_to_dict(bundle: PoVPromptCandidateBundle) -> dict[str, Any]:
+    return asdict(bundle)

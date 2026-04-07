@@ -6,7 +6,20 @@ import json
 import os
 
 
-async def run_demo(image_url: str, question: str, detail: str) -> None:
+def _extract_json_payload(tool_name: str, result) -> dict:
+    raw_text = ""
+    for content_item in result.content:
+        if content_item.type != "text":
+            continue
+        raw_text = content_item.text
+        try:
+            return json.loads(raw_text)
+        except json.JSONDecodeError:
+            raise RuntimeError(f"{tool_name} returned non-JSON payload: {raw_text}")
+    raise RuntimeError(f"{tool_name} returned no text payload")
+
+
+async def run_demo(image_url: str | None, image_path: str | None, question: str, detail: str) -> None:
     server_params = StdioServerParameters(
         command="osm-mcp-server",
         args=[],
@@ -17,20 +30,29 @@ async def run_demo(image_url: str, question: str, detail: str) -> None:
         async with ClientSession(read, write) as session:
             await session.initialize()
 
-            result = await session.call_tool(
-                "analyze_image",
-                {
-                    "image_url": image_url,
-                    "question": question,
-                    "detail": detail,
-                },
-            )
+            if image_path:
+                result = await session.call_tool(
+                    "analyze_local_image",
+                    {
+                        "image_path": image_path,
+                        "question": question,
+                        "detail": detail,
+                    },
+                )
+            else:
+                result = await session.call_tool(
+                    "analyze_image",
+                    {
+                        "image_url": image_url,
+                        "question": question,
+                        "detail": detail,
+                    },
+                )
 
-            payload = {}
-            for content_item in result.content:
-                if content_item.type == "text":
-                    payload = json.loads(content_item.text)
-                    break
+            payload = _extract_json_payload(
+                "analyze_local_image" if image_path else "analyze_image",
+                result,
+            )
 
             print("=== Image Analysis Result ===")
             print(json.dumps(payload, indent=2, ensure_ascii=False))
@@ -38,9 +60,12 @@ async def run_demo(image_url: str, question: str, detail: str) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Image understanding demo for osm-mcp-server")
-    parser.add_argument("--image-url", required=True, help="Public image URL")
+    parser.add_argument("--image-url", help="Public image URL")
+    parser.add_argument("--image-path", help="Local image path")
     parser.add_argument("--question", default="What is in this image?", help="Question for the model")
     parser.add_argument("--detail", default="auto", choices=["auto", "low", "high"], help="Vision detail level")
 
     args = parser.parse_args()
-    asyncio.run(run_demo(args.image_url, args.question, args.detail))
+    if not args.image_url and not args.image_path:
+        parser.error("one of --image-url or --image-path is required")
+    asyncio.run(run_demo(args.image_url, args.image_path, args.question, args.detail))

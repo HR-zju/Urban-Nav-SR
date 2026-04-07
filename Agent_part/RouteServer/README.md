@@ -146,6 +146,12 @@ export LLM_FEW_SHOT_MAX_EXAMPLES=6
 export LLM_FEW_SHOT_MAX_EXAMPLES=2
 ```
 
+如果多模态图像分析经常超时，可以单独提高视觉超时：
+
+```bash
+export LLM_VISION_TIMEOUT_S=60
+```
+
 ## 安装
 
 ### 本地开发安装
@@ -227,9 +233,33 @@ pip install -e ".[macos]"
   - 输出：
     - `local_bev_context`
     - `route_context`
+    - `prompt_proposals`
     - `svg`
     - `svg_data_url`
+  - 当前会把 BEV proposal sectors 直接叠加到 patch 上
   - 适合 PromptProposal 试验和可视化调试
+
+- `generate_bev_prompt_proposals`
+  - 输入：
+    - `RouteContext` 所需字段
+    - `LocalBEVContext` 所需字段
+  - 输出 route-prior-only 的 `PromptProposal v1`
+  - 当前不读取 RGB
+  - 适合作为：
+    - PoV projection 的前置 teacher
+    - LVLM-Arbiter 的候选先验
+
+- `generate_pov_prompt_candidates`
+  - 输入：
+    - `RouteContext` 所需字段
+    - `LocalBEVContext` 所需字段
+    - `image_width`
+    - `image_height`
+  - 输出 `PoV Prompt Projection v1`
+  - 当前是弱几何投影：
+    - `BEV prompt proposals -> image-plane prompt candidates`
+  - 不读取 RGB
+  - 适合作为后续 LVLM-Arbiter 的图像平面候选先验
 
 - `render_bev_route_snapshot`
   - 仅在 `MAP_PROVIDER=amap` 下可用
@@ -252,6 +282,12 @@ pip install -e ".[macos]"
 ### 其他分析工具
 
 - `analyze_image`
+  - 支持公共 `image_url`
+  - 适合公网可访问图像
+- `analyze_local_image`
+  - 支持本地 `image_path`
+  - 会把本地图片编码成 inline data URL 后发送给多模态 LLM
+  - 适合 FPV / PoV 本地样例调试
 - `suggest_meeting_point`
 - `find_schools_nearby`
 - `analyze_commute`
@@ -382,12 +418,104 @@ pip install -e ".[macos]"
 - 橙色虚线：`connector_bev`
 - 蓝色扇区：`corridor_sector_deg`
 - 橙色扇区：`turn_sector_deg`
+- 半透明 proposal sectors：
+  - teal: `corridor_sector`
+  - orange: `turn_sector`
+  - purple: `connector_merge_sector`
+  - cyan: `entrance_candidate_sector`
+  - red: `crossing_candidate_sector`
 - `C`：current pose
 - `M`：matched point
 - `W`：next waypoint
 - `T`：next turn
 
 它不是 provider 的地图截图，而是由 `LocalBEVContext` 的几何和语义字段直接渲染出来的局部 BEV patch。
+
+### 1.8 PromptProposal v1
+
+当前新增的是 **route-prior-only / BEV PromptProposal v1**。
+
+它不会直接输出 RGB 上的最终箭头，而是先把：
+
+- `RouteContext`
+- `LocalBEVContext`
+
+压成一组结构化候选 proposal，供后续：
+
+- PoV projection
+- LVLM-Arbiter
+- unified model distillation
+
+使用。
+
+当前支持的 proposal type：
+
+- `corridor_sector`
+- `turn_sector`
+- `connector_merge_sector`
+- `entrance_candidate_sector`
+- `crossing_candidate_sector`
+
+每个 proposal 至少包含：
+
+- `proposal_id`
+- `proposal_type`
+- `frame`
+- `sector_center_deg`
+- `sector_span_deg`
+- `range_m`
+- `priority`
+- `geometry_source`
+- `semantic_tag`
+- `rationale`
+- `prompt_text`
+- `debug`
+
+也就是说，现在这一步输出的是：
+
+- BEV 可解释候选先验
+
+而不是最终 PoV prompt。
+
+### 1.9 PoV Prompt Projection v1
+
+当前新增的是 **weak geometric PoV Prompt Projection v1**。
+
+它会把：
+
+- `RouteContext`
+- `PromptProposal v1`
+
+映射成一组 image-plane 候选 prompt，而不是直接输出唯一最终箭头。
+
+每个 candidate 至少包含：
+
+- `proposal_id`
+- `source_bev_proposal_id`
+- `prompt_type`
+- `frame="image_plane"`
+- `center_uv`
+- `direction_vec`
+- `span_px`
+- `priority`
+- `projection_confidence`
+- `debug`
+
+这一步仍然不读取 RGB，它只是把：
+
+- `BEV proposal sectors`
+
+翻译成：
+
+- `PoV 粗候选视觉提示`
+
+供后续：
+
+- RGB-aware PromptProposal v2
+- LVLM-Arbiter
+- unified student distillation
+
+使用。
 
 ### 2. AMap 静态 BEV 图
 
@@ -653,12 +781,64 @@ python examples/local_bev_patch_client.py \
 
 它会先调用 `recommend_destination_and_waypoints`，必要时 fallback 到 `get_coarse_waypoints`，然后自动调用 `render_local_bev_patch`，最后打印 `LocalBEVContext` 并打开局部 SVG patch。
 
+### PromptProposal v1
+
+最直接的测试方法是运行：
+
+```bash
+python examples/bev_prompt_proposal_client.py \
+  --prompt "我想去西湖" \
+  --lat 30.2645 \
+  --lon 120.1180 \
+  --mode foot \
+  --radius 3000 \
+  --heading-deg 35 \
+  --lookahead-m 20
+```
+
+它会先生成路线，再自动调用 `generate_bev_prompt_proposals`，最后打印结构化 proposal 列表。
+
+### PoV Prompt Projection v1
+
+最直接的测试方法是运行：
+
+```bash
+python examples/pov_prompt_projection_client.py \
+  --prompt "我想去西湖" \
+  --lat 30.2645 \
+  --lon 120.1180 \
+  --mode foot \
+  --radius 3000 \
+  --heading-deg 35 \
+  --lookahead-m 20 \
+  --image-width 1280 \
+  --image-height 720
+```
+
+它会先生成路线，再自动调用：
+
+- `generate_bev_prompt_proposals`
+- `generate_pov_prompt_candidates`
+
+最后打印：
+
+- `prompt_proposals`
+- `pov_prompt_candidates`
+
 ### 图像理解
 
 ```bash
 python examples/image_understanding_client.py \
   --image-url "https://ark-project.tos-cn-beijing.ivolces.com/images/view.jpeg" \
   --question "What place is shown in this image?"
+```
+
+也支持本地图片路径：
+
+```bash
+python examples/image_understanding_client.py \
+  --image-path /home/ubuntu/WorkSpace/dataset/urban.jpeg \
+  --question "Describe the navigable directions and obstacles in this FPV image."
 ```
 
 ### AMap BEV 快照轮询

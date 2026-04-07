@@ -3,8 +3,21 @@ from __future__ import annotations
 from .build_bev import build_local_bev_context
 from .describe_segment import describe_local_segment
 from .match_pose import match_pose_to_route
+from .prompt_proposals import generate_bev_prompt_proposals
+from .prompt_projection import project_bev_prompt_proposals_to_pov
 from .progress import get_route_progress
-from .schema import LocalBEVContext, RouteContext, RouteState, local_bev_context_to_dict, route_context_to_dict, route_state_to_dict
+from .schema import (
+    LocalBEVContext,
+    PoVPromptCandidateBundle,
+    PromptProposalBundle,
+    RouteContext,
+    RouteState,
+    local_bev_context_to_dict,
+    pov_prompt_candidate_bundle_to_dict,
+    prompt_proposal_bundle_to_dict,
+    route_context_to_dict,
+    route_state_to_dict,
+)
 
 
 def build_route_context(
@@ -80,15 +93,21 @@ def build_route_state(
 
 __all__ = [
     "LocalBEVContext",
+    "PoVPromptCandidateBundle",
+    "PromptProposalBundle",
     "RouteContext",
     "RouteState",
     "build_local_bev_context",
     "build_route_context",
     "build_route_state",
     "describe_local_segment",
+    "generate_bev_prompt_proposals",
     "get_route_progress",
     "local_bev_context_to_dict",
     "match_pose_to_route",
+    "pov_prompt_candidate_bundle_to_dict",
+    "project_bev_prompt_proposals_to_pov",
+    "prompt_proposal_bundle_to_dict",
     "route_context_to_dict",
     "route_state_to_dict",
 ]
