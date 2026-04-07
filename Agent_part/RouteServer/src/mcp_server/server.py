@@ -24,15 +24,81 @@ from mcp_server.map_providers import (
     MapProviderClient,
     build_amap_staticmap_url,
     create_map_client,
+    encode_polyline_text,
     parse_location_text,
+    sample_route_coordinates,
 )
 from mcp_server.recommendation import DestinationRecommendationEngine
+from mcp_server.route_context import build_route_context, route_context_to_dict
 
 # Create application context
 @dataclass
 class AppContext:
     osm_client: MapProviderClient
     provider: str
+
+
+def _normalize_route_coords(route_polyline: List[Dict[str, Any]] | List[List[float]]) -> List[List[float]]:
+    normalized: List[List[float]] = []
+    for item in route_polyline or []:
+        longitude = None
+        latitude = None
+        if isinstance(item, dict):
+            longitude = item.get("longitude", item.get("lng", item.get("lon")))
+            latitude = item.get("latitude", item.get("lat"))
+        elif isinstance(item, (list, tuple)) and len(item) == 2:
+            longitude = item[0]
+            latitude = item[1]
+        if longitude is None or latitude is None:
+            continue
+        point = [float(longitude), float(latitude)]
+        if normalized and abs(normalized[-1][0] - point[0]) < 1e-9 and abs(normalized[-1][1] - point[1]) < 1e-9:
+            continue
+        normalized.append(point)
+    return normalized
+
+
+def _build_amap_staticmap_overlay_url(
+    *,
+    api_key: str,
+    base_route_coords: List[List[float]],
+    extra_paths: List[Tuple[str, List[List[float]]]],
+    markers: List[str],
+    size: str = "800*600",
+    scale: int = 2,
+    zoom: Optional[int] = None,
+    traffic: int = 0,
+) -> str:
+    if not api_key:
+        raise RuntimeError("AMAP_KEY is required to build AMap static map URLs.")
+
+    sampled_base = sample_route_coordinates(
+        base_route_coords,
+        max_points=int(os.getenv("AMAP_STATIC_ROUTE_MAX_POINTS", os.getenv("STATIC_ROUTE_MAX_POINTS", "240")) or 240),
+    )
+    if not sampled_base:
+        raise ValueError("No base route coordinates available for RouteContext BEV rendering.")
+
+    path_specs = [f"6,0x2E8B57,1,,:{encode_polyline_text(sampled_base)}"]
+    for style, coords in extra_paths:
+        sampled = sample_route_coordinates(coords, max_points=80)
+        if sampled:
+            path_specs.append(f"{style}:{encode_polyline_text(sampled)}")
+
+    params: List[Tuple[str, str]] = [
+        ("key", api_key),
+        ("size", size),
+        ("scale", str(max(1, min(int(scale), 2)))),
+        ("traffic", str(1 if int(traffic) else 0)),
+        ("paths", "|".join(path_specs)),
+    ]
+    if zoom is not None:
+        params.append(("zoom", str(int(zoom))))
+    if markers:
+        params.append(("markers", "|".join(markers)))
+
+    query = "&".join(f"{key}={value}" for key, value in params)
+    return f"https://restapi.amap.com/v3/staticmap?{query}"
 
 # Define lifespan manager
 @asynccontextmanager
@@ -369,6 +435,180 @@ async def render_bev_route_snapshot(
             "recommended_refresh_after_s": max(0.5, float(refresh_interval_s)),
         },
     }
+
+
+@mcp.tool()
+async def get_route_context(
+    gps: Dict[str, float],
+    route_polyline: List[Dict[str, Any]] | List[List[float]],
+    coarse_waypoints: List[Dict[str, Any]],
+    ctx: Context,
+    heading_deg: Optional[float] = None,
+    lookahead_m: float = 20.0,
+    off_route_threshold_m: float = 20.0,
+) -> Dict[str, Any]:
+    """
+    Build a lightweight runtime RouteContext from current pose and an existing route.
+
+    This tool does not perform fresh routing. It takes an already computed route polyline
+    plus coarse semantic waypoints and compresses them into a stable local route context
+    suitable for downstream embodied reasoning.
+
+    Args:
+        gps: Current pose as {"lat": ..., "lng": ...}
+        route_polyline: Full route polyline from recommendation or routing output
+        coarse_waypoints: Coarse semantic route steps
+        heading_deg: Optional current heading in degrees
+        lookahead_m: Forward local context distance in meters
+        off_route_threshold_m: Cross-track error threshold in meters for off-route detection
+
+    Returns:
+        RouteContext with pose match, progress, local semantics, and local geometry
+    """
+    await ctx.info(
+        "Building RouteContext "
+        f"heading={heading_deg if heading_deg is not None else 'none'} "
+        f"lookahead_m={lookahead_m:.1f}"
+    )
+    route_context = build_route_context(
+        gps=gps,
+        heading_deg=heading_deg,
+        route_polyline=route_polyline,
+        coarse_waypoints=coarse_waypoints,
+        lookahead_m=lookahead_m,
+        off_route_threshold_m=off_route_threshold_m,
+    )
+    return route_context_to_dict(route_context)
+
+
+@mcp.tool()
+async def render_bev_route_context_snapshot(
+    gps: Dict[str, float],
+    route_polyline: List[Dict[str, Any]] | List[List[float]],
+    coarse_waypoints: List[Dict[str, Any]],
+    ctx: Context,
+    heading_deg: Optional[float] = None,
+    lookahead_m: float = 20.0,
+    off_route_threshold_m: float = 20.0,
+    size: str = "800*600",
+    scale: int = 2,
+    zoom: Optional[int] = None,
+    traffic: bool = False,
+) -> Dict[str, Any]:
+    """
+    Render an AMap BEV snapshot with RouteContext overlays.
+
+    The rendered image overlays:
+    - the full planned route
+    - the local route segment around the matched point
+    - the connector polyline when the pose is still merging toward the provider route start
+
+    Args:
+        gps: Current pose as {"lat": ..., "lng": ...}
+        route_polyline: Full route polyline from recommendation or routing output
+        coarse_waypoints: Coarse semantic route steps
+        heading_deg: Optional current heading in degrees
+        lookahead_m: Forward local context distance in meters
+        off_route_threshold_m: Cross-track error threshold in meters for off-route detection
+        size: Static image size in "width*height" format
+        scale: Static map scale, typically 1 or 2
+        zoom: Optional zoom level override
+        traffic: Whether to enable traffic layer
+
+    Returns:
+        RouteContext plus a refreshable BEV image URL with context overlays
+    """
+    app_context = ctx.request_context.lifespan_context
+    if app_context.provider != "amap":
+        raise RuntimeError("render_bev_route_context_snapshot currently requires MAP_PROVIDER=amap")
+
+    await ctx.info(
+        "Rendering RouteContext BEV snapshot "
+        f"heading={heading_deg if heading_deg is not None else 'none'} "
+        f"lookahead_m={lookahead_m:.1f}"
+    )
+
+    route_context = build_route_context(
+        gps=gps,
+        heading_deg=heading_deg,
+        route_polyline=route_polyline,
+        coarse_waypoints=coarse_waypoints,
+        lookahead_m=lookahead_m,
+        off_route_threshold_m=off_route_threshold_m,
+    )
+    route_context_dict = route_context_to_dict(route_context)
+
+    base_route_coords = _normalize_route_coords(route_polyline)
+    if not base_route_coords:
+        raise RuntimeError("No route_polyline available for RouteContext BEV snapshot rendering.")
+
+    amap_key = os.getenv("AMAP_KEY", "").strip()
+    if not amap_key:
+        raise RuntimeError("AMAP_KEY is required for AMap static RouteContext BEV snapshots.")
+
+    local_segment_coords = _normalize_route_coords(route_context_dict.get("geometry", {}).get("local_segment_polyline", []))
+    connector_coords = _normalize_route_coords(route_context_dict.get("geometry", {}).get("connector_polyline", []))
+
+    extra_paths: List[Tuple[str, List[List[float]]]] = []
+    if local_segment_coords:
+        extra_paths.append(("8,0x2E86FF,1,,", local_segment_coords))
+    if connector_coords:
+        extra_paths.append(("6,0xFF8C42,1,,", connector_coords))
+
+    current_lon = float(gps["lng"])
+    current_lat = float(gps["lat"])
+    destination_lon, destination_lat = base_route_coords[-1]
+    matched_point = route_context_dict.get("pose_match", {}).get("matched_point", {}) or {}
+    matched_lon = matched_point.get("lng")
+    matched_lat = matched_point.get("lat")
+
+    markers = [
+        f"mid,0x2E86FF,C:{current_lon},{current_lat}",
+        f"mid,0xFF5533,D:{destination_lon},{destination_lat}",
+    ]
+    if matched_lon is not None and matched_lat is not None:
+        markers.append(f"mid,0x00A86B,M:{matched_lon},{matched_lat}")
+
+    image_url = _build_amap_staticmap_overlay_url(
+        api_key=amap_key,
+        base_route_coords=base_route_coords,
+        extra_paths=extra_paths,
+        markers=markers,
+        size=size,
+        scale=scale,
+        zoom=zoom,
+        traffic=1 if traffic else 0,
+    )
+    cache_busted_url = f"{image_url}&_ts={int(datetime.now().timestamp())}"
+
+    return {
+        "provider": app_context.provider,
+        "snapshot_provider": "amap_staticmap_route_context",
+        "gps": {"latitude": current_lat, "longitude": current_lon},
+        "heading_deg": heading_deg,
+        "route_context": route_context_dict,
+        "route_polyline": [
+            {"longitude": float(point[0]), "latitude": float(point[1])}
+            for point in base_route_coords
+        ],
+        "image_url": image_url,
+        "image_url_cache_busted": cache_busted_url,
+        "refresh_interval_s": 3.0,
+        "generated_at": datetime.now().isoformat(),
+        "usage": {
+            "polling": "Call this tool again with updated GPS and heading at refresh cadence.",
+            "recommended_refresh_after_s": 3.0,
+            "overlay_legend": {
+                "green": "full route",
+                "blue": "local route segment",
+                "orange": "connector polyline",
+                "C": "current pose",
+                "M": "matched point",
+                "D": "destination",
+            },
+        },
+    }
+
 
 @mcp.tool()
 async def find_nearby_places(

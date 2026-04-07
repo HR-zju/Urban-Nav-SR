@@ -203,10 +203,21 @@ pip install -e ".[macos]"
   - 输入起终点
   - 返回 provider route 的语义步骤和 coarse waypoints
 
+- `get_route_context`
+  - 输入当前 `gps`、`heading_deg`、`route_polyline`、`coarse_waypoints`
+  - 输出统一 `RouteContext`
+  - 适合后续 PromptProposal / LVLM-Arbiter / TemporalRefine 消费
+  - 它不重新规划路线，只做当前时刻的局部运行时上下文整理
+
 - `render_bev_route_snapshot`
   - 仅在 `MAP_PROVIDER=amap` 下可用
   - 根据起终点和路线 polyline 生成高德静态 BEV 图 URL
   - 可按固定频率轮询刷新
+
+- `render_bev_route_context_snapshot`
+  - 仅在 `MAP_PROVIDER=amap` 下可用
+  - 在静态 BEV 图上叠加 `RouteContext`
+  - 可视化 full route、local segment、connector polyline、current pose、matched point
 
 ### 检索与解析
 
@@ -244,6 +255,61 @@ pip install -e ".[macos]"
 - `route_polyline`
   更细的路线 polyline，适合地图渲染
 
+### 1.5 RouteContext 运行时上下文
+
+`get_route_context` 会把：
+
+- 当前 GPS / heading
+- `route_polyline`
+- `coarse_waypoints`
+
+压缩成一个稳定的局部导航上下文对象：
+
+- `pose_match`
+  - `matched_point`
+  - `matched_segment_index`
+  - `matched_segment_ratio`
+  - `cross_track_error_m`
+  - `heading_delta_deg`
+  - `off_route`
+  - `route_confidence`
+
+- `progress`
+  - `current_waypoint_index`
+  - `next_waypoint_index`
+  - `remaining_distance_m`
+  - `distance_to_next_waypoint_m`
+  - `distance_to_next_turn_m`
+  - `next_turn_type`
+  - `progress_ratio`
+
+- `local_semantics`
+  - `turn_type`
+  - `turn_semantics`
+  - `corridor_type`
+  - `short_action_summary`
+  - `instruction_hint`
+  - `road_name`
+
+- `geometry`
+  - `local_segment_polyline`
+  - `connector_polyline`
+  - `connector_active`
+  - `lookahead_m`
+
+它的设计目标不是替代地图 provider，而是为后续具身导航 Brain 提供一个轻量、连续、结构化的 route runtime state。
+
+其中：
+
+- `local_segment_polyline`
+  表示已经并入规划路径后的局部路线段
+
+- `connector_polyline`
+  表示从当前 GPS 到 provider 路线起点/并入点的几何引导段
+
+- `connector_active`
+  为 `true` 时，说明当前仍处于“接近路线起点、准备并入正式路径”的启动阶段
+
 ### 2. AMap 静态 BEV 图
 
 `render_bev_route_snapshot` 返回：
@@ -254,6 +320,19 @@ pip install -e ".[macos]"
 - `refresh_interval_s`
 
 它不是视频流，而是“静态图按频率刷新”。
+
+### 2.5 RouteContext BEV Overlay
+
+`render_bev_route_context_snapshot` 会把 `RouteContext` 中可视化的部分直接叠加到 AMap 静态图：
+
+- 绿色：full route
+- 蓝色：local segment
+- 橙色：connector polyline
+- `C`：current pose
+- `M`：matched point
+- `D`：destination
+
+当 `connector_active = true` 时，说明当前仍在接近 provider 路线起点，橙色 connector 会显式展示从当前 GPS 到路线并入点的引导段。
 
 ### 3. macOS app 本地渲染
 
@@ -301,6 +380,35 @@ python examples/macos_prompt_recommendation_client.py \
 - 先返回候选列表
 - 只在用户确认选项后再补该候选路线
 
+### RouteContext
+
+```python
+{
+  "gps": {"lat": 30.2645, "lng": 120.1180},
+  "heading_deg": 35.0,
+  "route_polyline": [...],
+  "coarse_waypoints": [...],
+  "lookahead_m": 20.0
+}
+```
+
+你可以先调用 `recommend_destination_and_waypoints` 或 `get_coarse_waypoints` 拿到 `route_polyline` 和 `coarse_waypoints`，再把它们送进 `get_route_context`。
+
+最直接的测试方法是运行：
+
+```bash
+python examples/route_context_client.py \
+  --prompt "我想去西湖" \
+  --lat 30.2645 \
+  --lon 120.1180 \
+  --mode foot \
+  --radius 3000 \
+  --heading-deg 35 \
+  --lookahead-m 20
+```
+
+它会先调用 `recommend_destination_and_waypoints`，再自动调用 `get_route_context`，最后打印标准 `RouteContext` JSON。
+
 ### 图像理解
 
 ```bash
@@ -323,6 +431,98 @@ python examples/amap_bev_snapshot_client.py \
   --refresh-interval-s 3 \
   --iterations 5
 ```
+
+## 测试建议
+
+### 1. 静态语法检查
+
+如果你刚同步了 `RouteContext` 相关代码，先跑：
+
+```bash
+python -m py_compile \
+  src/mcp_server/route_context/__init__.py \
+  src/mcp_server/route_context/common.py \
+  src/mcp_server/route_context/schema.py \
+  src/mcp_server/route_context/match_pose.py \
+  src/mcp_server/route_context/progress.py \
+  src/mcp_server/route_context/describe_segment.py \
+  src/mcp_server/server.py
+```
+
+### 2. 推荐链路测试
+
+先确认推荐输出已经包含：
+
+- `route_polyline`
+- `coarse_waypoints` 或 `key_waypoints`
+
+可以直接运行：
+
+```bash
+python examples/macos_prompt_recommendation_client.py \
+  --prompt "我想去西湖" \
+  --mode foot \
+  --radius 3000 \
+  --lat 30.2645 \
+  --lon 120.1180
+```
+
+### 3. RouteContext 测试
+
+建议直接跑新的示例客户端：
+
+```bash
+python examples/route_context_client.py \
+  --prompt "我想去西湖" \
+  --lat 30.2645 \
+  --lon 120.1180 \
+  --mode foot \
+  --radius 3000 \
+  --heading-deg 35
+```
+
+重点检查输出里的这些字段：
+
+- `pose_match.cross_track_error_m`
+- `pose_match.heading_delta_deg`
+- `pose_match.off_route`
+- `progress.distance_to_next_turn_m`
+- `progress.next_turn_type`
+- `local_semantics.turn_semantics`
+- `local_semantics.corridor_type`
+- `local_semantics.short_action_summary`
+
+### 4. 手工偏航测试
+
+把 `gps` 人为改到路线外 20 到 50 米，再调用一次 `get_route_context`，确认：
+
+- `pose_match.cross_track_error_m` 变大
+- `pose_match.off_route` 变成 `true`
+- `local_semantics.turn_semantics` 会切到 `off_route_recovery`
+
+### 5. Heading 测试
+
+只改 `heading_deg`，不改 GPS，验证 `corridor_type` 是否随朝向变化：
+
+- 朝向基本对齐路线时，应接近 `front`
+- 朝向偏左时，应接近 `slight_left_front` 或 `left_front`
+- 朝向偏右时，应接近 `slight_right_front` 或 `right_front`
+
+### 6. MCP Inspector 测试
+
+如果你想直接在 MCP 层验证 tool 输入输出：
+
+```bash
+npx @modelcontextprotocol/inspector \
+  uv --directory /path/to/open-streetmap-mcp run osm-mcp-server
+```
+
+然后手动调用：
+
+- `recommend_destination_and_waypoints`
+- `get_route_context`
+
+这对检查 JSON schema 和字段稳定性最直接。
 
 ## macOS 客户端
 
@@ -417,4 +617,3 @@ uv build
 ```bash
 npx @modelcontextprotocol/inspector uv --directory /path/to/open-streetmap-mcp run osm-mcp-server
 ```
-

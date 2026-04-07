@@ -942,12 +942,31 @@ class OSMClient(BaseHTTPMapClient):
 
         route = routes[0]
         coarse_waypoints = []
+        route_coords: list[list[float]] = []
+        route_geometry = route.get("geometry", {}) or {}
+        geometry_coords = route_geometry.get("coordinates", []) or []
+        for coord in geometry_coords:
+            if isinstance(coord, (list, tuple)) and len(coord) == 2:
+                try:
+                    route_coords.append([float(coord[0]), float(coord[1])])
+                except Exception:
+                    continue
+
         for leg in route.get("legs", []) or []:
             for step in leg.get("steps", []) or []:
                 maneuver = step.get("maneuver", {}) or {}
                 location_point = maneuver.get("location")
-                if not location_point and step.get("geometry", {}).get("coordinates"):
-                    location_point = step["geometry"]["coordinates"][-1]
+                step_geometry = step.get("geometry", {}) or {}
+                step_coords = step_geometry.get("coordinates", []) or []
+                if step_coords:
+                    for coord in step_coords:
+                        if isinstance(coord, (list, tuple)) and len(coord) == 2:
+                            try:
+                                route_coords.append([float(coord[0]), float(coord[1])])
+                            except Exception:
+                                continue
+                if not location_point and step_coords:
+                    location_point = step_coords[-1]
                 if not location_point or len(location_point) != 2:
                     continue
                 longitude, latitude = float(location_point[0]), float(location_point[1])
@@ -975,6 +994,8 @@ class OSMClient(BaseHTTPMapClient):
                 "step_count": len(coarse_waypoints),
             },
             "coarse_waypoints": coarse_waypoints,
+            "route_polyline": dedupe_route_coordinates(route_coords),
+            "route_polyline_text": encode_polyline_text(dedupe_route_coordinates(route_coords)),
         }
 
     async def get_route(
