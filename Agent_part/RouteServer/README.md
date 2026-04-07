@@ -209,6 +209,28 @@ pip install -e ".[macos]"
   - 适合后续 PromptProposal / LVLM-Arbiter / TemporalRefine 消费
   - 它不重新规划路线，只做当前时刻的局部运行时上下文整理
 
+- `get_local_bev_context`
+  - 输入当前 `gps`、`heading_deg`、`route_polyline`、`coarse_waypoints`
+  - 输出显式 `LocalBEVContext`
+  - 提供局部 BEV 坐标系下的 route/local segment/connector/next turn 几何
+  - 适合 PromptProposal 和 BEV-to-PoV 对齐
+
+- `get_route_state`
+  - 同时输出：
+    - `route_context`
+    - `local_bev_context`
+  - 适合后续 Brain 一次性消费两路输入
+
+- `render_local_bev_patch`
+  - 输入当前 `gps`、`heading_deg`、`route_polyline`、`coarse_waypoints`
+  - 返回局部姿态对齐的 `LocalBEVContext` SVG patch
+  - 输出：
+    - `local_bev_context`
+    - `route_context`
+    - `svg`
+    - `svg_data_url`
+  - 适合 PromptProposal 试验和可视化调试
+
 - `render_bev_route_snapshot`
   - 仅在 `MAP_PROVIDER=amap` 下可用
   - 根据起终点和路线 polyline 生成高德静态 BEV 图 URL
@@ -294,7 +316,7 @@ pip install -e ".[macos]"
 - `geometry`
   - `local_segment_polyline`
   - `connector_polyline`
-  - `connector_active`
+- `connector_active`
   - `lookahead_m`
 
 它的设计目标不是替代地图 provider，而是为后续具身导航 Brain 提供一个轻量、连续、结构化的 route runtime state。
@@ -309,6 +331,63 @@ pip install -e ".[macos]"
 
 - `connector_active`
   为 `true` 时，说明当前仍处于“接近路线起点、准备并入正式路径”的启动阶段
+
+### 1.6 LocalBEVContext 显式分支
+
+当前版本除了 `RouteContext`，还新增了并行的 `LocalBEVContext` 分支。
+
+它不是整张地图截图，而是围绕当前位姿裁切、并按当前 heading 对齐的局部 BEV 几何上下文。
+
+它当前包含：
+
+- `current_pose_bev`
+- `matched_point_bev`
+- `route_polyline_local`
+- `local_segment_bev`
+- `connector_bev`
+- `next_turn_point_bev`
+- `next_waypoint_bev`
+- `bev_bbox`
+- `bev_rotation_deg`
+- `corridor_type`
+- `turn_type`
+- `turn_semantics`
+- `corridor_sector_deg`
+- `turn_sector_deg`
+- `semantic_bev_layers`
+
+其中：
+
+- `RouteContext`
+  更适合：
+  - progress tracking
+  - off-route detection
+  - instruction generation
+  - TemporalRefine
+
+- `LocalBEVContext`
+  更适合：
+  - PromptProposal
+  - BEV-to-PoV 几何对齐
+  - 候选 prompt 搜索空间约束
+
+### 1.7 Local BEV Patch 渲染
+
+`render_local_bev_patch` 会把 `LocalBEVContext` 直接渲染成局部 pose-aligned SVG patch。
+
+这个 patch 会画出：
+
+- 绿色：`route_polyline_local`
+- 蓝色：`local_segment_bev`
+- 橙色虚线：`connector_bev`
+- 蓝色扇区：`corridor_sector_deg`
+- 橙色扇区：`turn_sector_deg`
+- `C`：current pose
+- `M`：matched point
+- `W`：next waypoint
+- `T`：next turn
+
+它不是 provider 的地图截图，而是由 `LocalBEVContext` 的几何和语义字段直接渲染出来的局部 BEV patch。
 
 ### 2. AMap 静态 BEV 图
 
@@ -342,6 +421,153 @@ pip install -e ".[macos]"
 
 - AMap static map URL
 - macOS app 本地 `MapPolyline`
+
+## RouteContext 调试工具
+
+`RouteContext` 是中间运行时状态，单看日志不容易定位问题到底出在：
+
+- 当前匹配段是否吸附错路
+- `turn_type` 是否和几何形状一致
+- `heading_delta_deg` 是否合理
+- `corridor_type` 是否抖动
+- `distance_to_next_turn_m` 是否稳定递减
+
+因此仓库里新增了一套 `tools/` 调试工具，建议按“采集 -> 指标 -> 可视化回放”三步来校验。
+
+### 1. 采集调试序列
+
+`tools/route_context_capture.py` 会：
+
+1. 调 `recommend_destination_and_waypoints`
+2. 必要时 fallback 调 `get_coarse_waypoints`
+3. 对轨迹文件中的每一帧调用 `get_route_context`
+4. 输出一份完整 capture JSON
+
+轨迹文件支持：
+
+- JSON 数组
+- JSONL，每行一帧
+
+每一帧至少需要：
+
+```json
+{"lat": 30.2645, "lng": 120.1180, "heading_deg": 35.0, "timestamp": "2026-04-07T10:00:00"}
+```
+
+示例：
+
+```bash
+python tools/route_context_capture.py \
+  --trajectory /tmp/trajectory.jsonl \
+  --prompt "我想去西湖" \
+  --mode foot \
+  --radius 3000 \
+  --lookahead-m 20 \
+  --output /tmp/route_context_capture.json
+```
+
+如果你只是想快速验证工具链，不想先准备轨迹文件，也可以直接做单帧 capture：
+
+```bash
+python tools/route_context_capture.py \
+  --lat 30.2645 \
+  --lon 120.1180 \
+  --heading-deg 35 \
+  --prompt "我想去西湖" \
+  --mode foot \
+  --radius 3000 \
+  --lookahead-m 20 \
+  --output /tmp/route_state_capture.json
+```
+
+capture 中会保存：
+
+- 推荐元数据
+- `route_polyline`
+- `coarse_waypoints`
+- 每一帧的标准 debug 字段
+- 每一帧的完整 `RouteContext`
+
+### 2. 计算稳定性指标
+
+`tools/route_context_metrics.py` 会从 capture 中计算一组时间一致性指标：
+
+- `segment_index_monotonicity_violation_rate`
+- `corridor_switching_rate`
+- `distance_to_turn_inconsistency_rate`
+- `off_route_rate`
+- `off_route_false_positive_like_rate`
+
+示例：
+
+```bash
+python tools/route_context_metrics.py \
+  --capture /tmp/route_context_capture.json
+```
+
+也可以输出成 JSON：
+
+```bash
+python tools/route_context_metrics.py \
+  --capture /tmp/route_context_capture.json \
+  --output /tmp/route_context_metrics.json
+```
+
+### 3. 生成可回放调试页面
+
+`tools/route_context_debugger.py` 会生成一个自包含 HTML 页面，里面有：
+
+- BEV 视图
+  - full route
+  - current GPS
+  - matched point
+  - local segment
+  - connector polyline
+  - heading vector
+  - route tangent vector
+- 时间曲线
+  - segment index
+  - cross-track
+  - heading delta
+  - distance-to-turn
+  - corridor type
+- 当前帧完整 `RouteContext` JSON
+- 当前帧 `LocalBEVContext` 可通过 `render_local_bev_patch` 单独验证
+
+示例：
+
+```bash
+python tools/route_context_debugger.py \
+  --capture /tmp/route_context_capture.json \
+  --output /tmp/route_context_debugger.html
+```
+
+然后直接打开：
+
+```bash
+xdg-open /tmp/route_context_debugger.html
+```
+
+### 4. 推荐的校验顺序
+
+先看几何正确性：
+
+- `matched_segment_index` 大体应单调递增
+- `distance_to_next_turn_m` 应平滑下降，接近 turn 后跳到下一个关键点
+- `heading_delta_deg` 在直行段通常较小
+- `local_segment_polyline` 不应跳到错误支路
+
+再看语义正确性：
+
+- `turn_type`
+- `turn_semantics`
+- `corridor_type`
+- `short_action_summary`
+
+最后看时间稳定性：
+
+- `corridor_type` 不应在连续几帧里高频抖动
+- `off_route` 不应在正常直行时频繁误报
 
 ## 示例客户端
 
@@ -408,6 +634,24 @@ python examples/route_context_client.py \
 ```
 
 它会先调用 `recommend_destination_and_waypoints`，再自动调用 `get_route_context`，最后打印标准 `RouteContext` JSON。
+
+### Local BEV Patch
+
+最直接的测试方法是运行：
+
+```bash
+python examples/local_bev_patch_client.py \
+  --prompt "我想去西湖" \
+  --lat 30.2645 \
+  --lon 120.1180 \
+  --mode foot \
+  --radius 3000 \
+  --heading-deg 35 \
+  --lookahead-m 20 \
+  --open
+```
+
+它会先调用 `recommend_destination_and_waypoints`，必要时 fallback 到 `get_coarse_waypoints`，然后自动调用 `render_local_bev_patch`，最后打印 `LocalBEVContext` 并打开局部 SVG patch。
 
 ### 图像理解
 
