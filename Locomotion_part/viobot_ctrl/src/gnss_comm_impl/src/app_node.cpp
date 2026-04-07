@@ -119,20 +119,20 @@ void GnssSppNode::meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPt
     std::vector<gnss_comm::ObsPtr> combined_obs;
     std::vector<gnss_comm::EphemBasePtr> combined_ephems;
 
-    filter_iono_free(matched_obs_in, matched_ephems_in, combined_obs, combined_ephems);
+    // filter_iono_free(matched_obs_in, matched_ephems_in, combined_obs, combined_ephems);
 
-    if (combined_obs.size() >= MIN_SAT_COUNT) {
-        RCLCPP_DEBUG(logger, "Using IF Combination. Sats: %zu", combined_obs.size());
-    } else {
-        RCLCPP_WARN_THROTTLE(logger, *clock, 3000, 
-            "Not enough dual-freq sats (%zu). Fallback to L1.", combined_obs.size());
-        gnss_comm::filter_L1(matched_obs_in, matched_ephems_in, combined_obs, combined_ephems);
-    }
+    // if (combined_obs.size() >= MIN_SAT_COUNT) {
+    //     RCLCPP_DEBUG(logger, "Using IF Combination. Sats: %zu", combined_obs.size());
+    // } else {
+        // RCLCPP_WARN_THROTTLE(logger, *clock, 3000, 
+        //     "Not enough dual-freq sats (%zu). Fallback to L1.", combined_obs.size());
+        filter_L1_hatch(matched_obs_in, matched_ephems_in, combined_obs, combined_ephems);
+    // }
 
     // 进一步剔除弱势星座防止 SPP 解算发散
     std::vector<gnss_comm::ObsPtr> robust_obs;
     std::vector<gnss_comm::EphemBasePtr> robust_ephems;
-    filter_weak_constellations(combined_obs, combined_ephems, robust_obs, robust_ephems, 3);
+    filter_weak_constellations(combined_obs, combined_ephems, robust_obs, robust_ephems, 4);
 
 
     if (robust_obs.size() < MIN_SAT_COUNT)
@@ -309,6 +309,85 @@ void GnssSppNode::odom_callback(const nav_msgs::msg::Odometry::ConstSharedPtr ms
         kml_exporter_->add_point(cur_lla[0], cur_lla[1], cur_lla[2]);
     }
 }
+/**
+* @brief 提取L1单频数据并使用Hatch滤波进行载波相位平滑伪距
+*/
+void GnssSppNode::filter_L1_hatch(
+    const std::vector<gnss_comm::ObsPtr>& obs_in,
+    const std::vector<gnss_comm::EphemBasePtr>& ephem_in,
+    std::vector<gnss_comm::ObsPtr>& obs_out,
+    std::vector<gnss_comm::EphemBasePtr>& ephem_out)
+{
+    obs_out.clear();
+    ephem_out.clear();
+
+    for (size_t i = 0; i < obs_in.size(); ++i)
+    {
+        const auto& obs = obs_in[i];
+        
+        // 检查卫星系统
+        const uint32_t sys = gnss_comm::satsys(obs->sat, nullptr);
+        if (sys != SYS_GPS && sys != SYS_GLO && sys != SYS_BDS && sys != SYS_GAL)
+            continue;
+
+        // 提取 L1 频率
+        int l1_idx = -1;
+        const double f1 = gnss_comm::L1_freq(obs, &l1_idx);
+        if (f1 < 0 || l1_idx < 0) continue;
+        if (obs->psr[l1_idx] == 0.0) continue;
+
+        double p1 = obs->psr[l1_idx];
+        double std1 = obs->psr_std[l1_idx];
+        
+        // 将载波相位从 cycle 转换为 m
+        double cp1_m = obs->cp[l1_idx] * (LIGHT_SPEED / f1);
+
+        double current_time = obs->time.time + obs->time.sec;
+        auto& state = hatch_states_[obs->sat];
+
+        // 检查周跳、相位无效等重置条件
+        bool cycle_slip = (obs->LLI[l1_idx] != 0);
+        if (obs->cp[l1_idx] == 0.0) cycle_slip = true;
+
+        // 如果发生周跳、时间间隔过大(>2.5秒) 或 刚初始化，则重置滤波器
+        if (state.count == 0 || cycle_slip || std::abs(current_time - state.last_time) > 2.5) {
+            state.p_smooth = p1;
+            state.cp_prev  = cp1_m;
+            state.count    = 1;
+        } else {
+            state.count = std::min(state.count + 1, MAX_HATCH_WINDOW);
+            double k = static_cast<double>(state.count);
+            // Hatch滤波递推公式: P_smooth(k) = 1/k * P_raw(k) + (k-1)/k * (P_smooth(k-1) + cp(k) - cp(k-1))
+            state.p_smooth = (1.0 / k) * p1 + ((k - 1.0) / k) * (state.p_smooth + cp1_m - state.cp_prev);
+            state.cp_prev = cp1_m;
+        }
+
+        // 粗略估计平滑后的标准差
+        double smoothed_std1 = std1 / std::sqrt(static_cast<double>(state.count));
+        state.last_time = current_time;
+
+        auto l1_obs = std::make_shared<gnss_comm::Obs>();
+        l1_obs->time = obs->time;
+        l1_obs->sat  = obs->sat;
+        
+        l1_obs->freqs.push_back(f1);
+        l1_obs->psr.push_back(state.p_smooth);
+        l1_obs->psr_std.push_back(smoothed_std1);
+
+        l1_obs->CN0.push_back(obs->CN0[l1_idx]); 
+        l1_obs->status.push_back(obs->status[l1_idx]);
+        l1_obs->LLI.push_back(0);
+        l1_obs->code.push_back(obs->code[l1_idx]);
+        l1_obs->cp.push_back(0.0);
+        l1_obs->cp_std.push_back(0.0);
+        l1_obs->dopp.push_back(0.0);
+        l1_obs->dopp_std.push_back(0.0);
+
+        obs_out.push_back(l1_obs);
+        ephem_out.push_back(ephem_in[i]);
+    }
+}
+
 /**
 * @brief 提取多频数据并构造最优无电离层组合 (IF) 单频观测值
 */

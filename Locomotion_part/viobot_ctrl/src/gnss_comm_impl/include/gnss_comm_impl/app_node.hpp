@@ -73,6 +73,7 @@ private:
     
 private:
     void filter_iono_free(const std::vector<gnss_comm::ObsPtr>& obs_in, const std::vector<gnss_comm::EphemBasePtr>& ephem_in, std::vector<gnss_comm::ObsPtr>& obs_out, std::vector<gnss_comm::EphemBasePtr>& ephem_out);
+    void filter_L1_hatch(const std::vector<gnss_comm::ObsPtr>& obs_in, const std::vector<gnss_comm::EphemBasePtr>& ephem_in, std::vector<gnss_comm::ObsPtr>& obs_out, std::vector<gnss_comm::EphemBasePtr>& ephem_out);
     void filter_weak_constellations(const std::vector<gnss_comm::ObsPtr>& obs_in, const std::vector<gnss_comm::EphemBasePtr>& ephem_in, std::vector<gnss_comm::ObsPtr>& obs_out, std::vector<gnss_comm::EphemBasePtr>& ephem_out, const int min_sat_per_sys = 3);
     bool is_valid_ephem_msg(const gnss_comm::msg::GnssEphemMsg &msg, std::string *reason);
     bool is_valid_obs_msg(const gnss_comm::msg::GnssObsMsg &msg, std::string *reason);
