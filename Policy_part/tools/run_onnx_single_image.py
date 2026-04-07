@@ -257,7 +257,7 @@ def main():
         img_base = os.path.basename(os.path.normpath(args.img_dir))
     else:
         img_base = os.path.splitext(os.path.basename(args.img))[0]
-    out_txt = f"{img_base}_waypoints.txt"
+    out_txt = f"logs/{img_base}_waypoints.txt"
     print(f"Will save first 10 waypoint predictions to: {out_txt}")
 
     with open(out_txt, "w", encoding="utf-8") as f:
