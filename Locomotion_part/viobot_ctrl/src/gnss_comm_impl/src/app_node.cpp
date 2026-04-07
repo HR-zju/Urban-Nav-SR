@@ -310,7 +310,7 @@ void GnssSppNode::odom_callback(const nav_msgs::msg::Odometry::ConstSharedPtr ms
     }
 }
 /**
-* @brief 提取双频数据并构造无电离层组合 (IF) 单频观测值
+* @brief 提取多频数据并构造最优无电离层组合 (IF) 单频观测值
 */
 void GnssSppNode::filter_iono_free(
     const std::vector<gnss_comm::ObsPtr>& obs_in,
@@ -324,19 +324,33 @@ void GnssSppNode::filter_iono_free(
     for (size_t i = 0; i < obs_in.size(); ++i)
     {
         const auto& obs = obs_in[i];
-        int idx1 = -1, idx2 = -1;
+        
+        int idx1 = -1; // 用于记录最高频率索引
+        int idx2 = -1; // 用于记录最低频率索引
+        double f_max = 0.0;
+        double f_min = 1e12; // 初始设为一个极大的值
 
-        // 寻找一高一低两个频率
+        // 遍历所有可用频率，寻找频率跨度最大的一对，频差越大，IF噪声放大越小
         for (size_t j = 0; j < obs->freqs.size(); ++j)
         {
-            if (obs->freqs[j] > 1.5e9 && idx1 == -1) {        // L1/E1/B1I 频段
+            double f = obs->freqs[j];
+            
+            // 过滤掉异常的 0 值频率
+            if (f < 1e8) continue; 
+
+            if (f > f_max) {
+                f_max = f;
                 idx1 = j;
-            } else if (obs->freqs[j] < 1.3e9 && idx2 == -1) { // L2/L5/B2 频段
+            }
+            if (f < f_min) {
+                f_min = f;
                 idx2 = j;
             }
         }
 
-        if (idx1 != -1 && idx2 != -1)
+        // 确保找到了两个不同的频率，并且频差足够大
+        // 避免误将同频段的两个相近信号进行组合，导致噪声爆炸
+        if (idx1 != -1 && idx2 != -1 && idx1 != idx2 && (f_max - f_min) > 1e8)
         {
             double f1 = obs->freqs[idx1];
             double f2 = obs->freqs[idx2];
@@ -359,7 +373,7 @@ void GnssSppNode::filter_iono_free(
             if_obs->time = obs->time;
             if_obs->sat  = obs->sat;
             
-            // 将组合伪距作为单频数据喂入
+            // 将组合伪距作为单频数据喂入，标称频率设为最高频 f1
             if_obs->freqs.push_back(f1);
             if_obs->psr.push_back(p_if);
             if_obs->psr_std.push_back(std_if);
