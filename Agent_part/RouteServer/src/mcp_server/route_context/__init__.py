@@ -3,6 +3,7 @@ from __future__ import annotations
 from .build_bev import build_local_bev_context
 from .describe_segment import describe_local_segment
 from .match_pose import match_pose_to_route
+from .prompt_proposal_v2 import generate_rgb_aware_pov_prompt_candidates
 from .prompt_proposals import generate_bev_prompt_proposals
 from .prompt_projection import project_bev_prompt_proposals_to_pov
 from .progress import get_route_progress
@@ -17,7 +18,9 @@ from .schema import (
     prompt_proposal_bundle_to_dict,
     route_context_to_dict,
     route_state_to_dict,
+    visual_region_bundle_to_dict,
 )
+from .visual_region_extractor import extract_visual_regions
 
 
 def build_route_context(
@@ -102,6 +105,7 @@ __all__ = [
     "build_route_state",
     "describe_local_segment",
     "generate_bev_prompt_proposals",
+    "generate_rgb_aware_pov_prompt_candidates",
     "get_route_progress",
     "local_bev_context_to_dict",
     "match_pose_to_route",
@@ -110,4 +114,6 @@ __all__ = [
     "prompt_proposal_bundle_to_dict",
     "route_context_to_dict",
     "route_state_to_dict",
+    "extract_visual_regions",
+    "visual_region_bundle_to_dict",
 ]

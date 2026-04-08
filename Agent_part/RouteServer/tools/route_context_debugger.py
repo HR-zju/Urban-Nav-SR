@@ -20,7 +20,7 @@ HTML_TEMPLATE = """<!doctype html>
     }}
     .layout {{
       display: grid;
-      grid-template-columns: 1.35fr 1fr;
+      grid-template-columns: 1.2fr 1fr;
       gap: 12px;
       padding: 12px;
     }}
@@ -49,6 +49,13 @@ HTML_TEMPLATE = """<!doctype html>
       border: 1px solid #1e293b;
     }}
     #localPatch {{
+      width: 100%;
+      height: 420px;
+      background: #020617;
+      border-radius: 8px;
+      border: 1px solid #1e293b;
+    }}
+    #povOverlay {{
       width: 100%;
       height: 420px;
       background: #020617;
@@ -129,6 +136,11 @@ HTML_TEMPLATE = """<!doctype html>
     .tangent::before {{ background: #facc15; }}
     .patchcorridor::before {{ background: rgba(96,165,250,0.8); }}
     .patchturn::before {{ background: rgba(245,158,11,0.8); }}
+    .proposalcorridor::before {{ background: rgba(20,184,166,0.85); }}
+    .proposalturn::before {{ background: rgba(245,158,11,0.85); }}
+    .proposalconnector::before {{ background: rgba(168,85,247,0.85); }}
+    .proposalentrance::before {{ background: rgba(6,182,212,0.85); }}
+    .proposalcrossing::before {{ background: rgba(239,68,68,0.85); }}
     .controls {{
       display: flex;
       gap: 8px;
@@ -215,6 +227,9 @@ HTML_TEMPLATE = """<!doctype html>
           <span class="connector">connector</span>
           <span class="patchcorridor">corridor prior</span>
           <span class="patchturn">turn prior</span>
+          <span class="proposalcorridor">corridor proposal</span>
+          <span class="proposalturn">turn proposal</span>
+          <span class="proposalconnector">connector proposal</span>
         </div>
         <svg id="localPatch" viewBox="0 0 680 420"></svg>
         <div class="field-grid">
@@ -225,6 +240,20 @@ HTML_TEMPLATE = """<!doctype html>
           <div class="field"><div class="label">corridor_type</div><div id="fieldCorridorType">-</div></div>
           <div class="field"><div class="label">off_route</div><div id="fieldOffRoute">-</div></div>
         </div>
+      </div>
+      <div class="panel">
+        <div class="row">
+          <h2>Current RGB + PoV Candidates</h2>
+          <span class="tag" id="povTopCandidate">top-1</span>
+        </div>
+        <div class="legend" style="margin:10px 0;">
+          <span class="proposalcorridor">corridor candidate</span>
+          <span class="proposalturn">turn candidate</span>
+          <span class="proposalconnector">connector candidate</span>
+          <span class="proposalentrance">entrance candidate</span>
+          <span class="proposalcrossing">crossing candidate</span>
+        </div>
+        <svg id="povOverlay" viewBox="0 0 1280 720"></svg>
       </div>
       <div class="panel">
         <h3>Current RouteContext JSON</h3>
@@ -345,6 +374,25 @@ HTML_TEMPLATE = """<!doctype html>
         }}
       }}
       return null;
+    }}
+
+    function proposalStyle(proposalType) {{
+      const styles = {{
+        "corridor_sector": {{ fill: "rgba(20,184,166,0.18)", stroke: "#14b8a6" }},
+        "turn_sector": {{ fill: "rgba(245,158,11,0.18)", stroke: "#f59e0b" }},
+        "connector_merge_sector": {{ fill: "rgba(168,85,247,0.18)", stroke: "#a855f7" }},
+        "entrance_candidate_sector": {{ fill: "rgba(6,182,212,0.18)", stroke: "#06b6d4" }},
+        "crossing_candidate_sector": {{ fill: "rgba(239,68,68,0.18)", stroke: "#ef4444" }},
+      }};
+      return styles[proposalType] || {{ fill: "rgba(148,163,184,0.18)", stroke: "#94a3b8" }};
+    }}
+
+    function activePovCandidates(frame) {{
+      const v2 = frame.pov_prompt_candidates_v2 || [];
+      if (Array.isArray(v2) && v2.length > 0) {{
+        return v2;
+      }}
+      return frame.pov_prompt_candidates || [];
     }}
 
     function renderBEV(frameIndex) {{
@@ -512,6 +560,34 @@ HTML_TEMPLATE = """<!doctype html>
       html += `<polygon points="${{patchSectorPath(bbox, width, height, corridorSector.center_deg || 0, corridorSector.span_deg || 60, Math.max(local.lookahead_m || 20, 12))}}" fill="#60a5fa" fill-opacity="0.10" stroke="none" />`;
       html += `<polygon points="${{patchSectorPath(bbox, width, height, turnSector.center_deg || 0, turnSector.span_deg || 35, Math.max((local.lookahead_m || 20) * 0.85, 10))}}" fill="#f59e0b" fill-opacity="0.10" stroke="none" />`;
 
+      (frame.prompt_proposals || []).forEach((proposal, index) => {{
+        const style = proposalStyle(proposal.proposal_type);
+        const range = proposal.range_m || [];
+        const radius = Array.isArray(range) && range.length ? Math.max(range[1] || range[0] || 12, 8) : Math.max(local.lookahead_m || 20, 10);
+        const points = patchSectorPath(
+          bbox,
+          width,
+          height,
+          Number(proposal.sector_center_deg || 0),
+          Number(proposal.sector_span_deg || 30),
+          radius
+        );
+        if (!points) return;
+        html += `<polygon points="${{points}}" fill="${{style.fill}}" stroke="${{style.stroke}}" stroke-width="1.5" />`;
+        const labelPoint = projectPatchPoint(
+          {{
+            x_m: Math.sin((Number(proposal.sector_center_deg || 0)) * Math.PI / 180) * radius * 0.7,
+            y_m: Math.cos((Number(proposal.sector_center_deg || 0)) * Math.PI / 180) * radius * 0.7
+          }},
+          bbox,
+          width,
+          height
+        );
+        if (labelPoint) {{
+          html += `<text x="${{(labelPoint.x + 6).toFixed(1)}}" y="${{(labelPoint.y - 4).toFixed(1)}}" fill="${{style.stroke}}" font-size="10">${{proposal.proposal_type}} · p=${{Number(proposal.priority || 0).toFixed(2)}}</text>`;
+        }}
+      }});
+
       html += patchPolyline(local.route_polyline_local || [], bbox, width, height, "#22c55e", 4);
       html += patchPolyline(local.local_segment_bev || [], bbox, width, height, "#3b82f6", 5);
       html += patchPolyline(local.connector_bev || [], bbox, width, height, "#fb923c", 4, "8 6");
@@ -541,6 +617,94 @@ HTML_TEMPLATE = """<!doctype html>
       patch.innerHTML = html;
     }}
 
+    function povCenter() {{
+      return {{ x: 640, y: 640 }};
+    }}
+
+    function renderPovOverlay(frameIndex) {{
+      const frame = CAPTURE.frames[frameIndex];
+      const svg = document.getElementById("povOverlay");
+      const width = Math.max(Number(frame.image_width || CAPTURE.meta.image_width || 1280), 64);
+      const height = Math.max(Number(frame.image_height || CAPTURE.meta.image_height || 720), 64);
+      svg.setAttribute("viewBox", `0 0 ${{width}} ${{height}}`);
+      const imageHref = frame.image_data_url || frame.image_url || "";
+
+      let html = `<rect x="0" y="0" width="${{width}}" height="${{height}}" fill="#020617" />`;
+      if (imageHref) {{
+        html += `<image href="${{imageHref}}" x="0" y="0" width="${{width}}" height="${{height}}" preserveAspectRatio="xMidYMid slice" />`;
+      }} else {{
+        html += `<text x="${{width / 2}}" y="${{height / 2}}" text-anchor="middle" fill="#94a3b8" font-size="24">No RGB frame available</text>`;
+      }}
+
+      const anchor = {{ x: width * 0.5, y: height * 0.94 }};
+      const visualRegions = (frame.visual_regions || {{}}).candidate_regions || [];
+      visualRegions.forEach((region) => {{
+        const polygon = Array.isArray(region.polygon_uv) ? region.polygon_uv : [];
+        if (polygon.length >= 3) {{
+          const points = polygon.map((point) => `${{Number(point[0] || 0).toFixed(1)}},${{Number(point[1] || 0).toFixed(1)}}`).join(" ");
+          html += `<polygon points="${{points}}" fill="rgba(148,163,184,0.10)" stroke="rgba(148,163,184,0.42)" stroke-width="1.5" stroke-dasharray="4 4" />`;
+        }}
+        const bbox = Array.isArray(region.bbox_uv) ? region.bbox_uv : [];
+        if (bbox.length === 4) {{
+          const cx = (Number(bbox[0]) + Number(bbox[2])) * 0.5;
+          const cy = Number(bbox[1]) + 16;
+          html += `<text x="${{cx.toFixed(1)}}" y="${{cy.toFixed(1)}}" text-anchor="middle" fill="#cbd5e1" font-size="11">${{region.region_id || "region"}} · s=${{Number(region.score || 0).toFixed(2)}}</text>`;
+        }}
+      }});
+
+      const candidates = activePovCandidates(frame);
+      candidates.forEach((candidate, index) => {{
+        const center = candidate.center_uv || [width * 0.5, height * 0.55];
+        const cx = Number(center[0] || width * 0.5);
+        const cy = Number(center[1] || height * 0.55);
+        const span = Number(candidate.span_px || 80);
+        const proposalType = candidate.debug?.proposal_type || "";
+        const style = proposalStyle(proposalType);
+        const isTop = index === 0;
+        const strokeWidth = isTop ? 4 : 2;
+        const opacity = isTop ? 0.28 : 0.18;
+
+        if (candidate.prompt_type === "arrow") {{
+          html += `<line x1="${{anchor.x.toFixed(1)}}" y1="${{anchor.y.toFixed(1)}}" x2="${{cx.toFixed(1)}}" y2="${{cy.toFixed(1)}}" stroke="${{style.stroke}}" stroke-width="${{strokeWidth}}" stroke-linecap="round" />`;
+          const dx = cx - anchor.x;
+          const dy = cy - anchor.y;
+          const norm = Math.max(Math.hypot(dx, dy), 1e-6);
+          const ux = dx / norm;
+          const uy = dy / norm;
+          const px = -uy;
+          const py = ux;
+          const ah = 14;
+          const ax1 = cx - ux * ah - px * 7;
+          const ay1 = cy - uy * ah - py * 7;
+          const ax2 = cx - ux * ah + px * 7;
+          const ay2 = cy - uy * ah + py * 7;
+          html += `<polygon points="${{cx.toFixed(1)}},${{cy.toFixed(1)}} ${{ax1.toFixed(1)}},${{ay1.toFixed(1)}} ${{ax2.toFixed(1)}},${{ay2.toFixed(1)}}" fill="${{style.stroke}}" />`;
+        }} else if (candidate.prompt_type === "region") {{
+          html += `<ellipse cx="${{cx.toFixed(1)}}" cy="${{cy.toFixed(1)}}" rx="${{(span * 0.55).toFixed(1)}}" ry="${{(span * 0.32).toFixed(1)}}" fill="${{style.fill.replace("0.18", String(opacity))}}" stroke="${{style.stroke}}" stroke-width="${{strokeWidth}}" stroke-dasharray="6 4" />`;
+        }} else {{
+          const leftX = cx - span * 0.5;
+          const rightX = cx + span * 0.5;
+          const midY = cy + span * 0.28;
+          html += `<polygon points="${{anchor.x.toFixed(1)}},${{anchor.y.toFixed(1)}} ${{leftX.toFixed(1)}},${{midY.toFixed(1)}} ${{rightX.toFixed(1)}},${{midY.toFixed(1)}}" fill="${{style.fill.replace("0.18", String(opacity))}}" stroke="${{style.stroke}}" stroke-width="${{strokeWidth}}" />`;
+        }}
+
+        if (Array.isArray(candidate.mask) && candidate.mask.length >= 3) {{
+          const maskPoints = candidate.mask.map((point) => `${{Number(point[0] || 0).toFixed(1)}},${{Number(point[1] || 0).toFixed(1)}}`).join(" ");
+          html += `<polygon points="${{maskPoints}}" fill="${{style.fill.replace("0.18", String(Math.max(opacity - 0.06, 0.10)))}}" stroke="${{style.stroke}}" stroke-width="1.5" stroke-dasharray="5 4" />`;
+        }}
+
+        html += `<circle cx="${{cx.toFixed(1)}}" cy="${{cy.toFixed(1)}}" r="${{isTop ? 6 : 4}}" fill="${{style.stroke}}" />`;
+        html += `<text x="${{(cx + 8).toFixed(1)}}" y="${{(cy - 8).toFixed(1)}}" fill="${{style.stroke}}" font-size="${{isTop ? 14 : 11}}">${{proposalType || candidate.prompt_type}} · p=${{Number(candidate.priority || 0).toFixed(2)}} · v=${{Number(candidate.visual_confidence || 0).toFixed(2)}}</text>`;
+      }});
+
+      svg.innerHTML = html;
+
+      const top = candidates[0];
+      document.getElementById("povTopCandidate").textContent = top
+        ? `${{top.debug?.proposal_type || top.prompt_type}} · proj=${{Number(top.projection_confidence || 0).toFixed(2)}} · visual=${{Number(top.visual_confidence || 0).toFixed(2)}}`
+        : "no candidates";
+    }}
+
     function setFields(frameIndex) {{
       const frame = CAPTURE.frames[frameIndex];
       const debug = frame.debug || {{}};
@@ -566,12 +730,16 @@ HTML_TEMPLATE = """<!doctype html>
         `gps=(${{frame.gps.lat.toFixed(6)}}, ${{frame.gps.lng.toFixed(6)}}) heading=${{frame.heading_deg ?? "n/a"}} cross_track=${{debug.cross_track_error_m ?? "n/a"}}m next_turn=${{debug.distance_to_next_turn_m ?? "n/a"}}m`;
       document.getElementById("jsonView").textContent = JSON.stringify({{
         route_context: frame.route_context,
-        local_bev_context: frame.local_bev_context
+        local_bev_context: frame.local_bev_context,
+        prompt_proposals: frame.prompt_proposals,
+        visual_regions: frame.visual_regions,
+        pov_prompt_candidates: activePovCandidates(frame)
       }}, null, 2);
       document.getElementById("frameSlider").value = String(frameIndex);
       setFields(frameIndex);
       renderBEV(frameIndex);
       renderLocalPatch(frameIndex);
+      renderPovOverlay(frameIndex);
       drawSeries(frameIndex);
     }}
 

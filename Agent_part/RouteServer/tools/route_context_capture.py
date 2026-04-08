@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 from datetime import datetime
 import json
+import mimetypes
 import os
 from pathlib import Path
 from typing import Any
@@ -88,6 +90,10 @@ def _normalize_frame(item: dict[str, Any], index: int) -> dict[str, Any]:
         "timestamp": item.get("timestamp"),
         "gps": {"lat": float(latitude), "lng": float(longitude)},
         "heading_deg": float(heading_deg) if heading_deg is not None else None,
+        "image_path": item.get("image_path"),
+        "image_url": item.get("image_url"),
+        "image_width": item.get("image_width"),
+        "image_height": item.get("image_height"),
         "raw": item,
     }
 
@@ -134,6 +140,10 @@ def build_inline_trajectory(
     longitude: float,
     heading_deg: float | None,
     frame_count: int,
+    image_path: str | None,
+    image_url: str | None,
+    image_width: int | None,
+    image_height: int | None,
 ) -> list[dict[str, Any]]:
     frames: list[dict[str, Any]] = []
     for index in range(max(int(frame_count), 1)):
@@ -143,14 +153,35 @@ def build_inline_trajectory(
                 "timestamp": None,
                 "gps": {"lat": float(latitude), "lng": float(longitude)},
                 "heading_deg": float(heading_deg) if heading_deg is not None else None,
+                "image_path": image_path,
+                "image_url": image_url,
+                "image_width": image_width,
+                "image_height": image_height,
                 "raw": {
                     "lat": float(latitude),
                     "lng": float(longitude),
                     "heading_deg": float(heading_deg) if heading_deg is not None else None,
+                    "image_path": image_path,
+                    "image_url": image_url,
+                    "image_width": image_width,
+                    "image_height": image_height,
                 },
             }
         )
     return frames
+
+
+def image_path_to_data_url(path: str | None) -> str | None:
+    if not path:
+        return None
+    input_path = Path(path).expanduser()
+    if not input_path.exists() or not input_path.is_file():
+        return None
+    mime_type, _ = mimetypes.guess_type(input_path.name)
+    if not mime_type or not mime_type.startswith("image/"):
+        mime_type = "image/jpeg"
+    encoded = base64.b64encode(input_path.read_bytes()).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
 
 
 async def ensure_route_geometry(
@@ -219,6 +250,12 @@ def build_debug_frame(frame: dict[str, Any], route_context: dict[str, Any]) -> d
     }
 
 
+def choose_prompt_tool(image_path: str | None, image_url: str | None) -> str:
+    if str(image_path or "").strip() or str(image_url or "").strip():
+        return "generate_pov_prompt_candidates_v2"
+    return "generate_pov_prompt_candidates"
+
+
 async def run_capture(
     *,
     trajectory_path: str | None,
@@ -226,6 +263,10 @@ async def run_capture(
     longitude: float | None,
     heading_deg: float | None,
     frame_count: int,
+    image_path: str | None,
+    image_url: str | None,
+    image_width: int,
+    image_height: int,
     prompt: str,
     mode: str,
     radius: int,
@@ -245,6 +286,10 @@ async def run_capture(
             longitude=longitude,
             heading_deg=heading_deg,
             frame_count=frame_count,
+            image_path=image_path,
+            image_url=image_url,
+            image_width=image_width,
+            image_height=image_height,
         )
     origin = frames[0]["gps"]
 
@@ -281,17 +326,27 @@ async def run_capture(
 
             captured_frames: list[dict[str, Any]] = []
             for frame in frames:
-                route_state = await call_tool_json(
-                    session,
-                    "get_route_state",
-                    {
-                        "gps": frame["gps"],
-                        "heading_deg": frame.get("heading_deg"),
-                        "route_polyline": route_polyline,
-                        "coarse_waypoints": coarse_waypoints,
-                        "lookahead_m": lookahead_m,
-                    },
-                )
+                image_width_px = int(frame.get("image_width") or image_width)
+                image_height_px = int(frame.get("image_height") or image_height)
+                resolved_image_path = str(frame.get("image_path") or image_path or "").strip() or None
+                resolved_image_url = str(frame.get("image_url") or image_url or "").strip() or None
+                tool_name = choose_prompt_tool(resolved_image_path, resolved_image_url)
+                tool_args: dict[str, Any] = {
+                    "gps": frame["gps"],
+                    "heading_deg": frame.get("heading_deg"),
+                    "route_polyline": route_polyline,
+                    "coarse_waypoints": coarse_waypoints,
+                    "lookahead_m": lookahead_m,
+                }
+                if tool_name == "generate_pov_prompt_candidates_v2":
+                    tool_args["image_path"] = resolved_image_path
+                    tool_args["image_url"] = resolved_image_url
+                    tool_args["visual_top_k"] = 5
+                else:
+                    tool_args["image_width"] = image_width_px
+                    tool_args["image_height"] = image_height_px
+
+                route_state = await call_tool_json(session, tool_name, tool_args)
                 route_context = route_state.get("route_context", {}) or {}
                 captured_frames.append(
                     {
@@ -299,9 +354,19 @@ async def run_capture(
                         "timestamp": frame.get("timestamp"),
                         "gps": frame["gps"],
                         "heading_deg": frame.get("heading_deg"),
+                        "image_path": resolved_image_path,
+                        "image_url": resolved_image_url,
+                        "image_data_url": image_path_to_data_url(resolved_image_path),
+                        "image_width": image_width_px,
+                        "image_height": image_height_px,
                         "debug": build_debug_frame(frame, route_context),
                         "route_context": route_context,
                         "local_bev_context": route_state.get("local_bev_context", {}),
+                        "prompt_proposals": route_state.get("prompt_proposals", []) or [],
+                        "visual_regions": route_state.get("visual_regions", {}) or {},
+                        "pov_prompt_candidates": route_state.get("pov_prompt_candidates", []) or [],
+                        "pov_prompt_candidates_v2": route_state.get("pov_prompt_candidates", []) or [],
+                        "prompt_generation_tool": tool_name,
                     }
                 )
 
@@ -315,6 +380,10 @@ async def run_capture(
             "lookahead_m": lookahead_m,
             "trajectory_path": trajectory_path,
             "inline_capture": trajectory_path is None,
+            "image_path": image_path,
+            "image_url": image_url,
+            "image_width": image_width,
+            "image_height": image_height,
             "provider": recommendation.get("provider"),
             "parsed_intent": recommendation.get("parsed_intent", {}),
             "chosen_destination": recommendation.get("chosen_destination", {}),
@@ -335,6 +404,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lon", type=float, help="Inline capture longitude when no trajectory file is provided")
     parser.add_argument("--heading-deg", type=float, default=None, help="Inline capture heading in degrees")
     parser.add_argument("--frame-count", type=int, default=1, help="Inline capture frame count for repeated single-pose snapshots")
+    parser.add_argument("--image-path", help="Shared local image path for inline capture or default frame image")
+    parser.add_argument("--image-url", help="Shared image URL for inline capture or default frame image")
+    parser.add_argument("--image-width", type=int, default=1280, help="Target RGB width for PoV projection")
+    parser.add_argument("--image-height", type=int, default=720, help="Target RGB height for PoV projection")
     parser.add_argument("--prompt", required=True, help="Natural language destination prompt")
     parser.add_argument("--mode", default="foot", choices=["car", "foot", "bike"], help="Routing mode")
     parser.add_argument("--radius", type=int, default=3000, help="Search radius in meters")
@@ -355,6 +428,10 @@ if __name__ == "__main__":
             longitude=args.lon,
             heading_deg=args.heading_deg,
             frame_count=args.frame_count,
+            image_path=args.image_path,
+            image_url=args.image_url,
+            image_width=args.image_width,
+            image_height=args.image_height,
             prompt=args.prompt,
             mode=args.mode,
             radius=args.radius,

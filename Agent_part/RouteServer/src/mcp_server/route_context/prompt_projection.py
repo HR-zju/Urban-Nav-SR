@@ -78,8 +78,11 @@ def project_bev_prompt_proposals_to_pov(
                 center_uv=[round(center_u, 2), round(center_v, 2)],
                 span_px=span_px,
                 direction_vec=_direction_vec(float(proposal.sector_center_deg)),
+                mask=None,
                 priority=round(float(proposal.priority), 4),
                 projection_confidence=round(_clamp(projection_confidence, 0.0, 1.0), 4),
+                semantic_tag=proposal.semantic_tag,
+                rationale=proposal.rationale,
                 debug={
                     "proposal_type": proposal.proposal_type,
                     "sector_center_deg": proposal.sector_center_deg,

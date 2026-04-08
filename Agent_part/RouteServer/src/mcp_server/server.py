@@ -35,12 +35,15 @@ from mcp_server.route_context import (
     build_route_context,
     build_route_state,
     generate_bev_prompt_proposals as build_bev_prompt_proposals,
+    generate_rgb_aware_pov_prompt_candidates,
+    extract_visual_regions,
     local_bev_context_to_dict,
     pov_prompt_candidate_bundle_to_dict,
     project_bev_prompt_proposals_to_pov,
     prompt_proposal_bundle_to_dict,
     route_context_to_dict,
     route_state_to_dict,
+    visual_region_bundle_to_dict,
 )
 
 # Create application context
@@ -908,6 +911,75 @@ async def generate_pov_prompt_candidates(
         "route_context": route_context_to_dict(state.route_context),
         "local_bev_context": local_bev_context_to_dict(state.local_bev_context),
         "prompt_proposals": prompt_proposal_bundle_to_dict(proposal_bundle).get("proposals", []),
+        "pov_prompt_candidates": pov_prompt_candidate_bundle_to_dict(candidate_bundle).get("candidates", []),
+    }
+
+
+@mcp.tool()
+async def generate_pov_prompt_candidates_v2(
+    gps: Dict[str, float],
+    route_polyline: List[Dict[str, Any]] | List[List[float]],
+    coarse_waypoints: List[Dict[str, Any]],
+    ctx: Context,
+    image_path: Optional[str] = None,
+    image_url: Optional[str] = None,
+    heading_deg: Optional[float] = None,
+    lookahead_m: float = 20.0,
+    off_route_threshold_m: float = 20.0,
+    front_extent_m: float = 30.0,
+    back_extent_m: float = 10.0,
+    side_extent_m: float = 15.0,
+    visual_top_k: int = 5,
+) -> Dict[str, Any]:
+    """
+    Generate RGB-aware PoV PromptProposal v2 candidates.
+
+    This tool fuses:
+    - RouteContext
+    - LocalBEVContext
+    - BEV prompt proposals
+    - image-space visual region candidates
+
+    It returns a Route-Prior + RGB-aware PoV candidate set for downstream arbitration.
+    """
+    await ctx.info(
+        "Generating RGB-aware PoV prompt candidates "
+        f"heading={heading_deg if heading_deg is not None else 'none'} "
+        f"visual_top_k={visual_top_k}"
+    )
+    if not str(image_path or "").strip() and not str(image_url or "").strip():
+        raise RuntimeError("generate_pov_prompt_candidates_v2 requires image_path or image_url")
+
+    state = build_route_state(
+        gps=gps,
+        heading_deg=heading_deg,
+        route_polyline=route_polyline,
+        coarse_waypoints=coarse_waypoints,
+        lookahead_m=lookahead_m,
+        off_route_threshold_m=off_route_threshold_m,
+        front_extent_m=front_extent_m,
+        back_extent_m=back_extent_m,
+        side_extent_m=side_extent_m,
+    )
+    proposal_bundle = build_bev_prompt_proposals(
+        route_context=state.route_context,
+        local_bev_context=state.local_bev_context,
+    )
+    visual_region_bundle = extract_visual_regions(
+        image_path=image_path,
+        image_url=image_url,
+        top_k=visual_top_k,
+    )
+    candidate_bundle = generate_rgb_aware_pov_prompt_candidates(
+        route_context=state.route_context,
+        prompt_proposals=proposal_bundle.proposals,
+        visual_regions=visual_region_bundle,
+    )
+    return {
+        "route_context": route_context_to_dict(state.route_context),
+        "local_bev_context": local_bev_context_to_dict(state.local_bev_context),
+        "prompt_proposals": prompt_proposal_bundle_to_dict(proposal_bundle).get("proposals", []),
+        "visual_regions": visual_region_bundle_to_dict(visual_region_bundle),
         "pov_prompt_candidates": pov_prompt_candidate_bundle_to_dict(candidate_bundle).get("candidates", []),
     }
 

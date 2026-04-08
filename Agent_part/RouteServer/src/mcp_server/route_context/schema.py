@@ -133,16 +133,41 @@ class PromptProposalBundle:
 
 
 @dataclass
+class VisualRegion:
+    region_id: str
+    region_type: str
+    frame: str
+    bbox_uv: list[float]
+    polygon_uv: list[list[float]]
+    score: float
+    mask: Any | None
+    source: str
+    debug: dict[str, Any]
+
+
+@dataclass
+class VisualRegionBundle:
+    image_width: int
+    image_height: int
+    navigability_heatmap: list[list[float]]
+    candidate_regions: list[VisualRegion]
+
+
+@dataclass
 class PoVPromptCandidate:
     proposal_id: str
     source_bev_proposal_id: str
     prompt_type: str
     frame: str
-    center_uv: list[float]
-    span_px: float
-    direction_vec: list[float]
+    center_uv: list[float] | None
+    direction_vec: list[float] | None
+    span_px: float | None
+    mask: Any | None
     priority: float
     projection_confidence: float
+    visual_confidence: float | None
+    semantic_tag: str | None
+    rationale: str | None
     debug: dict[str, Any]
 
 
@@ -164,6 +189,10 @@ def route_state_to_dict(state: RouteState) -> dict[str, Any]:
 
 
 def prompt_proposal_bundle_to_dict(bundle: PromptProposalBundle) -> dict[str, Any]:
+    return asdict(bundle)
+
+
+def visual_region_bundle_to_dict(bundle: VisualRegionBundle) -> dict[str, Any]:
     return asdict(bundle)
 
 

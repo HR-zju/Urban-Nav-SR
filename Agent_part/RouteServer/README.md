@@ -261,6 +261,21 @@ pip install -e ".[macos]"
   - 不读取 RGB
   - 适合作为后续 LVLM-Arbiter 的图像平面候选先验
 
+- `generate_pov_prompt_candidates_v2`
+  - 输入：
+    - `RouteContext` 所需字段
+    - `LocalBEVContext` 所需字段
+    - `image_path` 或 `image_url`
+  - 输出 **RGB-aware PromptProposal v2**
+  - 会把：
+    - route-prior teacher
+    - image-space visual region candidates
+    融合成更贴近当前 FPV 的 PoV candidates
+  - 适合作为后续：
+    - LVLM-Arbiter
+    - TemporalRefine
+    - teacher dataset logging
+
 - `render_bev_route_snapshot`
   - 仅在 `MAP_PROVIDER=amap` 下可用
   - 根据起终点和路线 polyline 生成高德静态 BEV 图 URL
@@ -517,6 +532,56 @@ pip install -e ".[macos]"
 
 使用。
 
+### 1.10 PromptProposal v2 (RGB-aware)
+
+当前新增的是 **RGB-aware PromptProposal v2**。
+
+它不是直接做最终裁决，而是把：
+
+- `RouteContext`
+- `LocalBEVContext`
+- `PromptProposal v1`
+- 当前 RGB 的视觉区域候选
+
+融合成一组更合理的 image-plane prompt candidates。
+
+这一步新增了两个对象：
+
+- `VisualRegionBundle`
+  - `navigability_heatmap`
+  - `candidate_regions`
+
+- `PoVPromptCandidate v2`
+  - 在 v1 基础上新增：
+    - `mask`
+    - `visual_confidence`
+
+当前 `VisualRegionExtractor` 是 heuristic v1：
+
+- 支持 `image_path`
+- 支持 `data:image/...` URL
+- 输出 top-k `candidate_regions`
+- 每个 region 都带：
+  - `bbox_uv`
+  - `polygon_uv`
+  - `score`
+  - `debug`
+
+然后 `PromptProposal v2` 会把 route-prior-only 的候选和这些 visual regions 做融合，得到：
+
+- 更贴近图像可通行区域的 `center_uv`
+- region-aware `mask`
+- 融合后的 `priority`
+- `visual_confidence`
+
+也就是说，这一步已经从：
+
+- `route-prior-only PoV candidates`
+
+推进到了：
+
+- `route-prior + RGB region-aware PoV candidates`
+
 ### 2. AMap 静态 BEV 图
 
 `render_bev_route_snapshot` 返回：
@@ -615,6 +680,27 @@ capture 中会保存：
 - `coarse_waypoints`
 - 每一帧的标准 debug 字段
 - 每一帧的完整 `RouteContext`
+- 每一帧的 `LocalBEVContext`
+- 每一帧的 `prompt_proposals`
+- 每一帧的 `pov_prompt_candidates`
+- 可选的 `image_path / image_url / image_data_url`
+
+如果你想做三联面板回放，也可以在 capture 时直接带当前 RGB：
+
+```bash
+python tools/route_context_capture.py \
+  --lat 30.2645 \
+  --lon 120.1180 \
+  --heading-deg 35 \
+  --image-path /home/ubuntu/WorkSpace/dataset/urban.jpeg \
+  --image-width 1280 \
+  --image-height 720 \
+  --prompt "我想去西湖" \
+  --mode foot \
+  --radius 3000 \
+  --lookahead-m 20 \
+  --output /tmp/route_state_capture.json
+```
 
 ### 2. 计算稳定性指标
 
@@ -660,7 +746,12 @@ python tools/route_context_metrics.py \
   - distance-to-turn
   - corridor type
 - 当前帧完整 `RouteContext` JSON
-- 当前帧 `LocalBEVContext` 可通过 `render_local_bev_patch` 单独验证
+- `LocalBEVContext` patch
+  - corridor / turn priors
+  - BEV prompt proposals
+- 当前 RGB + PoV candidates overlay
+  - 会把 `pov_prompt_candidates` 直接叠加到当前图像平面
+  - top-1 candidate 会高亮显示
 
 示例：
 
@@ -824,6 +915,39 @@ python examples/pov_prompt_projection_client.py \
 
 - `prompt_proposals`
 - `pov_prompt_candidates`
+
+### PromptProposal v2 (RGB-aware)
+
+最直接的测试方法是运行：
+
+```bash
+python examples/pov_prompt_projection_v2_client.py \
+  --prompt "我想去西湖" \
+  --lat 30.2645 \
+  --lon 120.1180 \
+  --mode foot \
+  --radius 3000 \
+  --heading-deg 35 \
+  --lookahead-m 20 \
+  --image-path /home/ubuntu/WorkSpace/dataset/urban.jpeg
+```
+
+它会先生成路线，再自动调用：
+
+- `generate_bev_prompt_proposals`
+- `generate_pov_prompt_candidates_v2`
+
+最后打印：
+
+- `visual_regions`
+- `pov_prompt_candidates`
+
+如果你用 `tools/route_context_capture.py` 且提供了 `--image-path` 或轨迹帧里的 `image_path`，capture 会优先走 v2，并把：
+
+- `visual_regions`
+- `pov_prompt_candidates_v2`
+
+一起保存给 `route_context_debugger.py` 做三联面板回放。
 
 ### 图像理解
 
