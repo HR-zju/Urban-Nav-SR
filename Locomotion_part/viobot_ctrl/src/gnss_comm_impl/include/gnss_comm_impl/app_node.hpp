@@ -27,6 +27,7 @@ public:
     GnssSppNode() : Node("gnss_spp_node")
     {
         kml_exporter_ = std::make_unique<gnss_comm::KmlExporter>("/home/symc/data/kml");
+        kml_exporter_raw_ = std::make_unique<gnss_comm::KmlExporter>("/home/symc/data/kml_raw");
         sub_ephem_ = this->create_subscription<gnss_comm::msg::GnssEphemMsg>(
             "/baton/gnss/ephem", 10,
             std::bind(&GnssSppNode::ephem_callback, this, std::placeholders::_1));
@@ -100,6 +101,7 @@ private:
     std::unordered_map<uint32_t, HatchState> hatch_states_;
 
     std::unique_ptr<gnss_comm::KmlExporter> kml_exporter_;
+    std::unique_ptr<gnss_comm::KmlExporter> kml_exporter_raw_;
 
     // 融合Stereo3和SPP
     std::deque<Eigen::Vector3d> init_ecef_buffer_; // 滑动窗口缓存

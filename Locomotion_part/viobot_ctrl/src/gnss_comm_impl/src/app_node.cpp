@@ -198,6 +198,11 @@ void GnssSppNode::meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPt
     fix_msg.position_covariance_type = sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_UNKNOWN;
     pub_spp_fix_raw_->publish(fix_msg);
 
+    // 保存原始SPP轨迹
+    if (kml_exporter_raw_) {
+        kml_exporter_raw_->add_point(lat_deg, lon_deg, alt);
+    }
+
     // stereo算法启动后收集SPP初始位置
     if (is_algo_running_ && !is_origin_set_) {
 
@@ -218,7 +223,7 @@ void GnssSppNode::meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPt
             double variance = 0.0;
             for (const auto& pos : init_ecef_buffer_) {
                 // squaredNorm() 是求两点距离的平方
-                variance += (pos - mean_ecef).squaredNorm(); 
+                variance += (pos - mean_ecef).squaredNorm();
             }
             variance /= INIT_WINDOW_SIZE;
             double std_dev = std::sqrt(variance);
@@ -246,10 +251,6 @@ void GnssSppNode::meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPt
         }
     }
 
-    // Save to KML if fusion hasn't taken over
-    if (kml_exporter_ && !is_origin_set_) {
-        kml_exporter_->add_point(lat_deg, lon_deg, alt);
-    }
 }
 
 void GnssSppNode::algo_status_callback(const system_ctrl::msg::AlgoStatus::ConstSharedPtr msg)
@@ -761,8 +762,8 @@ bool GnssSppNode::is_valid_obs_msg(const gnss_comm::msg::GnssObsMsg &msg, std::s
         // 频率值应该是 L-band 范围 (1.1 ~ 2.6 GHz)
         if (msg.freqs[i] < 1.0e9 || msg.freqs[i] > 3.0e9) return reject("freqs[" + std::to_string(i) + "] out of L-band range: " + std::to_string(msg.freqs[i]));
 
-        // CN0 (载噪比) 范围 [40, 65] dB-Hz
-        if (msg.cn0[i] < 40.0 || msg.cn0[i] > 65.0) return reject("cn0[" + std::to_string(i) + "] out of range: " + std::to_string(msg.cn0[i]));
+        // CN0 (载噪比) 范围 [30, 65] dB-Hz
+        if (msg.cn0[i] < 30.0 || msg.cn0[i] > 65.0) return reject("cn0[" + std::to_string(i) + "] out of range: " + std::to_string(msg.cn0[i]));
 
         // 伪距标准差不能为负
         if (msg.psr_std[i] < 0.0 || msg.psr_std[i] > 10.0) return reject("psr_std[" + std::to_string(i) + "] out of range: " + std::to_string(msg.psr_std[i]));
