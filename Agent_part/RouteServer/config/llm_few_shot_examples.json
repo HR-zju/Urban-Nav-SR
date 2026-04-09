@@ -1,0 +1,150 @@
+[
+  {
+    "request": "Find a quiet place to work nearby with coffee and good access",
+    "output": {
+      "destination_type": "workspace",
+      "destination_kind": "generic_poi",
+      "search_keywords": "cafe|coworking space|bookstore",
+      "mode": "car",
+      "radius_m": 2500,
+      "optimize_for": "balanced",
+      "max_candidates": 5,
+      "hard_constraints": {
+        "max_route_duration_min": null,
+        "max_route_distance_m": null,
+        "must_include_keywords": [],
+        "exclude_keywords": []
+      }
+    }
+  },
+  {
+    "request": "Recommend an EV charging stop near me and avoid paid facilities",
+    "output": {
+      "destination_type": "charging",
+      "destination_kind": "generic_poi",
+      "search_keywords": "charging station|charging point",
+      "mode": "car",
+      "radius_m": 5000,
+      "optimize_for": "distance",
+      "max_candidates": 5,
+      "hard_constraints": {
+        "max_route_duration_min": null,
+        "max_route_distance_m": null,
+        "must_include_keywords": [
+          "charging"
+        ],
+        "exclude_keywords": [
+          "paid"
+        ]
+      }
+    }
+  },
+  {
+    "request": "Suggest a park for a short walk within 15 minutes",
+    "output": {
+      "destination_type": "park",
+      "destination_kind": "generic_poi",
+      "search_keywords": "park|garden|green space",
+      "mode": "foot",
+      "radius_m": 1800,
+      "optimize_for": "time",
+      "max_candidates": 5,
+      "hard_constraints": {
+        "max_route_duration_min": 15,
+        "max_route_distance_m": null,
+        "must_include_keywords": [],
+        "exclude_keywords": []
+      }
+    }
+  },
+  {
+    "request": "I want to go to West Lake in Hangzhou",
+    "output": {
+      "destination_type": "named_place",
+      "destination_kind": "regional_scenic_area",
+      "search_keywords": "West Lake",
+      "mode": "foot",
+      "radius_m": 10000,
+      "optimize_for": "balanced",
+      "max_candidates": 5,
+      "hard_constraints": {
+        "max_route_duration_min": null,
+        "max_route_distance_m": null,
+        "must_include_keywords": [],
+        "exclude_keywords": []
+      }
+    }
+  },
+  {
+    "request": "Find a grocery option for a bike trip with minimal route distance",
+    "output": {
+      "destination_type": "grocery",
+      "destination_kind": "generic_poi",
+      "search_keywords": "supermarket|convenience store|grocery",
+      "mode": "bike",
+      "radius_m": 3500,
+      "optimize_for": "distance",
+      "max_candidates": 5,
+      "hard_constraints": {
+        "max_route_duration_min": null,
+        "max_route_distance_m": null,
+        "must_include_keywords": [],
+        "exclude_keywords": []
+      }
+    }
+  },
+  {
+    "request": "Need a pharmacy nearby, fastest route only",
+    "output": {
+      "destination_type": "pharmacy",
+      "destination_kind": "generic_poi",
+      "search_keywords": "pharmacy|drugstore|medical store",
+      "mode": "car",
+      "radius_m": 3500,
+      "optimize_for": "time",
+      "max_candidates": 5,
+      "hard_constraints": {
+        "max_route_duration_min": null,
+        "max_route_distance_m": null,
+        "must_include_keywords": [],
+        "exclude_keywords": []
+      }
+    }
+  },
+  {
+    "request": "Find a family-friendly place to relax with kids",
+    "output": {
+      "destination_type": "family_leisure",
+      "destination_kind": "generic_poi",
+      "search_keywords": "park|playground|family cafe",
+      "mode": "car",
+      "radius_m": 4000,
+      "optimize_for": "balanced",
+      "max_candidates": 5,
+      "hard_constraints": {
+        "max_route_duration_min": null,
+        "max_route_distance_m": null,
+        "must_include_keywords": [],
+        "exclude_keywords": []
+      }
+    }
+  },
+  {
+    "request": "I'm thirsty",
+    "output": {
+      "destination_type": "drink_retail",
+      "destination_kind": "generic_poi",
+      "search_keywords": "convenience store|cafe|tea shop|juice bar|beverage store",
+      "mode": "foot",
+      "radius_m": 2500,
+      "optimize_for": "distance",
+      "max_candidates": 5,
+      "hard_constraints": {
+        "max_route_duration_min": null,
+        "max_route_distance_m": null,
+        "must_include_keywords": [],
+        "exclude_keywords": []
+      }
+    }
+  }
+]

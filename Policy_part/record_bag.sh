@@ -1,7 +1,8 @@
 #!/bin/zsh
 # notice running this script out of docker container, and running ./record_bag.sh <bag_name> 
 # Create a new tmux session
-session_name="record_bag_$(date +%s)"
+session_name="foundation_policy_record"
+tmux kill-session -t $session_name 2>/dev/null
 tmux new-session -d -s $session_name
 
 # Split the window into 6 panes
@@ -27,8 +28,8 @@ tmux select-layout tiled
 # Run the realsense2 launch command in the first pane
 tmux select-pane -t 0
 tmux send-keys "tmux set -g mouse on" Enter
-tmux send-keys "sudo nvidia-smi -pm 1" Enter
-tmux send-keys "sudo nvidia-smi -pl 100" Enter
+# tmux send-keys "sudo nvidia-smi -pm 1" Enter
+# tmux send-keys "sudo nvidia-smi -pl 100" Enter
 tmux send-keys "docker start ros1toros2" Enter
 tmux send-keys "docker exec -it ros1toros2 zsh" Enter
 sleep 1

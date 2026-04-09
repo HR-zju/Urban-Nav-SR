@@ -1,5 +1,7 @@
 #include "gnss_comm_impl/app_node.hpp"
 
+#include <sstream>
+
 int main(int argc, char **argv)
 {
     rclcpp::init(argc, argv);
@@ -7,6 +9,23 @@ int main(int argc, char **argv)
     rclcpp::spin(node);
     rclcpp::shutdown();
     return 0;
+}
+
+void GnssSppNode::publish_bridge_diagnostics(const gnss_comm_impl::StereoYawBridge::UpdateResult &result)
+{
+    if (!enable_bridge_diagnostics_ || !pub_bridge_diag_) return;
+
+    std_msgs::msg::String msg;
+    std::ostringstream oss;
+    oss << "calibrated=" << (result.calibrated ? 1 : 0)
+        << ",samples=" << result.calib_samples
+        << ",gnss_fresh=" << (result.gnss_fresh ? 1 : 0)
+        << ",used_new_gnss=" << (result.used_new_gnss ? 1 : 0)
+        << ",has_measurement=" << (result.has_measurement ? 1 : 0)
+        << ",reject_count=" << result.reject_count
+        << ",yaw_deg=" << result.yaw_offset_rad * 180.0 / M_PI;
+    msg.data = oss.str();
+    pub_bridge_diag_->publish(msg);
 }
 
 void GnssSppNode::ephem_callback(const gnss_comm::msg::GnssEphemMsg::ConstSharedPtr msg)
@@ -119,20 +138,20 @@ void GnssSppNode::meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPt
     std::vector<gnss_comm::ObsPtr> combined_obs;
     std::vector<gnss_comm::EphemBasePtr> combined_ephems;
 
-    filter_iono_free(matched_obs_in, matched_ephems_in, combined_obs, combined_ephems);
+    // filter_iono_free(matched_obs_in, matched_ephems_in, combined_obs, combined_ephems);
 
-    if (combined_obs.size() >= MIN_SAT_COUNT) {
-        RCLCPP_DEBUG(logger, "Using IF Combination. Sats: %zu", combined_obs.size());
-    } else {
-        RCLCPP_WARN_THROTTLE(logger, *clock, 3000, 
-            "Not enough dual-freq sats (%zu). Fallback to L1.", combined_obs.size());
-        gnss_comm::filter_L1(matched_obs_in, matched_ephems_in, combined_obs, combined_ephems);
-    }
+    // if (combined_obs.size() >= MIN_SAT_COUNT) {
+    //     RCLCPP_DEBUG(logger, "Using IF Combination. Sats: %zu", combined_obs.size());
+    // } else {
+        // RCLCPP_WARN_THROTTLE(logger, *clock, 3000, 
+        //     "Not enough dual-freq sats (%zu). Fallback to L1.", combined_obs.size());
+        filter_L1_hatch(matched_obs_in, matched_ephems_in, combined_obs, combined_ephems);
+    // }
 
     // 进一步剔除弱势星座防止 SPP 解算发散
     std::vector<gnss_comm::ObsPtr> robust_obs;
     std::vector<gnss_comm::EphemBasePtr> robust_ephems;
-    filter_weak_constellations(combined_obs, combined_ephems, robust_obs, robust_ephems, 3);
+    filter_weak_constellations(combined_obs, combined_ephems, robust_obs, robust_ephems, 4);
 
 
     if (robust_obs.size() < MIN_SAT_COUNT)
@@ -177,6 +196,8 @@ void GnssSppNode::meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPt
         return;
     }
 
+    yaw_bridge_.set_latest_raw_ecef(ecef_pos, this->now().seconds());
+
     RCLCPP_INFO_THROTTLE(logger, *clock, 2000,
                             "SPP Succeeded | Lat: %.8f, Lon: %.8f, Alt: %.2f m | Sats: %zu",
                             lat_deg, lon_deg, alt, robust_obs.size());
@@ -198,6 +219,11 @@ void GnssSppNode::meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPt
     fix_msg.position_covariance_type = sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_UNKNOWN;
     pub_spp_fix_raw_->publish(fix_msg);
 
+    // 保存原始SPP轨迹
+    if (kml_exporter_raw_) {
+        kml_exporter_raw_->add_point(lat_deg, lon_deg, alt);
+    }
+
     // stereo算法启动后收集SPP初始位置
     if (is_algo_running_ && !is_origin_set_) {
 
@@ -218,7 +244,7 @@ void GnssSppNode::meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPt
             double variance = 0.0;
             for (const auto& pos : init_ecef_buffer_) {
                 // squaredNorm() 是求两点距离的平方
-                variance += (pos - mean_ecef).squaredNorm(); 
+                variance += (pos - mean_ecef).squaredNorm();
             }
             variance /= INIT_WINDOW_SIZE;
             double std_dev = std::sqrt(variance);
@@ -230,6 +256,7 @@ void GnssSppNode::meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPt
                 origin_lla_  = gnss_comm::ecef2geo(origin_ecef_);
                 R_enu2ecef_  = gnss_comm::geo2rotation(origin_lla_);
                 is_origin_set_ = true;
+                yaw_bridge_.set_origin(origin_ecef_, R_enu2ecef_);
                 
                 RCLCPP_INFO(this->get_logger(), 
                     "Fusion Origin Set Securely! StdDev: %.2f m. LLA: [%.8f, %.8f, %.2f]", 
@@ -246,21 +273,19 @@ void GnssSppNode::meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPt
         }
     }
 
-    // Save to KML if fusion hasn't taken over
-    if (kml_exporter_ && !is_origin_set_) {
-        kml_exporter_->add_point(lat_deg, lon_deg, alt);
-    }
 }
 
 void GnssSppNode::algo_status_callback(const system_ctrl::msg::AlgoStatus::ConstSharedPtr msg)
 {
-    if (msg->algo_status == "1") {
+    if (msg->algo_status == "stereo3_running" || msg->algo_status == "stereo4_running") {
         is_algo_running_ = true;
     } else {
         is_algo_running_ = false;
         // reset origin
         is_origin_set_ = false;
         init_ecef_buffer_.clear();
+        yaw_bridge_.reset();
+        yaw_bridge_.clear_raw_gnss();
         
     }
 }
@@ -274,11 +299,40 @@ void GnssSppNode::odom_callback(const nav_msgs::msg::Odometry::ConstSharedPtr ms
     double y = msg->pose.pose.position.y;
     double z = msg->pose.pose.position.z;
 
-    // ENU mapping from ROS base_link (X forward, Y left, Z up) if initial yaw=0 points North
-    double enu_e = -y;
-    double enu_n = x;
-    double enu_u = z;
-    Eigen::Vector3d enu_pos(enu_e, enu_n, enu_u);
+    // Stereo odom is relative to its initial frame, first map it to a pseudo-ENU frame.
+    Eigen::Vector3d enu_pos_raw(-y, x, z);
+
+    const auto yaw_result = yaw_bridge_.update(enu_pos_raw, this->now().seconds());
+    publish_bridge_diagnostics(yaw_result);
+
+    if (!yaw_result.calibrated)
+    {
+        // Detailed diagnostics for failed measurement
+        if (yaw_result.used_new_gnss && !yaw_result.has_measurement) {
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 3000,
+                "Measuring yaw failed: baseline too short. odom=[%.3f,%.3f,%.3f] m (norm=%.3f), "
+                "check if enough distance traveled or GNSS position updated",
+                x, y, z, enu_pos_raw.head(2).norm());
+        } else {
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 3000,
+                "Calibrating stereo yaw... samples=%d, gnss_fresh=%d, used_new_gnss=%d, has_meas=%d",
+                yaw_result.calib_samples,
+                yaw_result.gnss_fresh ? 1 : 0,
+                yaw_result.used_new_gnss ? 1 : 0,
+                yaw_result.has_measurement ? 1 : 0);
+        }
+        return;
+    }
+
+    if (yaw_result.used_new_gnss && yaw_result.reject_count > 0)
+    {
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 3000,
+            "Yaw update rejected. reject_count=%d, yaw_offset=%.2f deg",
+            yaw_result.reject_count,
+            yaw_result.yaw_offset_rad * 180.0 / M_PI);
+    }
+
+    const Eigen::Vector3d enu_pos = yaw_bridge_.rotate_raw_to_enu(enu_pos_raw);
 
     // Transform relatively to ECEF
     Eigen::Vector3d delta_ecef = R_enu2ecef_ * enu_pos;
@@ -310,7 +364,86 @@ void GnssSppNode::odom_callback(const nav_msgs::msg::Odometry::ConstSharedPtr ms
     }
 }
 /**
-* @brief 提取双频数据并构造无电离层组合 (IF) 单频观测值
+* @brief 提取L1单频数据并使用Hatch滤波进行载波相位平滑伪距
+*/
+void GnssSppNode::filter_L1_hatch(
+    const std::vector<gnss_comm::ObsPtr>& obs_in,
+    const std::vector<gnss_comm::EphemBasePtr>& ephem_in,
+    std::vector<gnss_comm::ObsPtr>& obs_out,
+    std::vector<gnss_comm::EphemBasePtr>& ephem_out)
+{
+    obs_out.clear();
+    ephem_out.clear();
+
+    for (size_t i = 0; i < obs_in.size(); ++i)
+    {
+        const auto& obs = obs_in[i];
+        
+        // 检查卫星系统
+        const uint32_t sys = gnss_comm::satsys(obs->sat, nullptr);
+        if (sys != SYS_GPS && sys != SYS_GLO && sys != SYS_BDS && sys != SYS_GAL)
+            continue;
+
+        // 提取 L1 频率
+        int l1_idx = -1;
+        const double f1 = gnss_comm::L1_freq(obs, &l1_idx);
+        if (f1 < 0 || l1_idx < 0) continue;
+        if (obs->psr[l1_idx] == 0.0) continue;
+
+        double p1 = obs->psr[l1_idx];
+        double std1 = obs->psr_std[l1_idx];
+        
+        // 将载波相位从 cycle 转换为 m
+        double cp1_m = obs->cp[l1_idx] * (LIGHT_SPEED / f1);
+
+        double current_time = obs->time.time + obs->time.sec;
+        auto& state = hatch_states_[obs->sat];
+
+        // 检查周跳、相位无效等重置条件
+        bool cycle_slip = (obs->LLI[l1_idx] != 0);
+        if (obs->cp[l1_idx] == 0.0) cycle_slip = true;
+
+        // 如果发生周跳、时间间隔过大(>2.5秒) 或 刚初始化，则重置滤波器
+        if (state.count == 0 || cycle_slip || std::abs(current_time - state.last_time) > 2.5) {
+            state.p_smooth = p1;
+            state.cp_prev  = cp1_m;
+            state.count    = 1;
+        } else {
+            state.count = std::min(state.count + 1, MAX_HATCH_WINDOW);
+            double k = static_cast<double>(state.count);
+            // Hatch滤波递推公式: P_smooth(k) = 1/k * P_raw(k) + (k-1)/k * (P_smooth(k-1) + cp(k) - cp(k-1))
+            state.p_smooth = (1.0 / k) * p1 + ((k - 1.0) / k) * (state.p_smooth + cp1_m - state.cp_prev);
+            state.cp_prev = cp1_m;
+        }
+
+        // 粗略估计平滑后的标准差
+        double smoothed_std1 = std1 / std::sqrt(static_cast<double>(state.count));
+        state.last_time = current_time;
+
+        auto l1_obs = std::make_shared<gnss_comm::Obs>();
+        l1_obs->time = obs->time;
+        l1_obs->sat  = obs->sat;
+        
+        l1_obs->freqs.push_back(f1);
+        l1_obs->psr.push_back(state.p_smooth);
+        l1_obs->psr_std.push_back(smoothed_std1);
+
+        l1_obs->CN0.push_back(obs->CN0[l1_idx]); 
+        l1_obs->status.push_back(obs->status[l1_idx]);
+        l1_obs->LLI.push_back(0);
+        l1_obs->code.push_back(obs->code[l1_idx]);
+        l1_obs->cp.push_back(0.0);
+        l1_obs->cp_std.push_back(0.0);
+        l1_obs->dopp.push_back(0.0);
+        l1_obs->dopp_std.push_back(0.0);
+
+        obs_out.push_back(l1_obs);
+        ephem_out.push_back(ephem_in[i]);
+    }
+}
+
+/**
+* @brief 提取多频数据并构造最优无电离层组合 (IF) 单频观测值
 */
 void GnssSppNode::filter_iono_free(
     const std::vector<gnss_comm::ObsPtr>& obs_in,
@@ -324,19 +457,142 @@ void GnssSppNode::filter_iono_free(
     for (size_t i = 0; i < obs_in.size(); ++i)
     {
         const auto& obs = obs_in[i];
-        int idx1 = -1, idx2 = -1;
+        auto find_freq_idx = [&](double target_f) -> int {
+            double min_diff = 1e12;
+            int idx = -1;
 
-        // 寻找一高一低两个频率
-        for (size_t j = 0; j < obs->freqs.size(); ++j)
+            for (size_t j = 0; j < obs->freqs.size(); ++j) {
+                double f = obs->freqs[j];
+
+                if (f < 1e8) continue;
+                if (obs->psr[j] == 0.0) continue;
+
+                double diff = std::abs(f - target_f);
+                if (diff < min_diff) {
+                    min_diff = diff;
+                    idx = static_cast<int>(j);
+                }
+            }
+            return idx;
+        };
+        int idx1 = -1; // 用于记录高频率索引
+        int idx2 = -1; // 用于记录低频率索引
+
+        // 获取卫星系统
+        int sys = gnss_comm::satsys(obs->sat, nullptr);
+        // 根据不同系统分配目标频率
+        
+        switch (sys)
         {
-            if (obs->freqs[j] > 1.5e9 && idx1 == -1) {        // L1/E1/B1I 频段
-                idx1 = j;
-            } else if (obs->freqs[j] < 1.3e9 && idx2 == -1) { // L2/L5/B2 频段
-                idx2 = j;
+            case SYS_GPS:
+            case SYS_QZS:
+            {
+                // L1 + L2
+                idx1 = find_freq_idx(FREQ1);
+                idx2 = find_freq_idx(FREQ2);
+
+                // fallback: L1 + L5
+                if (idx1 == -1 || idx2 == -1) {
+                    idx1 = find_freq_idx(FREQ1);
+                    idx2 = find_freq_idx(FREQ5);
+                }
+                break;
+            }
+
+            case SYS_GAL:
+            {
+                // E1 + E5a
+                idx1 = find_freq_idx(FREQ1);
+                idx2 = find_freq_idx(FREQ5);
+
+                // fallback: E1 + E5b
+                if (idx1 == -1 || idx2 == -1) {
+                    idx1 = find_freq_idx(FREQ1);
+                    idx2 = find_freq_idx(FREQ7);
+                }
+                break;
+            }
+
+            case SYS_BDS:
+            {
+                // 优先：B1 + B2 (兼容老设备)
+                idx1 = find_freq_idx(FREQ1_BDS);
+                idx2 = find_freq_idx(FREQ2_BDS);
+
+                // fallback: B1 + B3
+                if (idx1 == -1 || idx2 == -1) {
+                    idx1 = find_freq_idx(FREQ1_BDS);
+                    idx2 = find_freq_idx(FREQ3_BDS);
+                }
+
+                // fallback: GPS L1/L2（部分接收机混合输出）
+                if (idx1 == -1 || idx2 == -1) {
+                    idx1 = find_freq_idx(FREQ1);
+                    idx2 = find_freq_idx(FREQ2);
+                }
+                break;
+            }
+
+            case SYS_IRN:
+            {
+                // L5 + S
+                idx1 = find_freq_idx(FREQ5);
+                idx2 = find_freq_idx(FREQ9);
+                break;
+            }
+
+            case SYS_SBS:
+            {
+                // L1 + L5
+                idx1 = find_freq_idx(FREQ1);
+                idx2 = find_freq_idx(FREQ5);
+                break;
+            }
+
+            case SYS_GLO:
+            {
+                // GLONASS 不能用 target frequency！
+                // 直接选两个有效频点（通常 index 就是 G1/G2）
+
+                std::vector<int> valid_idx;
+                for (size_t j = 0; j < obs->freqs.size(); ++j) {
+                    if (obs->freqs[j] < 1e8) continue;
+                    if (obs->psr[j] == 0.0) continue;
+                    valid_idx.push_back(static_cast<int>(j));
+                }
+
+                if (valid_idx.size() >= 2) {
+                    idx1 = valid_idx[0];
+                    idx2 = valid_idx[1];
+                }
+                break;
+            }
+
+            default:
+            {
+                // fallback: 选频率差最大的两个
+                double max_diff = 0.0;
+
+                for (size_t i = 0; i < obs->freqs.size(); ++i) {
+                    if (obs->freqs[i] < 1e8) continue;
+
+                    for (size_t j = i + 1; j < obs->freqs.size(); ++j) {
+                        if (obs->freqs[j] < 1e8) continue;
+
+                        double diff = std::abs(obs->freqs[i] - obs->freqs[j]);
+                        if (diff > max_diff) {
+                            max_diff = diff;
+                            idx1 = static_cast<int>(i);
+                            idx2 = static_cast<int>(j);
+                        }
+                    }
+                }
+                break;
             }
         }
 
-        if (idx1 != -1 && idx2 != -1)
+        // 确保找到了两个不同的频率
+        if (idx1 != -1 && idx2 != -1 && idx1 != idx2)
         {
             double f1 = obs->freqs[idx1];
             double f2 = obs->freqs[idx2];
@@ -355,14 +611,43 @@ void GnssSppNode::filter_iono_free(
             double p_if = alpha * p1 + beta * p2;
             double std_if = std::sqrt(alpha * alpha * std1 * std1 + beta * beta * std2 * std2);
 
+            // Hatch filter 相位平滑伪距
+            // 将载波相位从 cycle 转换为 m
+            double cp1_m = obs->cp[idx1] * (LIGHT_SPEED / f1);
+            double cp2_m = obs->cp[idx2] * (LIGHT_SPEED / f2);
+            double cp_if = alpha * cp1_m + beta * cp2_m;
+
+            double current_time = obs->time.time + obs->time.sec;
+            auto& state = hatch_states_[obs->sat];
+
+            // 检查周跳、相位无效等重置条件
+            bool cycle_slip = (obs->LLI[idx1] != 0) || (obs->LLI[idx2] != 0);
+            if (obs->cp[idx1] == 0.0 || obs->cp[idx2] == 0.0) cycle_slip = true;
+
+            // 如果发生周跳、时间间隔过大(>2.5秒) 或 刚初始化，则重置滤波器
+            if (state.count == 0 || cycle_slip || std::abs(current_time - state.last_time) > 2.5) {
+                state.p_smooth = p_if;
+                state.cp_prev  = cp_if;
+                state.count    = 1;
+            } else {
+                state.count = std::min(state.count + 1, MAX_HATCH_WINDOW);
+                double k = static_cast<double>(state.count);
+                // Hatch滤波递推公式: P_smooth(k) = 1/k * P_raw(k) + (k-1)/k * (P_smooth(k-1) + cp_if(k) - cp_if(k-1))
+                state.p_smooth = (1.0 / k) * p_if + ((k - 1.0) / k) * (state.p_smooth + cp_if - state.cp_prev);
+                state.cp_prev = cp_if;
+            }
+            // 粗略估计平滑后的标准差
+            double smoothed_std_if = std_if / std::sqrt(static_cast<double>(state.count));
+            state.last_time = current_time;
+
             auto if_obs = std::make_shared<gnss_comm::Obs>();
             if_obs->time = obs->time;
             if_obs->sat  = obs->sat;
             
-            // 将组合伪距作为单频数据喂入
+            // 将组合伪距作为单频数据喂入，标称频率设为最高频 f1
             if_obs->freqs.push_back(f1);
-            if_obs->psr.push_back(p_if);
-            if_obs->psr_std.push_back(std_if);
+            if_obs->psr.push_back(state.p_smooth);
+            if_obs->psr_std.push_back(smoothed_std_if);
 
             if_obs->CN0.push_back(obs->CN0[idx1]); 
             if_obs->status.push_back(obs->status[idx1]);
@@ -444,7 +729,7 @@ bool GnssSppNode::is_valid_ephem_msg(const gnss_comm::msg::GnssEphemMsg &msg, st
 
     // 2. 检查卫星系统是否支持
     uint32_t sys = gnss_comm::satsys(msg.sat, nullptr);
-    if (sys != SYS_GPS && sys != SYS_GAL && sys != SYS_BDS) return reject("unsupported satellite system for ephem (sat=" + std::to_string(msg.sat) + ")");
+    if (sys != SYS_GPS && sys != SYS_GLO && sys != SYS_GAL && sys != SYS_BDS) return reject("unsupported satellite system for ephem (sat=" + std::to_string(msg.sat) + ")");
 
     // 3. GPS 周数合理性 (GPS rollover: week 大约在 1024 ~ 4096 范围)
     if (msg.week == 0 || msg.week > 4096) return reject("week out of range: " + std::to_string(msg.week));
@@ -506,7 +791,7 @@ bool GnssSppNode::is_valid_obs_msg(const gnss_comm::msg::GnssObsMsg &msg, std::s
     // 2. 检查卫星系统是否支持
     uint32_t sys = gnss_comm::satsys(msg.sat, nullptr);
     if (sys != SYS_GPS && sys != SYS_GLO && sys != SYS_GAL && sys != SYS_BDS) return reject("unsupported satellite system (sat=" + std::to_string(msg.sat) + ")");
-
+        
     // 3. 观测时间有效性
     if (msg.time.week == 0) return reject("time.week == 0");
     if (msg.time.tow < 0.0 || msg.time.tow > WEEK_SECONDS) return reject("time.tow out of range: " + std::to_string(msg.time.tow));
@@ -530,11 +815,11 @@ bool GnssSppNode::is_valid_obs_msg(const gnss_comm::msg::GnssObsMsg &msg, std::s
         // 频率值应该是 L-band 范围 (1.1 ~ 2.6 GHz)
         if (msg.freqs[i] < 1.0e9 || msg.freqs[i] > 3.0e9) return reject("freqs[" + std::to_string(i) + "] out of L-band range: " + std::to_string(msg.freqs[i]));
 
-        // CN0 (载噪比) 范围 [40, 65] dB-Hz
-        if (msg.cn0[i] < 40.0 || msg.cn0[i] > 65.0) return reject("cn0[" + std::to_string(i) + "] out of range: " + std::to_string(msg.cn0[i]));
+        // CN0 (载噪比) 范围 [30, 65] dB-Hz
+        if (msg.cn0[i] < 30.0 || msg.cn0[i] > 65.0) return reject("cn0[" + std::to_string(i) + "] out of range: " + std::to_string(msg.cn0[i]));
 
         // 伪距标准差不能为负
-        if (msg.psr_std[i] < 0.0 || msg.psr_std[i] > 10.0) return reject("psr_std[" + std::to_string(i) + "] < 0");
+        if (msg.psr_std[i] < 0.0 || msg.psr_std[i] > 10.0) return reject("psr_std[" + std::to_string(i) + "] out of range: " + std::to_string(msg.psr_std[i]));
 
         // 载波相位标准差不能为负
         if (msg.cp_std[i] < 0.0) return reject("cp_std[" + std::to_string(i) + "] < 0");
@@ -543,7 +828,7 @@ bool GnssSppNode::is_valid_obs_msg(const gnss_comm::msg::GnssObsMsg &msg, std::s
         if (msg.dopp_std[i] < 0.0) return reject("dopp_std[" + std::to_string(i) + "] < 0");
 
         // 检查 status bit_0（伪距有效位）
-        bool psr_valid = (msg.status[i] & 0x01) != 0;
+        // bool psr_valid = (msg.status[i] & 0x01) != 0;
         // if (!psr_valid) continue;
         
         // 伪距值应在合理范围：约 20,000 km ~ 30,000 km 的轨道对应
