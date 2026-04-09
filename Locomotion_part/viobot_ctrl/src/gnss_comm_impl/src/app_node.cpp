@@ -28,6 +28,17 @@ void GnssSppNode::publish_bridge_diagnostics(const gnss_comm_impl::StereoYawBrid
     pub_bridge_diag_->publish(msg);
 }
 
+Eigen::Vector3d GnssSppNode::apply_gnss_initial_calibration(const Eigen::Vector3d &ecef_pos) const
+{
+    if (gnss_initial_calibration_enu_.isZero(0.0)) {
+        return ecef_pos;
+    }
+
+    const Eigen::Vector3d geo_pos = gnss_comm::ecef2geo(ecef_pos);
+    const Eigen::Matrix3d R_enu2ecef = gnss_comm::geo2rotation(geo_pos);
+    return ecef_pos + R_enu2ecef * gnss_initial_calibration_enu_;
+}
+
 void GnssSppNode::ephem_callback(const gnss_comm::msg::GnssEphemMsg::ConstSharedPtr msg)
 {
     auto clock = this->get_clock();
@@ -170,13 +181,15 @@ void GnssSppNode::meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPt
 
     Eigen::Vector3d ecef_pos = spp_result.head<3>();
 
-    if (!ecef_pos.allFinite())
+    const Eigen::Vector3d corrected_ecef_pos = apply_gnss_initial_calibration(ecef_pos);
+
+    if (!corrected_ecef_pos.allFinite())
     {
         RCLCPP_WARN_THROTTLE(logger, *clock, 2000, "SPP returned non-finite ECEF position");
         return;
     }
 
-    const double ecef_norm = ecef_pos.norm();
+    const double ecef_norm = corrected_ecef_pos.norm();
     if (ecef_norm < MIN_EARTH_RADIUS || ecef_norm > MAX_EARTH_RADIUS)
     {
         RCLCPP_WARN_THROTTLE(logger, *clock, 2000,
@@ -184,7 +197,7 @@ void GnssSppNode::meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPt
         return;
     }
 
-    Eigen::Vector3d geo_pos = gnss_comm::ecef2geo(ecef_pos);
+    Eigen::Vector3d geo_pos = gnss_comm::ecef2geo(corrected_ecef_pos);
 
     const double lat_deg = geo_pos[0];
     const double lon_deg = geo_pos[1];
@@ -196,7 +209,7 @@ void GnssSppNode::meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPt
         return;
     }
 
-    yaw_bridge_.set_latest_raw_ecef(ecef_pos, this->now().seconds());
+    yaw_bridge_.set_latest_raw_ecef(corrected_ecef_pos, this->now().seconds());
 
     RCLCPP_INFO_THROTTLE(logger, *clock, 2000,
                             "SPP Succeeded | Lat: %.8f, Lon: %.8f, Alt: %.2f m | Sats: %zu",
@@ -228,7 +241,7 @@ void GnssSppNode::meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPt
     if (is_algo_running_ && !is_origin_set_) {
 
         // 首先使用滑动窗口确认SPP是否稳定
-        init_ecef_buffer_.push_back(ecef_pos);
+        init_ecef_buffer_.push_back(corrected_ecef_pos);
         if (init_ecef_buffer_.size() > INIT_WINDOW_SIZE) init_ecef_buffer_.pop_front();
 
         // 评估稳定性

@@ -40,9 +40,17 @@ public:
         const double yaw_update_gain = this->declare_parameter<double>("yaw_bridge.update_gain", 0.03);
         const double yaw_max_step_deg = this->declare_parameter<double>("yaw_bridge.max_step_deg", 2.0);
         const double yaw_max_innovation_deg = this->declare_parameter<double>("yaw_bridge.max_innovation_deg", 25.0);
+        const std::vector<double> gnss_initial_calibration_enu = this->declare_parameter<std::vector<double>>("gnss.initial_calibration_enu", std::vector<double>{0.0, 0.0, 0.0});
 
         enable_bridge_diagnostics_ = this->declare_parameter<bool>("diagnostics.enable_bridge", false);
         bridge_diag_topic_ = this->declare_parameter<std::string>("diagnostics.bridge_topic", "/baton/gnss/bridge_diagnostics");
+
+        if (gnss_initial_calibration_enu.size() == 3) {
+            gnss_initial_calibration_enu_ = Eigen::Vector3d(gnss_initial_calibration_enu[0], gnss_initial_calibration_enu[1], gnss_initial_calibration_enu[2]);
+        } else {
+            RCLCPP_WARN(this->get_logger(), "gnss.initial_calibration_enu must have 3 elements, falling back to [0, 0, 0]");
+            gnss_initial_calibration_enu_.setZero();
+        }
 
 
         gnss_comm_impl::StereoYawBridge::Config yaw_cfg;
@@ -119,6 +127,7 @@ private:
     bool is_valid_ephem_msg(const gnss_comm::msg::GnssEphemMsg &msg, std::string *reason);
     bool is_valid_obs_msg(const gnss_comm::msg::GnssObsMsg &msg, std::string *reason);
     void cleanup_ephem_callback();
+    Eigen::Vector3d apply_gnss_initial_calibration(const Eigen::Vector3d &ecef_pos) const;
 
     rclcpp::Subscription<gnss_comm::msg::GnssEphemMsg>::SharedPtr sub_ephem_;
     rclcpp::Subscription<gnss_comm::msg::GnssMeasMsg>::SharedPtr  sub_meas_;
@@ -155,6 +164,7 @@ private:
     gnss_comm_impl::StereoYawBridge yaw_bridge_;
     bool enable_bridge_diagnostics_ = false;
     std::string bridge_diag_topic_;
+    Eigen::Vector3d gnss_initial_calibration_enu_{0.0, 0.0, 0.0};
 
     Eigen::Vector3d origin_ecef_{0.0, 0.0, 0.0};
     Eigen::Vector3d origin_lla_{0.0, 0.0, 0.0};

@@ -19,6 +19,7 @@ def generate_launch_description():
                 'yaw_bridge.update_gain': 0.03,
                 'yaw_bridge.max_step_deg': 2.0,
                 'yaw_bridge.max_innovation_deg': 25.0,
+                'gnss.initial_calibration_enu': [0.0, -10.0, 0.0], # [m] (East, North, Up)
                 'diagnostics.enable_bridge': False,
                 'diagnostics.bridge_topic': '/baton/gnss/bridge_diagnostics',
             }]
