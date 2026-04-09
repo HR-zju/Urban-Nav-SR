@@ -1001,6 +1001,12 @@ def parse_args():
         dest="record_video",
         help="Disable MP4 video recording (AsyncVideoWriter)",
     )
+    parser.add_argument(
+        "--targets",
+        type=str,
+        default="odom_poses.txt",
+        help="Path to target poses file (default: odom_poses.txt)",
+    )
     return parser.parse_args()
 
 
@@ -1030,7 +1036,9 @@ def main():
         providers = ["CPUExecutionProvider"]
         provider_options = [{}]
 
-    print(f"[onnx] loading model from {args.onnx} with providers {providers}")
+    print(
+        f"[onnx] loading model from {args.onnx} with providers {providers}"
+    )
     session = ort.InferenceSession(
         args.onnx,
         providers=providers,
@@ -1040,7 +1048,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[device] using {device}")
 
-    target_xy = load_target_positions_from_file()
+    target_xy = load_target_positions_from_file(args.targets)
     print(f"[target] loaded {len(target_xy)} target positions: {target_xy}")
 
     # Async video writer: record overlay MP4 unless explicitly disabled.
@@ -1052,7 +1060,8 @@ def main():
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         out_path = os.path.join(out_dir, f"realsense_navflow_overlay_{ts}.mp4")
         print(
-            f"[overlay] enabling AsyncVideoWriter at {out_path}, fps={args.output_fps}"
+            "[overlay] enabling AsyncVideoWriter at {}", out_path,
+            f"fps={args.output_fps}"
         )
         async_writer = AsyncVideoWriter(out_path, args.output_fps, fourcc)
         async_writer.start()

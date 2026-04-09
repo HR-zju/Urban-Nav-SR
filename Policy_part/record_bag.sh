@@ -28,8 +28,8 @@ tmux select-layout tiled
 # Run the realsense2 launch command in the first pane
 tmux select-pane -t 0
 tmux send-keys "tmux set -g mouse on" Enter
-tmux send-keys "sudo nvidia-smi -pm 1" Enter
-tmux send-keys "sudo nvidia-smi -pl 100" Enter
+# tmux send-keys "sudo nvidia-smi -pm 1" Enter
+# tmux send-keys "sudo nvidia-smi -pl 100" Enter
 tmux send-keys "docker start ros1toros2" Enter
 tmux send-keys "docker exec -it ros1toros2 zsh" Enter
 sleep 1
