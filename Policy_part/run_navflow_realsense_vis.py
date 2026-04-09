@@ -938,7 +938,7 @@ class RealSenseNavflowNode(Node):
         self.get_logger().info(
             f"waypoint (x,y) = {wp_list[0][-1][1], -wp_list[0][-1][0]}"
         )
-        if wp_list[0][-1][1] > 0.1:
+        if wp_list[0][-1][1] > 0.12:
             tmp_list = []
             for i in range(0, len(wp_list[0]), 2):
                 tmp_list += [wp_list[0][i][1]]
