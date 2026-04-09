@@ -82,7 +82,7 @@ def load_function_from_file(filepath: str, func_name: str):
 
 # Resolve path to vis_gt_single_gt.py from tools/ directory
 _REPO_ROOT = os.path.dirname(os.path.dirname(__file__))
-_VIS_FILE = os.path.join(_REPO_ROOT, "vis_gt_single_gt.py")
+_VIS_FILE = os.path.join(_REPO_ROOT, "Policy_part", "tools", "vis_gt_single_gt.py")
 project_waypoints_to_fisheye_image_with_polygon_new = load_function_from_file(
     _VIS_FILE, "project_waypoints_to_fisheye_image_with_polygon_new"
 )
@@ -1047,7 +1047,7 @@ def main():
     async_writer = None
     if getattr(args, "record_video", True):
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        out_dir = os.path.join(_REPO_ROOT, "overlay")
+        out_dir = os.path.join(_REPO_ROOT, "Policy_part", "vis", "overlay")
         os.makedirs(out_dir, exist_ok=True)
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         out_path = os.path.join(out_dir, f"realsense_navflow_overlay_{ts}.mp4")

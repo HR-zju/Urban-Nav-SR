@@ -294,14 +294,14 @@ class PDController(Node):
 
     def timer_callback(self):
         if not self.flag:
-        msg2 = Bool()
-        msg2.data = False
-        self.cmd_enable_pub.publish(msg2)
-        
-        # force stop the robot immediately
-        stop_vel = Twist()
-        self.vel_pub.publish(stop_vel)
-        return 
+            msg2 = Bool()
+            msg2.data = False
+            self.cmd_enable_pub.publish(msg2)
+            
+            # force stop the robot immediately
+            stop_vel = Twist()
+            self.vel_pub.publish(stop_vel)
+            return 
 
         v, w = 0.0, 0.0
         x_stop = False
