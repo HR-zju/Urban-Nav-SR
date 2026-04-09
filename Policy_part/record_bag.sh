@@ -1,7 +1,8 @@
 #!/bin/zsh
 # notice running this script out of docker container, and running ./record_bag.sh <bag_name> 
 # Create a new tmux session
-session_name="record_bag_$(date +%s)"
+session_name="foundation_policy_record"
+tmux kill-session -t $session_name 2>/dev/null
 tmux new-session -d -s $session_name
 
 # Split the window into 6 panes
