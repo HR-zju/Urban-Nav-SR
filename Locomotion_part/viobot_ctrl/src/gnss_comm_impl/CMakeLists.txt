@@ -12,6 +12,7 @@ endif()
 # 查找 ROS 2 核心及接口依赖
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(gnss_comm REQUIRED)
 find_package(nav_msgs REQUIRED)
@@ -23,6 +24,7 @@ find_package(glog REQUIRED)
 
 set(SOURCE_FILES
   src/app_node.cpp
+  src/stereo_yaw_bridge.cpp
   src/gnss_ros.cpp
   src/gnss_spp.cpp
   src/gnss_utility.cpp
@@ -44,6 +46,7 @@ target_link_libraries(app_node
 
 ament_target_dependencies(app_node
   rclcpp
+  std_msgs
   sensor_msgs
   gnss_comm
   nav_msgs
@@ -52,6 +55,10 @@ ament_target_dependencies(app_node
 
 install(TARGETS app_node
   DESTINATION lib/${PROJECT_NAME}
+)
+
+install(DIRECTORY launch
+  DESTINATION share/${PROJECT_NAME}
 )
 
 # install(DIRECTORY include/

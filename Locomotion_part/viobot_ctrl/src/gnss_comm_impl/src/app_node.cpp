@@ -1,5 +1,7 @@
 #include "gnss_comm_impl/app_node.hpp"
 
+#include <sstream>
+
 int main(int argc, char **argv)
 {
     rclcpp::init(argc, argv);
@@ -7,6 +9,23 @@ int main(int argc, char **argv)
     rclcpp::spin(node);
     rclcpp::shutdown();
     return 0;
+}
+
+void GnssSppNode::publish_bridge_diagnostics(const gnss_comm_impl::StereoYawBridge::UpdateResult &result)
+{
+    if (!enable_bridge_diagnostics_ || !pub_bridge_diag_) return;
+
+    std_msgs::msg::String msg;
+    std::ostringstream oss;
+    oss << "calibrated=" << (result.calibrated ? 1 : 0)
+        << ",samples=" << result.calib_samples
+        << ",gnss_fresh=" << (result.gnss_fresh ? 1 : 0)
+        << ",used_new_gnss=" << (result.used_new_gnss ? 1 : 0)
+        << ",has_measurement=" << (result.has_measurement ? 1 : 0)
+        << ",reject_count=" << result.reject_count
+        << ",yaw_deg=" << result.yaw_offset_rad * 180.0 / M_PI;
+    msg.data = oss.str();
+    pub_bridge_diag_->publish(msg);
 }
 
 void GnssSppNode::ephem_callback(const gnss_comm::msg::GnssEphemMsg::ConstSharedPtr msg)
@@ -177,6 +196,8 @@ void GnssSppNode::meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPt
         return;
     }
 
+    yaw_bridge_.set_latest_raw_ecef(ecef_pos, this->now().seconds());
+
     RCLCPP_INFO_THROTTLE(logger, *clock, 2000,
                             "SPP Succeeded | Lat: %.8f, Lon: %.8f, Alt: %.2f m | Sats: %zu",
                             lat_deg, lon_deg, alt, robust_obs.size());
@@ -235,6 +256,7 @@ void GnssSppNode::meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPt
                 origin_lla_  = gnss_comm::ecef2geo(origin_ecef_);
                 R_enu2ecef_  = gnss_comm::geo2rotation(origin_lla_);
                 is_origin_set_ = true;
+                yaw_bridge_.set_origin(origin_ecef_, R_enu2ecef_);
                 
                 RCLCPP_INFO(this->get_logger(), 
                     "Fusion Origin Set Securely! StdDev: %.2f m. LLA: [%.8f, %.8f, %.2f]", 
@@ -262,6 +284,8 @@ void GnssSppNode::algo_status_callback(const system_ctrl::msg::AlgoStatus::Const
         // reset origin
         is_origin_set_ = false;
         init_ecef_buffer_.clear();
+        yaw_bridge_.reset();
+        yaw_bridge_.clear_raw_gnss();
         
     }
 }
@@ -275,11 +299,40 @@ void GnssSppNode::odom_callback(const nav_msgs::msg::Odometry::ConstSharedPtr ms
     double y = msg->pose.pose.position.y;
     double z = msg->pose.pose.position.z;
 
-    // ENU mapping from ROS base_link (X forward, Y left, Z up) if initial yaw=0 points North
-    double enu_e = -y;
-    double enu_n = x;
-    double enu_u = z;
-    Eigen::Vector3d enu_pos(enu_e, enu_n, enu_u);
+    // Stereo odom is relative to its initial frame, first map it to a pseudo-ENU frame.
+    Eigen::Vector3d enu_pos_raw(-y, x, z);
+
+    const auto yaw_result = yaw_bridge_.update(enu_pos_raw, this->now().seconds());
+    publish_bridge_diagnostics(yaw_result);
+
+    if (!yaw_result.calibrated)
+    {
+        // Detailed diagnostics for failed measurement
+        if (yaw_result.used_new_gnss && !yaw_result.has_measurement) {
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 3000,
+                "Measuring yaw failed: baseline too short. odom=[%.3f,%.3f,%.3f] m (norm=%.3f), "
+                "check if enough distance traveled or GNSS position updated",
+                x, y, z, enu_pos_raw.head(2).norm());
+        } else {
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 3000,
+                "Calibrating stereo yaw... samples=%d, gnss_fresh=%d, used_new_gnss=%d, has_meas=%d",
+                yaw_result.calib_samples,
+                yaw_result.gnss_fresh ? 1 : 0,
+                yaw_result.used_new_gnss ? 1 : 0,
+                yaw_result.has_measurement ? 1 : 0);
+        }
+        return;
+    }
+
+    if (yaw_result.used_new_gnss && yaw_result.reject_count > 0)
+    {
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 3000,
+            "Yaw update rejected. reject_count=%d, yaw_offset=%.2f deg",
+            yaw_result.reject_count,
+            yaw_result.yaw_offset_rad * 180.0 / M_PI);
+    }
+
+    const Eigen::Vector3d enu_pos = yaw_bridge_.rotate_raw_to_enu(enu_pos_raw);
 
     // Transform relatively to ECEF
     Eigen::Vector3d delta_ecef = R_enu2ecef_ * enu_pos;
@@ -676,7 +729,7 @@ bool GnssSppNode::is_valid_ephem_msg(const gnss_comm::msg::GnssEphemMsg &msg, st
 
     // 2. 检查卫星系统是否支持
     uint32_t sys = gnss_comm::satsys(msg.sat, nullptr);
-    if (sys != SYS_GPS && sys != SYS_GAL && sys != SYS_BDS) return reject("unsupported satellite system for ephem (sat=" + std::to_string(msg.sat) + ")");
+    if (sys != SYS_GPS && sys != SYS_GLO && sys != SYS_GAL && sys != SYS_BDS) return reject("unsupported satellite system for ephem (sat=" + std::to_string(msg.sat) + ")");
 
     // 3. GPS 周数合理性 (GPS rollover: week 大约在 1024 ~ 4096 范围)
     if (msg.week == 0 || msg.week > 4096) return reject("week out of range: " + std::to_string(msg.week));
@@ -738,7 +791,7 @@ bool GnssSppNode::is_valid_obs_msg(const gnss_comm::msg::GnssObsMsg &msg, std::s
     // 2. 检查卫星系统是否支持
     uint32_t sys = gnss_comm::satsys(msg.sat, nullptr);
     if (sys != SYS_GPS && sys != SYS_GLO && sys != SYS_GAL && sys != SYS_BDS) return reject("unsupported satellite system (sat=" + std::to_string(msg.sat) + ")");
-
+        
     // 3. 观测时间有效性
     if (msg.time.week == 0) return reject("time.week == 0");
     if (msg.time.tow < 0.0 || msg.time.tow > WEEK_SECONDS) return reject("time.tow out of range: " + std::to_string(msg.time.tow));
