@@ -3,16 +3,16 @@
 
 
 # 环境变量
-source /home/mayukai/miniconda3/etc/profile.d/conda.sh
-source /opt/ros/humble/setup.bash
-bash kill_tmux.sh
-bash run_ros_pub.sh go2
-bash run_ros_pub.sh coco
+# source /home/mayukai/miniconda3/etc/profile.d/conda.sh
+# source /opt/ros/humble/setup.bash
+# bash kill_tmux.sh
+# bash run_ros_pub.sh go2
+# bash run_ros_pub.sh coco
 
 
-conda activate vint_deployment
-cd visualnav_ros/deployment/src
-python create_topomap_ros2.py --distance-threshold 2
+# conda activate vint_deployment
+# cd visualnav_ros/deployment/src
+python tools/create_topomap_ros2.py -distance-threshold 2.0
 
 # conda activate vint_deployment
 # cd CityWalker/

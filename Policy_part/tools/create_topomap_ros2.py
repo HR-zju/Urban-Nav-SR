@@ -1,7 +1,7 @@
 import argparse
 import os
 import time
-from utils import msg_to_pil
+from tools.utils import msg_to_pil
 import atexit
 from nav_msgs.msg import Odometry
 import math
@@ -12,10 +12,11 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image, Joy
 import threading
 import datetime
+import shutil
 
 # IMAGE_TOPIC = "/usb_cam/image_raw"
-IMAGE_TOPIC = "/camera/image"
-TOPOMAP_IMAGES_DIR = "../topomaps/images"
+IMAGE_TOPIC = "/camera/camera/color/image_raw/compressed"
+TOPOMAP_IMAGES_DIR = "topomaps/images"
 
 
 def remove_files_in_dir(dir_path: str):
@@ -51,8 +52,9 @@ class CreateTopomapNode(Node):
         # 创建定时器
         self.timer = self.create_timer(args.dt, self.timer_callback)
 
-        # 创建拓扑图目录
-        self.topomap_name_dir = os.path.join(TOPOMAP_IMAGES_DIR, args.dir)
+        # 创建拓扑图目录（可以通过命令行参数覆盖默认目录）
+        images_base = getattr(args, "images_dir", TOPOMAP_IMAGES_DIR)
+        self.topomap_name_dir = os.path.join(images_base, args.dir)
         if not os.path.isdir(self.topomap_name_dir):
             os.makedirs(self.topomap_name_dir)
         else:
@@ -69,7 +71,7 @@ class CreateTopomapNode(Node):
         # 创建订阅者
         self.odom_sub = self.create_subscription(
             Odometry,
-            '/utlidar/robot_odom',
+            '/mfla/dr_odom',
             self.odom_callback,
             100
         )
@@ -150,12 +152,22 @@ class CreateTopomapNode(Node):
             self.get_logger().info("No poses to save.")
             return
         
-        # 原始文件名
-        original_filename = "/home/mayukai/code/CityWalker/odom_poses.txt"
-        
-        # 带时间戳的文件名
+        # 使用命令行参数指定输出目录和文件名（避免硬编码路径）
+        output_base = getattr(self.args, "output_dir", "/home/zjy/code/myk/Urban-Nav-SR/Policy_part/CityWalker/")
+        poses_basename = getattr(self.args, "poses_filename", "odom_poses.txt")
+
+        # 原始文件名（在 output_base 下）
+        original_filename = os.path.join(output_base, poses_basename)
+
+        # 带时间戳的文件名，放在 output_base/logs/
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        timestamped_filename = f"/home/mayukai/code/logs/odom_{timestamp}.txt"
+        logs_dir = os.path.join(output_base, "logs")
+        if not os.path.isdir(logs_dir):
+            try:
+                os.makedirs(logs_dir, exist_ok=True)
+            except Exception:
+                pass
+        timestamped_filename = os.path.join(logs_dir, f"odom_{timestamp}.txt")
         
         try:
             # 写入原始文件
@@ -210,6 +222,25 @@ if __name__ == "__main__":
     )
     parser.add_argument('--distance-threshold', type=float, default=3.0,
                     help='Distance threshold in meters to trigger pose saving (default: 3.0)')
+
+    parser.add_argument(
+        "--images-dir",
+        type=str,
+        default=TOPOMAP_IMAGES_DIR,
+        help=f"Base directory to save topomap images (default: {TOPOMAP_IMAGES_DIR})",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default='.',
+        help="Base output directory for pose files and logs (default: current directory)",
+    )
+    parser.add_argument(
+        "--poses-filename",
+        type=str,
+        default='odom_poses.txt',
+        help="Filename for the main poses file (default: odom_poses.txt)",
+    )
 
     args = parser.parse_args()
 
