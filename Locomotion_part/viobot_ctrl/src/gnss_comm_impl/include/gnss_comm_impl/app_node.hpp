@@ -12,6 +12,7 @@
 #include <deque>
 
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
+#include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <gnss_comm/msg/gnss_ephem_msg.hpp>
 #include <gnss_comm/msg/gnss_meas_msg.hpp>
@@ -42,6 +43,7 @@ public:
 
         enable_bridge_diagnostics_ = this->declare_parameter<bool>("diagnostics.enable_bridge", false);
         bridge_diag_topic_ = this->declare_parameter<std::string>("diagnostics.bridge_topic", "/baton/gnss/bridge_diagnostics");
+
 
         gnss_comm_impl::StereoYawBridge::Config yaw_cfg;
         yaw_cfg.min_samples = std::max(1, yaw_min_samples);
@@ -82,6 +84,10 @@ public:
         
         pub_spp_fix_ = this->create_publisher<sensor_msgs::msg::NavSatFix>(
             "/baton/gnss/spp_fix", 10);
+
+        
+        pub_heading_ = this->create_publisher<std_msgs::msg::Float64>(
+            "/baton/gnss/heading", 10);
         
         // 创建定时器，每隔一小时执行一次清理
         cleanup_timer_ = this->create_wall_timer(
@@ -122,6 +128,7 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr     pub_spp_fix_raw_;
     rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr     pub_spp_fix_;
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr           pub_bridge_diag_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr          pub_heading_;
 
     rclcpp::TimerBase::SharedPtr cleanup_timer_;
     std::mutex ephem_mutex_; // 保护 ephem_map_

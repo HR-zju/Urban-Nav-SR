@@ -69,4 +69,6 @@ This project contains the **Viobot Control** (`viobot_ctrl`) and **GNSS SPP Node
 - [x] Refactor and separate ROS 2 node code
 - [x] Fuse stereo3 odometry and GNSS SPP outputs
 - [ ] Collect data and perform field testing
-- [ ] Test Euler angle output of stereo3
+- [x] Test Euler angle output of stereo3
+- [ ] Heading estimation using stereo3 and GNSS SPP
+- [ ] Migrate to Viobot2 platform

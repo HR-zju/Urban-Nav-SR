@@ -111,9 +111,6 @@ bool StereoYawBridge::compute_yaw_measurement(const Eigen::Vector3d &enu_pos_raw
     const double gnss_norm = gnss_2d.norm();
     if (odom_norm < cfg_.min_baseline_m || gnss_norm < cfg_.min_baseline_m)
     {
-        // Debug: Print why measurement failed
-        // std::printf("[YawBridge] Baseline too short: odom=%.3f m (min=%.3f), gnss=%.3f m (min=%.3f)\n",
-        //            odom_norm, cfg_.min_baseline_m, gnss_norm, cfg_.min_baseline_m);
         return false;
     }
 

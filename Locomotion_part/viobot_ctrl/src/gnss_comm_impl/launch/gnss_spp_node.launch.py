@@ -19,7 +19,7 @@ def generate_launch_description():
                 'yaw_bridge.update_gain': 0.03,
                 'yaw_bridge.max_step_deg': 2.0,
                 'yaw_bridge.max_innovation_deg': 25.0,
-                'diagnostics.enable_bridge': True,
+                'diagnostics.enable_bridge': False,
                 'diagnostics.bridge_topic': '/baton/gnss/bridge_diagnostics',
             }]
         )

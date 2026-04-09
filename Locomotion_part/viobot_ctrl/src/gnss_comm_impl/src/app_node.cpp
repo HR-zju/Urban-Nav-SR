@@ -332,6 +332,25 @@ void GnssSppNode::odom_callback(const nav_msgs::msg::Odometry::ConstSharedPtr ms
             yaw_result.yaw_offset_rad * 180.0 / M_PI);
     }
 
+    const auto &q = msg->pose.pose.orientation;
+    const double siny_cosp = 2.0 * (q.w * q.z + q.x * q.y);
+    const double cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z);
+    const double yaw_rel = std::atan2(siny_cosp, cosy_cosp);
+
+    const double e_raw_fwd = -std::sin(yaw_rel);
+    const double n_raw_fwd = std::cos(yaw_rel);
+    const double c = std::cos(yaw_result.yaw_offset_rad);
+    const double s = std::sin(yaw_result.yaw_offset_rad);
+    const double e_fwd = c * e_raw_fwd - s * n_raw_fwd;
+    const double n_fwd = s * e_raw_fwd + c * n_raw_fwd;
+
+    double heading_deg = std::atan2(e_fwd, n_fwd) * 180.0 / M_PI;
+    if (heading_deg < 0.0) heading_deg += 360.0;
+
+    std_msgs::msg::Float64 heading_msg;
+    heading_msg.data = heading_deg;
+    pub_heading_->publish(heading_msg);
+
     const Eigen::Vector3d enu_pos = yaw_bridge_.rotate_raw_to_enu(enu_pos_raw);
 
     // Transform relatively to ECEF
