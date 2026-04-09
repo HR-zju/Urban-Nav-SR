@@ -18,6 +18,8 @@ public:
         double update_gain = 0.03;
         double max_step_rad = 2.0 * PI / 180.0;
         double max_innovation_rad = 25.0 * PI / 180.0;
+        double hard_reject_rad = 120.0 * PI / 180.0;
+        int max_reject_before_rebootstrap = 30;
     };
 
     struct UpdateResult
@@ -44,7 +46,7 @@ public:
 
 private:
     double normalize_angle(double rad) const;
-    bool compute_yaw_measurement(const Eigen::Vector3d &enu_pos_raw, double *yaw_meas) const;
+    bool compute_yaw_measurement(const Eigen::Vector3d &enu_pos_raw, double *yaw_meas);
     void update_yaw_offset_with_measurement(double yaw_meas);
 
 private:
@@ -62,6 +64,9 @@ private:
     double yaw_sin_sum_ = 0.0;
     double yaw_cos_sum_ = 0.0;
     double latest_raw_stamp_sec_ = 0.0;
+    bool has_motion_anchor_ = false;
+    Eigen::Vector2d anchor_odom_2d_{Eigen::Vector2d::Zero()};
+    Eigen::Vector2d anchor_gnss_enu_2d_{Eigen::Vector2d::Zero()};
 
     Eigen::Vector3d latest_raw_ecef_{0.0, 0.0, 0.0};
     Eigen::Vector3d origin_ecef_{0.0, 0.0, 0.0};
