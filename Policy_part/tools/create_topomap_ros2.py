@@ -172,13 +172,14 @@ class CreateTopomapNode(Node):
         try:
             # 写入原始文件
             with open(original_filename, 'w') as f:
-                f.write("x,y,z,qw,qx,qy,qz\n")  # 写入标题行
+                # header matches the order written below: x,y,z,qx,qy,qz,qw
+                f.write("x,y,z,qx,qy,qz,qw\n")  # 写入标题行
                 for pose in self.poses:
                     f.write(f"{pose.position.x},{pose.position.y},{pose.position.z},{pose.orientation.x},{pose.orientation.y},{pose.orientation.z},{pose.orientation.w}\n")
             
             # 写入带时间戳的文件
             with open(timestamped_filename, 'w') as f:
-                f.write("x,y,z,qw,qx,qy,qz\n")  # 写入标题行
+                f.write("x,y,z,qx,qy,qz,qw\n")  # 写入标题行
                 for pose in self.poses:
                     f.write(f"{pose.position.x},{pose.position.y},{pose.position.z},{pose.orientation.x},{pose.orientation.y},{pose.orientation.z},{pose.orientation.w}\n")
             
