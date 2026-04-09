@@ -53,7 +53,9 @@ tmux send-keys "docker exec -it ros1toros2 zsh" Enter
 sleep 1
 tmux send-keys "mamba activate foundation_policy" Enter
 tmux send-keys "cd /home/nuvo/SR/foundation-policy" Enter
-tmux send-keys "python test_nav_flow_il_realsense.py" Enter
+tmux send-keys "python3 tools/run_navflow_realsense_vis.py \
+  --onnx onnx_ckpts/s1_ours_coco_sft_stage2_goal_less.onnx \ 
+  --no_record_video" Enter
 
 
 # run teleop in the fourth pane
