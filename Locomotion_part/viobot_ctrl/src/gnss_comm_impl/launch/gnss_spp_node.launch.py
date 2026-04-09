@@ -1,27 +1,29 @@
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from ament_index_python.packages import get_package_share_directory
+import os
 
 
 def generate_launch_description():
+    default_params_file = os.path.join(
+        get_package_share_directory('gnss_comm_impl'),
+        'config',
+        'gnss_spp_node.yaml'
+    )
+
     return LaunchDescription([
+        DeclareLaunchArgument(
+            'params_file',
+            default_value=default_params_file,
+            description='Path to ROS2 parameters YAML file for gnss_spp_node'
+        ),
         Node(
             package='gnss_comm_impl',
             executable='app_node',
             name='gnss_spp_node',
             output='screen',
-            parameters=[{
-                'enable_kml_export': True,
-                'kml_directory': '/home/symc/data/kml',
-                'kml_raw_directory': '/home/symc/data/kml_raw',
-                'yaw_bridge.min_samples': 5,
-                'yaw_bridge.min_baseline_m': 2.0,
-                'yaw_bridge.gnss_stale_sec': 1.5,
-                'yaw_bridge.update_gain': 0.03,
-                'yaw_bridge.max_step_deg': 2.0,
-                'yaw_bridge.max_innovation_deg': 25.0,
-                'gnss.initial_calibration_enu': [0.0, -10.0, 0.0], # [m] (East, North, Up)
-                'diagnostics.enable_bridge': False,
-                'diagnostics.bridge_topic': '/baton/gnss/bridge_diagnostics',
-            }]
+            parameters=[LaunchConfiguration('params_file')]
         )
     ])
