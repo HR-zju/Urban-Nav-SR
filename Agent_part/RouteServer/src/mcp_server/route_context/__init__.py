@@ -18,6 +18,7 @@ from .schema import (
     prompt_proposal_bundle_to_dict,
     route_context_to_dict,
     route_state_to_dict,
+    visual_prompt_decision_to_dict,
     visual_region_bundle_to_dict,
 )
 from .visual_region_extractor import extract_visual_regions
@@ -114,6 +115,7 @@ __all__ = [
     "prompt_proposal_bundle_to_dict",
     "route_context_to_dict",
     "route_state_to_dict",
+    "visual_prompt_decision_to_dict",
     "extract_visual_regions",
     "visual_region_bundle_to_dict",
 ]

@@ -276,6 +276,41 @@ pip install -e ".[macos]"
     - TemporalRefine
     - teacher dataset logging
 
+- `run_zero_shot_visual_prompt_agent`
+  - 输入：
+    - `RouteContext` 所需字段
+    - `LocalBEVContext` 所需字段
+    - `image_path` 或 `image_url`
+  - 输出：
+    - `prompt_proposals`
+    - `visual_regions`
+    - `pov_prompt_candidates`
+    - `arbiter_decision`
+    - `selected_candidate`
+  - 工作方式：
+    - 先生成 RGB-aware PoV candidates
+    - 再调用多模态 LLM 在候选中做裁决
+  - 如果 LLM 超时、返回非法 JSON、选择了不存在的 candidate，或拒绝全部候选
+      则自动退回 rule-based fallback
+
+- `run_zero_shot_direct_arrow_agent`
+  - 输入：
+    - `RouteContext` 所需字段
+    - `image_path` 或 `image_url`
+  - 输出：
+    - `direct_decision`
+    - `rendered_prompt`
+  - 这是 direct-arrow baseline：
+    - 让 LVLM 直接生成一个 visual prompt
+    - 仍然读取 route context 和 visual regions
+    - 如果输出非法或不稳定，则退回结构化 candidate fallback
+
+- `compare_zero_shot_agents`
+  - 同时运行：
+    - `run_zero_shot_direct_arrow_agent`
+    - `run_zero_shot_visual_prompt_agent`
+  - 输出两边的决策结果和简洁对比摘要
+
 - `render_bev_route_snapshot`
   - 仅在 `MAP_PROVIDER=amap` 下可用
   - 根据起终点和路线 polyline 生成高德静态 BEV 图 URL
@@ -581,6 +616,35 @@ pip install -e ".[macos]"
 推进到了：
 
 - `route-prior + RGB region-aware PoV candidates`
+
+### 1.11 Zero-shot Visual Prompt Agent
+
+当前新增的是 **zero-shot visual prompt agent v1**。
+
+它的设计原则不是让 LVLM 自由回归图像坐标，而是：
+
+1. 先生成一小组 `PoVPromptCandidateBundle v2`
+2. 再让 LVLM 只在这些候选中做选择
+3. 最后输出：
+   - `arbiter_decision`
+   - `selected_candidate`
+
+也就是说，这一层的核心是：
+
+- `RouteContext`
+- `BEV PromptProposal`
+- `RGB-aware PoV Prompt candidates`
+- `LVLM candidate arbitration`
+
+同时保留必要 fallback：
+
+- 如果 LLM 不可用
+- 如果 LLM 超时
+- 如果 LLM 返回非 JSON
+- 如果 LLM 选择了不存在的 candidate
+- 如果 LLM 直接 `reject_all`
+
+系统会自动退回规则排序，保证 zero-shot agent 始终能产出一个稳定的可用结果。
 
 ### 2. AMap 静态 BEV 图
 
@@ -948,6 +1012,61 @@ python examples/pov_prompt_projection_v2_client.py \
 - `pov_prompt_candidates_v2`
 
 一起保存给 `route_context_debugger.py` 做三联面板回放。
+
+### Zero-shot Visual Prompt Agent
+
+最直接的测试方法是运行：
+
+```bash
+python examples/zero_shot_visual_prompt_agent_client.py \
+  --prompt "我想去西湖" \
+  --lat 30.2645 \
+  --lon 120.1180 \
+  --mode foot \
+  --radius 3000 \
+  --heading-deg 35 \
+  --lookahead-m 20 \
+  --image-path /home/ubuntu/WorkSpace/dataset/urban.jpeg
+```
+
+它会先生成：
+
+- `RouteContext`
+- `PromptProposal v1`
+- `PromptProposal v2`
+
+然后再调用 zero-shot LVLM arbiter，并最终打印：
+
+- `arbiter_decision`
+- `selected_candidate`
+
+### Zero-shot Direct-Arrow Baseline
+
+最直接的测试方法是运行：
+
+```bash
+python examples/compare_zero_shot_agents.py \
+  --prompt "我想去西湖" \
+  --lat 30.2645 \
+  --lon 120.1180 \
+  --mode foot \
+  --radius 3000 \
+  --heading-deg 35 \
+  --lookahead-m 20 \
+  --image-path /home/ubuntu/WorkSpace/dataset/urban.jpeg
+```
+
+它会在同一帧上同时比较：
+
+- direct-arrow zero-shot baseline
+- candidate-arbiter zero-shot agent
+
+并输出两边的：
+
+- decision source
+- fallback usage
+- reject_all
+- rendered prompt / selected candidate
 
 ### 图像理解
 

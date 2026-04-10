@@ -1253,6 +1253,48 @@ async def analyze_local_image_with_llm(
     return result
 
 
+async def arbitrate_pov_candidates_with_llm(
+    *,
+    image_url: str,
+    question: str,
+    detail: str = "auto",
+    system_prompt: str | None = None,
+) -> dict[str, Any] | None:
+    result = await VisionAnalyzer().analyze(
+        image_url=image_url,
+        question=question,
+        detail=detail,
+        system_prompt=system_prompt,
+    )
+    answer = str(result.get("answer", "")).strip()
+    if not answer:
+        return None
+    parsed = _parse_json_object_from_text(answer)
+    parsed["_arbiter_provider"] = result.get("provider")
+    parsed["_arbiter_model"] = result.get("model")
+    parsed["_arbiter_api_style"] = result.get("api_style")
+    return parsed
+
+
+async def arbitrate_local_pov_candidates_with_llm(
+    *,
+    image_path: str,
+    question: str,
+    detail: str = "auto",
+    system_prompt: str | None = None,
+) -> dict[str, Any] | None:
+    data_url = local_image_path_to_data_url(image_path)
+    parsed = await arbitrate_pov_candidates_with_llm(
+        image_url=data_url,
+        question=question,
+        detail=detail,
+        system_prompt=system_prompt,
+    )
+    if parsed is not None:
+        parsed["_arbiter_image_path"] = str(Path(image_path).expanduser())
+    return parsed
+
+
 async def translate_instruction_for_cn_map(
     *,
     user_instruction: str,
@@ -1279,6 +1321,8 @@ __all__ = [
     "VisionAnalyzer",
     "analyze_image_with_llm",
     "analyze_local_image_with_llm",
+    "arbitrate_local_pov_candidates_with_llm",
+    "arbitrate_pov_candidates_with_llm",
     "extract_explicit_destination_query",
     "infer_destination_kind",
     "local_image_path_to_data_url",

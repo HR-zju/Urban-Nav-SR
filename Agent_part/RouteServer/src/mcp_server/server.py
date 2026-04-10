@@ -19,7 +19,24 @@ from urllib.parse import quote
 import aiohttp
 from mcp.server.fastmcp import Context, FastMCP
 
-from mcp_server.llm import analyze_image_with_llm, analyze_local_image_with_llm
+from mcp_server.brain import (
+    build_arbiter_question,
+    build_arbiter_system_prompt,
+    build_direct_prompt_question,
+    build_direct_prompt_system_prompt,
+    candidate_to_rendered_prompt,
+    coerce_arbiter_decision,
+    coerce_direct_prompt_decision,
+    rule_based_direct_prompt_decision,
+    rule_based_visual_prompt_decision,
+)
+from mcp_server.llm import (
+    analyze_image_with_llm,
+    analyze_local_image_with_llm,
+    arbitrate_local_pov_candidates_with_llm,
+    arbitrate_pov_candidates_with_llm,
+    local_image_path_to_data_url,
+)
 from mcp_server.macos_location import get_current_location
 from mcp_server.map_providers import (
     MapProviderClient,
@@ -43,6 +60,7 @@ from mcp_server.route_context import (
     prompt_proposal_bundle_to_dict,
     route_context_to_dict,
     route_state_to_dict,
+    visual_prompt_decision_to_dict,
     visual_region_bundle_to_dict,
 )
 
@@ -114,6 +132,223 @@ def _build_amap_staticmap_overlay_url(
 
     query = "&".join(f"{key}={value}" for key, value in params)
     return f"https://restapi.amap.com/v3/staticmap?{query}"
+
+
+def _image_href_for_overlay(*, image_path: Optional[str], image_url: Optional[str]) -> str:
+    if str(image_path or "").strip():
+        return local_image_path_to_data_url(str(image_path))
+    return str(image_url or "").strip()
+
+
+def _render_prompt_overlay_svg(
+    *,
+    image_href: str,
+    image_width: int,
+    image_height: int,
+    rendered_prompt: Dict[str, Any] | None,
+    title: str = "Visual Prompt Overlay",
+) -> str:
+    width = max(int(image_width), 32)
+    height = max(int(image_height), 32)
+    bg = (
+        f'<image href="{image_href}" x="0" y="0" width="{width}" height="{height}" preserveAspectRatio="xMidYMid slice" />'
+        if image_href
+        else f'<rect x="0" y="0" width="{width}" height="{height}" fill="#0f172a" />'
+    )
+    if not isinstance(rendered_prompt, dict):
+        return (
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">'
+            f"{bg}"
+            f'<rect x="0" y="0" width="{width}" height="{height}" fill="rgba(2,6,23,0.10)" />'
+            f'<text x="16" y="26" fill="#e2e8f0" font-size="14">{title}</text>'
+            f'<text x="{width/2:.1f}" y="{height/2:.1f}" text-anchor="middle" fill="#fca5a5" font-size="16">No rendered prompt</text>'
+            "</svg>"
+        )
+
+    prompt_type = str(rendered_prompt.get("type") or "arrow").strip().lower()
+    center = rendered_prompt.get("center_uv") or [width * 0.5, height * 0.55]
+    try:
+        cx = float(center[0])
+        cy = float(center[1])
+    except Exception:
+        cx = width * 0.5
+        cy = height * 0.55
+    span = max(float(rendered_prompt.get("span_px", 72.0) or 72.0), 16.0)
+    direction = rendered_prompt.get("direction_vec") or [0.0, -1.0]
+    try:
+        dx = float(direction[0])
+        dy = float(direction[1])
+    except Exception:
+        dx, dy = 0.0, -1.0
+    mask = rendered_prompt.get("mask")
+
+    anchor_x = width * 0.5
+    anchor_y = height * 0.94
+    label = str(rendered_prompt.get("semantic_tag") or prompt_type)
+
+    overlay_parts = [
+        f'<rect x="0" y="0" width="{width}" height="{height}" fill="rgba(2,6,23,0.06)" />',
+        f'<text x="16" y="26" fill="#e2e8f0" font-size="14">{title}</text>',
+    ]
+
+    if isinstance(mask, list) and len(mask) >= 3:
+        points = " ".join(
+            f"{float(point[0]):.1f},{float(point[1]):.1f}"
+            for point in mask
+            if isinstance(point, (list, tuple)) and len(point) == 2
+        )
+        if points:
+            overlay_parts.append(
+                f'<polygon points="{points}" fill="rgba(56,189,248,0.22)" stroke="#38bdf8" stroke-width="2" stroke-dasharray="6 4" />'
+            )
+
+    path_uv = rendered_prompt.get("path_uv")
+    valid_path = (
+        isinstance(path_uv, list)
+        and len(path_uv) >= 2
+        and all(isinstance(point, (list, tuple)) and len(point) == 2 for point in path_uv)
+    )
+
+    if prompt_type in {"arrow", "arrow_path"} and valid_path:
+        points = " ".join(f"{float(point[0]):.1f},{float(point[1]):.1f}" for point in path_uv)
+        overlay_parts.append(
+            f'<polyline points="{points}" fill="none" stroke="#f97316" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />'
+        )
+        end_x = float(path_uv[-1][0])
+        end_y = float(path_uv[-1][1])
+        prev_x = float(path_uv[-2][0])
+        prev_y = float(path_uv[-2][1])
+        vx = end_x - prev_x
+        vy = end_y - prev_y
+        norm = max((vx * vx + vy * vy) ** 0.5, 1e-6)
+        ux, uy = vx / norm, vy / norm
+        px, py = -uy, ux
+        ah = max(span * 0.16, 12.0)
+        ax1 = end_x - ux * ah - px * ah * 0.55
+        ay1 = end_y - uy * ah - py * ah * 0.55
+        ax2 = end_x - ux * ah + px * ah * 0.55
+        ay2 = end_y - uy * ah + py * ah * 0.55
+        overlay_parts.append(
+            f'<polygon points="{end_x:.1f},{end_y:.1f} {ax1:.1f},{ay1:.1f} {ax2:.1f},{ay2:.1f}" fill="#f97316" />'
+        )
+    elif prompt_type == "arrow":
+        overlay_parts.append(
+            f'<line x1="{anchor_x:.1f}" y1="{anchor_y:.1f}" x2="{cx:.1f}" y2="{cy:.1f}" stroke="#f97316" stroke-width="5" stroke-linecap="round" />'
+        )
+        norm = max((dx * dx + dy * dy) ** 0.5, 1e-6)
+        ux, uy = dx / norm, dy / norm
+        px, py = -uy, ux
+        ah = max(span * 0.16, 12.0)
+        ax1 = cx - ux * ah - px * ah * 0.55
+        ay1 = cy - uy * ah - py * ah * 0.55
+        ax2 = cx - ux * ah + px * ah * 0.55
+        ay2 = cy - uy * ah + py * ah * 0.55
+        overlay_parts.append(
+            f'<polygon points="{cx:.1f},{cy:.1f} {ax1:.1f},{ay1:.1f} {ax2:.1f},{ay2:.1f}" fill="#f97316" />'
+        )
+    elif prompt_type == "region":
+        overlay_parts.append(
+            f'<ellipse cx="{cx:.1f}" cy="{cy:.1f}" rx="{span * 0.55:.1f}" ry="{span * 0.32:.1f}" fill="rgba(168,85,247,0.18)" stroke="#a855f7" stroke-width="3" />'
+        )
+    else:
+        left_x = cx - span * 0.6
+        right_x = cx + span * 0.6
+        top_y = cy - span * 0.52
+        bottom_y = cy + span * 0.52
+        overlay_parts.append(
+            f'<polygon points="{anchor_x:.1f},{anchor_y:.1f} {left_x:.1f},{bottom_y:.1f} {cx:.1f},{top_y:.1f} {right_x:.1f},{bottom_y:.1f}" fill="rgba(56,189,248,0.22)" stroke="#38bdf8" stroke-width="3" />'
+        )
+
+    overlay_parts.extend(
+        [
+            f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="6" fill="#e2e8f0" />',
+            f'<text x="{cx + 10:.1f}" y="{cy - 10:.1f}" fill="#e2e8f0" font-size="13">{label}</text>',
+        ]
+    )
+
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">'
+        f"{bg}{''.join(overlay_parts)}</svg>"
+    )
+
+
+def _svg_to_data_url(svg: str) -> str:
+    return "data:image/svg+xml;utf8," + quote(svg, safe=":/?&=,+-_.!~*'()#% ")
+
+
+def _synthetic_prompt_proposals_from_context(route_context: Dict[str, Any]) -> List[Dict[str, Any]]:
+    local = route_context.get("local_semantics", {}) or {}
+    progress = route_context.get("progress", {}) or {}
+    pose_match = route_context.get("pose_match", {}) or {}
+    corridor = str(local.get("corridor_type") or "front").strip().lower()
+    if corridor.startswith("left"):
+        center_deg = -28.0
+    elif corridor.startswith("right"):
+        center_deg = 28.0
+    else:
+        center_deg = 0.0
+    distance_to_turn = progress.get("distance_to_next_turn_m")
+    try:
+        distance_to_turn = float(distance_to_turn) if distance_to_turn is not None else None
+    except Exception:
+        distance_to_turn = None
+    if distance_to_turn is not None and distance_to_turn <= 12.0:
+        span_deg = 30.0
+    else:
+        span_deg = 42.0
+    return [
+        {
+            "proposal_id": "synthetic_corridor_prior",
+            "proposal_type": "corridor_sector",
+            "frame": "ego_bev",
+            "sector_center_deg": center_deg,
+            "sector_span_deg": span_deg,
+            "range_m": [0.0, 10.0],
+            "priority": round(max(0.4, float(pose_match.get("route_confidence", 0.5) or 0.5)), 4),
+            "geometry_source": "synthetic_context",
+            "semantic_tag": "forward_path",
+            "rationale": str(local.get("instruction_hint") or "Synthetic route prior from provided context."),
+            "prompt_text": str(local.get("short_action_summary") or "Proceed along the visible forward corridor."),
+            "debug": {"source": "synthetic_context"},
+        }
+    ]
+
+
+def _fallback_candidate_from_visual_regions(
+    *,
+    visual_regions_dict: Dict[str, Any],
+    image_width: int,
+    image_height: int,
+    navigation_mode: str,
+) -> Dict[str, Any] | None:
+    regions = (visual_regions_dict.get("candidate_regions", []) or [])
+    if not regions:
+        return None
+    target = None
+    for region in regions:
+        region_id = str(region.get("region_id") or "")
+        region_type = str(region.get("region_type") or "")
+        if navigation_mode == "foot" and ("opening" in region_type or "opening" in region_id):
+            target = region
+            break
+    if target is None:
+        target = regions[0]
+    bbox = target.get("bbox_uv") or [image_width * 0.35, image_height * 0.35, image_width * 0.65, image_height * 0.9]
+    x0, y0, x1, y1 = [float(v) for v in bbox]
+    cx = (x0 + x1) * 0.5
+    cy = (y0 + y1) * 0.5
+    dx = cx - image_width * 0.5
+    dy = cy - image_height * 0.94
+    norm = max((dx * dx + dy * dy) ** 0.5, 1e-6)
+    return {
+        "proposal_id": f"fallback__{target.get('region_id') or 'region'}",
+        "prompt_type": "arrow",
+        "center_uv": [round(cx, 2), round(cy, 2)],
+        "direction_vec": [round(dx / norm, 4), round(dy / norm, 4)],
+        "span_px": round(max((x1 - x0) * 0.45, 18.0), 2),
+        "mask": target.get("polygon_uv"),
+        "semantic_tag": target.get("region_id"),
+    }
 
 
 def _project_bev_point(
@@ -981,6 +1216,484 @@ async def generate_pov_prompt_candidates_v2(
         "prompt_proposals": prompt_proposal_bundle_to_dict(proposal_bundle).get("proposals", []),
         "visual_regions": visual_region_bundle_to_dict(visual_region_bundle),
         "pov_prompt_candidates": pov_prompt_candidate_bundle_to_dict(candidate_bundle).get("candidates", []),
+    }
+
+
+@mcp.tool()
+async def run_zero_shot_visual_prompt_agent(
+    gps: Dict[str, float],
+    route_polyline: List[Dict[str, Any]] | List[List[float]],
+    coarse_waypoints: List[Dict[str, Any]],
+    ctx: Context,
+    image_path: Optional[str] = None,
+    image_url: Optional[str] = None,
+    heading_deg: Optional[float] = None,
+    lookahead_m: float = 20.0,
+    off_route_threshold_m: float = 20.0,
+    front_extent_m: float = 30.0,
+    back_extent_m: float = 10.0,
+    side_extent_m: float = 15.0,
+    visual_top_k: int = 5,
+    candidate_top_k: int = 5,
+    llm_detail: str = "auto",
+    navigation_mode: str = "foot",
+) -> Dict[str, Any]:
+    """
+    Run a zero-shot visual prompt agent over the current FPV frame.
+
+    The agent:
+    1. builds RouteContext + LocalBEVContext
+    2. generates BEV prompt proposals
+    3. generates RGB-aware PoV prompt candidates
+    4. asks a multimodal LLM to select one candidate
+    5. falls back to a deterministic rule-based selector if the LLM is unavailable,
+       times out, returns invalid JSON, or rejects every candidate
+    """
+    await ctx.info(
+        "Running zero-shot visual prompt agent "
+        f"heading={heading_deg if heading_deg is not None else 'none'} "
+        f"visual_top_k={visual_top_k} candidate_top_k={candidate_top_k}"
+    )
+    if not str(image_path or "").strip() and not str(image_url or "").strip():
+        raise RuntimeError("run_zero_shot_visual_prompt_agent requires image_path or image_url")
+
+    state = build_route_state(
+        gps=gps,
+        heading_deg=heading_deg,
+        route_polyline=route_polyline,
+        coarse_waypoints=coarse_waypoints,
+        lookahead_m=lookahead_m,
+        off_route_threshold_m=off_route_threshold_m,
+        front_extent_m=front_extent_m,
+        back_extent_m=back_extent_m,
+        side_extent_m=side_extent_m,
+    )
+    route_context_dict = route_context_to_dict(state.route_context)
+    local_bev_dict = local_bev_context_to_dict(state.local_bev_context)
+
+    proposal_bundle = build_bev_prompt_proposals(
+        route_context=state.route_context,
+        local_bev_context=state.local_bev_context,
+    )
+    prompt_proposals = prompt_proposal_bundle_to_dict(proposal_bundle).get("proposals", [])
+
+    visual_region_bundle = extract_visual_regions(
+        image_path=image_path,
+        image_url=image_url,
+        top_k=visual_top_k,
+    )
+    visual_regions_dict = visual_region_bundle_to_dict(visual_region_bundle)
+
+    candidate_bundle = generate_rgb_aware_pov_prompt_candidates(
+        route_context=state.route_context,
+        prompt_proposals=proposal_bundle.proposals,
+        visual_regions=visual_region_bundle,
+    )
+    all_candidates = pov_prompt_candidate_bundle_to_dict(candidate_bundle).get("candidates", []) or []
+    pov_prompt_candidates = all_candidates[: max(1, int(candidate_top_k))]
+
+    llm_raw: Dict[str, Any] | None = None
+    llm_error: str | None = None
+    decision = None
+    if pov_prompt_candidates:
+        try:
+            question = build_arbiter_question(
+                route_context=route_context_dict,
+                prompt_proposals=prompt_proposals,
+                pov_prompt_candidates=pov_prompt_candidates,
+                navigation_mode=navigation_mode,
+            )
+            system_prompt = build_arbiter_system_prompt()
+            if str(image_path or "").strip():
+                llm_raw = await arbitrate_local_pov_candidates_with_llm(
+                    image_path=str(image_path),
+                    question=question,
+                    detail=llm_detail,
+                    system_prompt=system_prompt,
+                )
+            else:
+                llm_raw = await arbitrate_pov_candidates_with_llm(
+                    image_url=str(image_url),
+                    question=question,
+                    detail=llm_detail,
+                    system_prompt=system_prompt,
+                )
+            decision = coerce_arbiter_decision(
+                raw=llm_raw,
+                route_context=route_context_dict,
+                pov_prompt_candidates=pov_prompt_candidates,
+            )
+            if decision is not None and decision.reject_all:
+                llm_error = "LLM rejected all candidates; falling back to rule-based selection."
+                decision = None
+        except Exception as exc:
+            llm_error = str(exc)
+
+    if decision is None:
+        decision = rule_based_visual_prompt_decision(
+            route_context=route_context_dict,
+            pov_prompt_candidates=pov_prompt_candidates,
+        )
+
+    decision_dict = visual_prompt_decision_to_dict(decision)
+    if llm_raw is not None:
+        decision_dict.setdefault("debug", {})
+        decision_dict["debug"]["llm_raw"] = llm_raw
+        decision_dict["debug"]["system_prompt"] = system_prompt
+        decision_dict["debug"]["question"] = question
+    if llm_error:
+        decision_dict.setdefault("debug", {})
+        decision_dict["debug"]["llm_error"] = llm_error
+
+    selected_candidate = next(
+        (item for item in pov_prompt_candidates if str(item.get("proposal_id") or "") == str(decision.selected_candidate_id or "")),
+        None,
+    )
+    image_href = _image_href_for_overlay(image_path=image_path, image_url=image_url)
+    overlay_svg = _render_prompt_overlay_svg(
+        image_href=image_href,
+        image_width=visual_region_bundle.image_width,
+        image_height=visual_region_bundle.image_height,
+        rendered_prompt=decision.rendered_prompt,
+        title="Candidate-Arbiter Visual Prompt",
+    )
+
+    return {
+        "route_context": route_context_dict,
+        "local_bev_context": local_bev_dict,
+        "prompt_proposals": prompt_proposals,
+        "visual_regions": visual_regions_dict,
+        "pov_prompt_candidates": pov_prompt_candidates,
+        "arbiter_decision": decision_dict,
+        "selected_candidate": selected_candidate,
+        "overlay_svg": overlay_svg,
+        "overlay_svg_data_url": _svg_to_data_url(overlay_svg),
+    }
+
+
+@mcp.tool()
+async def run_zero_shot_direct_arrow_agent(
+    gps: Dict[str, float],
+    route_polyline: List[Dict[str, Any]] | List[List[float]],
+    coarse_waypoints: List[Dict[str, Any]],
+    ctx: Context,
+    image_path: Optional[str] = None,
+    image_url: Optional[str] = None,
+    heading_deg: Optional[float] = None,
+    lookahead_m: float = 20.0,
+    off_route_threshold_m: float = 20.0,
+    front_extent_m: float = 30.0,
+    back_extent_m: float = 10.0,
+    side_extent_m: float = 15.0,
+    visual_top_k: int = 5,
+    llm_detail: str = "auto",
+    navigation_mode: str = "foot",
+) -> Dict[str, Any]:
+    """
+    Run a direct zero-shot baseline that asks the LVLM to generate one visual prompt.
+
+    This baseline does not let the LVLM modify or select from structured candidates first.
+    It still builds route context and visual regions to keep the prompt grounded, and
+    falls back to the top structured candidate when the direct output is invalid.
+    """
+    await ctx.info(
+        "Running zero-shot direct arrow baseline "
+        f"heading={heading_deg if heading_deg is not None else 'none'} visual_top_k={visual_top_k}"
+    )
+    if not str(image_path or "").strip() and not str(image_url or "").strip():
+        raise RuntimeError("run_zero_shot_direct_arrow_agent requires image_path or image_url")
+
+    state = build_route_state(
+        gps=gps,
+        heading_deg=heading_deg,
+        route_polyline=route_polyline,
+        coarse_waypoints=coarse_waypoints,
+        lookahead_m=lookahead_m,
+        off_route_threshold_m=off_route_threshold_m,
+        front_extent_m=front_extent_m,
+        back_extent_m=back_extent_m,
+        side_extent_m=side_extent_m,
+    )
+    route_context_dict = route_context_to_dict(state.route_context)
+    local_bev_dict = local_bev_context_to_dict(state.local_bev_context)
+    proposal_bundle = build_bev_prompt_proposals(
+        route_context=state.route_context,
+        local_bev_context=state.local_bev_context,
+    )
+    prompt_proposals = prompt_proposal_bundle_to_dict(proposal_bundle).get("proposals", [])
+    visual_region_bundle = extract_visual_regions(
+        image_path=image_path,
+        image_url=image_url,
+        top_k=visual_top_k,
+    )
+    visual_regions_dict = visual_region_bundle_to_dict(visual_region_bundle)
+    fallback_candidate_bundle = generate_rgb_aware_pov_prompt_candidates(
+        route_context=state.route_context,
+        prompt_proposals=proposal_bundle.proposals,
+        visual_regions=visual_region_bundle,
+    )
+    fallback_candidates = pov_prompt_candidate_bundle_to_dict(fallback_candidate_bundle).get("candidates", []) or []
+
+    llm_raw: Dict[str, Any] | None = None
+    llm_error: str | None = None
+    decision = None
+    try:
+        question = build_direct_prompt_question(
+            route_context=route_context_dict,
+            prompt_proposals=prompt_proposals,
+            visual_regions=visual_regions_dict,
+            image_width=visual_region_bundle.image_width,
+            image_height=visual_region_bundle.image_height,
+            navigation_mode=navigation_mode,
+        )
+        system_prompt = build_direct_prompt_system_prompt()
+        if str(image_path or "").strip():
+            llm_raw = await arbitrate_local_pov_candidates_with_llm(
+                image_path=str(image_path),
+                question=question,
+                detail=llm_detail,
+                system_prompt=system_prompt,
+            )
+        else:
+            llm_raw = await arbitrate_pov_candidates_with_llm(
+                image_url=str(image_url),
+                question=question,
+                detail=llm_detail,
+                system_prompt=system_prompt,
+            )
+        decision = coerce_direct_prompt_decision(
+            raw=llm_raw,
+            route_context=route_context_dict,
+            image_width=visual_region_bundle.image_width,
+            image_height=visual_region_bundle.image_height,
+        )
+        if decision is not None and decision.reject_all:
+            llm_error = "LLM rejected the direct prompt; falling back to a structured candidate."
+            decision = None
+    except Exception as exc:
+        llm_error = str(exc)
+
+    if decision is None:
+        decision = rule_based_direct_prompt_decision(
+            route_context=route_context_dict,
+            fallback_candidate=(fallback_candidates[0] if fallback_candidates else None),
+        )
+
+    decision_dict = visual_prompt_decision_to_dict(decision)
+    if llm_raw is not None:
+        decision_dict.setdefault("debug", {})
+        decision_dict["debug"]["llm_raw"] = llm_raw
+        decision_dict["debug"]["system_prompt"] = system_prompt
+        decision_dict["debug"]["question"] = question
+    if llm_error:
+        decision_dict.setdefault("debug", {})
+        decision_dict["debug"]["llm_error"] = llm_error
+    image_href = _image_href_for_overlay(image_path=image_path, image_url=image_url)
+    overlay_svg = _render_prompt_overlay_svg(
+        image_href=image_href,
+        image_width=visual_region_bundle.image_width,
+        image_height=visual_region_bundle.image_height,
+        rendered_prompt=decision.rendered_prompt,
+        title="Direct-Agent Visual Prompt",
+    )
+
+    return {
+        "route_context": route_context_dict,
+        "local_bev_context": local_bev_dict,
+        "prompt_proposals": prompt_proposals,
+        "visual_regions": visual_regions_dict,
+        "fallback_candidates": fallback_candidates[:5],
+        "direct_decision": decision_dict,
+        "rendered_prompt": decision.rendered_prompt,
+        "overlay_svg": overlay_svg,
+        "overlay_svg_data_url": _svg_to_data_url(overlay_svg),
+    }
+
+
+@mcp.tool()
+async def compare_zero_shot_agents(
+    gps: Dict[str, float],
+    route_polyline: List[Dict[str, Any]] | List[List[float]],
+    coarse_waypoints: List[Dict[str, Any]],
+    ctx: Context,
+    image_path: Optional[str] = None,
+    image_url: Optional[str] = None,
+    heading_deg: Optional[float] = None,
+    lookahead_m: float = 20.0,
+    off_route_threshold_m: float = 20.0,
+    front_extent_m: float = 30.0,
+    back_extent_m: float = 10.0,
+    side_extent_m: float = 15.0,
+    visual_top_k: int = 5,
+    candidate_top_k: int = 5,
+    llm_detail: str = "auto",
+    navigation_mode: str = "foot",
+) -> Dict[str, Any]:
+    """
+    Compare the direct-arrow zero-shot baseline against the candidate-arbiter agent.
+    """
+    await ctx.info("Comparing zero-shot direct-arrow baseline with candidate-arbiter agent")
+    direct_result = await run_zero_shot_direct_arrow_agent(
+        gps=gps,
+        route_polyline=route_polyline,
+        coarse_waypoints=coarse_waypoints,
+        ctx=ctx,
+        image_path=image_path,
+        image_url=image_url,
+        heading_deg=heading_deg,
+        lookahead_m=lookahead_m,
+        off_route_threshold_m=off_route_threshold_m,
+        front_extent_m=front_extent_m,
+        back_extent_m=back_extent_m,
+        side_extent_m=side_extent_m,
+        visual_top_k=visual_top_k,
+        llm_detail=llm_detail,
+        navigation_mode=navigation_mode,
+    )
+    candidate_result = await run_zero_shot_visual_prompt_agent(
+        gps=gps,
+        route_polyline=route_polyline,
+        coarse_waypoints=coarse_waypoints,
+        ctx=ctx,
+        image_path=image_path,
+        image_url=image_url,
+        heading_deg=heading_deg,
+        lookahead_m=lookahead_m,
+        off_route_threshold_m=off_route_threshold_m,
+        front_extent_m=front_extent_m,
+        back_extent_m=back_extent_m,
+        side_extent_m=side_extent_m,
+        visual_top_k=visual_top_k,
+        candidate_top_k=candidate_top_k,
+        llm_detail=llm_detail,
+        navigation_mode=navigation_mode,
+    )
+    selected_candidate = candidate_result.get("selected_candidate", {}) or None
+    candidate_decision = candidate_result.get("arbiter_decision", {}) or {}
+    if selected_candidate and not candidate_decision.get("rendered_prompt"):
+        candidate_decision["rendered_prompt"] = candidate_to_rendered_prompt(selected_candidate)
+    return {
+        "direct_agent": direct_result,
+        "candidate_agent": candidate_result,
+        "comparison_summary": {
+            "direct_source": (direct_result.get("direct_decision", {}) or {}).get("arbiter_source"),
+            "direct_fallback_used": (direct_result.get("direct_decision", {}) or {}).get("fallback_used"),
+            "candidate_source": candidate_decision.get("arbiter_source"),
+            "candidate_fallback_used": candidate_decision.get("fallback_used"),
+            "direct_reject_all": (direct_result.get("direct_decision", {}) or {}).get("reject_all"),
+            "candidate_reject_all": candidate_decision.get("reject_all"),
+        },
+    }
+
+
+@mcp.tool()
+async def run_visual_prompt_only_from_context(
+    route_context: Dict[str, Any],
+    ctx: Context,
+    image_path: Optional[str] = None,
+    image_url: Optional[str] = None,
+    llm_detail: str = "auto",
+    visual_top_k: int = 5,
+    navigation_mode: str = "foot",
+    top_route_prior: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Test the visual-prompt stage in isolation from route planning.
+
+    Provide a route_context-like object and an image, then directly render a zero-shot
+    visual prompt overlay without running route planning or route-context inference.
+    """
+    await ctx.info(
+        "Running visual-prompt-only test "
+        f"mode={navigation_mode} visual_top_k={visual_top_k}"
+    )
+    if not str(image_path or "").strip() and not str(image_url or "").strip():
+        raise RuntimeError("run_visual_prompt_only_from_context requires image_path or image_url")
+
+    visual_region_bundle = extract_visual_regions(
+        image_path=image_path,
+        image_url=image_url,
+        top_k=visual_top_k,
+    )
+    visual_regions_dict = visual_region_bundle_to_dict(visual_region_bundle)
+    prompt_proposals = [top_route_prior] if isinstance(top_route_prior, dict) else _synthetic_prompt_proposals_from_context(route_context)
+
+    llm_raw: Dict[str, Any] | None = None
+    llm_error: str | None = None
+    decision = None
+    try:
+        question = build_direct_prompt_question(
+            route_context=route_context,
+            prompt_proposals=prompt_proposals,
+            visual_regions=visual_regions_dict,
+            image_width=visual_region_bundle.image_width,
+            image_height=visual_region_bundle.image_height,
+            navigation_mode=navigation_mode,
+        )
+        system_prompt = build_direct_prompt_system_prompt()
+        if str(image_path or "").strip():
+            llm_raw = await arbitrate_local_pov_candidates_with_llm(
+                image_path=str(image_path),
+                question=question,
+                detail=llm_detail,
+                system_prompt=system_prompt,
+            )
+        else:
+            llm_raw = await arbitrate_pov_candidates_with_llm(
+                image_url=str(image_url),
+                question=question,
+                detail=llm_detail,
+                system_prompt=system_prompt,
+            )
+        decision = coerce_direct_prompt_decision(
+            raw=llm_raw,
+            route_context=route_context,
+            image_width=visual_region_bundle.image_width,
+            image_height=visual_region_bundle.image_height,
+        )
+        if decision is not None and decision.reject_all:
+            llm_error = "LLM rejected the visual prompt-only output; falling back to a region-based prompt."
+            decision = None
+    except Exception as exc:
+        llm_error = str(exc)
+
+    if decision is None:
+        fallback_candidate = _fallback_candidate_from_visual_regions(
+            visual_regions_dict=visual_regions_dict,
+            image_width=visual_region_bundle.image_width,
+            image_height=visual_region_bundle.image_height,
+            navigation_mode=navigation_mode,
+        )
+        decision = rule_based_direct_prompt_decision(
+            route_context=route_context,
+            fallback_candidate=fallback_candidate,
+        )
+
+    decision_dict = visual_prompt_decision_to_dict(decision)
+    if llm_raw is not None:
+        decision_dict.setdefault("debug", {})
+        decision_dict["debug"]["llm_raw"] = llm_raw
+        decision_dict["debug"]["system_prompt"] = system_prompt
+        decision_dict["debug"]["question"] = question
+    if llm_error:
+        decision_dict.setdefault("debug", {})
+        decision_dict["debug"]["llm_error"] = llm_error
+
+    image_href = _image_href_for_overlay(image_path=image_path, image_url=image_url)
+    overlay_svg = _render_prompt_overlay_svg(
+        image_href=image_href,
+        image_width=visual_region_bundle.image_width,
+        image_height=visual_region_bundle.image_height,
+        rendered_prompt=decision.rendered_prompt,
+        title="Visual Prompt Only",
+    )
+    return {
+        "route_context": route_context,
+        "prompt_proposals": prompt_proposals,
+        "visual_regions": visual_regions_dict,
+        "decision": decision_dict,
+        "overlay_svg": overlay_svg,
+        "overlay_svg_data_url": _svg_to_data_url(overlay_svg),
     }
 
 

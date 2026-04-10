@@ -81,6 +81,7 @@ def project_bev_prompt_proposals_to_pov(
                 mask=None,
                 priority=round(float(proposal.priority), 4),
                 projection_confidence=round(_clamp(projection_confidence, 0.0, 1.0), 4),
+                visual_confidence=None,
                 semantic_tag=proposal.semantic_tag,
                 rationale=proposal.rationale,
                 debug={

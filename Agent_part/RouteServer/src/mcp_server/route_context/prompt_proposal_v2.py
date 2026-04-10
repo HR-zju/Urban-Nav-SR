@@ -82,6 +82,17 @@ def _match_region(candidate: PoVPromptCandidate, regions: list[VisualRegion]) ->
     return best_region, best_overlap
 
 
+def _rank_regions(candidate: PoVPromptCandidate, regions: list[VisualRegion]) -> list[tuple[VisualRegion, float, float]]:
+    candidate_box = _candidate_bbox(candidate.center_uv, candidate.span_px, candidate.prompt_type)
+    ranked: list[tuple[VisualRegion, float, float]] = []
+    for region in regions:
+        overlap = _bbox_iou(candidate_box, region.bbox_uv)
+        score = 0.7 * overlap + 0.3 * float(region.score)
+        ranked.append((region, overlap, score))
+    ranked.sort(key=lambda item: item[2], reverse=True)
+    return ranked
+
+
 def generate_rgb_aware_pov_prompt_candidates(
     *,
     route_context: RouteContext,
@@ -97,35 +108,65 @@ def generate_rgb_aware_pov_prompt_candidates(
 
     fused: list[PoVPromptCandidate] = []
     for candidate in base_bundle.candidates:
-        region, overlap = _match_region(candidate, visual_regions.candidate_regions)
-        priority, visual_confidence = _fuse_priority(candidate, region, overlap)
-        fused.append(
-            PoVPromptCandidate(
-                proposal_id=candidate.proposal_id,
-                source_bev_proposal_id=candidate.source_bev_proposal_id,
-                prompt_type=candidate.prompt_type,
-                frame=candidate.frame,
-                center_uv=_fuse_center(candidate, region),
-                direction_vec=candidate.direction_vec,
-                span_px=round(max(float(candidate.span_px or 0.0), 24.0), 2) if candidate.span_px is not None else None,
-                mask=(region.polygon_uv if region is not None else None),
-                priority=priority,
-                projection_confidence=candidate.projection_confidence,
-                visual_confidence=visual_confidence,
-                semantic_tag=candidate.semantic_tag,
-                rationale=(
-                    f"{candidate.rationale or ''} Fused with visual region {region.region_id}."
-                    if region is not None
-                    else (candidate.rationale or "Route prior only candidate.")
-                ).strip(),
-                debug={
-                    **(candidate.debug or {}),
-                    "matched_visual_region_id": region.region_id if region is not None else None,
-                    "matched_visual_region_score": float(region.score) if region is not None else None,
-                    "region_overlap": round(overlap, 4),
-                },
+        ranked_regions = _rank_regions(candidate, visual_regions.candidate_regions)
+        selected_regions: list[tuple[VisualRegion | None, float, float]] = []
+        if ranked_regions:
+            best_region, best_overlap, best_score = ranked_regions[0]
+            selected_regions.append((best_region, best_overlap, best_score))
+
+            is_forward_like = str(candidate.semantic_tag or "").strip().lower() in {
+                "forward_path",
+                "corridor_path",
+                "connector_merge",
+            }
+            if is_forward_like:
+                for region, overlap, score in ranked_regions[1:]:
+                    if len(selected_regions) >= 2:
+                        break
+                    if score < max(0.08, best_score * 0.72):
+                        continue
+                    if region.score < 0.35:
+                        continue
+                    selected_regions.append((region, overlap, score))
+        if not selected_regions:
+            selected_regions.append((None, 0.0, 0.0))
+
+        for branch_index, (region, overlap, match_score) in enumerate(selected_regions):
+            priority, visual_confidence = _fuse_priority(candidate, region, overlap)
+            proposal_id = candidate.proposal_id
+            semantic_tag = candidate.semantic_tag
+            if region is not None and len(selected_regions) > 1:
+                proposal_id = f"{candidate.proposal_id}__{region.region_id}"
+                semantic_tag = f"{candidate.semantic_tag or 'prompt'}::{region.region_id}"
+            fused.append(
+                PoVPromptCandidate(
+                    proposal_id=proposal_id,
+                    source_bev_proposal_id=candidate.source_bev_proposal_id,
+                    prompt_type=candidate.prompt_type,
+                    frame=candidate.frame,
+                    center_uv=_fuse_center(candidate, region),
+                    direction_vec=candidate.direction_vec,
+                    span_px=round(max(float(candidate.span_px or 0.0), 24.0), 2) if candidate.span_px is not None else None,
+                    mask=(region.polygon_uv if region is not None else None),
+                    priority=priority,
+                    projection_confidence=candidate.projection_confidence,
+                    visual_confidence=visual_confidence,
+                    semantic_tag=semantic_tag,
+                    rationale=(
+                        f"{candidate.rationale or ''} Fused with visual region {region.region_id}."
+                        if region is not None
+                        else (candidate.rationale or "Route prior only candidate.")
+                    ).strip(),
+                    debug={
+                        **(candidate.debug or {}),
+                        "matched_visual_region_id": region.region_id if region is not None else None,
+                        "matched_visual_region_score": float(region.score) if region is not None else None,
+                        "region_overlap": round(overlap, 4),
+                        "region_match_score": round(match_score, 4),
+                        "branch_index": branch_index,
+                    },
+                )
             )
-        )
 
     fused.sort(key=lambda item: item.priority, reverse=True)
     return PoVPromptCandidateBundle(candidates=fused)
