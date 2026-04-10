@@ -11,6 +11,48 @@ int main(int argc, char **argv)
     return 0;
 }
 
+const char *GnssSppNode::gnss_status_to_string(GnssStatusState state)
+{
+    switch (state) {
+        case GnssStatusState::Idle:
+            return "gnss_idle";
+        case GnssStatusState::WaitingOrigin:
+            return "gnss_waiting_origin";
+        case GnssStatusState::Fusing:
+            return "gnss_fusing";
+    }
+
+    return "gnss_idle";
+}
+
+void GnssSppNode::publish_gnss_status()
+{
+    if (!pub_gnss_status_) {
+        return;
+    }
+
+    system_ctrl::msg::AlgoStatus msg;
+    msg.header.stamp = this->now();
+    msg.header.frame_id = "gnss_spp_node";
+    msg.algo_status = gnss_status_to_string(current_gnss_status_);
+    pub_gnss_status_->publish(msg);
+}
+
+void GnssSppNode::transition_gnss_status(GnssStatusState next_state)
+{
+    if (!pub_gnss_status_) {
+        return;
+    }
+
+    if (current_gnss_status_ == next_state) {
+        return;
+    }
+
+    current_gnss_status_ = next_state;
+
+    publish_gnss_status();
+}
+
 void GnssSppNode::publish_bridge_diagnostics(const gnss_comm_impl::StereoYawBridge::UpdateResult &result)
 {
     if (!enable_bridge_diagnostics_ || !pub_bridge_diag_) return;
@@ -239,7 +281,6 @@ void GnssSppNode::meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPt
 
     // stereo算法启动后收集SPP初始位置
     if (is_algo_running_ && !is_origin_set_) {
-
         // 首先使用滑动窗口确认SPP是否稳定
         init_ecef_buffer_.push_back(corrected_ecef_pos);
         if (init_ecef_buffer_.size() > INIT_WINDOW_SIZE) init_ecef_buffer_.pop_front();
@@ -270,6 +311,7 @@ void GnssSppNode::meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPt
                 R_enu2ecef_  = gnss_comm::geo2rotation(origin_lla_);
                 is_origin_set_ = true;
                 yaw_bridge_.set_origin(origin_ecef_, R_enu2ecef_);
+                transition_gnss_status(GnssStatusState::Fusing);
                 
                 RCLCPP_INFO(this->get_logger(), 
                     "Fusion Origin Set Securely! StdDev: %.2f m. LLA: [%.8f, %.8f, %.2f]", 
@@ -292,6 +334,7 @@ void GnssSppNode::algo_status_callback(const system_ctrl::msg::AlgoStatus::Const
 {
     if (msg->algo_status == "stereo3_running" || msg->algo_status == "stereo4_running") {
         is_algo_running_ = true;
+        transition_gnss_status(is_origin_set_ ? GnssStatusState::Fusing : GnssStatusState::WaitingOrigin);
     } else {
         is_algo_running_ = false;
         // reset origin
@@ -299,6 +342,7 @@ void GnssSppNode::algo_status_callback(const system_ctrl::msg::AlgoStatus::Const
         init_ecef_buffer_.clear();
         yaw_bridge_.reset();
         yaw_bridge_.clear_raw_gnss();
+        transition_gnss_status(GnssStatusState::Idle);
         
     }
 }

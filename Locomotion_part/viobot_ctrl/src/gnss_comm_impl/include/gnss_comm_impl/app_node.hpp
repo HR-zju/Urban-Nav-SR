@@ -28,6 +28,12 @@
 class GnssSppNode : public rclcpp::Node
 {
 public:
+    enum class GnssStatusState {
+        Idle,
+        WaitingOrigin,
+        Fusing,
+    };
+
     GnssSppNode() : Node("gnss_spp_node")
     {
         const bool enable_kml_export = this->declare_parameter<bool>("enable_kml_export", true);
@@ -87,13 +93,15 @@ public:
             "/baton/algo_status", 10,
             std::bind(&GnssSppNode::algo_status_callback, this, std::placeholders::_1));
 
+        pub_gnss_status_ = this->create_publisher<system_ctrl::msg::AlgoStatus>(
+            "/baton/gnss/status", 10);
+
         pub_spp_fix_raw_ = this->create_publisher<sensor_msgs::msg::NavSatFix>(
             "/baton/gnss/spp_fix_raw", 10);
         
         pub_spp_fix_ = this->create_publisher<sensor_msgs::msg::NavSatFix>(
             "/baton/gnss/spp_fix", 10);
 
-        
         pub_heading_ = this->create_publisher<std_msgs::msg::Float64>(
             "/baton/gnss/heading", 10);
         
@@ -101,8 +109,13 @@ public:
         cleanup_timer_ = this->create_wall_timer(
             std::chrono::seconds(CLEANUP_INTERVAL_SEC),
             std::bind(&GnssSppNode::cleanup_ephem_callback, this));
+
+        gnss_status_timer_ = this->create_wall_timer(
+            std::chrono::seconds(1),
+            std::bind(&GnssSppNode::publish_gnss_status, this));
         
         RCLCPP_INFO(this->get_logger(), "GNSS SPP Node initialized. Waiting for data...");
+        publish_gnss_status();
     }
 
 private:
@@ -118,6 +131,9 @@ private:
     void meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPtr msg);
     void odom_callback(const nav_msgs::msg::Odometry::ConstSharedPtr msg);
     void algo_status_callback(const system_ctrl::msg::AlgoStatus::ConstSharedPtr msg);
+    void transition_gnss_status(GnssStatusState next_state);
+    void publish_gnss_status();
+    static const char *gnss_status_to_string(GnssStatusState state);
     void publish_bridge_diagnostics(const gnss_comm_impl::StereoYawBridge::UpdateResult &result);
     
 private:
@@ -136,10 +152,12 @@ private:
     
     rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr     pub_spp_fix_raw_;
     rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr     pub_spp_fix_;
+    rclcpp::Publisher<system_ctrl::msg::AlgoStatus>::SharedPtr    pub_gnss_status_;
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr           pub_bridge_diag_;
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr          pub_heading_;
 
     rclcpp::TimerBase::SharedPtr cleanup_timer_;
+    rclcpp::TimerBase::SharedPtr gnss_status_timer_;
     std::mutex ephem_mutex_; // 保护 ephem_map_
     std::unordered_map<uint32_t, gnss_comm::EphemBasePtr> ephem_map_;
 
@@ -161,6 +179,7 @@ private:
 
     bool is_algo_running_ = false;
     bool is_origin_set_   = false;
+    GnssStatusState current_gnss_status_ = GnssStatusState::Idle;
     gnss_comm_impl::StereoYawBridge yaw_bridge_;
     bool enable_bridge_diagnostics_ = false;
     std::string bridge_diag_topic_;
