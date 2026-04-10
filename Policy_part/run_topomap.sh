@@ -1,7 +1,7 @@
 #!/bin/zsh
 # notice running this script out of docker container, and running ./record_bag.sh <bag_name> 
 # Create a new tmux session
-session_name="run topomap"
+session_name="run_topomap"
 tmux kill-session -t $session_name 2>/dev/null
 tmux new-session -d -s $session_name
 
@@ -10,19 +10,15 @@ tmux selectp -t 0
 tmux splitw -v -p 50 
 
 tmux selectp -t 0
-tmux splitw -h -p 66
-tmux selectp -t 2
 tmux splitw -h -p 50
 
 tmux selectp -t 1
-tmux splitw -h -p 66 
-tmux selectp -t 4
 tmux splitw -h -p 50 
 tmux select-layout tiled
 
 
-# [ 0 ] [ 2 ] [ 3 ]
-# [ 1 ] [ 4 ] [ 5 ]
+# [ 0 ] [ 2 ] 
+# [ 1 ] [ 3 ] 
 
 
 # Run the realsense2 launch command in the first pane
@@ -47,37 +43,22 @@ tmux send-keys "source /ros-humble-ros1-bridge/install/setup.zsh
 ros2 run ros1_bridge dynamic_bridge" Enter # change topic if necessary
 
 
-# control the robot by joy teleopic in the third pane
-# tmux select-pane -t 2
-# tmux send-keys "docker exec -it ros1toros2 zsh" Enter
-# sleep 1
-# tmux send-keys "mamba activate foundation_policy" Enter
-# tmux send-keys "cd /home/nuvo/SR/foundation-policy" Enter
-# tmux send-keys "python tools/run_navflow_realsense_vis.py \
-#   --onnx onnx_ckpts/s1_ours_coco_sft_stage2_goal_less.onnx \ 
-#   --no_record_video" Enter
-
 
 # run teleop in the fourth pane
-tmux select-pane -t 3
+tmux select-pane -t 2
 tmux send-keys "docker exec -it unitree bash" Enter
 sleep 1
 tmux send-keys "cd driver_ws/" Enter
 tmux send-keys "source devel/setup.bash" Enter
 tmux send-keys "roslaunch joystick_control seekur_joy.launch" Enter 
 
-# run pd controller in the fifth pane
-# tmux select-pane -t 4
-# tmux send-keys "docker exec -it ros1toros2 zsh" Enter
-# tmux send-keys "mamba activate foundation_policy" Enter
-# tmux send-keys "cd /home/nuvo/SR/foundation-policy" Enter
-# tmux send-keys "python pd_controller_ros2_new2.py" Enter 
-
-# Run the rosbag record command in the forth pane
-tmux select-pane -t 5
+tmux select-pane -t 3
+tmux send-keys "docker exec -it ros1toros2 zsh" Enter
+sleep 1
 tmux send-keys "cd /home/nuvo/SR/foundation-policy/Policy_part" Enter
-tmux send-keys "python tools/create_topomap_ros2.py -distance-threshold 2.0" Enter
-# tmux send-keys "ros2 bag record /camera/camera/color/image_raw/compressed  /mfla/dr_odom  /tf_static -o $1"  
+tmux send-keys "mamba activate foundation_policy" Enter
+tmux send-keys "python tools/create_topomap_ros2.py --distance-threshold 2.0" Enter
+
 
 # Attach to the tmux session
 tmux -2 attach-session -t $session_name
