@@ -26,6 +26,7 @@ This project contains the **Viobot Control** (`viobot_ctrl`) and **GNSS SPP Node
 - **RAIM Gross Error Rejection**: Implements Receiver Autonomous Integrity Monitoring to effectively detect and reject anomalous observations.
 - **Elevation Angle and SNR Weighting**: Enhances positioning accuracy by establishing a weighted observation model.
 - **Multi-sensor Fusion**: Fuses high-frequency relative displacement from Stereo3 odometry with GNSS SPP outputs.
+- **GNSS Status Export**: Publishes GNSS fusion state on `/baton/gnss/status` for external consumers.
 - **Ephemeris Management**: Periodically cleans up satellite ephemeris data to prevent the accumulation of outdated or incorrect data.
 - **Trajectory Export**: Saves latitude and longitude parameters during operation to generate paths compatible with Google Earth visualization.
 
@@ -70,5 +71,5 @@ This project contains the **Viobot Control** (`viobot_ctrl`) and **GNSS SPP Node
 - [x] Fuse stereo3 odometry and GNSS SPP outputs
 - [ ] Collect data and perform field testing
 - [x] Test Euler angle output of stereo3
-- [ ] Heading estimation using stereo3 and GNSS SPP
+- [x] Heading estimation using stereo3 and GNSS SPP
 - [ ] Migrate to Viobot2 platform
