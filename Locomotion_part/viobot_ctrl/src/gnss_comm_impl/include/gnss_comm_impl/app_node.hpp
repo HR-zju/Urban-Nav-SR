@@ -102,7 +102,6 @@ public:
         pub_spp_fix_ = this->create_publisher<sensor_msgs::msg::NavSatFix>(
             "/baton/gnss/spp_fix", 10);
 
-        
         pub_heading_ = this->create_publisher<std_msgs::msg::Float64>(
             "/baton/gnss/heading", 10);
         
