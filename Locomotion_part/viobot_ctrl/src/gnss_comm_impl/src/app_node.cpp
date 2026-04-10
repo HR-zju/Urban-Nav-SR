@@ -28,6 +28,17 @@ void GnssSppNode::publish_bridge_diagnostics(const gnss_comm_impl::StereoYawBrid
     pub_bridge_diag_->publish(msg);
 }
 
+Eigen::Vector3d GnssSppNode::apply_gnss_initial_calibration(const Eigen::Vector3d &ecef_pos) const
+{
+    if (gnss_initial_calibration_enu_.isZero(0.0)) {
+        return ecef_pos;
+    }
+
+    const Eigen::Vector3d geo_pos = gnss_comm::ecef2geo(ecef_pos);
+    const Eigen::Matrix3d R_enu2ecef = gnss_comm::geo2rotation(geo_pos);
+    return ecef_pos + R_enu2ecef * gnss_initial_calibration_enu_;
+}
+
 void GnssSppNode::ephem_callback(const gnss_comm::msg::GnssEphemMsg::ConstSharedPtr msg)
 {
     auto clock = this->get_clock();
@@ -170,13 +181,15 @@ void GnssSppNode::meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPt
 
     Eigen::Vector3d ecef_pos = spp_result.head<3>();
 
-    if (!ecef_pos.allFinite())
+    const Eigen::Vector3d corrected_ecef_pos = apply_gnss_initial_calibration(ecef_pos);
+
+    if (!corrected_ecef_pos.allFinite())
     {
         RCLCPP_WARN_THROTTLE(logger, *clock, 2000, "SPP returned non-finite ECEF position");
         return;
     }
 
-    const double ecef_norm = ecef_pos.norm();
+    const double ecef_norm = corrected_ecef_pos.norm();
     if (ecef_norm < MIN_EARTH_RADIUS || ecef_norm > MAX_EARTH_RADIUS)
     {
         RCLCPP_WARN_THROTTLE(logger, *clock, 2000,
@@ -184,7 +197,7 @@ void GnssSppNode::meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPt
         return;
     }
 
-    Eigen::Vector3d geo_pos = gnss_comm::ecef2geo(ecef_pos);
+    Eigen::Vector3d geo_pos = gnss_comm::ecef2geo(corrected_ecef_pos);
 
     const double lat_deg = geo_pos[0];
     const double lon_deg = geo_pos[1];
@@ -196,7 +209,7 @@ void GnssSppNode::meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPt
         return;
     }
 
-    yaw_bridge_.set_latest_raw_ecef(ecef_pos, this->now().seconds());
+    yaw_bridge_.set_latest_raw_ecef(corrected_ecef_pos, this->now().seconds());
 
     RCLCPP_INFO_THROTTLE(logger, *clock, 2000,
                             "SPP Succeeded | Lat: %.8f, Lon: %.8f, Alt: %.2f m | Sats: %zu",
@@ -228,7 +241,7 @@ void GnssSppNode::meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPt
     if (is_algo_running_ && !is_origin_set_) {
 
         // 首先使用滑动窗口确认SPP是否稳定
-        init_ecef_buffer_.push_back(ecef_pos);
+        init_ecef_buffer_.push_back(corrected_ecef_pos);
         if (init_ecef_buffer_.size() > INIT_WINDOW_SIZE) init_ecef_buffer_.pop_front();
 
         // 评估稳定性
@@ -331,6 +344,25 @@ void GnssSppNode::odom_callback(const nav_msgs::msg::Odometry::ConstSharedPtr ms
             yaw_result.reject_count,
             yaw_result.yaw_offset_rad * 180.0 / M_PI);
     }
+
+    const auto &q = msg->pose.pose.orientation;
+    const double siny_cosp = 2.0 * (q.w * q.z + q.x * q.y);
+    const double cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z);
+    const double yaw_rel = std::atan2(siny_cosp, cosy_cosp);
+
+    const double e_raw_fwd = -std::sin(yaw_rel);
+    const double n_raw_fwd = std::cos(yaw_rel);
+    const double c = std::cos(yaw_result.yaw_offset_rad);
+    const double s = std::sin(yaw_result.yaw_offset_rad);
+    const double e_fwd = c * e_raw_fwd - s * n_raw_fwd;
+    const double n_fwd = s * e_raw_fwd + c * n_raw_fwd;
+
+    double heading_deg = std::atan2(e_fwd, n_fwd) * 180.0 / M_PI;
+    if (heading_deg < 0.0) heading_deg += 360.0;
+
+    std_msgs::msg::Float64 heading_msg;
+    heading_msg.data = heading_deg;
+    pub_heading_->publish(heading_msg);
 
     const Eigen::Vector3d enu_pos = yaw_bridge_.rotate_raw_to_enu(enu_pos_raw);
 

@@ -52,10 +52,13 @@ tmux select-pane -t 2
 tmux send-keys "docker exec -it ros1toros2 zsh" Enter
 sleep 1
 tmux send-keys "mamba activate foundation_policy" Enter
-tmux send-keys "cd /home/nuvo/SR/foundation-policy" Enter
-tmux send-keys "python3 tools/run_navflow_realsense_vis.py \
-  --onnx onnx_ckpts/s1_ours_coco_sft_stage2_goal_less.onnx \ 
-  --no_record_video" Enter
+tmux send-keys "cd /home/nuvo/SR/foundation-policy/Policy_part" Enter
+# tmux send-keys "python run_navflow_realsense_vis.py \
+#   --onnx onnx_ckpts/s1_ours_coco_sft_stage2_goal_less.onnx \
+#   --no_record_video" Enter
+
+tmux send-keys "python run_navflow_realsense_vis.py --onnx onnx_ckpts/s1_ours_coco_sft_stage2_goal_less.onnx --targets ./topomaps/odom_poses.txt --no_record_video" Enter
+
 
 
 # run teleop in the fourth pane
@@ -70,13 +73,13 @@ tmux send-keys "roslaunch joystick_control seekur_joy.launch" Enter
 tmux select-pane -t 4
 tmux send-keys "docker exec -it ros1toros2 zsh" Enter
 tmux send-keys "mamba activate foundation_policy" Enter
-tmux send-keys "cd /home/nuvo/SR/foundation-policy" Enter
+tmux send-keys "cd /home/nuvo/SR/foundation-policy/Policy_part" Enter
 tmux send-keys "python pd_controller_ros2_new2.py" Enter 
 
 # Run the rosbag record command in the forth pane
 tmux select-pane -t 5
 tmux send-keys "docker exec -it ros1toros2 zsh" Enter
-tmux send-keys "cd /home/nuvo/SR/foundation-policy/bags/" Enter
+tmux send-keys "cd /home/nuvo/SR/foundation-policy/Policy_part/bags/" Enter
 tmux send-keys "ros2 bag record /camera/camera/color/image_raw/compressed  /mfla/dr_odom  /tf_static -o $1"  
 
 # Attach to the tmux session

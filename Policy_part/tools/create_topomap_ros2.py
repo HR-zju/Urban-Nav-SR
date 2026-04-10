@@ -16,7 +16,7 @@ import shutil
 
 # IMAGE_TOPIC = "/usb_cam/image_raw"
 IMAGE_TOPIC = "/camera/camera/color/image_raw/compressed"
-TOPOMAP_IMAGES_DIR = "topomaps/images"
+TOPOMAP_IMAGES_DIR = "./topomaps/images"
 
 
 def remove_files_in_dir(dir_path: str):
@@ -153,7 +153,7 @@ class CreateTopomapNode(Node):
             return
         
         # 使用命令行参数指定输出目录和文件名（避免硬编码路径）
-        output_base = getattr(self.args, "output_dir", "/home/zjy/code/myk/Urban-Nav-SR/Policy_part/CityWalker/")
+        output_base = getattr(self.args, "output_dir", "./")
         poses_basename = getattr(self.args, "poses_filename", "odom_poses.txt")
 
         # 原始文件名（在 output_base 下）
@@ -233,7 +233,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output-dir",
         type=str,
-        default='.',
+        default='./topomaps',
         help="Base output directory for pose files and logs (default: current directory)",
     )
     parser.add_argument(
@@ -242,7 +242,6 @@ if __name__ == "__main__":
         default='odom_poses.txt',
         help="Filename for the main poses file (default: odom_poses.txt)",
     )
-
     args = parser.parse_args()
 
     main(args)
