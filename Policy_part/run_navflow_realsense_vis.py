@@ -731,6 +731,80 @@ class RealSenseNavflowNode(Node):
             resampled.append(resampled_wp)
         return torch.tensor(np.array(resampled), device=device, dtype=waypoints.dtype)
 
+    @staticmethod
+    def render_bev_image(
+        pred_waypoints_robot_xy: np.ndarray,
+        target_robot_xy: Optional[np.ndarray] = None,
+        canvas_size: tuple[int, int] = (640, 640),
+        range_m: float = 12.0,
+    ) -> np.ndarray:
+        """Render a lightweight BEV canvas with predicted and target points.
+
+        Coordinates are expected in robot frame:
+        - x: left/right (meters)
+        - y: forward (meters)
+        """
+
+        h, w = canvas_size
+        bev = np.full((h, w, 3), 245, dtype=np.uint8)
+
+        # Robot origin at lower center so forward space is visible.
+        origin = np.array([w // 2, h - 48], dtype=np.int32)
+        scale = (h - 96) / max(range_m, 1e-6)
+
+        def to_px(x_m: float, y_m: float):
+            u = int(round(origin[0] + x_m * scale))
+            v = int(round(origin[1] - y_m * scale))
+            return u, v
+
+        # Grid (every 2 meters)
+        for g in np.arange(0.0, range_m + 1e-6, 2.0):
+            y = int(round(origin[1] - g * scale))
+            cv2.line(bev, (40, y), (w - 40, y), (220, 220, 220), 1, cv2.LINE_AA)
+
+        for gx in np.arange(-range_m / 2.0, range_m / 2.0 + 1e-6, 2.0):
+            x = int(round(origin[0] + gx * scale))
+            cv2.line(bev, (x, 20), (x, h - 40), (230, 230, 230), 1, cv2.LINE_AA)
+
+        # Axes + robot marker
+        cv2.arrowedLine(bev, tuple(origin), (origin[0], 20), (80, 80, 80), 2, cv2.LINE_AA, tipLength=0.03)
+        cv2.putText(bev, "forward", (origin[0] + 8, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (80, 80, 80), 1)
+        cv2.circle(bev, tuple(origin), 7, (30, 30, 30), -1, cv2.LINE_AA)
+        cv2.putText(bev, "robot", (origin[0] + 10, origin[1] + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (40, 40, 40), 1)
+
+        # Predicted waypoints polyline
+        if pred_waypoints_robot_xy is not None and len(pred_waypoints_robot_xy) > 0:
+            pts = []
+            for p in pred_waypoints_robot_xy:
+                try:
+                    x_m, y_m = float(p[0]), float(p[1])
+                    pts.append(to_px(x_m, y_m))
+                except Exception:  # noqa: BLE001
+                    continue
+            if pts:
+                pts_np = np.array(pts, dtype=np.int32).reshape(-1, 1, 2)
+                cv2.polylines(bev, [pts_np], isClosed=False, color=(87, 96, 219), thickness=3, lineType=cv2.LINE_AA)
+                for pt in pts:
+                    cv2.circle(bev, pt, 4, (87, 96, 219), -1, cv2.LINE_AA)
+
+        # Target point
+        if target_robot_xy is not None and len(target_robot_xy) >= 2:
+            tx, ty = float(target_robot_xy[0]), float(target_robot_xy[1])
+            tpx = to_px(tx, ty)
+            cv2.drawMarker(
+                bev,
+                tpx,
+                color=(219, 87, 161),
+                markerType=cv2.MARKER_STAR,
+                markerSize=18,
+                thickness=2,
+                line_type=cv2.LINE_AA,
+            )
+            cv2.putText(bev, "target", (tpx[0] + 6, tpx[1] - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (120, 30, 90), 1)
+
+        cv2.putText(bev, "BEV: predicted vs target", (16, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (60, 60, 60), 2)
+        return bev
+
     def process_batch(self, batch_snapshot):
         """Run ONNX on the latest batch and publish / cache waypoints.
 
@@ -930,6 +1004,34 @@ class RealSenseNavflowNode(Node):
                 os.path.join(folder_path, f"sample_{self.image_count}_wp.npy"),
                 self.last_wp_np,
             )
+
+            # BEV visualization (reference style from GO2 script comments):
+            # - predicted points in robot frame
+            # - target point in robot frame
+            # We only save these files when --save_vis is enabled.
+            pred_waypoints_robot = np.stack(
+                [wp_pred_np[0, :, 1], -wp_pred_np[0, :, 0]],
+                axis=1,
+            )
+            target_robot = np.array([target_diff[0, 1], -target_diff[0, 0]], dtype=np.float32)
+            bev_img = self.render_bev_image(
+                pred_waypoints_robot_xy=pred_waypoints_robot,
+                target_robot_xy=target_robot,
+            )
+
+            bev_output_path = os.path.join(folder_path, f"sample_{self.image_count}_bev.png")
+            cv2.imwrite(bev_output_path, bev_img)
+
+            # Save a side-by-side RGB+BEV image for quick inspection.
+            camera_bgr = img_np[..., ::-1]
+            bev_resized = cv2.resize(
+                bev_img,
+                (camera_bgr.shape[1], camera_bgr.shape[0]),
+                interpolation=cv2.INTER_LINEAR,
+            )
+            combined = np.concatenate([camera_bgr, bev_resized], axis=1)
+            combined_output_path = os.path.join(folder_path, f"sample_{self.image_count}_with_bev.png")
+            cv2.imwrite(combined_output_path, combined)
 
             self.image_count += 1
 
