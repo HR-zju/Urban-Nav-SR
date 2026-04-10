@@ -919,6 +919,9 @@ class RealSenseNavflowNode(Node):
 
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
             plt.subplots_adjust(wspace=0.3)
+            
+            self.get_logger().info(f"DEBUG -> Global Robot Pos: {current_pose[:2]}")
+            self.get_logger().info(f"DEBUG -> Relative Target (Local): {target_diff_temp[0]}")
 
             ax1.imshow(img_np)  # original RGB image
             ax1.axis('off')
@@ -926,8 +929,8 @@ class RealSenseNavflowNode(Node):
             ax2.axis('equal')
             ax2.plot(wp_to_plot[:, 0], wp_to_plot[:, 1],
                         's-', label='Predicted Waypoints', color='#DB6057')
-            ax2.axhline(0, color='black', lw=1, ls='--') # X轴辅助线
-            ax2.axvline(0, color='black', lw=1, ls='--') # Y轴辅助线
+            ax2.axhline(0, color='black', lw=1, ls='--') 
+            ax2.axvline(0, color='black', lw=1, ls='--') 
             ax2.plot(target_diff_temp[0][0], target_diff_temp[0][1],
                         marker='*', markersize=15, label='Target Coordinate', color='#A157DB')
             ax2.legend()
