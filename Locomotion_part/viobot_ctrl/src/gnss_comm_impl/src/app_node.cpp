@@ -624,47 +624,7 @@ void GnssSppNode::filter_iono_free(
                 idx2 = find_freq_idx(FREQ5);
                 break;
             }
-
-            case SYS_GLO:
-            {
-                // GLONASS 不能用 target frequency！
-                // 直接选两个有效频点（通常 index 就是 G1/G2）
-
-                std::vector<int> valid_idx;
-                for (size_t j = 0; j < obs->freqs.size(); ++j) {
-                    if (obs->freqs[j] < 1e8) continue;
-                    if (obs->psr[j] == 0.0) continue;
-                    valid_idx.push_back(static_cast<int>(j));
-                }
-
-                if (valid_idx.size() >= 2) {
-                    idx1 = valid_idx[0];
-                    idx2 = valid_idx[1];
-                }
-                break;
-            }
-
-            default:
-            {
-                // fallback: 选频率差最大的两个
-                double max_diff = 0.0;
-
-                for (size_t i = 0; i < obs->freqs.size(); ++i) {
-                    if (obs->freqs[i] < 1e8) continue;
-
-                    for (size_t j = i + 1; j < obs->freqs.size(); ++j) {
-                        if (obs->freqs[j] < 1e8) continue;
-
-                        double diff = std::abs(obs->freqs[i] - obs->freqs[j]);
-                        if (diff > max_diff) {
-                            max_diff = diff;
-                            idx1 = static_cast<int>(i);
-                            idx2 = static_cast<int>(j);
-                        }
-                    }
-                }
-                break;
-            }
+            default: break;
         }
 
         // 确保找到了两个不同的频率
@@ -735,6 +695,9 @@ void GnssSppNode::filter_iono_free(
             if_obs->dopp_std.push_back(0.0);
 
             obs_out.push_back(if_obs);
+            ephem_out.push_back(ephem_in[i]);
+        } else { // 直接降级为 L1 单频
+            obs_out.push_back(obs_in[i]);
             ephem_out.push_back(ephem_in[i]);
         }
     }
