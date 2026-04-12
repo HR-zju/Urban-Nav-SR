@@ -152,6 +152,12 @@ export LLM_FEW_SHOT_MAX_EXAMPLES=2
 export LLM_VISION_TIMEOUT_S=60
 ```
 
+如果多目标 itinerary 分解或候选裁决经常超时，可以单独提高 itinerary 超时：
+
+```bash
+export LLM_ITINERARY_TIMEOUT_S=60
+```
+
 ## 安装
 
 ### 本地开发安装
@@ -208,6 +214,43 @@ pip install -e ".[macos]"
 - `get_coarse_waypoints`
   - 输入起终点
   - 返回 provider route 的语义步骤和 coarse waypoints
+
+- `plan_route_with_via_points`
+  - 输入起点、终点和可选途经点列表
+  - 使用现有单段 route API 逐段规划，再拼接成统一多段路线
+  - 输出：
+    - `legs`
+    - `route_summary`
+    - `route_polyline`
+    - `coarse_waypoints`
+
+- `create_route_session`
+  - 创建后端持久化 route session
+  - 可在导航过程中交互更新：
+    - `get_route_session`
+    - `list_route_sessions`
+    - `add_via_point_to_session`
+    - `remove_via_point_from_session`
+    - `replace_destination_in_session`
+    - `replan_route_session_from_origin`
+  - 适合“先加一个途经点，再从当前位置重规划”的交互场景
+  - 默认持久化到 `~/.urban_nav/route_sessions.json`
+  - 可通过环境变量配置：
+    - `ROUTE_SESSION_STORE=file|memory`
+    - `ROUTE_SESSION_STORE_PATH=/path/to/route_sessions.json`
+  - UI 侧只需要保存 `session_id`；后端重启后可通过 `get_route_session` 或 `list_route_sessions` 恢复 session
+  - `create/add/remove/replace/replan` 会缓存最近一次 `route_plan`
+  - `get_route_session` 默认返回缓存，不重新请求地图 API；需要刷新路线时传 `force_replan=true`
+  - `list_route_sessions` 默认不返回完整 `route_plan_cache`，避免列表响应过大
+
+- `render_itinerary_bev_snapshot`
+  - 输入 itinerary `route_plan`，或输入 `origin/destination/via_points`
+  - 返回 AMap 静态图 URL
+  - 标注：
+    - `O`: 起点
+    - `1/2/...`: 途经点
+    - `D`: 终点
+  - 用于多目标 itinerary 和途经点路线的 BEV 可视化
 
 - `get_route_context`
   - 输入当前 `gps`、`heading_deg`、`route_polyline`、`coarse_waypoints`
@@ -1098,6 +1141,49 @@ python examples/amap_bev_snapshot_client.py \
   --refresh-interval-s 3 \
   --iterations 5
 ```
+
+### 途经点与多段路线
+
+静态多段路线：
+
+```bash
+python examples/via_points_client.py \
+  --origin 120.1180,30.2645 \
+  --destination 120.11717,30.266279 \
+  --mode foot \
+  --via 120.1205,30.2652 \
+  --via 120.1198,30.2660
+```
+
+交互式 route session：
+
+```bash
+python examples/route_session_client.py \
+  --origin 120.1180,30.2645 \
+  --destination 120.11717,30.266279 \
+  --mode foot \
+  --first-via 120.1205,30.2652 \
+  --second-via 120.1198,30.2660 \
+  --replan-origin 120.1186,30.2649
+```
+
+多目标需求指令分解与 itinerary 推荐：
+
+```bash
+python examples/itinerary_client.py \
+  --prompt "我今天累了，想先休息，吃顿晚餐，再看个电影" \
+  --lat 30.2645 \
+  --lon 120.1180 \
+  --mode foot \
+  --radius 3000 \
+  --render-map
+```
+
+这条链路使用两段开放词汇 LLM 推理：
+
+- `GoalDecomposer`：few-shot 后把自然语言需求拆成有序 goals，并为每个 goal 生成 provider-facing `search_keywords`
+- `ItineraryCandidateJudge`：对每个 goal 的 Top-K 候选做开放词汇裁决，结合 `goal.rationale`、候选名称、类型、地址和前序 stop 选择最合适的 POI
+- fallback 只做结构性兜底，例如非重复 top-score 候选；不在代码里维护 `movie -> 影院` 或 `dinner -> 餐厅` 这类封闭词表
 
 ## 测试建议
 
