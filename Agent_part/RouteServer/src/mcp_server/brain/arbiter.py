@@ -96,13 +96,15 @@ def build_arbiter_system_prompt() -> str:
 
 def build_direct_prompt_system_prompt() -> str:
     return (
-        "You are a pedestrian navigation visual prompt generator. "
-        "Your job is to draw one conservative image-plane guidance prompt for the next 1 to 3 seconds of walking. "
-        "Treat sidewalks, pedestrian plazas, curb cuts, and marked pedestrian crossings as preferred space. "
-        "Treat motor-vehicle lanes, open roadway, sky, walls, fences, parked cars, and freestanding obstacles such as signboards as forbidden unless a legal crossing is visually obvious. "
-        "Do not send the user into the middle of a road when pedestrian space exists. "
+        "You are a mode-aware first-person navigation visual prompt generator. "
+        "Your job is to draw one conservative image-plane guidance prompt for the next 1 to 3 seconds. "
+        "Use route context only as route intent; it is not permission to ignore visible scene safety. "
+        "For pedestrian mode, treat sidewalks, pedestrian plazas, curb cuts, entrances, and marked crossings as preferred space. "
+        "For pedestrian mode, treat motor-vehicle lanes, open roadway, sky, walls, fences, parked cars, and freestanding obstacles such as signboards as forbidden unless a legal crossing is visually obvious. "
+        "Do not send the user into the middle of a road when pedestrian space exists, even if the route prior points forward or right. "
         "Prefer the nearest safe sidewalk-side opening over a farther but wider drivable area. "
         "The prompt must start near the lower image area and end on a visible walkable opening. "
+        "Route/BEV/PoV candidates, when provided, are advisory priors only; reject or override them if they land on obstacles or non-walkable regions. "
         "If the scene is uncertain, be conservative and set reject_all=true. "
         "Return JSON only with keys: selected_prompt_type, instruction, confidence, reason, reject_all, rendered_prompt. "
         "rendered_prompt must include: type, center_uv, direction_vec, span_px, path_uv, mask. "
@@ -161,6 +163,7 @@ def build_direct_prompt_question(
     image_width: int,
     image_height: int,
     navigation_mode: str = "foot",
+    pov_prompt_candidates: list[dict[str, Any]] | None = None,
 ) -> str:
     compact_route = _compact_route_context(route_context)
     top_prior = None
@@ -183,12 +186,14 @@ def build_direct_prompt_question(
         }
         for item in ((visual_regions or {}).get("candidate_regions", []) or [])[:4]
     ]
+    compact_candidates = [_candidate_compact(item) for item in (pov_prompt_candidates or [])[:5]]
     return json.dumps(
         {
             "task": (
                 "Generate one conservative image-plane navigation trajectory prompt. "
                 "Use the image first, then route context, then the top route prior. "
-                "Prefer a single arrow trajectory through a visible sidewalk-side opening and avoid blocked central obstacles."
+                "Prefer a single arrow trajectory through a visible mode-valid opening and avoid blocked central obstacles. "
+                "Candidate hints are advisory and must not override visible walkability."
             ),
             "navigation_mode": str(navigation_mode or "foot"),
             "navigation_constraints": _navigation_mode_note(navigation_mode),
@@ -196,12 +201,14 @@ def build_direct_prompt_question(
             "route_context": compact_route,
             "top_route_prior": top_prior,
             "visual_regions_hint": compact_regions,
+            "optional_candidate_hints": compact_candidates,
             "hard_rules": [
                 "For foot mode, prioritize sidewalk or pedestrian-space openings.",
                 "Do not place the trajectory on apparent motor lanes or open roadway if sidewalk-like space exists.",
                 "Do not run the trajectory through a central obstacle such as a signboard.",
                 "The path should begin near the lower image region and terminate on a visible walkable opening.",
                 "Prefer the shortest safe path that stays on pedestrian space.",
+                "If route prior and visible mode-valid space conflict, prefer visible mode-valid space and explain the conflict.",
             ],
             "output_requirements": {
                 "selected_prompt_type": "arrow_path|arrow|sector|region",

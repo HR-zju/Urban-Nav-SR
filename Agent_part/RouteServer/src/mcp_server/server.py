@@ -22,15 +22,11 @@ import aiohttp
 from mcp.server.fastmcp import Context, FastMCP
 
 from mcp_server.brain import (
-    build_arbiter_question,
-    build_arbiter_system_prompt,
     build_direct_prompt_question,
     build_direct_prompt_system_prompt,
     candidate_to_rendered_prompt,
-    coerce_arbiter_decision,
     coerce_direct_prompt_decision,
     rule_based_direct_prompt_decision,
-    rule_based_visual_prompt_decision,
 )
 from mcp_server.llm import (
     GoalDecomposer,
@@ -2074,13 +2070,15 @@ async def run_zero_shot_visual_prompt_agent(
     """
     Run a zero-shot visual prompt agent over the current FPV frame.
 
-    The agent:
-    1. builds RouteContext + LocalBEVContext
-    2. generates BEV prompt proposals
-    3. generates RGB-aware PoV prompt candidates
-    4. asks a multimodal LLM to select one candidate
-    5. falls back to a deterministic rule-based selector if the LLM is unavailable,
-       times out, returns invalid JSON, or rejects every candidate
+    The online decision path is mode-aware and image-first:
+    1. build RouteContext + LocalBEVContext
+    2. generate BEV/PoV candidates as advisory teacher/debug priors
+    3. ask the LVLM to draw one conservative image-plane prompt using image +
+       RouteContext + mode constraints
+    4. fall back to visual-region guidance, then candidate priors only if needed
+
+    The public input/output schema is unchanged; candidate fields remain for
+    debugging and future teacher distillation.
     """
     await ctx.info(
         "Running zero-shot visual prompt agent "
@@ -2128,44 +2126,57 @@ async def run_zero_shot_visual_prompt_agent(
     llm_raw: Dict[str, Any] | None = None
     llm_error: str | None = None
     decision = None
-    if pov_prompt_candidates:
-        try:
-            question = build_arbiter_question(
-                route_context=route_context_dict,
-                prompt_proposals=prompt_proposals,
-                pov_prompt_candidates=pov_prompt_candidates,
-                navigation_mode=navigation_mode,
+    question = ""
+    system_prompt = ""
+    try:
+        question = build_direct_prompt_question(
+            route_context=route_context_dict,
+            prompt_proposals=prompt_proposals,
+            visual_regions=visual_regions_dict,
+            image_width=visual_region_bundle.image_width,
+            image_height=visual_region_bundle.image_height,
+            navigation_mode=navigation_mode,
+            pov_prompt_candidates=pov_prompt_candidates,
+        )
+        system_prompt = build_direct_prompt_system_prompt()
+        if str(image_path or "").strip():
+            llm_raw = await arbitrate_local_pov_candidates_with_llm(
+                image_path=str(image_path),
+                question=question,
+                detail=llm_detail,
+                system_prompt=system_prompt,
             )
-            system_prompt = build_arbiter_system_prompt()
-            if str(image_path or "").strip():
-                llm_raw = await arbitrate_local_pov_candidates_with_llm(
-                    image_path=str(image_path),
-                    question=question,
-                    detail=llm_detail,
-                    system_prompt=system_prompt,
-                )
-            else:
-                llm_raw = await arbitrate_pov_candidates_with_llm(
-                    image_url=str(image_url),
-                    question=question,
-                    detail=llm_detail,
-                    system_prompt=system_prompt,
-                )
-            decision = coerce_arbiter_decision(
-                raw=llm_raw,
-                route_context=route_context_dict,
-                pov_prompt_candidates=pov_prompt_candidates,
+        else:
+            llm_raw = await arbitrate_pov_candidates_with_llm(
+                image_url=str(image_url),
+                question=question,
+                detail=llm_detail,
+                system_prompt=system_prompt,
             )
-            if decision is not None and decision.reject_all:
-                llm_error = "LLM rejected all candidates; falling back to rule-based selection."
-                decision = None
-        except Exception as exc:
-            llm_error = str(exc)
+        decision = coerce_direct_prompt_decision(
+            raw=llm_raw,
+            route_context=route_context_dict,
+            image_width=visual_region_bundle.image_width,
+            image_height=visual_region_bundle.image_height,
+        )
+        if decision is not None and decision.reject_all:
+            llm_error = "LLM rejected the mode-aware visual prompt; falling back to visual-region guidance."
+            decision = None
+    except Exception as exc:
+        llm_error = str(exc)
 
     if decision is None:
-        decision = rule_based_visual_prompt_decision(
+        fallback_candidate = _fallback_candidate_from_visual_regions(
+            visual_regions_dict=visual_regions_dict,
+            image_width=visual_region_bundle.image_width,
+            image_height=visual_region_bundle.image_height,
+            navigation_mode=navigation_mode,
+        )
+        if fallback_candidate is None and pov_prompt_candidates:
+            fallback_candidate = pov_prompt_candidates[0]
+        decision = rule_based_direct_prompt_decision(
             route_context=route_context_dict,
-            pov_prompt_candidates=pov_prompt_candidates,
+            fallback_candidate=fallback_candidate,
         )
 
     decision_dict = visual_prompt_decision_to_dict(decision)
@@ -2188,7 +2199,7 @@ async def run_zero_shot_visual_prompt_agent(
         image_width=visual_region_bundle.image_width,
         image_height=visual_region_bundle.image_height,
         rendered_prompt=decision.rendered_prompt,
-        title="Candidate-Arbiter Visual Prompt",
+        title="Mode-Aware Visual Prompt",
     )
 
     return {
@@ -2227,7 +2238,7 @@ async def run_zero_shot_direct_arrow_agent(
 
     This baseline does not let the LVLM modify or select from structured candidates first.
     It still builds route context and visual regions to keep the prompt grounded, and
-    falls back to the top structured candidate when the direct output is invalid.
+    falls back to visual-region guidance before using structured candidates.
     """
     await ctx.info(
         "Running zero-shot direct arrow baseline "
@@ -2278,6 +2289,7 @@ async def run_zero_shot_direct_arrow_agent(
             image_width=visual_region_bundle.image_width,
             image_height=visual_region_bundle.image_height,
             navigation_mode=navigation_mode,
+            pov_prompt_candidates=fallback_candidates[:5],
         )
         system_prompt = build_direct_prompt_system_prompt()
         if str(image_path or "").strip():
@@ -2307,9 +2319,17 @@ async def run_zero_shot_direct_arrow_agent(
         llm_error = str(exc)
 
     if decision is None:
+        fallback_candidate = _fallback_candidate_from_visual_regions(
+            visual_regions_dict=visual_regions_dict,
+            image_width=visual_region_bundle.image_width,
+            image_height=visual_region_bundle.image_height,
+            navigation_mode=navigation_mode,
+        )
+        if fallback_candidate is None and fallback_candidates:
+            fallback_candidate = fallback_candidates[0]
         decision = rule_based_direct_prompt_decision(
             route_context=route_context_dict,
-            fallback_candidate=(fallback_candidates[0] if fallback_candidates else None),
+            fallback_candidate=fallback_candidate,
         )
 
     decision_dict = visual_prompt_decision_to_dict(decision)
@@ -2363,9 +2383,9 @@ async def compare_zero_shot_agents(
     navigation_mode: str = "foot",
 ) -> Dict[str, Any]:
     """
-    Compare the direct-arrow zero-shot baseline against the candidate-arbiter agent.
+    Compare the direct-arrow baseline against the mode-aware visual prompt agent.
     """
-    await ctx.info("Comparing zero-shot direct-arrow baseline with candidate-arbiter agent")
+    await ctx.info("Comparing zero-shot direct-arrow baseline with mode-aware visual prompt agent")
     direct_result = await run_zero_shot_direct_arrow_agent(
         gps=gps,
         route_polyline=route_polyline,
