@@ -897,76 +897,20 @@ xdg-open /tmp/route_context_debugger.html
 
 ## 示例客户端
 
-### 基础示例
+当前只保留主线 examples。过期的单功能调试脚本已经合并到 `route_context_debug_client.py`，避免 README 和 examples 目录继续膨胀。
+
+### 图像理解
 
 ```bash
-python examples/client.py
+python examples/image_understanding_client.py \
+  --image-path /home/ubuntu/WorkSpace/dataset/urban.jpeg \
+  --question "Describe the navigable directions and obstacles in this FPV image."
 ```
 
-### Prompt 推荐
+### Route Context / BEV / Proposal 调试
 
 ```bash
-python examples/prompt_recommendation_client.py \
-  --prompt "Find a quiet cafe nearby with fast driving access" \
-  --lat 37.7749 \
-  --lon -122.4194 \
-  --mode car \
-  --max-candidates 3 \
-  --radius 2500
-```
-
-### macOS 交互式推荐
-
-```bash
-python examples/macos_prompt_recommendation_client.py \
-  --prompt "我想去西湖" \
-  --mode foot \
-  --radius 3000 \
-  --lat 30.2645 \
-  --lon 120.1180
-```
-
-这个脚本会：
-
-- 用当前位置生成候选
-- 先返回候选列表
-- 只在用户确认选项后再补该候选路线
-
-### RouteContext
-
-```python
-{
-  "gps": {"lat": 30.2645, "lng": 120.1180},
-  "heading_deg": 35.0,
-  "route_polyline": [...],
-  "coarse_waypoints": [...],
-  "lookahead_m": 20.0
-}
-```
-
-你可以先调用 `recommend_destination_and_waypoints` 或 `get_coarse_waypoints` 拿到 `route_polyline` 和 `coarse_waypoints`，再把它们送进 `get_route_context`。
-
-最直接的测试方法是运行：
-
-```bash
-python examples/route_context_client.py \
-  --prompt "我想去西湖" \
-  --lat 30.2645 \
-  --lon 120.1180 \
-  --mode foot \
-  --radius 3000 \
-  --heading-deg 35 \
-  --lookahead-m 20
-```
-
-它会先调用 `recommend_destination_and_waypoints`，再自动调用 `get_route_context`，最后打印标准 `RouteContext` JSON。
-
-### Local BEV Patch
-
-最直接的测试方法是运行：
-
-```bash
-python examples/local_bev_patch_client.py \
+python examples/route_context_debug_client.py \
   --prompt "我想去西湖" \
   --lat 30.2645 \
   --lon 120.1180 \
@@ -977,58 +921,10 @@ python examples/local_bev_patch_client.py \
   --open
 ```
 
-它会先调用 `recommend_destination_and_waypoints`，必要时 fallback 到 `get_coarse_waypoints`，然后自动调用 `render_local_bev_patch`，最后打印 `LocalBEVContext` 并打开局部 SVG patch。
-
-### PromptProposal v1
-
-最直接的测试方法是运行：
+如提供 FPV 图像，它会额外跑 RGB-aware PoV candidates：
 
 ```bash
-python examples/bev_prompt_proposal_client.py \
-  --prompt "我想去西湖" \
-  --lat 30.2645 \
-  --lon 120.1180 \
-  --mode foot \
-  --radius 3000 \
-  --heading-deg 35 \
-  --lookahead-m 20
-```
-
-它会先生成路线，再自动调用 `generate_bev_prompt_proposals`，最后打印结构化 proposal 列表。
-
-### PoV Prompt Projection v1
-
-最直接的测试方法是运行：
-
-```bash
-python examples/pov_prompt_projection_client.py \
-  --prompt "我想去西湖" \
-  --lat 30.2645 \
-  --lon 120.1180 \
-  --mode foot \
-  --radius 3000 \
-  --heading-deg 35 \
-  --lookahead-m 20 \
-  --image-width 1280 \
-  --image-height 720
-```
-
-它会先生成路线，再自动调用：
-
-- `generate_bev_prompt_proposals`
-- `generate_pov_prompt_candidates`
-
-最后打印：
-
-- `prompt_proposals`
-- `pov_prompt_candidates`
-
-### PromptProposal v2 (RGB-aware)
-
-最直接的测试方法是运行：
-
-```bash
-python examples/pov_prompt_projection_v2_client.py \
+python examples/route_context_debug_client.py \
   --prompt "我想去西湖" \
   --lat 30.2645 \
   --lon 120.1180 \
@@ -1039,26 +935,15 @@ python examples/pov_prompt_projection_v2_client.py \
   --image-path /home/ubuntu/WorkSpace/dataset/urban.jpeg
 ```
 
-它会先生成路线，再自动调用：
+这个脚本会集中输出：
 
-- `generate_bev_prompt_proposals`
-- `generate_pov_prompt_candidates_v2`
-
-最后打印：
-
-- `visual_regions`
-- `pov_prompt_candidates`
-
-如果你用 `tools/route_context_capture.py` 且提供了 `--image-path` 或轨迹帧里的 `image_path`，capture 会优先走 v2，并把：
-
-- `visual_regions`
-- `pov_prompt_candidates_v2`
-
-一起保存给 `route_context_debugger.py` 做三联面板回放。
+- `RouteContext`
+- `LocalBEV` SVG patch
+- `BEV PromptProposal`
+- 可选 `visual_regions`
+- 可选 `PoV PromptCandidate v2`
 
 ### Zero-shot Visual Prompt Agent
-
-最直接的测试方法是运行：
 
 ```bash
 python examples/zero_shot_visual_prompt_agent_client.py \
@@ -1072,102 +957,35 @@ python examples/zero_shot_visual_prompt_agent_client.py \
   --image-path /home/ubuntu/WorkSpace/dataset/urban.jpeg
 ```
 
-它会先生成：
+它会生成 RouteContext、BEV/RGB-aware candidates，并调用 zero-shot LVLM arbiter 选择最终 visual prompt。
 
-- `RouteContext`
-- `PromptProposal v1`
-- `PromptProposal v2`
+### Route Session / 动态途经点
 
-然后再调用 zero-shot LVLM arbiter，并最终打印：
-
-- `arbiter_decision`
-- `selected_candidate`
-
-### Zero-shot Direct-Arrow Baseline
-
-最直接的测试方法是运行：
-
-```bash
-python examples/compare_zero_shot_agents.py \
-  --prompt "我想去西湖" \
-  --lat 30.2645 \
-  --lon 120.1180 \
-  --mode foot \
-  --radius 3000 \
-  --heading-deg 35 \
-  --lookahead-m 20 \
-  --image-path /home/ubuntu/WorkSpace/dataset/urban.jpeg
-```
-
-它会在同一帧上同时比较：
-
-- direct-arrow zero-shot baseline
-- candidate-arbiter zero-shot agent
-
-并输出两边的：
-
-- decision source
-- fallback usage
-- reject_all
-- rendered prompt / selected candidate
-
-### 图像理解
-
-```bash
-python examples/image_understanding_client.py \
-  --image-url "https://ark-project.tos-cn-beijing.ivolces.com/images/view.jpeg" \
-  --question "What place is shown in this image?"
-```
-
-也支持本地图片路径：
-
-```bash
-python examples/image_understanding_client.py \
-  --image-path /home/ubuntu/WorkSpace/dataset/urban.jpeg \
-  --question "Describe the navigable directions and obstacles in this FPV image."
-```
-
-### AMap BEV 快照轮询
-
-```bash
-export MAP_PROVIDER=amap
-export AMAP_KEY=your_amap_key
-
-python examples/amap_bev_snapshot_client.py \
-  --prompt "I want to go to the WestLake" \
-  --lat 30.2645 \
-  --lon 120.1180 \
-  --mode foot \
-  --refresh-interval-s 3 \
-  --iterations 5
-```
-
-### 途经点与多段路线
-
-静态多段路线：
-
-```bash
-python examples/via_points_client.py \
-  --origin 120.1180,30.2645 \
-  --destination 120.11717,30.266279 \
-  --mode foot \
-  --via 120.1205,30.2652 \
-  --via 120.1198,30.2660
-```
-
-交互式 route session：
+直接测试 session 内追加途经点：
 
 ```bash
 python examples/route_session_client.py \
   --origin 120.1180,30.2645 \
-  --destination 120.11717,30.266279 \
+  --destination 120.116555,30.270429 \
   --mode foot \
-  --first-via 120.1205,30.2652 \
-  --second-via 120.1198,30.2660 \
-  --replan-origin 120.1186,30.2649
+  --add-via 120.118376,30.257515 \
+  --add-via 120.12601,30.26017
 ```
 
-多目标需求指令分解与 itinerary 推荐：
+测试“自然语言新增需求 -> 解析地点 -> 追加途经点 -> 重规划”：
+
+```bash
+python examples/realtime_instruction_session_client.py \
+  --lat 30.2645 \
+  --lon 120.1180 \
+  --mode foot \
+  --init-instruction "我想去西湖" \
+  --append-instruction "我有点累，先找个地方坐下休息" \
+  --append-instruction "再找个地方吃晚餐" \
+  --radius 3000
+```
+
+### 多目标 Itinerary
 
 ```bash
 python examples/itinerary_client.py \
@@ -1184,6 +1002,19 @@ python examples/itinerary_client.py \
 - `GoalDecomposer`：few-shot 后把自然语言需求拆成有序 goals，并为每个 goal 生成 provider-facing `search_keywords`
 - `ItineraryCandidateJudge`：对每个 goal 的 Top-K 候选做开放词汇裁决，结合 `goal.rationale`、候选名称、类型、地址和前序 stop 选择最合适的 POI
 - fallback 只做结构性兜底，例如非重复 top-score 候选；不在代码里维护 `movie -> 影院` 或 `dinner -> 餐厅` 这类封闭词表
+
+### macOS 交互式推荐
+
+```bash
+python examples/macos_prompt_recommendation_client.py \
+  --prompt "我想去西湖" \
+  --mode foot \
+  --radius 3000 \
+  --lat 30.2645 \
+  --lon 120.1180
+```
+
+这是 macOS 专用入口，用于读取/确认当前位置；Ubuntu 环境可以忽略，但保留该脚本。
 
 ## 测试建议
 
@@ -1225,7 +1056,7 @@ python examples/macos_prompt_recommendation_client.py \
 建议直接跑新的示例客户端：
 
 ```bash
-python examples/route_context_client.py \
+python examples/route_context_debug_client.py \
   --prompt "我想去西湖" \
   --lat 30.2645 \
   --lon 120.1180 \

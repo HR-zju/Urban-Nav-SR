@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 from typing import Any
+import webbrowser
 
 
 def first_text_content(result) -> str:
@@ -79,7 +80,7 @@ async def ensure_route_geometry(
     latitude: float,
     longitude: float,
     mode: str,
-) -> tuple[list[dict[str, float]], list[dict[str, Any]]]:
+) -> tuple[list[Any], list[dict[str, Any]]]:
     route_polyline = recommendation.get("route_polyline") or []
     coarse_waypoints = recommendation.get("coarse_waypoints") or recommendation.get("key_waypoints") or []
     if route_polyline and coarse_waypoints:
@@ -88,10 +89,7 @@ async def ensure_route_geometry(
     chosen_destination = recommendation.get("chosen_destination", {}) or {}
     destination = destination_location(chosen_destination)
     if not destination:
-        raise RuntimeError(
-            "recommend_destination_and_waypoints did not return usable route geometry, "
-            "and chosen_destination has no usable location"
-        )
+        raise RuntimeError("Recommendation has no route geometry and no usable chosen destination location")
 
     route_payload = await call_tool_json(
         session,
@@ -106,15 +104,13 @@ async def ensure_route_geometry(
     coarse_waypoints = route_payload.get("coarse_waypoints") or []
     if not route_polyline and coarse_waypoints:
         route_polyline = polyline_from_coarse_waypoints(coarse_waypoints)
-
-    if not route_polyline:
-        raise RuntimeError("No route_polyline available after fallback get_coarse_waypoints")
-    if not coarse_waypoints:
-        raise RuntimeError("No coarse_waypoints available after fallback get_coarse_waypoints")
+    if not route_polyline or not coarse_waypoints:
+        raise RuntimeError("No usable route geometry after fallback get_coarse_waypoints")
     return route_polyline, coarse_waypoints
 
 
 async def run_demo(
+    *,
     prompt: str,
     latitude: float,
     longitude: float,
@@ -123,6 +119,12 @@ async def run_demo(
     max_candidates: int,
     heading_deg: float | None,
     lookahead_m: float,
+    image_path: str | None,
+    image_url: str | None,
+    visual_top_k: int,
+    width: int,
+    height: int,
+    open_svg: bool,
 ) -> None:
     server_params = StdioServerParameters(
         command="osm-mcp-server",
@@ -146,7 +148,6 @@ async def run_demo(
                     "search_radius": radius,
                 },
             )
-
             route_polyline, coarse_waypoints = await ensure_route_geometry(
                 session,
                 recommendation=recommendation,
@@ -155,37 +156,77 @@ async def run_demo(
                 mode=mode,
             )
 
-            proposal_payload = await call_tool_json(
+            common_args = {
+                "gps": {"lat": latitude, "lng": longitude},
+                "heading_deg": heading_deg,
+                "route_polyline": route_polyline,
+                "coarse_waypoints": coarse_waypoints,
+                "lookahead_m": lookahead_m,
+            }
+
+            route_context = await call_tool_json(session, "get_route_context", common_args)
+            bev_patch = await call_tool_json(
                 session,
-                "generate_bev_prompt_proposals",
+                "render_local_bev_patch",
                 {
-                    "gps": {"lat": latitude, "lng": longitude},
-                    "heading_deg": heading_deg,
-                    "route_polyline": route_polyline,
-                    "coarse_waypoints": coarse_waypoints,
-                    "lookahead_m": lookahead_m,
+                    **common_args,
+                    "width": width,
+                    "height": height,
                 },
             )
+            bev_proposals = await call_tool_json(session, "generate_bev_prompt_proposals", common_args)
 
-            print("=== BEV Prompt Proposal Summary ===")
+            pov_v2 = None
+            if image_path or image_url:
+                pov_v2 = await call_tool_json(
+                    session,
+                    "generate_pov_prompt_candidates_v2",
+                    {
+                        **common_args,
+                        "image_path": image_path,
+                        "image_url": image_url,
+                        "visual_top_k": visual_top_k,
+                    },
+                )
+
+            print("=== Route Context Debug Summary ===")
             print(
                 json.dumps(
                     {
                         "provider": recommendation.get("provider"),
                         "chosen_destination": recommendation.get("chosen_destination", {}),
-                        "proposal_count": len(proposal_payload.get("prompt_proposals", []) or []),
+                        "route_summary": recommendation.get("route_summary", {}),
+                        "turn_semantics": (route_context.get("local_semantics", {}) or {}).get("turn_semantics"),
+                        "corridor_type": (route_context.get("local_semantics", {}) or {}).get("corridor_type"),
+                        "distance_to_next_turn_m": (route_context.get("progress", {}) or {}).get("distance_to_next_turn_m"),
+                        "bev_proposal_count": len(bev_proposals.get("prompt_proposals", []) or []),
+                        "pov_candidate_count": len((pov_v2 or {}).get("pov_prompt_candidates", []) or []),
+                        "svg_data_url": bev_patch.get("svg_data_url"),
                     },
                     indent=2,
                     ensure_ascii=True,
                 )
             )
 
-            print("\n=== Prompt Proposals ===")
-            print(json.dumps(proposal_payload.get("prompt_proposals", []), indent=2, ensure_ascii=True))
+            print("\n=== RouteContext ===")
+            print(json.dumps(route_context, indent=2, ensure_ascii=True))
+            print("\n=== BEV Prompt Proposals ===")
+            print(json.dumps(bev_proposals.get("prompt_proposals", []), indent=2, ensure_ascii=True))
+
+            if pov_v2 is not None:
+                print("\n=== Visual Regions ===")
+                print(json.dumps((pov_v2.get("visual_regions", {}) or {}).get("candidate_regions", []), indent=2, ensure_ascii=True))
+                print("\n=== PoV Prompt Candidates v2 ===")
+                print(json.dumps(pov_v2.get("pov_prompt_candidates", []), indent=2, ensure_ascii=True))
+
+            if open_svg:
+                svg_data_url = str(bev_patch.get("svg_data_url") or "").strip()
+                if svg_data_url:
+                    await asyncio.to_thread(webbrowser.open, svg_data_url)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Generate PromptProposal v1 from RouteContext and LocalBEVContext")
+    parser = argparse.ArgumentParser(description="Debug RouteContext, LocalBEV, BEV proposals, and optional RGB-aware PoV candidates")
     parser.add_argument("--prompt", required=True, help="Natural language destination prompt")
     parser.add_argument("--lat", type=float, required=True, help="Current latitude")
     parser.add_argument("--lon", type=float, required=True, help="Current longitude")
@@ -194,8 +235,14 @@ if __name__ == "__main__":
     parser.add_argument("--max-candidates", type=int, default=5, help="Maximum recommendation candidates")
     parser.add_argument("--heading-deg", type=float, default=None, help="Optional current heading in degrees")
     parser.add_argument("--lookahead-m", type=float, default=20.0, help="Local segment lookahead distance in meters")
-
+    parser.add_argument("--image-path", help="Optional local RGB/FPV image path for PromptProposal v2")
+    parser.add_argument("--image-url", help="Optional image URL or data URL for PromptProposal v2")
+    parser.add_argument("--visual-top-k", type=int, default=5, help="Maximum visual candidate regions")
+    parser.add_argument("--width", type=int, default=640, help="Rendered BEV SVG width")
+    parser.add_argument("--height", type=int, default=640, help="Rendered BEV SVG height")
+    parser.add_argument("--open", action="store_true", help="Open the rendered BEV SVG data URL")
     args = parser.parse_args()
+
     asyncio.run(
         run_demo(
             prompt=args.prompt,
@@ -206,5 +253,11 @@ if __name__ == "__main__":
             max_candidates=args.max_candidates,
             heading_deg=args.heading_deg,
             lookahead_m=args.lookahead_m,
+            image_path=args.image_path,
+            image_url=args.image_url,
+            visual_top_k=args.visual_top_k,
+            width=args.width,
+            height=args.height,
+            open_svg=args.open,
         )
     )
