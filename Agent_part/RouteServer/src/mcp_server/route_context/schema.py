@@ -112,71 +112,6 @@ class RouteState:
 
 
 @dataclass
-class PromptProposal:
-    proposal_id: str
-    proposal_type: str
-    frame: str
-    sector_center_deg: float
-    sector_span_deg: float
-    range_m: list[float]
-    priority: float
-    geometry_source: str
-    semantic_tag: str
-    rationale: str
-    prompt_text: str
-    debug: dict[str, Any]
-
-
-@dataclass
-class PromptProposalBundle:
-    proposals: list[PromptProposal]
-
-
-@dataclass
-class VisualRegion:
-    region_id: str
-    region_type: str
-    frame: str
-    bbox_uv: list[float]
-    polygon_uv: list[list[float]]
-    score: float
-    mask: Any | None
-    source: str
-    debug: dict[str, Any]
-
-
-@dataclass
-class VisualRegionBundle:
-    image_width: int
-    image_height: int
-    navigability_heatmap: list[list[float]]
-    candidate_regions: list[VisualRegion]
-
-
-@dataclass
-class PoVPromptCandidate:
-    proposal_id: str
-    source_bev_proposal_id: str
-    prompt_type: str
-    frame: str
-    center_uv: list[float] | None
-    direction_vec: list[float] | None
-    span_px: float | None
-    mask: Any | None
-    priority: float
-    projection_confidence: float
-    visual_confidence: float | None
-    semantic_tag: str | None
-    rationale: str | None
-    debug: dict[str, Any]
-
-
-@dataclass
-class PoVPromptCandidateBundle:
-    candidates: list[PoVPromptCandidate]
-
-
-@dataclass
 class VisualPromptDecision:
     selected_candidate_id: str | None
     selected_prompt_type: str | None
@@ -200,18 +135,6 @@ def local_bev_context_to_dict(context: LocalBEVContext) -> dict[str, Any]:
 
 def route_state_to_dict(state: RouteState) -> dict[str, Any]:
     return asdict(state)
-
-
-def prompt_proposal_bundle_to_dict(bundle: PromptProposalBundle) -> dict[str, Any]:
-    return asdict(bundle)
-
-
-def visual_region_bundle_to_dict(bundle: VisualRegionBundle) -> dict[str, Any]:
-    return asdict(bundle)
-
-
-def pov_prompt_candidate_bundle_to_dict(bundle: PoVPromptCandidateBundle) -> dict[str, Any]:
-    return asdict(bundle)
 
 
 def visual_prompt_decision_to_dict(decision: VisualPromptDecision) -> dict[str, Any]:

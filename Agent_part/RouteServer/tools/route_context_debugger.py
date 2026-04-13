@@ -227,9 +227,6 @@ HTML_TEMPLATE = """<!doctype html>
           <span class="connector">connector</span>
           <span class="patchcorridor">corridor prior</span>
           <span class="patchturn">turn prior</span>
-          <span class="proposalcorridor">corridor proposal</span>
-          <span class="proposalturn">turn proposal</span>
-          <span class="proposalconnector">connector proposal</span>
         </div>
         <svg id="localPatch" viewBox="0 0 680 420"></svg>
         <div class="field-grid">
@@ -560,34 +557,6 @@ HTML_TEMPLATE = """<!doctype html>
       html += `<polygon points="${{patchSectorPath(bbox, width, height, corridorSector.center_deg || 0, corridorSector.span_deg || 60, Math.max(local.lookahead_m || 20, 12))}}" fill="#60a5fa" fill-opacity="0.10" stroke="none" />`;
       html += `<polygon points="${{patchSectorPath(bbox, width, height, turnSector.center_deg || 0, turnSector.span_deg || 35, Math.max((local.lookahead_m || 20) * 0.85, 10))}}" fill="#f59e0b" fill-opacity="0.10" stroke="none" />`;
 
-      (frame.prompt_proposals || []).forEach((proposal, index) => {{
-        const style = proposalStyle(proposal.proposal_type);
-        const range = proposal.range_m || [];
-        const radius = Array.isArray(range) && range.length ? Math.max(range[1] || range[0] || 12, 8) : Math.max(local.lookahead_m || 20, 10);
-        const points = patchSectorPath(
-          bbox,
-          width,
-          height,
-          Number(proposal.sector_center_deg || 0),
-          Number(proposal.sector_span_deg || 30),
-          radius
-        );
-        if (!points) return;
-        html += `<polygon points="${{points}}" fill="${{style.fill}}" stroke="${{style.stroke}}" stroke-width="1.5" />`;
-        const labelPoint = projectPatchPoint(
-          {{
-            x_m: Math.sin((Number(proposal.sector_center_deg || 0)) * Math.PI / 180) * radius * 0.7,
-            y_m: Math.cos((Number(proposal.sector_center_deg || 0)) * Math.PI / 180) * radius * 0.7
-          }},
-          bbox,
-          width,
-          height
-        );
-        if (labelPoint) {{
-          html += `<text x="${{(labelPoint.x + 6).toFixed(1)}}" y="${{(labelPoint.y - 4).toFixed(1)}}" fill="${{style.stroke}}" font-size="10">${{proposal.proposal_type}} · p=${{Number(proposal.priority || 0).toFixed(2)}}</text>`;
-        }}
-      }});
-
       html += patchPolyline(local.route_polyline_local || [], bbox, width, height, "#22c55e", 4);
       html += patchPolyline(local.local_segment_bev || [], bbox, width, height, "#3b82f6", 5);
       html += patchPolyline(local.connector_bev || [], bbox, width, height, "#fb923c", 4, "8 6");
@@ -628,12 +597,24 @@ HTML_TEMPLATE = """<!doctype html>
       const height = Math.max(Number(frame.image_height || CAPTURE.meta.image_height || 720), 64);
       svg.setAttribute("viewBox", `0 0 ${{width}} ${{height}}`);
       const imageHref = frame.image_data_url || frame.image_url || "";
+      const overlayHref = frame.visual_prompt_overlay_svg_data_url || "";
 
       let html = `<rect x="0" y="0" width="${{width}}" height="${{height}}" fill="#020617" />`;
-      if (imageHref) {{
+      if (overlayHref) {{
+        html += `<image href="${{overlayHref}}" x="0" y="0" width="${{width}}" height="${{height}}" preserveAspectRatio="xMidYMid meet" />`;
+      }} else if (imageHref) {{
         html += `<image href="${{imageHref}}" x="0" y="0" width="${{width}}" height="${{height}}" preserveAspectRatio="xMidYMid slice" />`;
       }} else {{
         html += `<text x="${{width / 2}}" y="${{height / 2}}" text-anchor="middle" fill="#94a3b8" font-size="24">No RGB frame available</text>`;
+      }}
+
+      if (overlayHref) {{
+        const decision = frame.visual_prompt_decision || {{}};
+        document.getElementById("povTopCandidate").textContent = decision.rendered_prompt?.type
+          ? `${{decision.rendered_prompt.type}} · conf=${{Number(decision.confidence || 0).toFixed(2)}}`
+          : "visual prompt overlay";
+        svg.innerHTML = html;
+        return;
       }}
 
       const anchor = {{ x: width * 0.5, y: height * 0.94 }};
@@ -731,9 +712,7 @@ HTML_TEMPLATE = """<!doctype html>
       document.getElementById("jsonView").textContent = JSON.stringify({{
         route_context: frame.route_context,
         local_bev_context: frame.local_bev_context,
-        prompt_proposals: frame.prompt_proposals,
-        visual_regions: frame.visual_regions,
-        pov_prompt_candidates: activePovCandidates(frame)
+        visual_prompt_decision: frame.visual_prompt_decision
       }}, null, 2);
       document.getElementById("frameSlider").value = String(frameIndex);
       setFields(frameIndex);

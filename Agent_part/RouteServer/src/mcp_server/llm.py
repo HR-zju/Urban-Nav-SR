@@ -10,6 +10,7 @@ import inspect
 import json
 import mimetypes
 import os
+import io
 import re
 from pathlib import Path
 
@@ -17,6 +18,12 @@ try:
     from openai import AsyncOpenAI
 except ImportError:
     AsyncOpenAI = None
+
+try:
+    from PIL import Image, ImageOps
+except ImportError:
+    Image = None
+    ImageOps = None
 
 from mcp_server.config import (
     default_intent_rules,
@@ -80,12 +87,23 @@ class LLMSettings:
         )
         if api_style not in {"responses", "chat_completions"}:
             api_style = "chat_completions" if provider == "ark" else "chat_completions"
+        model = (
+            os.getenv("LLM_MODEL", "").strip()
+            or os.getenv("VLM_MODEL", "").strip()
+            or os.getenv("ARK_MODEL", "").strip()
+            or default_model
+        )
+        base_url = (
+            os.getenv("LLM_API_BASE_URL", "").strip()
+            or os.getenv("ARK_BASE_URL", "").strip()
+            or default_base_url
+        )
         return cls(
             provider=provider,
             api_style=api_style,
             api_key=api_key,
-            model=os.getenv("LLM_MODEL", default_model).strip(),
-            base_url=os.getenv("LLM_API_BASE_URL", default_base_url).rstrip("/"),
+            model=model,
+            base_url=base_url.rstrip("/"),
             temperature=float(os.getenv("LLM_TEMPERATURE", "0") or 0),
             timeout_s=float(os.getenv("LLM_TIMEOUT_S", "20") or 20),
             response_format=os.getenv("LLM_RESPONSE_FORMAT_JSON", "true").strip().lower() not in {"0", "false", "no"},
@@ -1490,7 +1508,7 @@ class VisionAnalyzer(BaseLLMService):
                 return max(5.0, float(raw))
             except ValueError:
                 pass
-        return max(60.0, self.settings.timeout_s)
+        return max(90.0, self.settings.timeout_s)
 
     def build_messages(
         self,
@@ -1810,9 +1828,57 @@ def local_image_path_to_data_url(image_path: str) -> str:
     mime_type, _ = mimetypes.guess_type(path.name)
     if not mime_type or not mime_type.startswith("image/"):
         mime_type = "image/jpeg"
+    raw_bytes = path.read_bytes()
 
-    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-    return f"data:{mime_type};base64,{encoded}"
+    max_side_raw = os.getenv("LLM_VISION_IMAGE_MAX_SIDE", "").strip()
+    max_bytes_raw = os.getenv("LLM_VISION_IMAGE_MAX_BYTES", "").strip()
+    jpeg_quality_raw = os.getenv("LLM_VISION_IMAGE_JPEG_QUALITY", "").strip()
+    try:
+        max_side = max(512, int(max_side_raw)) if max_side_raw else 1600
+    except ValueError:
+        max_side = 1600
+    try:
+        max_bytes = max(256_000, int(max_bytes_raw)) if max_bytes_raw else 2_500_000
+    except ValueError:
+        max_bytes = 2_500_000
+    try:
+        jpeg_quality = min(max(int(jpeg_quality_raw), 40), 95) if jpeg_quality_raw else 85
+    except ValueError:
+        jpeg_quality = 85
+
+    should_optimize = len(raw_bytes) > max_bytes
+    optimized_bytes = raw_bytes
+    optimized_mime = mime_type
+
+    if Image is not None:
+        try:
+            image = Image.open(path)
+            if ImageOps is not None:
+                image = ImageOps.exif_transpose(image)
+            image = image.convert("RGB")
+            width, height = image.size
+            longest = max(width, height, 1)
+            resize_scale = min(1.0, float(max_side) / float(longest))
+            if resize_scale < 0.999:
+                image = image.resize(
+                    (
+                        max(1, int(round(width * resize_scale))),
+                        max(1, int(round(height * resize_scale))),
+                    ),
+                    Image.Resampling.LANCZOS,
+                )
+                should_optimize = True
+            if should_optimize:
+                buffer = io.BytesIO()
+                image.save(buffer, format="JPEG", quality=jpeg_quality, optimize=True)
+                optimized_bytes = buffer.getvalue()
+                optimized_mime = "image/jpeg"
+        except Exception:
+            optimized_bytes = raw_bytes
+            optimized_mime = mime_type
+
+    encoded = base64.b64encode(optimized_bytes).decode("ascii")
+    return f"data:{optimized_mime};base64,{encoded}"
 
 
 async def analyze_local_image_with_llm(

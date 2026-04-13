@@ -155,12 +155,7 @@ export ROUTE_SESSION_STORE=memory
 
 ### Prompt / Vision
 
-- `generate_bev_prompt_proposals`
-- `generate_pov_prompt_candidates`
-- `generate_pov_prompt_candidates_v2`
 - `run_zero_shot_visual_prompt_agent`
-- `run_zero_shot_direct_arrow_agent`
-- `run_visual_prompt_only_from_context`
 - `analyze_image`
 - `analyze_local_image`
 
@@ -176,7 +171,7 @@ python examples/image_understanding_client.py \
   --question "Describe the navigable directions and obstacles in this FPV image."
 ```
 
-### RouteContext / BEV / Proposal 调试
+### RouteContext / BEV 调试
 
 ```bash
 python examples/route_context_debug_client.py \
@@ -190,7 +185,7 @@ python examples/route_context_debug_client.py \
   --open
 ```
 
-带 FPV 图像时会额外生成 RGB-aware PoV candidates：
+带 FPV 图像时会额外调用当前 visual prompt agent：
 
 ```bash
 python examples/route_context_debug_client.py \
@@ -218,6 +213,16 @@ python examples/zero_shot_visual_prompt_agent_client.py \
   --image-path /home/ubuntu/WorkSpace/dataset/urban.jpeg \
   --save-overlay /tmp/visual_prompt.svg
 ```
+
+使用 iPhone 原图 EXIF pose 测试固定路线：
+
+```bash
+python examples/yuquan_visual_prompt_agent_client.py \
+  --image-path /home/ubuntu/WorkSpace/project/SR/test4.jpg \
+  --save-overlay /tmp/yuquan_visual_prompt_overlay.svg
+```
+
+默认路线是 `浙江大学玉泉校区南门` 到 `浙江大学玉泉校区北门`。脚本会从图片 EXIF 读取 `lat/lon/GPSImgDirection`，并用它作为当前 FPV pose；如果只想排查路线起点附近的 prompt，可加 `--gps-source origin`。
 
 ### 动态途经点
 

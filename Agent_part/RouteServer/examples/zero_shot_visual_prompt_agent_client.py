@@ -161,15 +161,16 @@ async def run_demo(
                         "provider": recommendation.get("provider"),
                         "chosen_destination": recommendation.get("chosen_destination", {}),
                         "arbiter_decision": payload.get("arbiter_decision", {}),
-                        "selected_candidate": payload.get("selected_candidate", {}),
+                        "route_context": {
+                            "turn_semantics": ((payload.get("route_context", {}) or {}).get("local_semantics", {}) or {}).get("turn_semantics"),
+                            "corridor_type": ((payload.get("route_context", {}) or {}).get("local_semantics", {}) or {}).get("corridor_type"),
+                            "off_route": ((payload.get("route_context", {}) or {}).get("pose_match", {}) or {}).get("off_route"),
+                        },
                     },
                     indent=2,
                     ensure_ascii=True,
                 )
             )
-
-            print("\n=== PoV Prompt Candidates ===")
-            print(json.dumps(payload.get("pov_prompt_candidates", []), indent=2, ensure_ascii=True))
 
             overlay_svg = payload.get("overlay_svg")
             if save_overlay and isinstance(overlay_svg, str) and overlay_svg.strip():

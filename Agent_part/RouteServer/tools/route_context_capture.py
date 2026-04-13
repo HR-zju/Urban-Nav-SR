@@ -250,12 +250,6 @@ def build_debug_frame(frame: dict[str, Any], route_context: dict[str, Any]) -> d
     }
 
 
-def choose_prompt_tool(image_path: str | None, image_url: str | None) -> str:
-    if str(image_path or "").strip() or str(image_url or "").strip():
-        return "generate_pov_prompt_candidates_v2"
-    return "generate_pov_prompt_candidates"
-
-
 async def run_capture(
     *,
     trajectory_path: str | None,
@@ -330,24 +324,27 @@ async def run_capture(
                 image_height_px = int(frame.get("image_height") or image_height)
                 resolved_image_path = str(frame.get("image_path") or image_path or "").strip() or None
                 resolved_image_url = str(frame.get("image_url") or image_url or "").strip() or None
-                tool_name = choose_prompt_tool(resolved_image_path, resolved_image_url)
-                tool_args: dict[str, Any] = {
+                state_args: dict[str, Any] = {
                     "gps": frame["gps"],
                     "heading_deg": frame.get("heading_deg"),
                     "route_polyline": route_polyline,
                     "coarse_waypoints": coarse_waypoints,
                     "lookahead_m": lookahead_m,
                 }
-                if tool_name == "generate_pov_prompt_candidates_v2":
-                    tool_args["image_path"] = resolved_image_path
-                    tool_args["image_url"] = resolved_image_url
-                    tool_args["visual_top_k"] = 5
-                else:
-                    tool_args["image_width"] = image_width_px
-                    tool_args["image_height"] = image_height_px
-
-                route_state = await call_tool_json(session, tool_name, tool_args)
+                route_state = await call_tool_json(session, "get_route_state", state_args)
                 route_context = route_state.get("route_context", {}) or {}
+                visual_prompt = None
+                if resolved_image_path or resolved_image_url:
+                    visual_prompt = await call_tool_json(
+                        session,
+                        "run_zero_shot_visual_prompt_agent",
+                        {
+                            **state_args,
+                            "image_path": resolved_image_path,
+                            "image_url": resolved_image_url,
+                            "visual_top_k": 5,
+                        },
+                    )
                 captured_frames.append(
                     {
                         "frame_index": frame["frame_index"],
@@ -362,11 +359,10 @@ async def run_capture(
                         "debug": build_debug_frame(frame, route_context),
                         "route_context": route_context,
                         "local_bev_context": route_state.get("local_bev_context", {}),
-                        "prompt_proposals": route_state.get("prompt_proposals", []) or [],
-                        "visual_regions": route_state.get("visual_regions", {}) or {},
-                        "pov_prompt_candidates": route_state.get("pov_prompt_candidates", []) or [],
-                        "pov_prompt_candidates_v2": route_state.get("pov_prompt_candidates", []) or [],
-                        "prompt_generation_tool": tool_name,
+                        "visual_prompt_decision": (visual_prompt or {}).get("arbiter_decision", {}) or {},
+                        "visual_prompt_overlay_svg_data_url": (visual_prompt or {}).get("overlay_svg_data_url"),
+                        "visual_prompt_overlay_svg": (visual_prompt or {}).get("overlay_svg"),
+                        "prompt_generation_tool": "run_zero_shot_visual_prompt_agent" if visual_prompt else None,
                     }
                 )
 

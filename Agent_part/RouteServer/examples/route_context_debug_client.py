@@ -165,6 +165,7 @@ async def run_demo(
             }
 
             route_context = await call_tool_json(session, "get_route_context", common_args)
+            route_state = await call_tool_json(session, "get_route_state", common_args)
             bev_patch = await call_tool_json(
                 session,
                 "render_local_bev_patch",
@@ -174,13 +175,11 @@ async def run_demo(
                     "height": height,
                 },
             )
-            bev_proposals = await call_tool_json(session, "generate_bev_prompt_proposals", common_args)
-
-            pov_v2 = None
+            visual_prompt = None
             if image_path or image_url:
-                pov_v2 = await call_tool_json(
+                visual_prompt = await call_tool_json(
                     session,
-                    "generate_pov_prompt_candidates_v2",
+                    "run_zero_shot_visual_prompt_agent",
                     {
                         **common_args,
                         "image_path": image_path,
@@ -199,8 +198,9 @@ async def run_demo(
                         "turn_semantics": (route_context.get("local_semantics", {}) or {}).get("turn_semantics"),
                         "corridor_type": (route_context.get("local_semantics", {}) or {}).get("corridor_type"),
                         "distance_to_next_turn_m": (route_context.get("progress", {}) or {}).get("distance_to_next_turn_m"),
-                        "bev_proposal_count": len(bev_proposals.get("prompt_proposals", []) or []),
-                        "pov_candidate_count": len((pov_v2 or {}).get("pov_prompt_candidates", []) or []),
+                        "off_route": (route_context.get("pose_match", {}) or {}).get("off_route"),
+                        "visual_prompt_type": (((visual_prompt or {}).get("arbiter_decision", {}) or {}).get("rendered_prompt", {}) or {}).get("type"),
+                        "visual_prompt_confidence": ((visual_prompt or {}).get("arbiter_decision", {}) or {}).get("confidence"),
                         "svg_data_url": bev_patch.get("svg_data_url"),
                     },
                     indent=2,
@@ -210,14 +210,12 @@ async def run_demo(
 
             print("\n=== RouteContext ===")
             print(json.dumps(route_context, indent=2, ensure_ascii=True))
-            print("\n=== BEV Prompt Proposals ===")
-            print(json.dumps(bev_proposals.get("prompt_proposals", []), indent=2, ensure_ascii=True))
+            print("\n=== RouteState ===")
+            print(json.dumps(route_state, indent=2, ensure_ascii=True))
 
-            if pov_v2 is not None:
-                print("\n=== Visual Regions ===")
-                print(json.dumps((pov_v2.get("visual_regions", {}) or {}).get("candidate_regions", []), indent=2, ensure_ascii=True))
-                print("\n=== PoV Prompt Candidates v2 ===")
-                print(json.dumps(pov_v2.get("pov_prompt_candidates", []), indent=2, ensure_ascii=True))
+            if visual_prompt is not None:
+                print("\n=== Visual Prompt Agent ===")
+                print(json.dumps(visual_prompt.get("arbiter_decision", {}), indent=2, ensure_ascii=True))
 
             if open_svg:
                 svg_data_url = str(bev_patch.get("svg_data_url") or "").strip()
