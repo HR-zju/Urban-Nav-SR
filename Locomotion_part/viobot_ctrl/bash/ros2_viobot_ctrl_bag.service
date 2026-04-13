@@ -1,0 +1,13 @@
+[Unit]
+Description= ROS2 Viobot_ctrl Bag Record Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/bin/bash /root/viobot_ctrl/bash/start_bag.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
