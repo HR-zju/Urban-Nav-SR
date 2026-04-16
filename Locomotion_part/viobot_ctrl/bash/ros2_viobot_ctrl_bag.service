@@ -8,6 +8,9 @@ User=root
 ExecStart=/bin/bash /root/viobot_ctrl/bash/start_bag.sh
 Restart=on-failure
 RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=15
+KillMode=mixed
 
 [Install]
 WantedBy=multi-user.target
