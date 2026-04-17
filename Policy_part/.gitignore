@@ -21,3 +21,6 @@ __pycache__/
 .DS_Store
 topomaps/
 CityWalker/
+build/
+devel/
+install/
