@@ -58,7 +58,6 @@ public:
             gnss_initial_calibration_enu_.setZero();
         }
 
-
         gnss_comm_impl::StereoYawBridge::Config yaw_cfg;
         yaw_cfg.min_samples = std::max(1, yaw_min_samples);
         yaw_cfg.min_baseline_m = std::max(0.1, yaw_min_baseline_m);
@@ -178,7 +177,9 @@ private:
     static constexpr double STABILITY_THRESHOLD = 1.0; // 稳定阈值
 
     bool is_algo_running_ = false;
-    bool is_origin_set_   = false;
+    bool is_yaw_bridge_initialized_ = false;  // 阶段1: yaw bridge 有临时 origin
+    bool is_yaw_calibrated_flag_ = false;     // yaw 已标定
+    bool is_origin_set_   = false;            // 阶段2: 最终融合 origin 已设定
     GnssStatusState current_gnss_status_ = GnssStatusState::Idle;
     gnss_comm_impl::StereoYawBridge yaw_bridge_;
     bool enable_bridge_diagnostics_ = false;
@@ -188,4 +189,20 @@ private:
     Eigen::Vector3d origin_ecef_{0.0, 0.0, 0.0};
     Eigen::Vector3d origin_lla_{0.0, 0.0, 0.0};
     Eigen::Matrix3d R_enu2ecef_{Eigen::Matrix3d::Identity()};
+
+    // 增量式偏航旋转: 避免 yaw 更新时累计位移的刚性摆动
+    Eigen::Vector3d prev_enu_pos_raw_{0.0, 0.0, 0.0};
+    Eigen::Vector3d accumulated_enu_pos_{0.0, 0.0, 0.0};
+    bool has_prev_enu_pos_raw_ = false;
+
+    // yaw 收敛检测: 标定后等 yaw 变化率足够小才设定最终 origin
+    double prev_yaw_offset_rad_ = 0.0;
+    int yaw_stable_count_ = 0;
+    static constexpr int YAW_STABLE_REQUIRED = 5;       // 连续 N 次小变化
+    static constexpr double YAW_CONVERGE_THRESH_DEG = 1.0; // 每次变化 < 1°
+
+    // 里程计原点偏移: stereo 起点 ≠ GNSS origin, 需记录 origin 时刻的 stereo 位置
+    Eigen::Vector3d origin_odom_offset_{0.0, 0.0, 0.0};
+    Eigen::Vector3d latest_odom_pos_raw_{0.0, 0.0, 0.0};
+    bool has_latest_odom_ = false;
 };
