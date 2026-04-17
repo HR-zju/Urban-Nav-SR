@@ -57,8 +57,8 @@ tmux send-keys "cd /home/nuvo/SR/foundation-policy/Policy_part" Enter
 #   --onnx onnx_ckpts/s1_ours_coco_sft_stage2_goal_less.onnx \
 #   --no_record_video" Enter
 
-tmux send-keys "python run_navflow_realsense_vis.py --onnx onnx_ckpts/s1_ours_coco_sft_stage2_goal_less.onnx --targets ./topomaps/odom_poses.txt --no_record_video" Enter
-
+# tmux send-keys "python run_navflow_realsense_vis.py --onnx onnx_ckpts/vint_goal_less.onnx --targets ./topomaps/odom_poses.txt --no_record_video" Enter
+tmux send-keys "python run_navflow_realsense_vis.py --onnx onnx_ckpts/vint_point_goal.onnx --targets ./topomaps/odom_poses.txt --no_record_video" Enter
 
 
 # run teleop in the fourth pane

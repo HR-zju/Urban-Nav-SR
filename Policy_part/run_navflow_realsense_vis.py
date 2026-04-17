@@ -418,6 +418,7 @@ class RealSenseNavflowNode(Node):
 
         # Autonomy enable flag
         self.enable_2 = False
+        self.goal_reached = False
         self.autonomy_sub2 = self.create_subscription(
             Bool,
             "/cmd_vel/autonomy_enable",
@@ -483,6 +484,25 @@ class RealSenseNavflowNode(Node):
         try:
             with self.lock:
                 self.localpose_buffer.append((msg.header.stamp, msg.pose))
+
+                if not self.goal_reached and len(self.target_xy) > 0:
+                    dx = self.target_xy[0][0] - msg.pose.pose.position.x
+                    dy = self.target_xy[0][1] - msg.pose.pose.position.y
+                    pose_diff = math.sqrt(dx ** 2 + dy ** 2)
+
+                    if pose_diff < self.distance_threshold:
+                        if len(self.target_xy) > 1:
+                            del self.target_xy[0]
+                            self.get_logger().info(
+                                f"Reached current target, {len(self.target_xy)} targets remaining"
+                            )
+                        else:
+                            self.goal_reached = True
+                            self.get_logger().info("Reached final target")
+
+            reached_goal_msg = Bool()
+            reached_goal_msg.data = bool(self.goal_reached)
+            self.goal_pub.publish(reached_goal_msg)
         except Exception as e:  # noqa: BLE001
             self.get_logger().error(f"Error in local odom callback: {e}")
 
@@ -777,19 +797,22 @@ class RealSenseNavflowNode(Node):
         input_poses = np.array(pose_list)
         current_pose = input_poses[-1]
         post_odom_temp = self.transform_poses(input_poses, current_pose)[:, [0, 1]]
-        # target_diff_temp = self.transform_target_pose(np.array(self.target_xy[0]), current_pose)[
-        #     np.newaxis, [0, 1]
-        # ]
-        target_positions = np.array([pose[:2] for pose in self.target_xy])
-        current_pos = current_pose[:2]
-        distances = np.linalg.norm(target_positions - current_pos, axis=1)
-        
-        closest_idx = np.argmin(distances)
-        
-        lookahead_steps = 1 
-        target_idx = min(closest_idx + lookahead_steps, len(self.target_xy) - 1)
+        # Snapshot shared state once to avoid races with localodom_callback.
+        with self.lock:
+            target_snapshot = list(self.target_xy)
+            goal_reached_snapshot = self.goal_reached
 
-        current_target_pose = np.array(self.target_xy[target_idx])
+        if not target_snapshot:
+            self.get_logger().warning("No target pose available, skip this batch")
+            reached_goal_msg = Bool()
+            reached_goal_msg.data = bool(goal_reached_snapshot)
+            self.goal_pub.publish(reached_goal_msg)
+            self.inference_event.clear()
+            return
+
+        # Keep target semantics consistent with sequential deletion logic:
+        # localodom_callback always removes the first target when reached.
+        current_target_pose = np.array(target_snapshot[0])
         target_diff_temp = self.transform_target_pose(current_target_pose, current_pose)[np.newaxis, [0, 1]]
 
         post_odom = post_odom_temp.copy()
@@ -997,9 +1020,8 @@ class RealSenseNavflowNode(Node):
             waypoint_msg.data = tmp_list
 
         self.waypoint_pub.publish(waypoint_msg)
-        reached_goal = False
         reached_goal_msg = Bool()
-        reached_goal_msg.data = bool(reached_goal)
+        reached_goal_msg.data = bool(self.goal_reached)
         self.goal_pub.publish(reached_goal_msg)
         self.inference_event.clear()
 
