@@ -7,25 +7,46 @@ This module wires FastMCP tool/resource handlers to public geospatial services:
 """
 
 import asyncio
+import base64
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
+import io
+from html import escape
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 import json
 import math
 import os
+from pathlib import Path
 from urllib.parse import quote
+from uuid import uuid4
 
 import aiohttp
 from mcp.server.fastmcp import Context, FastMCP
+from PIL import Image, ImageOps
 
-from mcp_server.llm import analyze_image_with_llm, analyze_local_image_with_llm
+from mcp_server.brain import (
+    build_direct_prompt_question,
+    build_direct_prompt_system_prompt,
+    coerce_direct_prompt_decision,
+)
+from mcp_server.llm import (
+    GoalDecomposer,
+    ItineraryCandidateJudge,
+    analyze_image_with_llm,
+    analyze_local_image_with_llm,
+    arbitrate_local_pov_candidates_with_llm,
+    arbitrate_pov_candidates_with_llm,
+    local_image_path_to_data_url,
+)
 from mcp_server.macos_location import get_current_location
 from mcp_server.map_providers import (
     MapProviderClient,
     build_amap_staticmap_url,
     create_map_client,
+    dedupe_route_coordinates,
     encode_polyline_text,
+    format_location,
     parse_location_text,
     sample_route_coordinates,
 )
@@ -34,17 +55,12 @@ from mcp_server.route_context import (
     build_local_bev_context,
     build_route_context,
     build_route_state,
-    generate_bev_prompt_proposals as build_bev_prompt_proposals,
-    generate_rgb_aware_pov_prompt_candidates,
-    extract_visual_regions,
     local_bev_context_to_dict,
-    pov_prompt_candidate_bundle_to_dict,
-    project_bev_prompt_proposals_to_pov,
-    prompt_proposal_bundle_to_dict,
     route_context_to_dict,
     route_state_to_dict,
-    visual_region_bundle_to_dict,
+    visual_prompt_decision_to_dict,
 )
+from mcp_server.route_context.schema import VisualPromptDecision
 
 # Create application context
 @dataclass
@@ -114,6 +130,577 @@ def _build_amap_staticmap_overlay_url(
 
     query = "&".join(f"{key}={value}" for key, value in params)
     return f"https://restapi.amap.com/v3/staticmap?{query}"
+
+
+def _single_char_marker_label(label: str, fallback: str) -> str:
+    """AMap static marker labels are safest as a single ASCII alphanumeric char."""
+    text = str(label or "").strip()
+    if len(text) == 1 and text.isascii() and text.isalnum():
+        return text
+    fallback_text = str(fallback or "").strip()
+    if len(fallback_text) == 1 and fallback_text.isascii() and fallback_text.isalnum():
+        return fallback_text
+    return "P"
+
+
+def _image_href_for_overlay(*, image_path: Optional[str], image_url: Optional[str]) -> str:
+    if str(image_path or "").strip():
+        return local_image_path_to_data_url(str(image_path))
+    return str(image_url or "").strip()
+
+
+def _load_prompt_image(*, image_path: Optional[str], image_url: Optional[str]) -> Image.Image:
+    if str(image_path or "").strip():
+        return ImageOps.exif_transpose(Image.open(Path(str(image_path)).expanduser())).convert("RGB")
+    raw = str(image_url or "").strip()
+    if raw.startswith("data:image/") and "," in raw:
+        _, encoded = raw.split(",", 1)
+        return ImageOps.exif_transpose(Image.open(io.BytesIO(base64.b64decode(encoded)))).convert("RGB")
+    raise RuntimeError("Visual prompt rendering currently supports image_path or data:image URL inputs")
+
+
+def _prompt_image_size(*, image_path: Optional[str], image_url: Optional[str]) -> tuple[int, int]:
+    image = _load_prompt_image(image_path=image_path, image_url=image_url)
+    return int(image.size[0]), int(image.size[1])
+
+
+def _render_prompt_overlay_svg(
+    *,
+    image_href: str,
+    image_width: int,
+    image_height: int,
+    rendered_prompt: Dict[str, Any] | None,
+    title: str = "Visual Prompt Overlay",
+) -> str:
+    width = max(int(image_width), 32)
+    height = max(int(image_height), 32)
+    max_display_width = max(int(os.getenv("VISUAL_PROMPT_SVG_DISPLAY_WIDTH", "1200") or 1200), 320)
+    display_width = min(width, max_display_width)
+    display_height = max(int(round(display_width * height / max(width, 1))), 1)
+    min_dim = min(width, height)
+    title_font = max(min_dim * 0.018, 18.0)
+    label_font = max(min_dim * 0.014, 14.0)
+    line_stroke = max(min_dim * 0.009, 5.0)
+    outline_stroke = max(min_dim * 0.005, 2.0)
+    marker_radius = max(min_dim * 0.011, 6.0)
+    bg = (
+        f'<image href="{image_href}" x="0" y="0" width="{width}" height="{height}" preserveAspectRatio="xMidYMid slice" />'
+        if image_href
+        else f'<rect x="0" y="0" width="{width}" height="{height}" fill="#0f172a" />'
+    )
+    if not isinstance(rendered_prompt, dict):
+        return (
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="{display_width}" height="{display_height}" viewBox="0 0 {width} {height}">'
+            f"{bg}"
+            f'<rect x="0" y="0" width="{width}" height="{height}" fill="rgba(2,6,23,0.10)" />'
+            f'<text x="{title_font:.1f}" y="{title_font * 1.7:.1f}" fill="#e2e8f0" font-size="{title_font:.1f}">{escape(title)}</text>'
+            f'<text x="{width/2:.1f}" y="{height/2:.1f}" text-anchor="middle" fill="#fca5a5" font-size="{title_font:.1f}">No rendered prompt</text>'
+            "</svg>"
+        )
+
+    prompt_type = str(rendered_prompt.get("type") or "arrow").strip().lower()
+    center = rendered_prompt.get("center_uv") or [width * 0.5, height * 0.55]
+    try:
+        cx = float(center[0])
+        cy = float(center[1])
+    except Exception:
+        cx = width * 0.5
+        cy = height * 0.55
+    span = max(float(rendered_prompt.get("span_px", 72.0) or 72.0), 16.0)
+    direction = rendered_prompt.get("direction_vec") or [0.0, -1.0]
+    try:
+        dx = float(direction[0])
+        dy = float(direction[1])
+    except Exception:
+        dx, dy = 0.0, -1.0
+    mask = rendered_prompt.get("mask")
+
+    anchor_x = width * 0.5
+    anchor_y = height * 0.94
+    label = str(rendered_prompt.get("semantic_tag") or prompt_type)
+
+    overlay_parts = [
+        f'<rect x="0" y="0" width="{width}" height="{height}" fill="rgba(2,6,23,0.06)" />',
+        f'<rect x="{title_font * 0.6:.1f}" y="{title_font * 0.45:.1f}" width="{min(width * 0.72, title_font * 24):.1f}" height="{title_font * 1.65:.1f}" rx="{title_font * 0.35:.1f}" fill="rgba(2,6,23,0.58)" />',
+        f'<text x="{title_font:.1f}" y="{title_font * 1.55:.1f}" fill="#e2e8f0" font-size="{title_font:.1f}" font-family="monospace">{escape(title)}</text>',
+    ]
+
+    if isinstance(mask, list) and len(mask) >= 3:
+        points = " ".join(
+            f"{float(point[0]):.1f},{float(point[1]):.1f}"
+            for point in mask
+            if isinstance(point, (list, tuple)) and len(point) == 2
+        )
+        if points:
+            overlay_parts.append(
+                f'<polygon points="{points}" fill="rgba(56,189,248,0.22)" stroke="#38bdf8" stroke-width="{outline_stroke:.1f}" stroke-dasharray="{outline_stroke * 3:.1f} {outline_stroke * 2:.1f}" />'
+            )
+
+    path_uv = rendered_prompt.get("path_uv")
+    valid_path = (
+        isinstance(path_uv, list)
+        and len(path_uv) >= 2
+        and all(isinstance(point, (list, tuple)) and len(point) == 2 for point in path_uv)
+    )
+
+    if prompt_type in {"arrival", "arrival_marker", "destination_marker"}:
+        overlay_parts.extend(
+            [
+                f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{marker_radius * 2.4:.1f}" fill="rgba(34,197,94,0.24)" stroke="#22c55e" stroke-width="{outline_stroke * 1.8:.1f}" />',
+                f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{marker_radius * 0.8:.1f}" fill="#22c55e" />',
+                f'<path d="M {cx - marker_radius * 1.0:.1f} {cy + marker_radius * 0.05:.1f} L {cx - marker_radius * 0.28:.1f} {cy + marker_radius * 0.75:.1f} L {cx + marker_radius * 1.15:.1f} {cy - marker_radius * 0.9:.1f}" fill="none" stroke="#ecfdf5" stroke-width="{outline_stroke * 1.7:.1f}" stroke-linecap="round" stroke-linejoin="round" />',
+                f'<text x="{cx:.1f}" y="{cy + marker_radius * 3.45:.1f}" text-anchor="middle" fill="#dcfce7" font-size="{title_font:.1f}" font-family="monospace">ARRIVED</text>',
+            ]
+        )
+    elif prompt_type in {"arrow", "arrow_path"} and valid_path:
+        points = " ".join(f"{float(point[0]):.1f},{float(point[1]):.1f}" for point in path_uv)
+        overlay_parts.append(
+            f'<polyline points="{points}" fill="none" stroke="#f97316" stroke-width="{line_stroke:.1f}" stroke-linecap="round" stroke-linejoin="round" />'
+        )
+        end_x = float(path_uv[-1][0])
+        end_y = float(path_uv[-1][1])
+        prev_x = float(path_uv[-2][0])
+        prev_y = float(path_uv[-2][1])
+        vx = end_x - prev_x
+        vy = end_y - prev_y
+        norm = max((vx * vx + vy * vy) ** 0.5, 1e-6)
+        ux, uy = vx / norm, vy / norm
+        px, py = -uy, ux
+        ah = max(span * 0.16, marker_radius * 2.2)
+        ax1 = end_x - ux * ah - px * ah * 0.55
+        ay1 = end_y - uy * ah - py * ah * 0.55
+        ax2 = end_x - ux * ah + px * ah * 0.55
+        ay2 = end_y - uy * ah + py * ah * 0.55
+        overlay_parts.append(
+            f'<polygon points="{end_x:.1f},{end_y:.1f} {ax1:.1f},{ay1:.1f} {ax2:.1f},{ay2:.1f}" fill="#f97316" />'
+        )
+    elif prompt_type == "arrow":
+        overlay_parts.append(
+            f'<line x1="{anchor_x:.1f}" y1="{anchor_y:.1f}" x2="{cx:.1f}" y2="{cy:.1f}" stroke="#f97316" stroke-width="{line_stroke:.1f}" stroke-linecap="round" />'
+        )
+        norm = max((dx * dx + dy * dy) ** 0.5, 1e-6)
+        ux, uy = dx / norm, dy / norm
+        px, py = -uy, ux
+        ah = max(span * 0.16, marker_radius * 2.2)
+        ax1 = cx - ux * ah - px * ah * 0.55
+        ay1 = cy - uy * ah - py * ah * 0.55
+        ax2 = cx - ux * ah + px * ah * 0.55
+        ay2 = cy - uy * ah + py * ah * 0.55
+        overlay_parts.append(
+            f'<polygon points="{cx:.1f},{cy:.1f} {ax1:.1f},{ay1:.1f} {ax2:.1f},{ay2:.1f}" fill="#f97316" />'
+        )
+    elif prompt_type == "region":
+        overlay_parts.append(
+            f'<ellipse cx="{cx:.1f}" cy="{cy:.1f}" rx="{span * 0.55:.1f}" ry="{span * 0.32:.1f}" fill="rgba(168,85,247,0.18)" stroke="#a855f7" stroke-width="{outline_stroke * 1.5:.1f}" />'
+        )
+    else:
+        left_x = cx - span * 0.6
+        right_x = cx + span * 0.6
+        top_y = cy - span * 0.52
+        bottom_y = cy + span * 0.52
+        overlay_parts.append(
+            f'<polygon points="{anchor_x:.1f},{anchor_y:.1f} {left_x:.1f},{bottom_y:.1f} {cx:.1f},{top_y:.1f} {right_x:.1f},{bottom_y:.1f}" fill="rgba(56,189,248,0.22)" stroke="#38bdf8" stroke-width="{outline_stroke * 1.5:.1f}" />'
+        )
+
+    if prompt_type not in {"arrival", "arrival_marker", "destination_marker"}:
+        overlay_parts.extend(
+            [
+                f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{marker_radius:.1f}" fill="#e2e8f0" />',
+                f'<rect x="{cx + marker_radius * 1.4:.1f}" y="{cy - label_font * 1.45:.1f}" width="{min(width - cx - marker_radius * 2.0, max(label_font * 11.0, 1.0)):.1f}" height="{label_font * 1.7:.1f}" rx="{label_font * 0.35:.1f}" fill="rgba(2,6,23,0.58)" />',
+                f'<text x="{cx + marker_radius * 1.9:.1f}" y="{cy - label_font * 0.22:.1f}" fill="#e2e8f0" font-size="{label_font:.1f}" font-family="monospace">{escape(label[:42])}</text>',
+            ]
+        )
+
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{display_width}" height="{display_height}" viewBox="0 0 {width} {height}">'
+        f"{bg}{''.join(overlay_parts)}</svg>"
+    )
+
+
+def _svg_to_data_url(svg: str) -> str:
+    return "data:image/svg+xml;utf8," + quote(svg, safe=":/?&=,+-_.!~*'()#% ")
+
+
+def _is_arrival_state(route_context: Dict[str, Any], *, threshold_m: float | None = None) -> bool:
+    enable_arrival_marker = str(os.getenv("VISUAL_PROMPT_ENABLE_ARRIVAL_MARKER", "")).strip().lower()
+    if enable_arrival_marker not in {"1", "true", "yes", "on"}:
+        return False
+    progress = route_context.get("progress", {}) or {}
+    pose_match = route_context.get("pose_match", {}) or {}
+    if bool(pose_match.get("off_route")):
+        return False
+    try:
+        remaining = float(progress.get("remaining_distance_m"))
+    except Exception:
+        return False
+    if threshold_m is None:
+        threshold_m = float(os.getenv("VISUAL_PROMPT_ARRIVAL_THRESHOLD_M", "2.0") or 2.0)
+    return remaining <= max(float(threshold_m), 0.0)
+
+
+def _arrival_visual_prompt_decision(
+    *,
+    route_context: Dict[str, Any],
+    image_width: int,
+    image_height: int,
+) -> VisualPromptDecision:
+    progress = route_context.get("progress", {}) or {}
+    try:
+        remaining = float(progress.get("remaining_distance_m"))
+    except Exception:
+        remaining = 0.0
+    return VisualPromptDecision(
+        selected_candidate_id=None,
+        selected_prompt_type="arrival_marker",
+        instruction="You have arrived at the destination.",
+        confidence=0.95,
+        reason=f"RouteContext reports remaining_distance_m={remaining:.2f}, within the arrival threshold.",
+        reject_all=False,
+        fallback_used=False,
+        arbiter_source="route_arrival_state",
+        rendered_prompt={
+            "type": "arrival_marker",
+            "center_uv": [float(image_width) * 0.5, float(image_height) * 0.68],
+            "direction_vec": [0.0, 0.0],
+            "span_px": max(min(float(image_width), float(image_height)) * 0.12, 48.0),
+            "path_uv": None,
+            "mask": None,
+            "semantic_tag": "destination_arrived",
+        },
+        debug={
+            "remaining_distance_m": remaining,
+            "arrival_threshold_m": float(os.getenv("VISUAL_PROMPT_ARRIVAL_THRESHOLD_M", "2.0") or 2.0),
+            "arrival_marker_enabled": True,
+        },
+    )
+
+
+def _reject_visual_prompt_decision(
+    *,
+    reason: str,
+    arbiter_source: str,
+    route_context: Dict[str, Any],
+) -> VisualPromptDecision:
+    local = route_context.get("local_semantics", {}) or {}
+    return VisualPromptDecision(
+        selected_candidate_id=None,
+        selected_prompt_type=None,
+        instruction=str(local.get("short_action_summary") or "Visual prompt unavailable for this frame.").strip(),
+        confidence=0.0,
+        reason=str(reason).strip() or "Visual prompt generation failed.",
+        reject_all=True,
+        fallback_used=False,
+        arbiter_source=arbiter_source,
+        rendered_prompt=None,
+        debug={},
+    )
+
+
+def _coerce_location_text(value: Any) -> str:
+    if isinstance(value, str) and "," in value:
+        parse_location_text(value)
+        return value.strip()
+    if isinstance(value, dict):
+        if isinstance(value.get("location"), str) and "," in str(value.get("location")):
+            location = str(value.get("location")).strip()
+            parse_location_text(location)
+            return location
+        coordinate = value.get("coordinate", {}) or {}
+        longitude = coordinate.get("longitude", value.get("longitude"))
+        latitude = coordinate.get("latitude", value.get("latitude"))
+        if longitude is not None and latitude is not None:
+            return format_location(float(longitude), float(latitude))
+    raise ValueError(f"Unsupported location payload: {value!r}")
+
+
+def _normalize_via_points(via_points: Any) -> List[Dict[str, Any]]:
+    normalized: List[Dict[str, Any]] = []
+    if not isinstance(via_points, list):
+        return normalized
+    for index, item in enumerate(via_points):
+        try:
+            location = _coerce_location_text(item)
+        except Exception:
+            continue
+        name = None
+        if isinstance(item, dict):
+            raw_name = str(item.get("name") or item.get("label") or "").strip()
+            name = raw_name or None
+        normalized.append(
+            {
+                "index": len(normalized),
+                "location": location,
+                "name": name or f"Via {index + 1}",
+            }
+        )
+    return normalized
+
+
+def _merge_route_segments(
+    *,
+    provider: str,
+    origin: str,
+    destination: str,
+    mode: str,
+    via_points: List[Dict[str, Any]],
+    leg_results: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    combined_polyline: List[List[float]] = []
+    combined_waypoints: List[Dict[str, Any]] = []
+    total_distance_m = 0.0
+    total_duration_s = 0.0
+    stop_sequence: List[Dict[str, Any]] = [{"type": "origin", "location": origin, "name": "Origin"}]
+    for via in via_points:
+        stop_sequence.append({"type": "via", "location": via["location"], "name": via.get("name") or "Via"})
+    stop_sequence.append({"type": "destination", "location": destination, "name": "Destination"})
+
+    global_waypoint_index = 0
+    legs_payload: List[Dict[str, Any]] = []
+    for leg_index, leg in enumerate(leg_results):
+        leg_origin = leg.get("origin")
+        leg_destination = leg.get("destination")
+        leg_summary = dict(leg.get("route_summary", {}) or {})
+        total_distance_m += float(leg_summary.get("distance_m", 0.0) or 0.0)
+        total_duration_s += float(leg_summary.get("duration_s", 0.0) or 0.0)
+
+        leg_polyline = []
+        for point in leg.get("route_polyline", []) or []:
+            if isinstance(point, (list, tuple)) and len(point) == 2:
+                leg_polyline.append([float(point[0]), float(point[1])])
+            elif isinstance(point, dict):
+                longitude = point.get("longitude", point.get("lng", point.get("lon")))
+                latitude = point.get("latitude", point.get("lat"))
+                if longitude is None or latitude is None:
+                    continue
+                leg_polyline.append([float(longitude), float(latitude)])
+        combined_polyline.extend(leg_polyline)
+
+        leg_waypoints = []
+        raw_waypoints = leg.get("coarse_waypoints", []) or []
+        for waypoint_index, waypoint in enumerate(raw_waypoints):
+            payload = dict(waypoint)
+            payload["leg_index"] = leg_index
+            payload["waypoint_index_in_leg"] = waypoint_index
+            payload["global_waypoint_index"] = global_waypoint_index
+            payload["leg_origin"] = leg_origin
+            payload["leg_destination"] = leg_destination
+            payload["is_leg_terminal"] = waypoint_index == (len(raw_waypoints) - 1)
+            payload["is_via_stop"] = payload["is_leg_terminal"] and leg_index < (len(leg_results) - 1)
+            if payload["is_via_stop"]:
+                payload["via_point_index"] = leg_index
+                payload["via_point_name"] = via_points[leg_index].get("name") if leg_index < len(via_points) else f"Via {leg_index + 1}"
+            global_waypoint_index += 1
+            combined_waypoints.append(payload)
+            leg_waypoints.append(payload)
+
+        legs_payload.append(
+            {
+                "leg_index": leg_index,
+                "origin": leg_origin,
+                "destination": leg_destination,
+                "route_summary": leg_summary,
+                "coarse_waypoints": leg_waypoints,
+                "route_polyline": [{"longitude": point[0], "latitude": point[1]} for point in leg_polyline],
+            }
+        )
+
+    combined_polyline = dedupe_route_coordinates(combined_polyline)
+    return {
+        "provider": provider,
+        "origin": origin,
+        "destination": destination,
+        "mode": mode,
+        "via_points": via_points,
+        "stop_sequence": stop_sequence,
+        "route_summary": {
+            "distance_m": round(total_distance_m, 1),
+            "duration_s": round(total_duration_s, 1),
+            "duration_min": round(total_duration_s / 60.0, 1),
+            "step_count": len(combined_waypoints),
+            "leg_count": len(leg_results),
+        },
+        "coarse_waypoints": combined_waypoints,
+        "route_polyline": [{"longitude": point[0], "latitude": point[1]} for point in combined_polyline],
+        "route_polyline_text": encode_polyline_text(combined_polyline),
+        "legs": legs_payload,
+    }
+
+
+async def _compute_combined_route_plan(
+    *,
+    app_context: AppContext,
+    origin: str,
+    destination: str,
+    via_points: Optional[List[Dict[str, Any]]] = None,
+    mode: str = "foot",
+) -> Dict[str, Any]:
+    normalized_via_points = _normalize_via_points(via_points)
+    stops = [origin] + [item["location"] for item in normalized_via_points] + [destination]
+    leg_results: List[Dict[str, Any]] = []
+    for leg_index in range(len(stops) - 1):
+        leg_origin = stops[leg_index]
+        leg_destination = stops[leg_index + 1]
+        leg = await app_context.osm_client.get_coarse_waypoints(
+            origin=leg_origin,
+            destination=leg_destination,
+            mode=mode,
+        )
+        leg_results.append(leg)
+    return _merge_route_segments(
+        provider=app_context.provider,
+        origin=origin,
+        destination=destination,
+        mode=mode,
+        via_points=normalized_via_points,
+        leg_results=leg_results,
+    )
+
+
+ROUTE_SESSIONS: Dict[str, Dict[str, Any]] = {}
+ROUTE_SESSIONS_LOADED = False
+
+
+def _route_session_store_backend() -> str:
+    return str(os.getenv("ROUTE_SESSION_STORE", "file") or "file").strip().lower()
+
+
+def _route_session_store_path() -> Path:
+    configured = str(os.getenv("ROUTE_SESSION_STORE_PATH") or "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / ".urban_nav" / "route_sessions.json"
+
+
+def _load_route_sessions() -> None:
+    global ROUTE_SESSIONS_LOADED
+    if ROUTE_SESSIONS_LOADED:
+        return
+    ROUTE_SESSIONS_LOADED = True
+    if _route_session_store_backend() == "memory":
+        return
+
+    path = _route_session_store_path()
+    if not path.exists():
+        return
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    sessions = payload.get("sessions") if isinstance(payload, dict) else payload
+    if not isinstance(sessions, dict):
+        return
+    for session_id, session in sessions.items():
+        if isinstance(session, dict) and str(session.get("session_id") or session_id).strip():
+            normalized_id = str(session.get("session_id") or session_id).strip()
+            session["session_id"] = normalized_id
+            ROUTE_SESSIONS[normalized_id] = session
+
+
+def _persist_route_sessions() -> None:
+    if _route_session_store_backend() == "memory":
+        return
+
+    path = _route_session_store_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": 1,
+        "updated_at": datetime.now().isoformat(),
+        "sessions": ROUTE_SESSIONS,
+    }
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def _get_persisted_route_session(session_id: str) -> Optional[Dict[str, Any]]:
+    _load_route_sessions()
+    session = ROUTE_SESSIONS.get(str(session_id or "").strip())
+    if isinstance(session, dict):
+        return session
+    return None
+
+
+def _save_persisted_route_session(session: Dict[str, Any]) -> Dict[str, Any]:
+    _load_route_sessions()
+    session_id = str(session.get("session_id") or "").strip()
+    if not session_id:
+        raise ValueError("Route session payload is missing session_id")
+    ROUTE_SESSIONS[session_id] = session
+    _persist_route_sessions()
+    return session
+
+
+def _cache_route_plan_on_session(session: Dict[str, Any], route_plan: Dict[str, Any]) -> None:
+    if not isinstance(route_plan, dict):
+        return
+    session["route_plan_cache"] = route_plan
+    session["route_plan_cached_at"] = datetime.now().isoformat()
+
+
+async def _route_plan_for_session(
+    *,
+    app_context: AppContext,
+    session: Dict[str, Any],
+    force_replan: bool = False,
+) -> Tuple[Dict[str, Any], bool]:
+    cached = session.get("route_plan_cache")
+    if isinstance(cached, dict) and cached and not force_replan:
+        return cached, True
+
+    route_plan = await _compute_combined_route_plan(
+        app_context=app_context,
+        origin=session["origin"],
+        destination=session["destination"],
+        via_points=session.get("via_points"),
+        mode=session["mode"],
+    )
+    _cache_route_plan_on_session(session, route_plan)
+    _save_persisted_route_session(session)
+    return route_plan, False
+
+
+def _route_session_store_info() -> Dict[str, Any]:
+    backend = _route_session_store_backend()
+    info: Dict[str, Any] = {"backend": backend}
+    if backend != "memory":
+        info["path"] = str(_route_session_store_path())
+    return info
+
+
+def _destination_id(candidate: Dict[str, Any]) -> str:
+    return str(candidate.get("id") or candidate.get("location") or "").strip()
+
+
+def _select_itinerary_destination(
+    *,
+    recommendation: Dict[str, Any],
+    used_destination_ids: set[str],
+) -> Tuple[Optional[Dict[str, Any]], str]:
+    candidates = recommendation.get("recommendations") or []
+    if not isinstance(candidates, list):
+        candidates = []
+
+    ranked: List[Tuple[float, Dict[str, Any]]] = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        destination_id = _destination_id(candidate)
+        if destination_id and destination_id in used_destination_ids:
+            continue
+        score = float(candidate.get("score", 0.0) or 0.0)
+        ranked.append((score, candidate))
+
+    if ranked:
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        return ranked[0][1], "ranked_nonduplicate_open_vocab_recommendation"
+
+    chosen = recommendation.get("chosen_destination")
+    if isinstance(chosen, dict):
+        destination_id = _destination_id(chosen)
+        if not destination_id or destination_id not in used_destination_ids:
+            return chosen, "chosen_destination_fallback"
+
+    return None, "no_nonduplicate_candidate"
 
 
 def _project_bev_point(
@@ -218,21 +805,9 @@ def _build_bev_sector_path(
     return " ".join(points)
 
 
-def _proposal_style(proposal_type: str) -> tuple[str, float]:
-    mapping = {
-        "corridor_sector": ("#14b8a6", 0.16),
-        "turn_sector": ("#f59e0b", 0.16),
-        "connector_merge_sector": ("#a855f7", 0.16),
-        "entrance_candidate_sector": ("#06b6d4", 0.14),
-        "crossing_candidate_sector": ("#ef4444", 0.14),
-    }
-    return mapping.get(proposal_type, ("#94a3b8", 0.12))
-
-
 def _build_local_bev_svg(
     *,
     local_bev_context: Dict[str, Any],
-    prompt_proposals: Optional[List[Dict[str, Any]]] = None,
     width: int = 640,
     height: int = 640,
 ) -> str:
@@ -270,35 +845,6 @@ def _build_local_bev_svg(
         f'<polygon points="{corridor_path}" fill="#60a5fa" fill-opacity="0.10" stroke="none" />',
         f'<polygon points="{turn_path}" fill="#f59e0b" fill-opacity="0.10" stroke="none" />',
     ]
-
-    for index, proposal in enumerate(prompt_proposals or []):
-        center_deg = float(proposal.get("sector_center_deg", 0.0))
-        span_deg = float(proposal.get("sector_span_deg", 35.0))
-        range_m = proposal.get("range_m") or [0.0, local_bev_context.get("lookahead_m", 20.0)]
-        radius_m = max(float(range_m[-1]), 6.0)
-        color, opacity = _proposal_style(str(proposal.get("proposal_type", "")))
-        proposal_path = _build_bev_sector_path(
-            bbox=bbox,
-            width=width,
-            height=height,
-            center_deg=center_deg,
-            span_deg=span_deg,
-            radius_m=radius_m,
-        )
-        label_point = _project_bev_point(
-            {"x_m": math.sin(math.radians(center_deg)) * min(radius_m + 1.5, float(local_bev_context.get("lookahead_m", 20.0)) + 2.0),
-             "y_m": math.cos(math.radians(center_deg)) * min(radius_m + 1.5, float(local_bev_context.get("lookahead_m", 20.0)) + 2.0)},
-            bbox=bbox,
-            width=width,
-            height=height,
-        )
-        parts.extend([
-            f'<polygon points="{proposal_path}" fill="{color}" fill-opacity="{opacity}" stroke="{color}" stroke-opacity="0.55" stroke-width="1" />',
-            (
-                f'<text x="{label_point[0]:.1f}" y="{label_point[1]:.1f}" fill="{color}" font-size="11" '
-                f'font-family="monospace">{proposal.get("proposal_type", "proposal")} {float(proposal.get("priority", 0.0)):.2f}</text>'
-            ),
-        ])
 
     parts.extend([
         _svg_polyline_from_bev(route_polyline_local, bbox=bbox, width=width, height=height, stroke="#22c55e", stroke_width=4),
@@ -581,6 +1127,366 @@ async def get_coarse_waypoints(
 
 
 @mcp.tool()
+async def plan_route_with_via_points(
+    origin: str,
+    destination: str,
+    ctx: Context,
+    via_points: Optional[List[Dict[str, Any]]] = None,
+    mode: str = "foot",
+) -> Dict[str, Any]:
+    """
+    Plan a multi-leg route with optional via points and return a combined route.
+
+    This tool keeps the current provider interface simple by routing each leg with the
+    existing single-origin-single-destination API, then stitching the legs together
+    into one combined route polyline and one combined semantic waypoint list.
+
+    Args:
+        origin: Start point in "longitude,latitude" format
+        destination: Final destination in "longitude,latitude" format
+        via_points: Optional ordered list of intermediate stops. Each item may include:
+            - location: "longitude,latitude"
+            - name: optional label for UI/debugging
+        mode: Travel mode ("foot", "car", "bike")
+
+    Returns:
+        Combined route summary, combined route polyline, combined coarse waypoints,
+        and per-leg route payloads.
+    """
+    app_context = ctx.request_context.lifespan_context
+    normalized_via_points = _normalize_via_points(via_points)
+    await ctx.info(
+        f"Planning route with via points: provider={app_context.provider}, mode={mode}, leg_count={max(0, len(normalized_via_points) + 1)}"
+    )
+    return await _compute_combined_route_plan(
+        app_context=app_context,
+        origin=origin,
+        destination=destination,
+        via_points=normalized_via_points,
+        mode=mode,
+    )
+
+
+@mcp.tool()
+async def add_via_point_to_route_plan(
+    origin: str,
+    destination: str,
+    new_via_point: Dict[str, Any],
+    ctx: Context,
+    existing_via_points: Optional[List[Dict[str, Any]]] = None,
+    insert_before_index: Optional[int] = None,
+    mode: str = "foot",
+) -> Dict[str, Any]:
+    """
+    Insert a new via point into an existing route plan and return the replanned route.
+
+    This is a stateless helper for interaction loops. The caller keeps the current
+    via_points list and passes it back on each interaction turn.
+
+    Args:
+        origin: Start point in "longitude,latitude" format
+        destination: Final destination in "longitude,latitude" format
+        new_via_point: New intermediate stop payload with location and optional name
+        existing_via_points: Current ordered via point list
+        insert_before_index: Optional insertion index. When omitted, append before destination.
+        mode: Travel mode ("foot", "car", "bike")
+
+    Returns:
+        Updated via point list and the replanned combined route.
+    """
+    normalized_existing = _normalize_via_points(existing_via_points)
+    normalized_new_list = _normalize_via_points([new_via_point])
+    if not normalized_new_list:
+        raise ValueError("new_via_point must include a valid location")
+    inserted = normalized_new_list[0]
+
+    if insert_before_index is None:
+        normalized_existing.append(inserted)
+    else:
+        idx = max(0, min(int(insert_before_index), len(normalized_existing)))
+        normalized_existing.insert(idx, inserted)
+
+    for index, item in enumerate(normalized_existing):
+        item["index"] = index
+
+    return await plan_route_with_via_points(
+        origin=origin,
+        destination=destination,
+        via_points=normalized_existing,
+        mode=mode,
+        ctx=ctx,
+    )
+
+
+@mcp.tool()
+async def create_route_session(
+    origin: str,
+    destination: str,
+    ctx: Context,
+    via_points: Optional[List[Dict[str, Any]]] = None,
+    mode: str = "foot",
+    session_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Create a backend-persisted route session with optional via points.
+
+    The returned session can later be updated interactively by adding/removing via points,
+    replacing the destination, or replanning from a new current origin.
+    """
+    app_context = ctx.request_context.lifespan_context
+    normalized_via_points = _normalize_via_points(via_points)
+    route_plan = await _compute_combined_route_plan(
+        app_context=app_context,
+        origin=origin,
+        destination=destination,
+        via_points=normalized_via_points,
+        mode=mode,
+    )
+    session_id = f"route_{uuid4().hex[:10]}"
+    session_payload = {
+        "session_id": session_id,
+        "session_name": str(session_name or "").strip() or session_id,
+        "provider": app_context.provider,
+        "origin": origin,
+        "destination": destination,
+        "mode": mode,
+        "via_points": normalized_via_points,
+        "created_at": datetime.now().isoformat(),
+        "updated_at": datetime.now().isoformat(),
+    }
+    _cache_route_plan_on_session(session_payload, route_plan)
+    _save_persisted_route_session(session_payload)
+    return {
+        "session": session_payload,
+        "route_plan": route_plan,
+        "route_plan_cache_hit": False,
+        "session_store": _route_session_store_info(),
+    }
+
+
+@mcp.tool()
+async def get_route_session(
+    session_id: str,
+    ctx: Context,
+    force_replan: bool = False,
+) -> Dict[str, Any]:
+    """
+    Fetch a route session and return its cached route plan by default.
+
+    Set force_replan=true only when the caller explicitly wants to refresh the
+    provider route. This avoids hitting provider QPS limits on frequent UI polls.
+    """
+    app_context = ctx.request_context.lifespan_context
+    session = _get_persisted_route_session(session_id)
+    if not session:
+        raise KeyError(f"Unknown route session: {session_id}")
+    route_plan, cache_hit = await _route_plan_for_session(
+        app_context=app_context,
+        session=session,
+        force_replan=bool(force_replan),
+    )
+    return {
+        "session": session,
+        "route_plan": route_plan,
+        "route_plan_cache_hit": cache_hit,
+        "session_store": _route_session_store_info(),
+    }
+
+
+@mcp.tool()
+async def list_route_sessions(
+    ctx: Context,
+    limit: int = 20,
+    include_route_plan_cache: bool = False,
+) -> Dict[str, Any]:
+    """
+    List persisted route sessions known to this backend.
+
+    This is useful for UI recovery: after a page refresh or backend restart, the
+    UI can show recoverable sessions or verify that a session_id is still valid.
+    """
+    _load_route_sessions()
+    bounded_limit = max(1, min(int(limit), 100))
+    sessions = sorted(
+        ROUTE_SESSIONS.values(),
+        key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""),
+        reverse=True,
+    )[:bounded_limit]
+    if not include_route_plan_cache:
+        sessions = [
+            {
+                key: value
+                for key, value in session.items()
+                if key not in {"route_plan_cache"}
+            }
+            for session in sessions
+        ]
+    return {
+        "sessions": sessions,
+        "count": len(sessions),
+        "total_count": len(ROUTE_SESSIONS),
+        "session_store": _route_session_store_info(),
+    }
+
+
+@mcp.tool()
+async def add_via_point_to_session(
+    session_id: str,
+    new_via_point: Dict[str, Any],
+    ctx: Context,
+    insert_before_index: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Insert or append a via point inside an existing route session.
+    """
+    app_context = ctx.request_context.lifespan_context
+    session = _get_persisted_route_session(session_id)
+    if not session:
+        raise KeyError(f"Unknown route session: {session_id}")
+    normalized_new = _normalize_via_points([new_via_point])
+    if not normalized_new:
+        raise ValueError("new_via_point must include a valid location")
+    via_points = _normalize_via_points(session.get("via_points"))
+    item = normalized_new[0]
+    if insert_before_index is None:
+        via_points.append(item)
+    else:
+        idx = max(0, min(int(insert_before_index), len(via_points)))
+        via_points.insert(idx, item)
+    for index, via in enumerate(via_points):
+        via["index"] = index
+    session["via_points"] = via_points
+    session["updated_at"] = datetime.now().isoformat()
+    route_plan = await _compute_combined_route_plan(
+        app_context=app_context,
+        origin=session["origin"],
+        destination=session["destination"],
+        via_points=via_points,
+        mode=session["mode"],
+    )
+    _cache_route_plan_on_session(session, route_plan)
+    _save_persisted_route_session(session)
+    return {
+        "session": session,
+        "route_plan": route_plan,
+        "route_plan_cache_hit": False,
+        "session_store": _route_session_store_info(),
+    }
+
+
+@mcp.tool()
+async def remove_via_point_from_session(
+    session_id: str,
+    ctx: Context,
+    via_point_index: Optional[int] = None,
+    via_point_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Remove one via point from an existing route session by index or by name.
+    """
+    app_context = ctx.request_context.lifespan_context
+    session = _get_persisted_route_session(session_id)
+    if not session:
+        raise KeyError(f"Unknown route session: {session_id}")
+    via_points = _normalize_via_points(session.get("via_points"))
+    removed = None
+    if via_point_index is not None and 0 <= int(via_point_index) < len(via_points):
+        removed = via_points.pop(int(via_point_index))
+    elif str(via_point_name or "").strip():
+        name = str(via_point_name).strip().lower()
+        for index, via in enumerate(via_points):
+            if str(via.get("name") or "").strip().lower() == name:
+                removed = via_points.pop(index)
+                break
+    if removed is None:
+        raise KeyError("No matching via point found to remove")
+    for index, via in enumerate(via_points):
+        via["index"] = index
+    session["via_points"] = via_points
+    session["updated_at"] = datetime.now().isoformat()
+    route_plan = await _compute_combined_route_plan(
+        app_context=app_context,
+        origin=session["origin"],
+        destination=session["destination"],
+        via_points=via_points,
+        mode=session["mode"],
+    )
+    _cache_route_plan_on_session(session, route_plan)
+    _save_persisted_route_session(session)
+    return {
+        "session": session,
+        "removed_via_point": removed,
+        "route_plan": route_plan,
+        "route_plan_cache_hit": False,
+        "session_store": _route_session_store_info(),
+    }
+
+
+@mcp.tool()
+async def replace_destination_in_session(
+    session_id: str,
+    destination: str,
+    ctx: Context,
+) -> Dict[str, Any]:
+    """
+    Replace the final destination of an existing route session and replan.
+    """
+    app_context = ctx.request_context.lifespan_context
+    session = _get_persisted_route_session(session_id)
+    if not session:
+        raise KeyError(f"Unknown route session: {session_id}")
+    session["destination"] = destination
+    session["updated_at"] = datetime.now().isoformat()
+    route_plan = await _compute_combined_route_plan(
+        app_context=app_context,
+        origin=session["origin"],
+        destination=session["destination"],
+        via_points=session.get("via_points"),
+        mode=session["mode"],
+    )
+    _cache_route_plan_on_session(session, route_plan)
+    _save_persisted_route_session(session)
+    return {
+        "session": session,
+        "route_plan": route_plan,
+        "route_plan_cache_hit": False,
+        "session_store": _route_session_store_info(),
+    }
+
+
+@mcp.tool()
+async def replan_route_session_from_origin(
+    session_id: str,
+    origin: str,
+    ctx: Context,
+) -> Dict[str, Any]:
+    """
+    Update the current origin of a route session and replan from the new location.
+    """
+    app_context = ctx.request_context.lifespan_context
+    session = _get_persisted_route_session(session_id)
+    if not session:
+        raise KeyError(f"Unknown route session: {session_id}")
+    session["origin"] = origin
+    session["updated_at"] = datetime.now().isoformat()
+    route_plan = await _compute_combined_route_plan(
+        app_context=app_context,
+        origin=session["origin"],
+        destination=session["destination"],
+        via_points=session.get("via_points"),
+        mode=session["mode"],
+    )
+    _cache_route_plan_on_session(session, route_plan)
+    _save_persisted_route_session(session)
+    return {
+        "session": session,
+        "route_plan": route_plan,
+        "route_plan_cache_hit": False,
+        "session_store": _route_session_store_info(),
+    }
+
+
+@mcp.tool()
 async def render_bev_route_snapshot(
     origin: str,
     destination: str,
@@ -685,6 +1591,155 @@ async def render_bev_route_snapshot(
             "polling": "Call this tool again with updated origin coordinates at refresh_interval_s cadence.",
             "recommended_refresh_after_s": max(0.5, float(refresh_interval_s)),
         },
+    }
+
+
+@mcp.tool()
+async def render_itinerary_bev_snapshot(
+    ctx: Context,
+    route_plan: Optional[Dict[str, Any]] = None,
+    origin: Optional[str] = None,
+    destination: Optional[str] = None,
+    via_points: Optional[List[Dict[str, Any]]] = None,
+    mode: str = "foot",
+    size: str = "800*600",
+    scale: int = 2,
+    zoom: Optional[int] = None,
+    traffic: bool = False,
+) -> Dict[str, Any]:
+    """
+    Render an AMap static BEV snapshot for a multi-leg itinerary route.
+
+    Pass either an existing route_plan returned by recommend_itinerary_and_waypoints /
+    plan_route_with_via_points, or pass origin + destination + via_points so this tool
+    can compute the route plan first.
+    """
+    app_context = ctx.request_context.lifespan_context
+    if app_context.provider != "amap":
+        raise RuntimeError("render_itinerary_bev_snapshot currently requires MAP_PROVIDER=amap")
+
+    amap_key = os.getenv("AMAP_KEY", "").strip()
+    if not amap_key:
+        raise RuntimeError("AMAP_KEY is required for AMap static itinerary snapshots.")
+
+    if not isinstance(route_plan, dict) or not route_plan.get("route_polyline"):
+        if not origin or not destination:
+            raise ValueError("Either route_plan or both origin and destination are required")
+        route_plan = await _compute_combined_route_plan(
+            app_context=app_context,
+            origin=origin,
+            destination=destination,
+            via_points=via_points,
+            mode=mode,
+        )
+
+    route_polyline = _normalize_route_coords(route_plan.get("route_polyline", []) or [])
+    if not route_polyline:
+        raise RuntimeError("No route polyline available for itinerary BEV snapshot rendering.")
+
+    legs = route_plan.get("legs", []) or []
+    leg_colors = ["0x2E86FF", "0xFF8C42", "0x9B5DE5", "0x00A86B", "0xFF4D6D"]
+    path_specs: List[str] = []
+    valid_legs = [leg for leg in legs if isinstance(leg, dict)]
+    max_total_points = int(os.getenv("AMAP_ITINERARY_STATIC_MAX_POINTS", "120") or 120)
+    per_leg_points = max(12, min(45, max_total_points // max(1, len(valid_legs))))
+    for index, leg in enumerate(legs):
+        if not isinstance(leg, dict):
+            continue
+        leg_coords = _normalize_route_coords(leg.get("route_polyline", []) or [])
+        if leg_coords:
+            color = leg_colors[index % len(leg_colors)]
+            sampled = sample_route_coordinates(leg_coords, max_points=per_leg_points)
+            path_specs.append(f"7,{color},1,,:{encode_polyline_text(sampled)}")
+
+    if not path_specs:
+        sampled = sample_route_coordinates(route_polyline, max_points=max_total_points)
+        path_specs.append(f"6,0x2E8B57,1,,:{encode_polyline_text(sampled)}")
+
+    combined_sampled = sample_route_coordinates(route_polyline, max_points=max_total_points)
+    combined_path_spec = f"7,0x2E8B57,1,,:{encode_polyline_text(combined_sampled)}"
+
+    stop_sequence = route_plan.get("stop_sequence", []) or []
+    markers: List[str] = []
+    via_marker_index = 0
+    for index, stop in enumerate(stop_sequence):
+        if not isinstance(stop, dict):
+            continue
+        location = str(stop.get("location") or "").strip()
+        if not location:
+            continue
+        try:
+            lon, lat = parse_location_text(location)
+        except Exception:
+            continue
+        stop_type = str(stop.get("type") or "").strip().lower()
+        if stop_type == "origin":
+            markers.append(f"mid,0x2E86FF,O:{lon},{lat}")
+        elif stop_type == "destination":
+            markers.append(f"mid,0xFF5533,D:{lon},{lat}")
+        else:
+            via_marker_index += 1
+            marker_label = _single_char_marker_label(str(via_marker_index), fallback="V")
+            markers.append(f"mid,0xFF8C42,{marker_label}:{lon},{lat}")
+
+    params: List[Tuple[str, str]] = [
+        ("key", amap_key),
+        ("size", size),
+        ("scale", str(max(1, min(int(scale), 2)))),
+        ("traffic", str(1 if traffic else 0)),
+        ("paths", combined_path_spec),
+    ]
+    if zoom is not None:
+        params.append(("zoom", str(int(zoom))))
+    if markers:
+        params.append(("markers", "|".join(markers)))
+
+    query = "&".join(f"{key}={value}" for key, value in params)
+    image_url = f"https://restapi.amap.com/v3/staticmap?{query}"
+    cache_busted_url = f"{image_url}&_ts={int(datetime.now().timestamp())}"
+
+    leg_overlay_image_url: Optional[str] = None
+    if len(path_specs) > 1:
+        leg_overlay_params = [(key, value) for key, value in params if key != "paths"]
+        leg_overlay_params.append(("paths", "|".join(path_specs)))
+        leg_overlay_query = "&".join(f"{key}={value}" for key, value in leg_overlay_params)
+        leg_overlay_image_url = f"https://restapi.amap.com/v3/staticmap?{leg_overlay_query}"
+
+    route_only_params = [(key, value) for key, value in params if key != "markers"]
+    route_only_query = "&".join(f"{key}={value}" for key, value in route_only_params)
+    route_only_image_url = f"https://restapi.amap.com/v3/staticmap?{route_only_query}"
+
+    markers_only_image_url: Optional[str] = None
+    if markers:
+        markers_only_params: List[Tuple[str, str]] = [
+            ("key", amap_key),
+            ("size", size),
+            ("scale", str(max(1, min(int(scale), 2)))),
+            ("traffic", str(1 if traffic else 0)),
+            ("markers", "|".join(markers)),
+        ]
+        if zoom is not None:
+            markers_only_params.append(("zoom", str(int(zoom))))
+        markers_only_query = "&".join(f"{key}={value}" for key, value in markers_only_params)
+        markers_only_image_url = f"https://restapi.amap.com/v3/staticmap?{markers_only_query}"
+
+    return {
+        "provider": app_context.provider,
+        "snapshot_provider": "amap_staticmap_itinerary",
+        "mode": route_plan.get("mode", mode),
+        "route_summary": route_plan.get("route_summary", {}),
+        "via_points": route_plan.get("via_points", []),
+        "stop_sequence": stop_sequence,
+        "leg_count": len(legs),
+        "image_url": image_url,
+        "image_url_cache_busted": cache_busted_url,
+        "leg_overlay_image_url": leg_overlay_image_url,
+        "route_only_image_url": route_only_image_url,
+        "markers_only_image_url": markers_only_image_url,
+        "marker_labels": [marker.split(":", 1)[0].rsplit(",", 1)[-1] for marker in markers],
+        "url_length": len(cache_busted_url),
+        "rendering_note": "Primary image_url uses one simplified combined route for AMap reliability; leg_overlay_image_url keeps per-leg colors when supported.",
+        "generated_at": datetime.now().isoformat(),
     }
 
 
@@ -815,108 +1870,7 @@ async def get_route_state(
 
 
 @mcp.tool()
-async def generate_bev_prompt_proposals(
-    gps: Dict[str, float],
-    route_polyline: List[Dict[str, Any]] | List[List[float]],
-    coarse_waypoints: List[Dict[str, Any]],
-    ctx: Context,
-    heading_deg: Optional[float] = None,
-    lookahead_m: float = 20.0,
-    off_route_threshold_m: float = 20.0,
-    front_extent_m: float = 30.0,
-    back_extent_m: float = 10.0,
-    side_extent_m: float = 15.0,
-) -> Dict[str, Any]:
-    """
-    Generate PromptProposal v1 from RouteContext and LocalBEVContext only.
-
-    This is a route-prior-only proposal generator. It does not inspect RGB.
-    It emits a structured BEV proposal list for downstream projection or arbitration.
-    """
-    await ctx.info(
-        "Generating BEV prompt proposals "
-        f"heading={heading_deg if heading_deg is not None else 'none'} "
-        f"lookahead_m={lookahead_m:.1f}"
-    )
-    state = build_route_state(
-        gps=gps,
-        heading_deg=heading_deg,
-        route_polyline=route_polyline,
-        coarse_waypoints=coarse_waypoints,
-        lookahead_m=lookahead_m,
-        off_route_threshold_m=off_route_threshold_m,
-        front_extent_m=front_extent_m,
-        back_extent_m=back_extent_m,
-        side_extent_m=side_extent_m,
-    )
-    proposal_bundle = build_bev_prompt_proposals(
-        route_context=state.route_context,
-        local_bev_context=state.local_bev_context,
-    )
-    return {
-        "route_context": route_context_to_dict(state.route_context),
-        "local_bev_context": local_bev_context_to_dict(state.local_bev_context),
-        "prompt_proposals": prompt_proposal_bundle_to_dict(proposal_bundle).get("proposals", []),
-    }
-
-
-@mcp.tool()
-async def generate_pov_prompt_candidates(
-    gps: Dict[str, float],
-    route_polyline: List[Dict[str, Any]] | List[List[float]],
-    coarse_waypoints: List[Dict[str, Any]],
-    ctx: Context,
-    heading_deg: Optional[float] = None,
-    lookahead_m: float = 20.0,
-    off_route_threshold_m: float = 20.0,
-    front_extent_m: float = 30.0,
-    back_extent_m: float = 10.0,
-    side_extent_m: float = 15.0,
-    image_width: int = 1280,
-    image_height: int = 720,
-) -> Dict[str, Any]:
-    """
-    Generate PoV Prompt Projection v1 candidates from BEV prompt proposals.
-
-    This is a weak geometric projection from ego-BEV proposal sectors into image-plane
-    candidate prompts. It does not use RGB and should be treated as a teacher prior.
-    """
-    await ctx.info(
-        "Generating PoV prompt candidates "
-        f"heading={heading_deg if heading_deg is not None else 'none'} "
-        f"image={image_width}x{image_height}"
-    )
-    state = build_route_state(
-        gps=gps,
-        heading_deg=heading_deg,
-        route_polyline=route_polyline,
-        coarse_waypoints=coarse_waypoints,
-        lookahead_m=lookahead_m,
-        off_route_threshold_m=off_route_threshold_m,
-        front_extent_m=front_extent_m,
-        back_extent_m=back_extent_m,
-        side_extent_m=side_extent_m,
-    )
-    proposal_bundle = build_bev_prompt_proposals(
-        route_context=state.route_context,
-        local_bev_context=state.local_bev_context,
-    )
-    candidate_bundle = project_bev_prompt_proposals_to_pov(
-        route_context=state.route_context,
-        prompt_proposals=proposal_bundle.proposals,
-        image_width=image_width,
-        image_height=image_height,
-    )
-    return {
-        "route_context": route_context_to_dict(state.route_context),
-        "local_bev_context": local_bev_context_to_dict(state.local_bev_context),
-        "prompt_proposals": prompt_proposal_bundle_to_dict(proposal_bundle).get("proposals", []),
-        "pov_prompt_candidates": pov_prompt_candidate_bundle_to_dict(candidate_bundle).get("candidates", []),
-    }
-
-
-@mcp.tool()
-async def generate_pov_prompt_candidates_v2(
+async def run_zero_shot_visual_prompt_agent(
     gps: Dict[str, float],
     route_polyline: List[Dict[str, Any]] | List[List[float]],
     coarse_waypoints: List[Dict[str, Any]],
@@ -930,25 +1884,29 @@ async def generate_pov_prompt_candidates_v2(
     back_extent_m: float = 10.0,
     side_extent_m: float = 15.0,
     visual_top_k: int = 5,
+    candidate_top_k: int = 5,
+    llm_detail: str = "auto",
+    navigation_mode: str = "foot",
 ) -> Dict[str, Any]:
     """
-    Generate RGB-aware PoV PromptProposal v2 candidates.
+    Run a zero-shot visual prompt agent over the current FPV frame.
 
-    This tool fuses:
-    - RouteContext
-    - LocalBEVContext
-    - BEV prompt proposals
-    - image-space visual region candidates
+    The online decision path is mode-aware and image-first:
+    1. build RouteContext + LocalBEVContext
+    2. pass compact RouteContext directly to the LVLM
+    3. let the LVLM render one conservative image-plane prompt from image + RouteContext
+    4. if the LVLM fails, return reject_all instead of switching to heuristic fallbacks
 
-    It returns a Route-Prior + RGB-aware PoV candidate set for downstream arbitration.
+    The public input/output schema is unchanged; candidate/debug fields remain for
+    backward compatibility but are empty in this path.
     """
     await ctx.info(
-        "Generating RGB-aware PoV prompt candidates "
+        "Running zero-shot visual prompt agent "
         f"heading={heading_deg if heading_deg is not None else 'none'} "
-        f"visual_top_k={visual_top_k}"
+        f"visual_top_k={visual_top_k} candidate_top_k={candidate_top_k}"
     )
     if not str(image_path or "").strip() and not str(image_url or "").strip():
-        raise RuntimeError("generate_pov_prompt_candidates_v2 requires image_path or image_url")
+        raise RuntimeError("run_zero_shot_visual_prompt_agent requires image_path or image_url")
 
     state = build_route_state(
         gps=gps,
@@ -961,26 +1919,88 @@ async def generate_pov_prompt_candidates_v2(
         back_extent_m=back_extent_m,
         side_extent_m=side_extent_m,
     )
-    proposal_bundle = build_bev_prompt_proposals(
-        route_context=state.route_context,
-        local_bev_context=state.local_bev_context,
+    route_context_dict = route_context_to_dict(state.route_context)
+    local_bev_dict = local_bev_context_to_dict(state.local_bev_context)
+    image_width, image_height = _prompt_image_size(image_path=image_path, image_url=image_url)
+
+    llm_raw: Dict[str, Any] | None = None
+    llm_error: str | None = None
+    decision = None
+    question = ""
+    system_prompt = ""
+    if _is_arrival_state(route_context_dict):
+        decision = _arrival_visual_prompt_decision(
+            route_context=route_context_dict,
+            image_width=image_width,
+            image_height=image_height,
+        )
+    else:
+        try:
+            question = build_direct_prompt_question(
+                route_context=route_context_dict,
+                prompt_proposals=[],
+                visual_regions={},
+                image_width=image_width,
+                image_height=image_height,
+                navigation_mode=navigation_mode,
+            )
+            system_prompt = build_direct_prompt_system_prompt()
+            if str(image_path or "").strip():
+                llm_raw = await arbitrate_local_pov_candidates_with_llm(
+                    image_path=str(image_path),
+                    question=question,
+                    detail=llm_detail,
+                    system_prompt=system_prompt,
+                )
+            else:
+                llm_raw = await arbitrate_pov_candidates_with_llm(
+                    image_url=str(image_url),
+                    question=question,
+                    detail=llm_detail,
+                    system_prompt=system_prompt,
+                )
+            decision = coerce_direct_prompt_decision(
+                raw=llm_raw,
+                route_context=route_context_dict,
+                image_width=image_width,
+                image_height=image_height,
+            )
+        except Exception as exc:
+            llm_error = str(exc)
+
+    if decision is None:
+        decision = _reject_visual_prompt_decision(
+            reason=(
+                llm_error
+                or "The RouteContext-driven LVLM agent did not return a valid rendered prompt."
+            ),
+            arbiter_source="llm_route_context_reject",
+            route_context=route_context_dict,
+        )
+
+    decision_dict = visual_prompt_decision_to_dict(decision)
+    if llm_raw is not None:
+        decision_dict.setdefault("debug", {})
+        decision_dict["debug"]["llm_raw"] = llm_raw
+    if llm_error:
+        decision_dict.setdefault("debug", {})
+        decision_dict["debug"]["llm_error"] = llm_error
+
+    image_href = _image_href_for_overlay(image_path=image_path, image_url=image_url)
+    overlay_svg = _render_prompt_overlay_svg(
+        image_href=image_href,
+        image_width=image_width,
+        image_height=image_height,
+        rendered_prompt=decision.rendered_prompt,
+        title="Mode-Aware Visual Prompt",
     )
-    visual_region_bundle = extract_visual_regions(
-        image_path=image_path,
-        image_url=image_url,
-        top_k=visual_top_k,
-    )
-    candidate_bundle = generate_rgb_aware_pov_prompt_candidates(
-        route_context=state.route_context,
-        prompt_proposals=proposal_bundle.proposals,
-        visual_regions=visual_region_bundle,
-    )
+
     return {
-        "route_context": route_context_to_dict(state.route_context),
-        "local_bev_context": local_bev_context_to_dict(state.local_bev_context),
-        "prompt_proposals": prompt_proposal_bundle_to_dict(proposal_bundle).get("proposals", []),
-        "visual_regions": visual_region_bundle_to_dict(visual_region_bundle),
-        "pov_prompt_candidates": pov_prompt_candidate_bundle_to_dict(candidate_bundle).get("candidates", []),
+        "route_context": route_context_dict,
+        "local_bev_context": local_bev_dict,
+        "arbiter_decision": decision_dict,
+        "overlay_svg": overlay_svg,
+        "overlay_svg_data_url": _svg_to_data_url(overlay_svg),
     }
 
 
@@ -1002,9 +2022,8 @@ async def render_local_bev_patch(
     """
     Render a local pose-aligned BEV patch from LocalBEVContext.
 
-    This tool returns an explicit local BEV SVG patch for debugging and downstream
-    PromptProposal experimentation. The patch is centered on the current pose and
-    aligned so the current heading points upward.
+    This tool returns an explicit local BEV SVG patch for debugging.
+    The patch is centered on the current pose and aligned so the current heading points upward.
     """
     await ctx.info(
         "Rendering LocalBEVContext patch "
@@ -1024,21 +2043,14 @@ async def render_local_bev_patch(
     )
     route_state_dict = route_state_to_dict(route_state)
     local_bev_context = route_state_dict.get("local_bev_context", {}) or {}
-    proposal_bundle = build_bev_prompt_proposals(
-        route_context=route_state.route_context,
-        local_bev_context=route_state.local_bev_context,
-    )
-    prompt_proposals = prompt_proposal_bundle_to_dict(proposal_bundle).get("proposals", [])
     svg = _build_local_bev_svg(
         local_bev_context=local_bev_context,
-        prompt_proposals=prompt_proposals,
         width=max(256, int(width)),
         height=max(256, int(height)),
     )
     return {
         "local_bev_context": local_bev_context,
         "route_context": route_state_dict.get("route_context", {}),
-        "prompt_proposals": prompt_proposals,
         "svg": svg,
         "svg_data_url": f"data:image/svg+xml;charset=utf-8,{quote(svg)}",
         "generated_at": datetime.now().isoformat(),
@@ -1049,10 +2061,6 @@ async def render_local_bev_patch(
                 "orange": "connector",
                 "blue sector": "corridor prior",
                 "orange sector": "turn prior",
-                "teal sector": "corridor proposal",
-                "purple sector": "connector proposal",
-                "cyan sector": "entrance proposal",
-                "red sector": "crossing proposal",
                 "C": "current pose",
                 "M": "matched point",
                 "W": "next waypoint",
@@ -2571,6 +3579,261 @@ async def recommend_destination_and_waypoints(
         mode=mode,
         ctx=ctx,
     )
+
+
+@mcp.tool()
+async def decompose_itinerary_goals(
+    user_instruction: str,
+    ctx: Context,
+    mode: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Decompose a free-form instruction into an ordered list of itinerary goals.
+
+    This tool does not recommend concrete POIs yet. It extracts the ordered goal
+    skeleton that can later be realized as via points plus a final destination.
+    """
+    decomposer = GoalDecomposer()
+    decomposition = await decomposer.parse(user_instruction)
+
+    override_mode = str(mode or "").strip().lower()
+    if override_mode in {"car", "foot", "bike"}:
+        decomposition["global_mode"] = override_mode
+        for goal in decomposition.get("goals", []) or []:
+            if isinstance(goal, dict):
+                goal["mode"] = override_mode
+
+    return {
+        "input": {
+            "user_instruction": user_instruction,
+            "mode_override": override_mode or None,
+        },
+        "decomposition": decomposition,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@mcp.tool()
+async def recommend_itinerary_and_waypoints(
+    user_instruction: str,
+    current_latitude: float,
+    current_longitude: float,
+    ctx: Context,
+    max_candidates: int = 5,
+    search_radius: float = 3000,
+    mode: Optional[str] = None,
+    max_goals: int = 4,
+) -> Dict[str, Any]:
+    """
+    Decompose a multi-goal instruction, recommend one stop for each ordered goal,
+    and build a combined multi-leg route with via points.
+
+    This is the first itinerary-oriented extension on top of the single-destination
+    recommendation stack. It keeps each sub-goal provider-retrievable and realizes
+    earlier goals as via points plus one final destination.
+    """
+    app_context = ctx.request_context.lifespan_context
+    engine = DestinationRecommendationEngine(
+        map_client=app_context.osm_client,
+        provider=app_context.provider,
+    )
+    decomposer = GoalDecomposer()
+    candidate_judge = ItineraryCandidateJudge()
+    decomposition = await decomposer.parse(user_instruction)
+
+    goals = [
+        goal
+        for goal in (decomposition.get("goals", []) or [])
+        if isinstance(goal, dict) and str(goal.get("request_text") or "").strip()
+    ][: max(1, int(max_goals))]
+
+    if not goals:
+        single = await engine.recommend(
+            user_instruction=user_instruction,
+            current_latitude=current_latitude,
+            current_longitude=current_longitude,
+            max_candidates=max_candidates,
+            search_radius=search_radius,
+            mode=mode,
+            ctx=ctx,
+        )
+        return {
+            "provider": app_context.provider,
+            "input": {
+                "user_instruction": user_instruction,
+                "current_latitude": current_latitude,
+                "current_longitude": current_longitude,
+            },
+            "decomposition": decomposition,
+            "goal_recommendations": [],
+            "via_points": [],
+            "final_destination": single.get("chosen_destination"),
+            "route_plan": {
+                "route_summary": single.get("route_summary", {}),
+                "route_polyline": single.get("route_polyline", []),
+                "coarse_waypoints": single.get("key_waypoints", []),
+                "legs": [],
+            },
+            "status": "single_goal_fallback",
+        }
+
+    override_mode = str(mode or "").strip().lower()
+    global_mode = override_mode if override_mode in {"car", "foot", "bike"} else str(
+        decomposition.get("global_mode") or "car"
+    ).strip().lower()
+    if global_mode not in {"car", "foot", "bike"}:
+        global_mode = "car"
+
+    goal_results: List[Dict[str, Any]] = []
+    selected_stops: List[Dict[str, Any]] = []
+    sequential_lat = float(current_latitude)
+    sequential_lon = float(current_longitude)
+    used_destination_ids: set[str] = set()
+
+    for goal in goals:
+        goal_mode = override_mode if override_mode in {"car", "foot", "bike"} else str(
+            goal.get("mode") or global_mode
+        ).strip().lower()
+        if goal_mode not in {"car", "foot", "bike"}:
+            goal_mode = global_mode
+        goal_radius = goal.get("radius_m")
+        if not isinstance(goal_radius, (int, float)) or float(goal_radius) <= 0:
+            goal_radius = search_radius
+
+        goal_instruction = str(goal.get("request_text") or "").strip()
+        search_keywords = str(goal.get("search_keywords") or "").strip()
+        goal_type = str(goal.get("goal_type") or "").strip()
+        if search_keywords:
+            goal_instruction = (
+                f"{goal_instruction}. Goal type: {goal_type}. "
+                f"Use these provider-facing search keywords: {search_keywords}."
+            )
+        recommendation = await engine.recommend(
+            user_instruction=goal_instruction,
+            current_latitude=sequential_lat,
+            current_longitude=sequential_lon,
+            max_candidates=max_candidates,
+            search_radius=float(goal_radius),
+            mode=goal_mode,
+            ctx=ctx,
+        )
+
+        top_candidates = [
+            candidate
+            for candidate in (recommendation.get("recommendations") or [])
+            if isinstance(candidate, dict)
+            and (
+                not _destination_id(candidate)
+                or _destination_id(candidate) not in used_destination_ids
+            )
+        ][: max(1, int(max_candidates))]
+        judge_decision = await candidate_judge.select_candidate(
+            goal=goal,
+            candidates=top_candidates,
+            previous_stops=selected_stops,
+        )
+        chosen = None
+        selection_reason = str(judge_decision.get("judge_source") or "llm_judge")
+        selected_id = str(judge_decision.get("selected_candidate_id") or "").strip()
+        if selected_id:
+            for candidate in top_candidates:
+                if _destination_id(candidate) == selected_id:
+                    chosen = candidate
+                    break
+        if not chosen:
+            fallback_chosen, fallback_reason = _select_itinerary_destination(
+                recommendation=recommendation,
+                used_destination_ids=used_destination_ids,
+            )
+            chosen = fallback_chosen
+            selection_reason = f"{selection_reason}_fallback_{fallback_reason}"
+        if chosen:
+            recommendation["chosen_destination"] = chosen
+        goal_entry = {
+            "goal": goal,
+            "recommendation": recommendation,
+            "status": "selected" if chosen else "failed",
+            "selection_reason": selection_reason,
+            "judge_decision": judge_decision,
+            "judge_fallback_used": not bool(selected_id and chosen),
+        }
+        goal_results.append(goal_entry)
+
+        if not chosen:
+            break
+
+        destination_id = _destination_id(chosen)
+        if destination_id:
+            used_destination_ids.add(destination_id)
+        selected_stops.append(
+            {
+                "name": str(chosen.get("name") or ""),
+                "location": str(chosen.get("location") or ""),
+                "goal_type": str(goal.get("goal_type") or ""),
+                "goal_index": goal.get("goal_index"),
+            }
+        )
+
+        coords = (chosen.get("coordinates") or {})
+        next_lat = coords.get("latitude")
+        next_lon = coords.get("longitude")
+        if isinstance(next_lat, (int, float)) and isinstance(next_lon, (int, float)):
+            sequential_lat = float(next_lat)
+            sequential_lon = float(next_lon)
+
+    successful_goals = [item for item in goal_results if item.get("status") == "selected"]
+    chosen_stops = [item.get("recommendation", {}).get("chosen_destination") for item in successful_goals]
+    chosen_stops = [item for item in chosen_stops if isinstance(item, dict)]
+
+    via_points = []
+    final_destination = chosen_stops[-1] if chosen_stops else None
+    if len(chosen_stops) >= 2:
+        for index, stop in enumerate(chosen_stops[:-1]):
+            goal = successful_goals[index].get("goal") or {}
+            via_points.append(
+                {
+                    "location": str(stop.get("location") or "").strip(),
+                    "name": str(stop.get("name") or goal.get("goal_type") or f"Stop {index + 1}").strip(),
+                    "goal_index": goal.get("goal_index"),
+                    "goal_type": goal.get("goal_type"),
+                }
+            )
+
+    route_plan = None
+    if final_destination and str(final_destination.get("location") or "").strip():
+        route_plan = await _compute_combined_route_plan(
+            app_context=app_context,
+            origin=format_location(current_longitude, current_latitude),
+            destination=str(final_destination["location"]),
+            via_points=via_points,
+            mode=global_mode,
+        )
+
+    status = "failed"
+    if goal_results:
+        if len(successful_goals) == len(goals):
+            status = "completed"
+        elif successful_goals:
+            status = "partial"
+
+    return {
+        "provider": app_context.provider,
+        "input": {
+            "user_instruction": user_instruction,
+            "current_latitude": current_latitude,
+            "current_longitude": current_longitude,
+            "mode_override": override_mode or None,
+        },
+        "decomposition": decomposition,
+        "goal_recommendations": goal_results,
+        "fulfilled_goal_count": len(successful_goals),
+        "requested_goal_count": len(goals),
+        "via_points": via_points,
+        "final_destination": final_destination,
+        "route_plan": route_plan,
+        "status": status,
+        "timestamp": datetime.now().isoformat(),
+    }
 
 if __name__ == "__main__":
     mcp.run()

@@ -44,7 +44,7 @@ This project contains the **Viobot Control** (`viobot_ctrl`) and **GNSS SPP Node
   - `/baton/gnss/heading` (`std_msgs::msg::Float64`) : Publishes the heading estimation derived from stereo3 and GNSS SPP fusion.
 
 ### Parameters
-- `gnss_initial_calibration_enu_` (vector3): Initial offset applied to the GNSS calculation natively in the ENU frame (default: 0.0, 0.0, 0.0).
+- `gnss_initial_calibration_enu_` (vector3): Initial offset applied to the GNSS calculation natively in the ENU frame (default: 0.0, -7.5, 0.0).
 - more parameters are defined in the config files.
 
 ## Getting Started
@@ -90,3 +90,4 @@ This project contains the **Viobot Control** (`viobot_ctrl`) and **GNSS SPP Node
 - [x] Test Euler angle output of stereo3
 - [x] Heading estimation using stereo3 and GNSS SPP
 - [ ] Migrate to Viobot2 platform
+- [ ] Incremental fusion or absolute fusion

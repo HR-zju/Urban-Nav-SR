@@ -10,6 +10,7 @@ import inspect
 import json
 import mimetypes
 import os
+import io
 import re
 from pathlib import Path
 
@@ -17,6 +18,12 @@ try:
     from openai import AsyncOpenAI
 except ImportError:
     AsyncOpenAI = None
+
+try:
+    from PIL import Image, ImageOps
+except ImportError:
+    Image = None
+    ImageOps = None
 
 from mcp_server.config import (
     default_intent_rules,
@@ -80,12 +87,23 @@ class LLMSettings:
         )
         if api_style not in {"responses", "chat_completions"}:
             api_style = "chat_completions" if provider == "ark" else "chat_completions"
+        model = (
+            os.getenv("LLM_MODEL", "").strip()
+            or os.getenv("VLM_MODEL", "").strip()
+            or os.getenv("ARK_MODEL", "").strip()
+            or default_model
+        )
+        base_url = (
+            os.getenv("LLM_API_BASE_URL", "").strip()
+            or os.getenv("ARK_BASE_URL", "").strip()
+            or default_base_url
+        )
         return cls(
             provider=provider,
             api_style=api_style,
             api_key=api_key,
-            model=os.getenv("LLM_MODEL", default_model).strip(),
-            base_url=os.getenv("LLM_API_BASE_URL", default_base_url).rstrip("/"),
+            model=model,
+            base_url=base_url.rstrip("/"),
             temperature=float(os.getenv("LLM_TEMPERATURE", "0") or 0),
             timeout_s=float(os.getenv("LLM_TIMEOUT_S", "20") or 20),
             response_format=os.getenv("LLM_RESPONSE_FORMAT_JSON", "true").strip().lower() not in {"0", "false", "no"},
@@ -717,6 +735,586 @@ class IntentParser(BaseLLMService):
             await _close_async_client(client)
 
 
+def _split_itinerary_segments(user_instruction: str) -> list[str]:
+    text = str(user_instruction or "").strip()
+    if not text:
+        return []
+
+    # Treat sequence markers as boundaries, but do not split on weak fillers such as "想".
+    normalized = re.sub(r"[；;。]", " | ", text)
+    normalized = re.sub(r"[，,]\s*(?:再|然后|之后|接着|最后)\s*", " | ", normalized)
+    normalized = re.sub(r"(?:^|[，,\s])先\s*", " | ", normalized)
+    normalized = re.sub(
+        r"\s+(?:and then|then|after that|next|finally)\s+",
+        " | ",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    segments = [
+        re.sub(r"\s+", " ", segment).strip(" ,|，")
+        for segment in normalized.split("|")
+    ]
+    stopwords = {"想", "我想", "want", "i want", "would like", "想要"}
+    cleaned: list[str] = []
+    for segment in segments:
+        if not segment or segment.lower() in stopwords:
+            continue
+        if len(segment) <= 1:
+            continue
+        cleaned.append(segment)
+    return cleaned
+
+
+def _normalize_goal_label(raw_label: Any, fallback: str = "generic_stop") -> str:
+    label = re.sub(r"[^0-9A-Za-z_\-\u3400-\u9fff]+", "_", str(raw_label or "").strip().lower())
+    label = re.sub(r"_+", "_", label).strip("_")
+    return label or fallback
+
+
+class GoalDecomposer(BaseLLMService):
+    """Decompose a multi-activity user instruction into an ordered goal list."""
+
+    def _itinerary_timeout_s(self) -> float:
+        raw = os.getenv("LLM_ITINERARY_TIMEOUT_S", "").strip()
+        if raw:
+            try:
+                return max(float(raw), 10.0)
+            except Exception:
+                pass
+        return max(float(self.settings.timeout_s), 45.0)
+
+    def heuristic_decompose(self, user_instruction: str) -> dict[str, Any]:
+        parser = IntentParser(settings=self.settings)
+        global_intent = parser.heuristic_parse(user_instruction)
+        segments = _split_itinerary_segments(user_instruction)
+        if not segments:
+            segments = [str(user_instruction or "").strip()]
+
+        goals: list[dict[str, Any]] = []
+        for index, segment in enumerate(segments[:4]):
+            parsed = parser.heuristic_parse(segment)
+            goal_type = _normalize_goal_label(parsed.get("destination_type"), fallback="generic_stop")
+            goals.append(
+                {
+                    "goal_index": index,
+                    "goal_type": goal_type,
+                    "request_text": segment,
+                    "destination_type": parsed.get("destination_type", "poi"),
+                    "destination_kind": parsed.get("destination_kind", "generic_poi"),
+                    "search_keywords": parsed.get("search_keywords", default_search_keywords()),
+                    "mode": parsed.get("mode", global_intent.get("mode", "car")),
+                    "radius_m": parsed.get("radius_m", global_intent.get("radius_m", 3000)),
+                    "optimize_for": parsed.get("optimize_for", global_intent.get("optimize_for", "distance")),
+                    "hard_constraints": parsed.get("hard_constraints", default_intent_rules()["default_hard_constraints"]),
+                    "rationale": "heuristic fallback only preserves structure; semantic generalization is provided by the LLM path",
+                }
+            )
+
+        return {
+            "goals": goals,
+            "global_mode": global_intent.get("mode", "car"),
+            "global_radius_m": global_intent.get("radius_m", 3000),
+            "is_multi_goal": len(goals) > 1,
+            "decomposition_source": "heuristic",
+        }
+
+    def build_messages(self, user_instruction: str) -> list[dict[str, str]]:
+        examples = [
+            {
+                "request": "我今天累了，想先休息，吃顿晚餐，再看个电影",
+                "output": {
+                    "goals": [
+                        {
+                            "goal_index": 0,
+                            "goal_type": "rest_stop",
+                            "request_text": "先找一个能坐下休息的地方",
+                            "destination_type": "rest_stop",
+                            "destination_kind": "generic_poi",
+                            "search_keywords": "咖啡馆|茶馆|书店|公园休息区",
+                            "mode": "foot",
+                            "radius_m": 3000,
+                            "optimize_for": "distance",
+                            "hard_constraints": {
+                                "max_route_duration_min": None,
+                                "max_route_distance_m": None,
+                                "must_include_keywords": [],
+                                "exclude_keywords": [],
+                            },
+                            "rationale": "The user is tired, so the first stop should be a nearby place where they can sit and rest.",
+                        },
+                        {
+                            "goal_index": 1,
+                            "goal_type": "dinner",
+                            "request_text": "吃顿晚餐",
+                            "destination_type": "dinner_restaurant",
+                            "destination_kind": "generic_poi",
+                            "search_keywords": "餐厅|晚餐|美食|饭店",
+                            "mode": "foot",
+                            "radius_m": 3000,
+                            "optimize_for": "balanced",
+                            "hard_constraints": {
+                                "max_route_duration_min": None,
+                                "max_route_distance_m": None,
+                                "must_include_keywords": [],
+                                "exclude_keywords": [],
+                            },
+                            "rationale": "Dinner should retrieve food-service POIs, not generic rest stops.",
+                        },
+                        {
+                            "goal_index": 2,
+                            "goal_type": "movie",
+                            "request_text": "看个电影",
+                            "destination_type": "cinema",
+                            "destination_kind": "generic_poi",
+                            "search_keywords": "电影院|影院|影城",
+                            "mode": "foot",
+                            "radius_m": 5000,
+                            "optimize_for": "distance",
+                            "hard_constraints": {
+                                "max_route_duration_min": None,
+                                "max_route_distance_m": None,
+                                "must_include_keywords": [],
+                                "exclude_keywords": [],
+                            },
+                            "rationale": "The final activity is watching a movie, so the retrievable supply is cinemas.",
+                        },
+                    ],
+                    "global_mode": "foot",
+                    "notes": "ordered_multi_goal",
+                },
+            },
+            {
+                "request": "I'm thirsty and want a quick coffee nearby",
+                "output": {
+                    "goals": [
+                        {
+                            "goal_index": 0,
+                            "goal_type": "quick_drink_or_coffee",
+                            "request_text": "find a quick coffee or drink stop nearby",
+                            "destination_type": "drink_stop",
+                            "destination_kind": "generic_poi",
+                            "search_keywords": "coffee|cafe|tea shop|juice bar|convenience store",
+                            "mode": "foot",
+                            "radius_m": 2000,
+                            "optimize_for": "distance",
+                            "hard_constraints": {
+                                "max_route_duration_min": None,
+                                "max_route_distance_m": None,
+                                "must_include_keywords": [],
+                                "exclude_keywords": [],
+                            },
+                            "rationale": "The need is thirst plus coffee, so nearby beverage-service POIs are appropriate.",
+                        },
+                    ],
+                    "global_mode": "foot",
+                    "notes": "single_goal_need",
+                },
+            },
+        ]
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a trip-goal decomposer for map recommendation. "
+                    "Return JSON only. The top-level JSON keys must be exactly: goals, global_mode, notes. "
+                    "goals must be an ordered list. Each goal object must contain exactly: "
+                    "goal_index, goal_type, request_text, destination_type, destination_kind, "
+                    "search_keywords, mode, radius_m, optimize_for, hard_constraints, rationale. "
+                    "Use open-vocabulary reasoning: goal_type and destination_type are semantic labels, not a closed taxonomy. "
+                    "search_keywords must be a concise provider-facing query string, preferably pipe-delimited, that a domestic map API can retrieve. "
+                    "For implicit human needs, infer the real-world POI/service supply that would satisfy the need, then write searchable keywords. "
+                    "Use hard_constraints only for constraints that are explicitly stated by the user. "
+                    "Allowed destination_kind values: generic_poi, named_landmark, regional_scenic_area, administrative_area, road_or_route_label, specific_poi. "
+                    "Allowed mode values: car, foot, bike. Allowed optimize_for values: time, distance, balanced. "
+                    "If the request is single-goal, still return a one-item goals list. "
+                    "Do not solve routing. Do not return destinations. Only decompose the user's instruction into ordered retrievable sub-goals."
+                ),
+            }
+        ]
+        for example in examples:
+            messages.append({"role": "user", "content": f"request: {example['request']}"})
+            messages.append({"role": "assistant", "content": json.dumps(example["output"], ensure_ascii=True)})
+        messages.append({"role": "user", "content": f"request: {user_instruction}"})
+        return messages
+
+    def build_prompt(self, user_instruction: str) -> str:
+        sections = [self.build_messages(user_instruction)[0]["content"], "", "Examples:"]
+        for message in self.build_messages(user_instruction)[1:-1]:
+            if message["role"] == "user":
+                sections.append(f"Request: {message['content'].replace('request: ', '')}")
+            else:
+                sections.append(f"JSON: {message['content']}")
+        sections.extend(["", "Now decompose this request and return JSON only.", f"Request: {user_instruction}"])
+        return "\n".join(sections)
+
+    async def _call_chat_completions(self, client: Any, user_instruction: str) -> str:
+        payload: dict[str, Any] = {
+            "model": self.settings.model,
+            "temperature": self.settings.temperature,
+            "messages": self.build_messages(user_instruction),
+        }
+        if self.settings.response_format and self.settings.provider != "ark":
+            payload["response_format"] = {"type": "json_object"}
+        response = await client.chat.completions.create(**payload)
+        return _extract_text_from_chat_response(response)
+
+    async def _call_responses_api(self, client: Any, user_instruction: str) -> str:
+        response = await client.responses.create(
+            model=self.settings.model,
+            input=[
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": self.build_prompt(user_instruction)}],
+                }
+            ],
+        )
+        return _extract_text_from_responses_response(response)
+
+    async def _call_llm_with_fallback(self, client: Any, user_instruction: str) -> tuple[str, str]:
+        preferred_style = self.settings.api_style
+        fallback_style = "responses" if preferred_style == "chat_completions" else "chat_completions"
+        styles = [preferred_style, fallback_style]
+        errors: list[str] = []
+        for style in styles:
+            try:
+                content = (
+                    await self._call_responses_api(client, user_instruction)
+                    if style == "responses"
+                    else await self._call_chat_completions(client, user_instruction)
+                )
+                if str(content or "").strip():
+                    return content, style
+                errors.append(f"{style}: empty_content")
+            except Exception as exc:
+                errors.append(f"{style}: {exc}")
+        raise RuntimeError(" | ".join(errors) if errors else "unknown_llm_call_error")
+
+    def _normalize_output(self, user_instruction: str, parsed: dict[str, Any]) -> dict[str, Any]:
+        heuristic = self.heuristic_decompose(user_instruction)
+        parser = IntentParser(settings=self.settings)
+        raw_goals = parsed.get("goals")
+        if not isinstance(raw_goals, list) or not raw_goals:
+            return heuristic
+
+        goals: list[dict[str, Any]] = []
+        for index, raw_goal in enumerate(raw_goals[:4]):
+            if not isinstance(raw_goal, dict):
+                continue
+            request_text = str(raw_goal.get("request_text") or "").strip()
+            if not request_text:
+                continue
+            normalized_intent = parser._normalize_llm_output(  # type: ignore[attr-defined]
+                request_text,
+                raw_goal,
+            )
+            raw_goal_type = str(raw_goal.get("goal_type") or raw_goal.get("destination_type") or "").strip()
+            goal_type = _normalize_goal_label(
+                raw_goal_type,
+                fallback=_normalize_goal_label(normalized_intent.get("destination_type"), fallback="generic_stop"),
+            )
+            goals.append(
+                {
+                    "goal_index": index,
+                    "goal_type": goal_type,
+                    "request_text": request_text,
+                    "destination_type": normalized_intent.get("destination_type", "poi"),
+                    "destination_kind": normalized_intent.get("destination_kind", "generic_poi"),
+                    "search_keywords": normalized_intent.get("search_keywords", default_search_keywords()),
+                    "mode": normalized_intent.get("mode", heuristic.get("global_mode", "car")),
+                    "radius_m": normalized_intent.get("radius_m", heuristic.get("global_radius_m", 3000)),
+                    "optimize_for": normalized_intent.get("optimize_for", "distance"),
+                    "hard_constraints": normalized_intent.get(
+                        "hard_constraints",
+                        default_intent_rules()["default_hard_constraints"],
+                    ),
+                    "rationale": str(raw_goal.get("rationale") or "").strip(),
+                }
+            )
+
+        if not goals:
+            return heuristic
+
+        global_mode = str(parsed.get("global_mode") or heuristic.get("global_mode") or "car").strip().lower()
+        if global_mode not in {"car", "foot", "bike"}:
+            global_mode = heuristic.get("global_mode", "car")
+
+        radii = [
+            int(goal.get("radius_m", heuristic.get("global_radius_m", 3000)) or 3000)
+            for goal in goals
+            if isinstance(goal.get("radius_m", 3000), (int, float))
+        ]
+
+        return {
+            "goals": goals,
+            "global_mode": global_mode,
+            "global_radius_m": max(radii or [int(heuristic.get("global_radius_m", 3000) or 3000)]),
+            "is_multi_goal": len(goals) > 1,
+            "decomposition_source": "llm",
+            "notes": str(parsed.get("notes") or "").strip(),
+        }
+
+    async def parse(self, user_instruction: str) -> dict[str, Any]:
+        if not self.is_available():
+            parsed = self.heuristic_decompose(user_instruction)
+            parsed["decomposition_source"] = "heuristic_no_llm"
+            return parsed
+
+        client = _create_async_client_with_timeout(self.settings, self._itinerary_timeout_s())
+        try:
+            try:
+                content, api_style_used = await self._call_llm_with_fallback(client, user_instruction)
+            except Exception as exc:
+                parsed = self.heuristic_decompose(user_instruction)
+                parsed["decomposition_source"] = "heuristic_llm_api_error"
+                parsed["llm_error"] = str(exc)
+                return parsed
+
+            try:
+                parsed = _parse_json_object_from_text(content)
+            except Exception as exc:
+                fallback = self.heuristic_decompose(user_instruction)
+                fallback["decomposition_source"] = "heuristic_llm_parse_error"
+                fallback["llm_error"] = str(exc)
+                return fallback
+
+            normalized = self._normalize_output(user_instruction, parsed)
+            normalized["llm_api_style_used"] = api_style_used
+            return normalized
+        except Exception:
+            parsed = self.heuristic_decompose(user_instruction)
+            parsed["decomposition_source"] = "heuristic_llm_error"
+            return parsed
+        finally:
+            await _close_async_client(client)
+
+
+class ItineraryCandidateJudge(BaseLLMService):
+    """Select the best concrete POI for one itinerary goal from Top-K map candidates."""
+
+    def _itinerary_timeout_s(self) -> float:
+        raw = os.getenv("LLM_ITINERARY_TIMEOUT_S", "").strip()
+        if raw:
+            try:
+                return max(float(raw), 10.0)
+            except Exception:
+                pass
+        return max(float(self.settings.timeout_s), 45.0)
+
+    def _simplify_candidate(self, candidate: dict[str, Any]) -> dict[str, Any]:
+        tags = candidate.get("tags") or {}
+        route_summary = candidate.get("route_summary") or {}
+        return {
+            "id": str(candidate.get("id") or ""),
+            "name": str(candidate.get("name") or ""),
+            "type": str(tags.get("type") or ""),
+            "address": str(tags.get("address") or ""),
+            "candidate_kind": str(candidate.get("candidate_kind") or ""),
+            "is_concrete_destination": bool(candidate.get("is_concrete_destination", False)),
+            "location": str(candidate.get("location") or ""),
+            "score": candidate.get("score"),
+            "distance_m": route_summary.get("distance_m"),
+            "duration_min": route_summary.get("duration_min"),
+        }
+
+    def build_messages(
+        self,
+        *,
+        goal: dict[str, Any],
+        candidates: list[dict[str, Any]],
+        previous_stops: list[dict[str, Any]],
+    ) -> list[dict[str, str]]:
+        payload = {
+            "goal": {
+                "goal_index": goal.get("goal_index"),
+                "goal_type": goal.get("goal_type"),
+                "request_text": goal.get("request_text"),
+                "destination_type": goal.get("destination_type"),
+                "destination_kind": goal.get("destination_kind"),
+                "search_keywords": goal.get("search_keywords"),
+                "rationale": goal.get("rationale"),
+            },
+            "previous_stops": [
+                {
+                    "name": str(item.get("name") or ""),
+                    "location": str(item.get("location") or ""),
+                    "goal_type": str(item.get("goal_type") or ""),
+                }
+                for item in previous_stops
+            ],
+            "candidates": [self._simplify_candidate(item) for item in candidates],
+        }
+        return [
+            {
+                "role": "system",
+                "content": (
+                    "You are an itinerary candidate judge for map navigation. "
+                    "Return JSON only with exactly: selected_candidate_id, confidence, reason, reject_all. "
+                    "Use open-vocabulary reasoning over the goal, its rationale/search query, and each candidate's name/type/address. "
+                    "Do not rely on a closed taxonomy. Select a candidate only if it plausibly satisfies the goal as a real-world service/place. "
+                    "Reject candidates that appear closed, unavailable, irrelevant to the activity, or duplicate a previous stop unless the goal explicitly asks to stay there. "
+                    "If no candidate satisfies the goal, set selected_candidate_id=null and reject_all=true. "
+                    "Prefer concrete POIs over vague administrative areas. Consider route distance and duration only after semantic suitability."
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(payload, ensure_ascii=False),
+            },
+        ]
+
+    def build_prompt(
+        self,
+        *,
+        goal: dict[str, Any],
+        candidates: list[dict[str, Any]],
+        previous_stops: list[dict[str, Any]],
+    ) -> str:
+        messages = self.build_messages(goal=goal, candidates=candidates, previous_stops=previous_stops)
+        return f"{messages[0]['content']}\n\nInput JSON:\n{messages[1]['content']}"
+
+    async def _call_chat_completions(
+        self,
+        client: Any,
+        *,
+        goal: dict[str, Any],
+        candidates: list[dict[str, Any]],
+        previous_stops: list[dict[str, Any]],
+    ) -> str:
+        payload: dict[str, Any] = {
+            "model": self.settings.model,
+            "temperature": self.settings.temperature,
+            "messages": self.build_messages(goal=goal, candidates=candidates, previous_stops=previous_stops),
+        }
+        if self.settings.response_format and self.settings.provider != "ark":
+            payload["response_format"] = {"type": "json_object"}
+        response = await client.chat.completions.create(**payload)
+        return _extract_text_from_chat_response(response)
+
+    async def _call_responses_api(
+        self,
+        client: Any,
+        *,
+        goal: dict[str, Any],
+        candidates: list[dict[str, Any]],
+        previous_stops: list[dict[str, Any]],
+    ) -> str:
+        response = await client.responses.create(
+            model=self.settings.model,
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": self.build_prompt(
+                                goal=goal,
+                                candidates=candidates,
+                                previous_stops=previous_stops,
+                            ),
+                        }
+                    ],
+                }
+            ],
+        )
+        return _extract_text_from_responses_response(response)
+
+    def _normalize_decision(self, parsed: dict[str, Any], candidate_ids: set[str]) -> dict[str, Any]:
+        selected = parsed.get("selected_candidate_id")
+        if selected is not None:
+            selected = str(selected).strip()
+        if selected and selected not in candidate_ids:
+            selected = None
+
+        confidence = parsed.get("confidence", 0.0)
+        try:
+            confidence_value = max(0.0, min(float(confidence), 1.0))
+        except Exception:
+            confidence_value = 0.0
+
+        reject_all = bool(parsed.get("reject_all", False)) or selected is None
+        return {
+            "selected_candidate_id": selected,
+            "confidence": confidence_value,
+            "reason": str(parsed.get("reason") or "").strip(),
+            "reject_all": reject_all,
+            "judge_source": "llm",
+        }
+
+    async def select_candidate(
+        self,
+        *,
+        goal: dict[str, Any],
+        candidates: list[dict[str, Any]],
+        previous_stops: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        previous_stops = previous_stops or []
+        candidate_ids = {str(item.get("id") or "").strip() for item in candidates if str(item.get("id") or "").strip()}
+        if not candidates or not candidate_ids:
+            return {
+                "selected_candidate_id": None,
+                "confidence": 0.0,
+                "reason": "No candidates were provided.",
+                "reject_all": True,
+                "judge_source": "no_candidates",
+            }
+        if not self.is_available():
+            return {
+                "selected_candidate_id": None,
+                "confidence": 0.0,
+                "reason": "LLM candidate judge is not configured.",
+                "reject_all": True,
+                "judge_source": "unavailable",
+            }
+
+        client = _create_async_client_with_timeout(self.settings, self._itinerary_timeout_s())
+        try:
+            try:
+                if self.settings.api_style == "responses":
+                    content = await self._call_responses_api(
+                        client,
+                        goal=goal,
+                        candidates=candidates,
+                        previous_stops=previous_stops,
+                    )
+                    api_style_used = "responses"
+                else:
+                    content = await self._call_chat_completions(
+                        client,
+                        goal=goal,
+                        candidates=candidates,
+                        previous_stops=previous_stops,
+                    )
+                    api_style_used = "chat_completions"
+            except Exception as exc:
+                return {
+                    "selected_candidate_id": None,
+                    "confidence": 0.0,
+                    "reason": f"LLM candidate judge failed: {exc}",
+                    "reject_all": True,
+                    "judge_source": "llm_api_error",
+                }
+
+            try:
+                parsed = _parse_json_object_from_text(content)
+            except Exception as exc:
+                return {
+                    "selected_candidate_id": None,
+                    "confidence": 0.0,
+                    "reason": f"LLM candidate judge returned non-JSON output: {exc}",
+                    "reject_all": True,
+                    "judge_source": "llm_parse_error",
+                    "raw_text": content,
+                }
+
+            decision = self._normalize_decision(parsed, candidate_ids)
+            decision["llm_api_style_used"] = api_style_used
+            decision["raw"] = parsed
+            return decision
+        finally:
+            await _close_async_client(client)
+
+
 class CandidateReranker(BaseLLMService):
     """Rerank map candidates by semantic relevance to the user request."""
 
@@ -910,7 +1508,7 @@ class VisionAnalyzer(BaseLLMService):
                 return max(5.0, float(raw))
             except ValueError:
                 pass
-        return max(60.0, self.settings.timeout_s)
+        return max(90.0, self.settings.timeout_s)
 
     def build_messages(
         self,
@@ -1230,9 +1828,57 @@ def local_image_path_to_data_url(image_path: str) -> str:
     mime_type, _ = mimetypes.guess_type(path.name)
     if not mime_type or not mime_type.startswith("image/"):
         mime_type = "image/jpeg"
+    raw_bytes = path.read_bytes()
 
-    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-    return f"data:{mime_type};base64,{encoded}"
+    max_side_raw = os.getenv("LLM_VISION_IMAGE_MAX_SIDE", "").strip()
+    max_bytes_raw = os.getenv("LLM_VISION_IMAGE_MAX_BYTES", "").strip()
+    jpeg_quality_raw = os.getenv("LLM_VISION_IMAGE_JPEG_QUALITY", "").strip()
+    try:
+        max_side = max(512, int(max_side_raw)) if max_side_raw else 1600
+    except ValueError:
+        max_side = 1600
+    try:
+        max_bytes = max(256_000, int(max_bytes_raw)) if max_bytes_raw else 2_500_000
+    except ValueError:
+        max_bytes = 2_500_000
+    try:
+        jpeg_quality = min(max(int(jpeg_quality_raw), 40), 95) if jpeg_quality_raw else 85
+    except ValueError:
+        jpeg_quality = 85
+
+    should_optimize = len(raw_bytes) > max_bytes
+    optimized_bytes = raw_bytes
+    optimized_mime = mime_type
+
+    if Image is not None:
+        try:
+            image = Image.open(path)
+            if ImageOps is not None:
+                image = ImageOps.exif_transpose(image)
+            image = image.convert("RGB")
+            width, height = image.size
+            longest = max(width, height, 1)
+            resize_scale = min(1.0, float(max_side) / float(longest))
+            if resize_scale < 0.999:
+                image = image.resize(
+                    (
+                        max(1, int(round(width * resize_scale))),
+                        max(1, int(round(height * resize_scale))),
+                    ),
+                    Image.Resampling.LANCZOS,
+                )
+                should_optimize = True
+            if should_optimize:
+                buffer = io.BytesIO()
+                image.save(buffer, format="JPEG", quality=jpeg_quality, optimize=True)
+                optimized_bytes = buffer.getvalue()
+                optimized_mime = "image/jpeg"
+        except Exception:
+            optimized_bytes = raw_bytes
+            optimized_mime = mime_type
+
+    encoded = base64.b64encode(optimized_bytes).decode("ascii")
+    return f"data:{optimized_mime};base64,{encoded}"
 
 
 async def analyze_local_image_with_llm(
@@ -1251,6 +1897,48 @@ async def analyze_local_image_with_llm(
     result["image_path"] = str(Path(image_path).expanduser())
     result["image_source"] = "local_path"
     return result
+
+
+async def arbitrate_pov_candidates_with_llm(
+    *,
+    image_url: str,
+    question: str,
+    detail: str = "auto",
+    system_prompt: str | None = None,
+) -> dict[str, Any] | None:
+    result = await VisionAnalyzer().analyze(
+        image_url=image_url,
+        question=question,
+        detail=detail,
+        system_prompt=system_prompt,
+    )
+    answer = str(result.get("answer", "")).strip()
+    if not answer:
+        return None
+    parsed = _parse_json_object_from_text(answer)
+    parsed["_arbiter_provider"] = result.get("provider")
+    parsed["_arbiter_model"] = result.get("model")
+    parsed["_arbiter_api_style"] = result.get("api_style")
+    return parsed
+
+
+async def arbitrate_local_pov_candidates_with_llm(
+    *,
+    image_path: str,
+    question: str,
+    detail: str = "auto",
+    system_prompt: str | None = None,
+) -> dict[str, Any] | None:
+    data_url = local_image_path_to_data_url(image_path)
+    parsed = await arbitrate_pov_candidates_with_llm(
+        image_url=data_url,
+        question=question,
+        detail=detail,
+        system_prompt=system_prompt,
+    )
+    if parsed is not None:
+        parsed["_arbiter_image_path"] = str(Path(image_path).expanduser())
+    return parsed
 
 
 async def translate_instruction_for_cn_map(
@@ -1273,12 +1961,16 @@ async def translate_result_bundle_to_english(
 
 __all__ = [
     "CandidateReranker",
+    "GoalDecomposer",
     "IntentParser",
+    "ItineraryCandidateJudge",
     "LLMSettings",
     "MapLocalizationService",
     "VisionAnalyzer",
     "analyze_image_with_llm",
     "analyze_local_image_with_llm",
+    "arbitrate_local_pov_candidates_with_llm",
+    "arbitrate_pov_candidates_with_llm",
     "extract_explicit_destination_query",
     "infer_destination_kind",
     "local_image_path_to_data_url",

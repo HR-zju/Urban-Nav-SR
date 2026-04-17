@@ -4,7 +4,7 @@ import argparse
 import asyncio
 import json
 import os
-from typing import Any
+from pathlib import Path
 
 
 def first_text_content(result) -> str:
@@ -16,7 +16,7 @@ def first_text_content(result) -> str:
     return ""
 
 
-def parse_first_text_payload(result) -> dict[str, Any]:
+def parse_first_text_payload(result) -> dict:
     text = first_text_content(result)
     if not text:
         return {}
@@ -26,7 +26,7 @@ def parse_first_text_payload(result) -> dict[str, Any]:
         return {}
 
 
-async def call_tool_json(session: ClientSession, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+async def call_tool_json(session: ClientSession, tool_name: str, arguments: dict) -> dict:
     result = await session.call_tool(tool_name, arguments)
     payload = parse_first_text_payload(result)
     if payload:
@@ -35,7 +35,7 @@ async def call_tool_json(session: ClientSession, tool_name: str, arguments: dict
     raise RuntimeError(f"{tool_name} returned non-JSON payload: {raw_text}")
 
 
-def destination_location(candidate: dict[str, Any]) -> str | None:
+def destination_location(candidate: dict) -> str | None:
     location = candidate.get("location")
     if isinstance(location, str) and "," in location:
         return location
@@ -47,22 +47,12 @@ def destination_location(candidate: dict[str, Any]) -> str | None:
     return f"{longitude},{latitude}"
 
 
-def polyline_from_coarse_waypoints(coarse_waypoints: list[dict[str, Any]]) -> list[dict[str, float]]:
+def polyline_from_coarse_waypoints(coarse_waypoints: list[dict]) -> list[dict[str, float]]:
     points: list[dict[str, float]] = []
     for item in coarse_waypoints or []:
         coordinate = item.get("coordinate", {}) or {}
         latitude = coordinate.get("latitude", item.get("latitude"))
         longitude = coordinate.get("longitude", item.get("longitude"))
-        if latitude is None or longitude is None:
-            location = item.get("location")
-            if isinstance(location, str) and "," in location:
-                try:
-                    lon_text, lat_text = str(location).split(",", 1)
-                    longitude = float(lon_text)
-                    latitude = float(lat_text)
-                except Exception:
-                    latitude = None
-                    longitude = None
         if latitude is None or longitude is None:
             continue
         point = {"longitude": float(longitude), "latitude": float(latitude)}
@@ -72,14 +62,7 @@ def polyline_from_coarse_waypoints(coarse_waypoints: list[dict[str, Any]]) -> li
     return points
 
 
-async def ensure_route_geometry(
-    session: ClientSession,
-    *,
-    recommendation: dict[str, Any],
-    latitude: float,
-    longitude: float,
-    mode: str,
-) -> tuple[list[dict[str, float]], list[dict[str, Any]]]:
+async def ensure_route_geometry(session: ClientSession, *, recommendation: dict, latitude: float, longitude: float, mode: str):
     route_polyline = recommendation.get("route_polyline") or []
     coarse_waypoints = recommendation.get("coarse_waypoints") or recommendation.get("key_waypoints") or []
     if route_polyline and coarse_waypoints:
@@ -88,10 +71,7 @@ async def ensure_route_geometry(
     chosen_destination = recommendation.get("chosen_destination", {}) or {}
     destination = destination_location(chosen_destination)
     if not destination:
-        raise RuntimeError(
-            "recommend_destination_and_waypoints did not return usable route geometry, "
-            "and chosen_destination has no usable location"
-        )
+        raise RuntimeError("No usable destination location for fallback routing")
 
     route_payload = await call_tool_json(
         session,
@@ -106,15 +86,11 @@ async def ensure_route_geometry(
     coarse_waypoints = route_payload.get("coarse_waypoints") or []
     if not route_polyline and coarse_waypoints:
         route_polyline = polyline_from_coarse_waypoints(coarse_waypoints)
-
-    if not route_polyline:
-        raise RuntimeError("No route_polyline available after fallback get_coarse_waypoints")
-    if not coarse_waypoints:
-        raise RuntimeError("No coarse_waypoints available after fallback get_coarse_waypoints")
     return route_polyline, coarse_waypoints
 
 
 async def run_demo(
+    *,
     prompt: str,
     latitude: float,
     longitude: float,
@@ -123,6 +99,12 @@ async def run_demo(
     max_candidates: int,
     heading_deg: float | None,
     lookahead_m: float,
+    image_path: str | None,
+    image_url: str | None,
+    visual_top_k: int,
+    candidate_top_k: int,
+    llm_detail: str,
+    save_overlay: str | None,
 ) -> None:
     server_params = StdioServerParameters(
         command="osm-mcp-server",
@@ -155,37 +137,51 @@ async def run_demo(
                 mode=mode,
             )
 
-            proposal_payload = await call_tool_json(
+            payload = await call_tool_json(
                 session,
-                "generate_bev_prompt_proposals",
+                "run_zero_shot_visual_prompt_agent",
                 {
                     "gps": {"lat": latitude, "lng": longitude},
                     "heading_deg": heading_deg,
                     "route_polyline": route_polyline,
                     "coarse_waypoints": coarse_waypoints,
                     "lookahead_m": lookahead_m,
+                    "image_path": image_path,
+                    "image_url": image_url,
+                    "visual_top_k": visual_top_k,
+                    "candidate_top_k": candidate_top_k,
+                    "llm_detail": llm_detail,
                 },
             )
 
-            print("=== BEV Prompt Proposal Summary ===")
+            print("=== Zero-shot Visual Prompt Agent ===")
             print(
                 json.dumps(
                     {
                         "provider": recommendation.get("provider"),
                         "chosen_destination": recommendation.get("chosen_destination", {}),
-                        "proposal_count": len(proposal_payload.get("prompt_proposals", []) or []),
+                        "arbiter_decision": payload.get("arbiter_decision", {}),
+                        "route_context": {
+                            "turn_semantics": ((payload.get("route_context", {}) or {}).get("local_semantics", {}) or {}).get("turn_semantics"),
+                            "corridor_type": ((payload.get("route_context", {}) or {}).get("local_semantics", {}) or {}).get("corridor_type"),
+                            "off_route": ((payload.get("route_context", {}) or {}).get("pose_match", {}) or {}).get("off_route"),
+                        },
                     },
                     indent=2,
                     ensure_ascii=True,
                 )
             )
 
-            print("\n=== Prompt Proposals ===")
-            print(json.dumps(proposal_payload.get("prompt_proposals", []), indent=2, ensure_ascii=True))
+            overlay_svg = payload.get("overlay_svg")
+            if save_overlay and isinstance(overlay_svg, str) and overlay_svg.strip():
+                output_path = Path(save_overlay)
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_text(overlay_svg, encoding="utf-8")
+                print(f"\nSaved overlay SVG to: {output_path}")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Generate PromptProposal v1 from RouteContext and LocalBEVContext")
+    parser = argparse.ArgumentParser(description="Run zero-shot visual prompt agent over one FPV frame")
     parser.add_argument("--prompt", required=True, help="Natural language destination prompt")
     parser.add_argument("--lat", type=float, required=True, help="Current latitude")
     parser.add_argument("--lon", type=float, required=True, help="Current longitude")
@@ -194,8 +190,17 @@ if __name__ == "__main__":
     parser.add_argument("--max-candidates", type=int, default=5, help="Maximum recommendation candidates")
     parser.add_argument("--heading-deg", type=float, default=None, help="Optional current heading in degrees")
     parser.add_argument("--lookahead-m", type=float, default=20.0, help="Local segment lookahead distance in meters")
+    parser.add_argument("--image-path", help="Local RGB/FPV image path")
+    parser.add_argument("--image-url", help="Image URL or data URL")
+    parser.add_argument("--visual-top-k", type=int, default=5, help="Maximum visual regions")
+    parser.add_argument("--candidate-top-k", type=int, default=5, help="Maximum PoV prompt candidates sent to the arbiter")
+    parser.add_argument("--llm-detail", default="auto", choices=["auto", "low", "high"], help="Vision detail level")
+    parser.add_argument("--save-overlay", help="Optional output path for the rendered prompt SVG overlay")
 
     args = parser.parse_args()
+    if not args.image_path and not args.image_url:
+        parser.error("one of --image-path or --image-url is required")
+
     asyncio.run(
         run_demo(
             prompt=args.prompt,
@@ -206,5 +211,11 @@ if __name__ == "__main__":
             max_candidates=args.max_candidates,
             heading_deg=args.heading_deg,
             lookahead_m=args.lookahead_m,
+            image_path=args.image_path,
+            image_url=args.image_url,
+            visual_top_k=args.visual_top_k,
+            candidate_top_k=args.candidate_top_k,
+            llm_detail=args.llm_detail,
+            save_overlay=args.save_overlay,
         )
     )
