@@ -53,12 +53,15 @@ tmux send-keys "docker exec -it ros1toros2 zsh" Enter
 sleep 1
 tmux send-keys "mamba activate foundation_policy" Enter
 tmux send-keys "cd /home/nuvo/SR/foundation-policy/Policy_part" Enter
+# 运行导航模型，测试导航无目标点自主探索的性能
 # tmux send-keys "python run_navflow_realsense_vis.py \
 #   --onnx onnx_ckpts/s1_ours_coco_sft_stage2_goal_less.onnx \
 #   --no_record_video" Enter
-
+# 更换模型，测试导航到自己录制目标点的性能
 # tmux send-keys "python run_navflow_realsense_vis.py --onnx onnx_ckpts/vint_goal_less.onnx --targets ./topomaps/odom_poses.txt --no_record_video" Enter
-tmux send-keys "python run_navflow_realsense_vis.py --onnx onnx_ckpts/vint_point_goal.onnx --targets ./topomaps/odom_poses.txt --no_record_video" Enter
+# tmux send-keys "python run_navflow_realsense_vis.py --onnx onnx_ckpts/vint_point_goal.onnx --targets ./topomaps/odom_poses.txt --no_record_video" Enter
+# 接收上位机LLM发来的目标点，并导航到目标点
+tmux send-keys "python run_navflow_realsense_vis.py --onnx onnx_ckpts/vint_point_goal.onnx --targets ./topomaps/LLM_odom_poses.txt --no_record_video" Enter
 
 
 # run teleop in the fourth pane
