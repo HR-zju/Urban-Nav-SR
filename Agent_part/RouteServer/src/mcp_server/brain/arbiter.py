@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 
 from mcp_server.route_context.schema import VisualPromptDecision
@@ -68,22 +69,42 @@ def _candidate_compact(candidate: dict[str, Any]) -> dict[str, Any]:
 def build_direct_prompt_system_prompt() -> str:
     return (
         "You are a mode-aware first-person navigation visual prompt generator. "
-        "Your job is to draw one conservative image-plane guidance prompt for the next 1 to 3 seconds. "
+        "Your job is to generate one conservative image-plane guidance prompt for the next 1 to 3 seconds. "
         "Use route context only as route intent; it is not permission to ignore visible scene safety. "
         "For pedestrian mode, treat sidewalks, pedestrian plazas, curb cuts, entrances, and marked crossings as preferred space. "
         "For pedestrian mode, treat motor-vehicle lanes, open roadway, sky, walls, fences, parked cars, and freestanding obstacles such as signboards as forbidden unless a legal crossing is visually obvious. "
         "For pedestrian mode, keep the prompt inside the visible sidewalk or pedestrian-safe corridor; do not spill outside curb boundaries when a sidewalk exists. "
+        "Treat grass, shrubs, planters, tree bases, decorative green belts, and other non-paved landscaping as non-traversable support surfaces for pedestrian prompts. "
         "Avoid trees, poles, bollards, stairs, planters, building facades, and people. "
-        "Prefer a short sidewalk-centerline arrow over a wide sector. "
+        "Prefer a structured path corridor over a wide sector. "
         "Do not send the user into the middle of a road when pedestrian space exists, even if the route prior points forward or right. "
         "Prefer the nearest safe sidewalk-side opening over a farther but wider drivable area. "
         "The prompt must start near the lower image area and every point of the trajectory must lie on the visible mode-valid traversable surface. "
-        "For pedestrian mode, every arrow_path point must be on visible sidewalk, pedestrian paving, curb cut, plaza, or legal crossing surface. "
+        "For pedestrian mode, every path point and every part of the support corridor must be on visible sidewalk, pedestrian paving, curb cut, plaza, or legal crossing surface. "
+        "Represent the prompt as a center path plus left and right support boundaries sampled along the path and an explicit termination semantic. "
+        "The termination semantic must explain whether the prompt stops because it reaches visible corridor depth, reaches a turn entry, or should stop before occlusion. "
         "Route/BEV/PoV candidates, when provided, are advisory priors only; reject or override them if they land on obstacles or non-walkable regions. "
         "If the scene is uncertain, be conservative and set reject_all=true. "
         "Return JSON only with keys: selected_prompt_type, instruction, confidence, reason, reject_all, rendered_prompt. "
-        "rendered_prompt must include: type, center_uv, direction_vec, span_px, path_uv, mask. "
-        "Prefer type=arrow_path. Do not output prose outside JSON."
+        "For type=path_corridor, rendered_prompt must include path_samples and termination_semantics. "
+        "Each path sample must contain center_uv, left_edge_uv, right_edge_uv, and support_label. "
+        "Do not freehand a wide polygon first; define the corridor by boundary samples anchored to visible traversable edges. "
+        "Prefer type=path_corridor. Do not output prose outside JSON."
+    )
+
+
+def build_direct_prompt_verifier_system_prompt() -> str:
+    return (
+        "You are a first-person navigation visual prompt verifier and refiner. "
+        "You receive a proposed prompt and must verify whether its center path and support corridor are truly grounded on visible traversable surface for the current navigation mode. "
+        "You must inspect the image, not trust the proposal text. "
+        "For pedestrian mode, visible paved sidewalk, pedestrian path, curb cut, crosswalk, and plaza surfaces are valid support. "
+        "Grass, shrubs, decorative green belts, planters, tree bases, exposed soil, walls, fences, and motor lanes are not valid support. "
+        "If the center path is reasonable but the support corridor is too wide, tighten the left/right support boundaries while preserving the path. "
+        "If the path itself enters non-traversable support, revise the path and boundary samples together. "
+        "If no safe and visible support corridor can be verified, set reject_all=true. "
+        "Return JSON only with keys: selected_prompt_type, instruction, confidence, reason, reject_all, rendered_prompt. "
+        "For path_corridor, rendered_prompt must include path_samples, termination_semantics, and support_confidence."
     )
 
 
@@ -127,7 +148,8 @@ def build_direct_prompt_question(
             "task": (
                 "Generate one conservative image-plane navigation trajectory prompt. "
                 "Use the image first, then route context, then the top route prior. "
-                "Prefer a single arrow trajectory through a visible mode-valid opening and avoid blocked central obstacles. "
+                "Represent the result as a center path with left/right traversable boundary samples along that path. "
+                "Prefer a single path corridor through a visible mode-valid opening and avoid blocked central obstacles. "
                 "Candidate hints are advisory and must not override visible walkability."
             ),
             "navigation_mode": str(navigation_mode or "foot"),
@@ -141,25 +163,39 @@ def build_direct_prompt_question(
                 "For foot mode, prioritize sidewalk or pedestrian-space openings.",
                 "Do not place the trajectory on apparent motor lanes or open roadway if sidewalk-like space exists.",
                 "Do not run the trajectory through a central obstacle such as a signboard.",
-                "Keep the trajectory inside the visible pedestrian-safe corridor and away from curb edges.",
-                "Prefer a short arrow_path that follows the sidewalk centerline.",
+                "Keep both the center path and the left/right support boundaries inside the visible pedestrian-safe corridor and away from curb edges.",
+                "Do not use grass, shrubs, planters, or decorative green belts as support boundaries in foot mode.",
+                "Prefer a path_corridor that follows the sidewalk centerline.",
                 "The path should begin near the lower image region and every point must stay on the visible traversable surface for the current mode.",
-                "If you cannot see a continuous traversable surface for all arrow_path points, set reject_all=true instead of drawing.",
+                "Every path sample must provide the visible left and right traversable edges around the center path.",
+                "Boundary samples must touch the visible traversable support around the center path, not sky, building facade, or landscaping.",
+                "If you cannot see a continuous traversable support surface for the whole path corridor, set reject_all=true instead of drawing.",
                 "Prefer the shortest safe path that stays on pedestrian space.",
+                "Set termination_semantics to one of: continue_visible_corridor, reach_turn_entry, stop_before_occlusion.",
                 "If route prior and visible mode-valid space conflict, prefer visible mode-valid space and explain the conflict.",
             ],
             "output_requirements": {
-                "selected_prompt_type": "arrow_path|arrow|sector|region",
+                "selected_prompt_type": "path_corridor|arrow_path|arrow|sector|region",
                 "instruction": "short English instruction",
                 "confidence": "number in [0,1]",
                 "reason": "one short sentence",
                 "reject_all": "boolean",
                 "rendered_prompt": {
-                    "type": "arrow_path|arrow|sector|region",
-                    "center_uv": "[u, v] inside image bounds",
-                    "direction_vec": "[dx, dy] unit-like vector or null",
-                    "span_px": "positive number",
-                    "path_uv": "optional polyline [[u,v], ...] from lower image to target",
+                    "type": "path_corridor|arrow_path|arrow|sector|region",
+                    "center_uv": "optional for path_corridor; otherwise [u, v] inside image bounds",
+                    "direction_vec": "optional [dx, dy] unit-like vector or null",
+                    "span_px": "optional positive number",
+                    "path_uv": "optional for path_corridor if path_samples are provided; required for arrow_path",
+                    "path_samples": [
+                        {
+                            "center_uv": "[u, v] on visible mode-valid traversable surface",
+                            "left_edge_uv": "[u, v] left traversable boundary corresponding to this center point",
+                            "right_edge_uv": "[u, v] right traversable boundary corresponding to this center point",
+                            "support_label": "sidewalk|pedestrian_path|crosswalk|plaza|bike_lane|road_lane"
+                        }
+                    ],
+                    "coverage_polygon_uv": "optional for path_corridor; if omitted it will be derived from path_samples",
+                    "termination_semantics": "required for path_corridor; continue_visible_corridor | reach_turn_entry | stop_before_occlusion",
                     "mask": "optional polygon list or null",
                 },
             },
@@ -168,20 +204,221 @@ def build_direct_prompt_question(
     )
 
 
+def build_direct_prompt_verifier_question(
+    *,
+    route_context: dict[str, Any],
+    rendered_prompt: dict[str, Any],
+    image_width: int,
+    image_height: int,
+    navigation_mode: str = "foot",
+) -> str:
+    compact_route = _compact_route_context(route_context)
+    return json.dumps(
+        {
+            "task": (
+                "Verify and, if needed, refine the proposed visual prompt so that its center path and left/right support boundaries are fully supported by visible traversable surface."
+            ),
+            "navigation_mode": str(navigation_mode or "foot"),
+            "navigation_constraints": _navigation_mode_note(navigation_mode),
+            "image_size": {"width": image_width, "height": image_height},
+            "route_context": compact_route,
+            "proposed_prompt": rendered_prompt,
+            "verification_objectives": [
+                "Check whether the path centerline stays on visible mode-valid traversable surface.",
+                "Check whether the left and right support boundaries tightly match the visible support of the path rather than spilling into road, grass, shrubs, or obstacles.",
+                "Check whether the termination semantic matches the actual visible corridor depth or turn entry.",
+                "If the proposal is partially wrong, revise it instead of only commenting on it.",
+                "If the proposal cannot be grounded in visible support, reject it."
+            ],
+            "output_requirements": {
+                "selected_prompt_type": "path_corridor|arrow_path|arrow|sector|region",
+                "instruction": "short English instruction",
+                "confidence": "number in [0,1]",
+                "reason": "one short sentence explaining verification or correction",
+                "reject_all": "boolean",
+                "rendered_prompt": {
+                    "type": "path_corridor|arrow_path|arrow|sector|region",
+                    "center_uv": "optional for path_corridor; otherwise [u, v] inside image bounds",
+                    "direction_vec": "optional [dx, dy] unit-like vector or null",
+                    "span_px": "optional positive number",
+                    "path_uv": "optional for path_corridor if path_samples are provided; required for arrow_path",
+                    "path_samples": [
+                        {
+                            "center_uv": "[u, v] on visible mode-valid traversable surface",
+                            "left_edge_uv": "[u, v] left traversable boundary corresponding to this center point",
+                            "right_edge_uv": "[u, v] right traversable boundary corresponding to this center point",
+                            "support_label": "sidewalk|pedestrian_path|crosswalk|plaza|bike_lane|road_lane"
+                        }
+                    ],
+                    "coverage_polygon_uv": "optional for path_corridor; if omitted it will be derived from path_samples",
+                    "termination_semantics": "required for path_corridor; continue_visible_corridor | reach_turn_entry | stop_before_occlusion",
+                    "support_confidence": "required for path_corridor; number in [0,1]",
+                    "mask": "optional polygon list or null"
+                }
+            },
+        },
+        ensure_ascii=False,
+    )
+
+
+def _coerce_polygon(
+    raw_polygon: Any,
+    *,
+    image_width: int,
+    image_height: int,
+    min_points: int = 3,
+) -> list[list[float]] | None:
+    if not isinstance(raw_polygon, list):
+        return None
+    parsed: list[list[float]] = []
+    for point in raw_polygon:
+        if not (isinstance(point, (list, tuple)) and len(point) == 2):
+            continue
+        try:
+            pu = _clamp(float(point[0]), 0.0, float(image_width))
+            pv = _clamp(float(point[1]), 0.0, float(image_height))
+        except Exception:
+            continue
+        parsed.append([round(pu, 2), round(pv, 2)])
+    if len(parsed) < min_points:
+        return None
+    return parsed
+
+
+def _coerce_point(
+    raw_point: Any,
+    *,
+    image_width: int,
+    image_height: int,
+) -> list[float] | None:
+    if not (isinstance(raw_point, (list, tuple)) and len(raw_point) == 2):
+        return None
+    try:
+        pu = _clamp(float(raw_point[0]), 0.0, float(image_width))
+        pv = _clamp(float(raw_point[1]), 0.0, float(image_height))
+    except Exception:
+        return None
+    return [round(pu, 2), round(pv, 2)]
+
+
+def _coerce_path(
+    raw_path: Any,
+    *,
+    image_width: int,
+    image_height: int,
+) -> list[list[float]] | None:
+    if not isinstance(raw_path, list):
+        return None
+    parsed_path: list[list[float]] = []
+    for point in raw_path:
+        if not (isinstance(point, (list, tuple)) and len(point) == 2):
+            continue
+        try:
+            pu = _clamp(float(point[0]), 0.0, float(image_width))
+            pv = _clamp(float(point[1]), 0.0, float(image_height))
+        except Exception:
+            continue
+        parsed_path.append([round(pu, 2), round(pv, 2)])
+    if len(parsed_path) < 2:
+        return None
+    return parsed_path
+
+
+def _coerce_path_samples(
+    raw_samples: Any,
+    *,
+    image_width: int,
+    image_height: int,
+) -> list[dict[str, Any]] | None:
+    if not isinstance(raw_samples, list):
+        return None
+    parsed_samples: list[dict[str, Any]] = []
+    for raw_sample in raw_samples:
+        if not isinstance(raw_sample, dict):
+            continue
+        center = _coerce_point(raw_sample.get("center_uv"), image_width=image_width, image_height=image_height)
+        left_edge = _coerce_point(
+            raw_sample.get("left_edge_uv") or raw_sample.get("left_support_edge_uv"),
+            image_width=image_width,
+            image_height=image_height,
+        )
+        right_edge = _coerce_point(
+            raw_sample.get("right_edge_uv") or raw_sample.get("right_support_edge_uv"),
+            image_width=image_width,
+            image_height=image_height,
+        )
+        if center is None or left_edge is None or right_edge is None:
+            continue
+        support_label = str(raw_sample.get("support_label", "") or "").strip().lower() or None
+        parsed_samples.append(
+            {
+                "center_uv": center,
+                "left_edge_uv": left_edge,
+                "right_edge_uv": right_edge,
+                "support_label": support_label,
+            }
+        )
+    if len(parsed_samples) < 2:
+        return None
+    return parsed_samples
+
+
+def _derive_path_uv_from_samples(path_samples: list[dict[str, Any]] | None) -> list[list[float]] | None:
+    if not path_samples:
+        return None
+    return [sample["center_uv"] for sample in path_samples if isinstance(sample.get("center_uv"), list)]
+
+
+def _derive_corridor_polygon_from_samples(path_samples: list[dict[str, Any]] | None) -> list[list[float]] | None:
+    if not path_samples:
+        return None
+    left_chain = [sample["left_edge_uv"] for sample in path_samples if isinstance(sample.get("left_edge_uv"), list)]
+    right_chain = [sample["right_edge_uv"] for sample in path_samples if isinstance(sample.get("right_edge_uv"), list)]
+    if len(left_chain) < 2 or len(right_chain) < 2:
+        return None
+    polygon = left_chain + list(reversed(right_chain))
+    if polygon and polygon[0] != polygon[-1]:
+        polygon.append(polygon[0])
+    return polygon if len(polygon) >= 4 else None
+
+
+def _derive_span_from_samples(path_samples: list[dict[str, Any]] | None) -> float | None:
+    if not path_samples:
+        return None
+    widths: list[float] = []
+    for sample in path_samples:
+        left_edge = sample.get("left_edge_uv")
+        right_edge = sample.get("right_edge_uv")
+        if not (isinstance(left_edge, list) and isinstance(right_edge, list)):
+            continue
+        widths.append(math.hypot(right_edge[0] - left_edge[0], right_edge[1] - left_edge[1]))
+    if not widths:
+        return None
+    return round(sum(widths) / len(widths), 2)
+
+
+def _derive_direction_from_path(path_uv: list[list[float]] | None) -> list[float] | None:
+    if not path_uv or len(path_uv) < 2:
+        return None
+    start = path_uv[-2]
+    end = path_uv[-1]
+    dx = float(end[0] - start[0])
+    dy = float(end[1] - start[1])
+    norm = math.hypot(dx, dy)
+    if norm <= 1e-6:
+        return None
+    return [round(dx / norm, 4), round(dy / norm, 4)]
+
+
 def _coerce_rendered_prompt(raw_prompt: Any, *, image_width: int, image_height: int) -> dict[str, Any] | None:
     if not isinstance(raw_prompt, dict):
         return None
     prompt_type = str(raw_prompt.get("type", "") or "").strip().lower()
-    if prompt_type not in {"arrow", "sector", "region", "arrow_path"}:
+    if prompt_type not in {"arrow", "sector", "region", "arrow_path", "path_corridor"}:
         return None
-    center = raw_prompt.get("center_uv")
-    if not (isinstance(center, (list, tuple)) and len(center) == 2):
-        return None
-    try:
-        u = _clamp(float(center[0]), 0.0, float(image_width))
-        v = _clamp(float(center[1]), 0.0, float(image_height))
-    except Exception:
-        return None
+    center = _coerce_point(raw_prompt.get("center_uv"), image_width=image_width, image_height=image_height)
+    u = center[0] if center else None
+    v = center[1] if center else None
     direction_vec = raw_prompt.get("direction_vec")
     if isinstance(direction_vec, (list, tuple)) and len(direction_vec) == 2:
         try:
@@ -194,32 +431,61 @@ def _coerce_rendered_prompt(raw_prompt: Any, *, image_width: int, image_height: 
         span_px = max(float(raw_prompt.get("span_px", 0.0) or 0.0), 12.0)
     except Exception:
         span_px = 64.0
-    mask = raw_prompt.get("mask")
-    if not isinstance(mask, list):
-        mask = None
-    raw_path = raw_prompt.get("path_uv")
-    path_uv = None
-    if isinstance(raw_path, list):
-        parsed_path: list[list[float]] = []
-        for point in raw_path:
-            if not (isinstance(point, (list, tuple)) and len(point) == 2):
-                continue
-            try:
-                pu = _clamp(float(point[0]), 0.0, float(image_width))
-                pv = _clamp(float(point[1]), 0.0, float(image_height))
-            except Exception:
-                continue
-            parsed_path.append([round(pu, 2), round(pv, 2)])
-        if len(parsed_path) >= 2:
-            path_uv = parsed_path
+    mask = _coerce_polygon(raw_prompt.get("mask"), image_width=image_width, image_height=image_height)
+    path_uv = _coerce_path(raw_prompt.get("path_uv"), image_width=image_width, image_height=image_height)
+    path_samples = _coerce_path_samples(
+        raw_prompt.get("path_samples"),
+        image_width=image_width,
+        image_height=image_height,
+    )
+    if path_uv is None:
+        path_uv = _derive_path_uv_from_samples(path_samples)
+    coverage_polygon_uv = _coerce_polygon(
+        raw_prompt.get("coverage_polygon_uv"),
+        image_width=image_width,
+        image_height=image_height,
+    )
+    if coverage_polygon_uv is None:
+        coverage_polygon_uv = _derive_corridor_polygon_from_samples(path_samples)
+    if coverage_polygon_uv is None and mask is not None:
+        coverage_polygon_uv = mask
+    termination_semantics = str(raw_prompt.get("termination_semantics", "") or "").strip().lower() or None
+    if termination_semantics not in {None, "continue_visible_corridor", "reach_turn_entry", "stop_before_occlusion"}:
+        termination_semantics = None
+    support_confidence = raw_prompt.get("support_confidence")
+    try:
+        support_confidence = (
+            round(_clamp(float(support_confidence), 0.0, 1.0), 4)
+            if support_confidence is not None
+            else None
+        )
+    except Exception:
+        support_confidence = None
     if prompt_type == "arrow_path" and path_uv is None:
+        if u is None or v is None:
+            return None
         path_uv = [[round(image_width * 0.5, 2), round(image_height * 0.94, 2)], [round(u, 2), round(v, 2)]]
+    if prompt_type == "path_corridor":
+        if path_samples is None or path_uv is None or coverage_polygon_uv is None or termination_semantics is None:
+            return None
+        u, v = path_uv[-1]
+        if direction is None:
+            direction = _derive_direction_from_path(path_uv)
+        derived_span = _derive_span_from_samples(path_samples)
+        if derived_span is not None:
+            span_px = derived_span
+    if u is None or v is None:
+        return None
     return {
         "type": prompt_type,
         "center_uv": [round(u, 2), round(v, 2)],
         "direction_vec": direction,
         "span_px": round(span_px, 2),
         "path_uv": path_uv,
+        "path_samples": path_samples,
+        "coverage_polygon_uv": coverage_polygon_uv,
+        "termination_semantics": termination_semantics,
+        "support_confidence": support_confidence,
         "mask": mask,
     }
 

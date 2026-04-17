@@ -28,6 +28,8 @@ from PIL import Image, ImageOps
 from mcp_server.brain import (
     build_direct_prompt_question,
     build_direct_prompt_system_prompt,
+    build_direct_prompt_verifier_question,
+    build_direct_prompt_verifier_system_prompt,
     coerce_direct_prompt_decision,
 )
 from mcp_server.llm import (
@@ -214,16 +216,65 @@ def _render_prompt_overlay_svg(
     except Exception:
         dx, dy = 0.0, -1.0
     mask = rendered_prompt.get("mask")
+    coverage_polygon = rendered_prompt.get("coverage_polygon_uv")
+    path_samples = rendered_prompt.get("path_samples")
 
     anchor_x = width * 0.5
     anchor_y = height * 0.94
     label = str(rendered_prompt.get("semantic_tag") or prompt_type)
+    termination_semantics = str(rendered_prompt.get("termination_semantics") or "").strip()
+    support_confidence = rendered_prompt.get("support_confidence")
 
     overlay_parts = [
         f'<rect x="0" y="0" width="{width}" height="{height}" fill="rgba(2,6,23,0.06)" />',
         f'<rect x="{title_font * 0.6:.1f}" y="{title_font * 0.45:.1f}" width="{min(width * 0.72, title_font * 24):.1f}" height="{title_font * 1.65:.1f}" rx="{title_font * 0.35:.1f}" fill="rgba(2,6,23,0.58)" />',
         f'<text x="{title_font:.1f}" y="{title_font * 1.55:.1f}" fill="#e2e8f0" font-size="{title_font:.1f}" font-family="monospace">{escape(title)}</text>',
     ]
+
+    if isinstance(coverage_polygon, list) and len(coverage_polygon) >= 3:
+        points = " ".join(
+            f"{float(point[0]):.1f},{float(point[1]):.1f}"
+            for point in coverage_polygon
+            if isinstance(point, (list, tuple)) and len(point) == 2
+        )
+        if points:
+            overlay_parts.append(
+                f'<polygon points="{points}" fill="rgba(34,197,94,0.18)" stroke="#22c55e" stroke-width="{outline_stroke:.1f}" stroke-linejoin="round" />'
+            )
+
+    if isinstance(path_samples, list):
+        for sample in path_samples:
+            if not isinstance(sample, dict):
+                continue
+            center_uv = sample.get("center_uv")
+            left_edge_uv = sample.get("left_edge_uv")
+            right_edge_uv = sample.get("right_edge_uv")
+            if (
+                isinstance(center_uv, (list, tuple))
+                and len(center_uv) == 2
+                and isinstance(left_edge_uv, (list, tuple))
+                and len(left_edge_uv) == 2
+                and isinstance(right_edge_uv, (list, tuple))
+                and len(right_edge_uv) == 2
+            ):
+                cx0 = float(center_uv[0])
+                cy0 = float(center_uv[1])
+                lx0 = float(left_edge_uv[0])
+                ly0 = float(left_edge_uv[1])
+                rx0 = float(right_edge_uv[0])
+                ry0 = float(right_edge_uv[1])
+                overlay_parts.append(
+                    f'<line x1="{lx0:.1f}" y1="{ly0:.1f}" x2="{rx0:.1f}" y2="{ry0:.1f}" stroke="rgba(250,204,21,0.78)" stroke-width="{outline_stroke:.1f}" />'
+                )
+                overlay_parts.append(
+                    f'<circle cx="{lx0:.1f}" cy="{ly0:.1f}" r="{marker_radius * 0.45:.1f}" fill="#fde047" />'
+                )
+                overlay_parts.append(
+                    f'<circle cx="{rx0:.1f}" cy="{ry0:.1f}" r="{marker_radius * 0.45:.1f}" fill="#fde047" />'
+                )
+                overlay_parts.append(
+                    f'<circle cx="{cx0:.1f}" cy="{cy0:.1f}" r="{marker_radius * 0.35:.1f}" fill="#fb7185" />'
+                )
 
     if isinstance(mask, list) and len(mask) >= 3:
         points = " ".join(
@@ -252,7 +303,7 @@ def _render_prompt_overlay_svg(
                 f'<text x="{cx:.1f}" y="{cy + marker_radius * 3.45:.1f}" text-anchor="middle" fill="#dcfce7" font-size="{title_font:.1f}" font-family="monospace">ARRIVED</text>',
             ]
         )
-    elif prompt_type in {"arrow", "arrow_path"} and valid_path:
+    elif prompt_type in {"arrow", "arrow_path", "path_corridor"} and valid_path:
         points = " ".join(f"{float(point[0]):.1f},{float(point[1]):.1f}" for point in path_uv)
         overlay_parts.append(
             f'<polyline points="{points}" fill="none" stroke="#f97316" stroke-width="{line_stroke:.1f}" stroke-linecap="round" stroke-linejoin="round" />'
@@ -303,6 +354,13 @@ def _render_prompt_overlay_svg(
         )
 
     if prompt_type not in {"arrival", "arrival_marker", "destination_marker"}:
+        termination_label = termination_semantics[:32] if termination_semantics else ""
+        support_label = ""
+        if support_confidence is not None:
+            try:
+                support_label = f"support={float(support_confidence):.2f}"
+            except Exception:
+                support_label = ""
         overlay_parts.extend(
             [
                 f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{marker_radius:.1f}" fill="#e2e8f0" />',
@@ -310,6 +368,14 @@ def _render_prompt_overlay_svg(
                 f'<text x="{cx + marker_radius * 1.9:.1f}" y="{cy - label_font * 0.22:.1f}" fill="#e2e8f0" font-size="{label_font:.1f}" font-family="monospace">{escape(label[:42])}</text>',
             ]
         )
+        if termination_label or support_label:
+            meta_text = " | ".join(item for item in [termination_label, support_label] if item)
+            overlay_parts.extend(
+                [
+                    f'<rect x="{title_font * 0.6:.1f}" y="{title_font * 2.3:.1f}" width="{min(width * 0.78, max(len(meta_text) * label_font * 0.72, title_font * 8.0)):.1f}" height="{label_font * 1.65:.1f}" rx="{label_font * 0.35:.1f}" fill="rgba(2,6,23,0.52)" />',
+                    f'<text x="{title_font:.1f}" y="{title_font * 3.0:.1f}" fill="#bbf7d0" font-size="{label_font:.1f}" font-family="monospace">{escape(meta_text)}</text>',
+                ]
+            )
 
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{display_width}" height="{display_height}" viewBox="0 0 {width} {height}">'
@@ -1924,10 +1990,15 @@ async def run_zero_shot_visual_prompt_agent(
     image_width, image_height = _prompt_image_size(image_path=image_path, image_url=image_url)
 
     llm_raw: Dict[str, Any] | None = None
+    verifier_raw: Dict[str, Any] | None = None
     llm_error: str | None = None
+    verifier_error: str | None = None
     decision = None
+    generator_decision = None
     question = ""
     system_prompt = ""
+    verifier_question = ""
+    verifier_system_prompt = ""
     if _is_arrival_state(route_context_dict):
         decision = _arrival_visual_prompt_decision(
             route_context=route_context_dict,
@@ -1965,8 +2036,53 @@ async def run_zero_shot_visual_prompt_agent(
                 image_width=image_width,
                 image_height=image_height,
             )
+            if decision is not None and not decision.reject_all and isinstance(decision.rendered_prompt, dict):
+                try:
+                    verifier_question = build_direct_prompt_verifier_question(
+                        route_context=route_context_dict,
+                        rendered_prompt=decision.rendered_prompt,
+                        image_width=image_width,
+                        image_height=image_height,
+                        navigation_mode=navigation_mode,
+                    )
+                    verifier_system_prompt = build_direct_prompt_verifier_system_prompt()
+                    if str(image_path or "").strip():
+                        verifier_raw = await arbitrate_local_pov_candidates_with_llm(
+                            image_path=str(image_path),
+                            question=verifier_question,
+                            detail=llm_detail,
+                            system_prompt=verifier_system_prompt,
+                        )
+                    else:
+                        verifier_raw = await arbitrate_pov_candidates_with_llm(
+                            image_url=str(image_url),
+                            question=verifier_question,
+                            detail=llm_detail,
+                            system_prompt=verifier_system_prompt,
+                        )
+                    generator_decision = decision
+                    verified_decision = coerce_direct_prompt_decision(
+                        raw=verifier_raw,
+                        route_context=route_context_dict,
+                        image_width=image_width,
+                        image_height=image_height,
+                    )
+                    if verified_decision is not None:
+                        verified_decision.arbiter_source = "llm_direct_verified"
+                        verified_decision.debug = {
+                            "generator_raw": llm_raw,
+                            "generator_decision": visual_prompt_decision_to_dict(generator_decision),
+                            "verifier_raw": verifier_raw,
+                            "verifier_decision": visual_prompt_decision_to_dict(verified_decision),
+                        }
+                        decision = verified_decision
+                except Exception as exc:
+                    verifier_error = str(exc)
         except Exception as exc:
             llm_error = str(exc)
+
+    if decision is not None and not decision.reject_all and isinstance(decision.rendered_prompt, dict) and verifier_raw is None and not verifier_error and question:
+        verifier_error = "visual prompt verifier did not run"
 
     if decision is None:
         decision = _reject_visual_prompt_decision(
@@ -1979,12 +2095,11 @@ async def run_zero_shot_visual_prompt_agent(
         )
 
     decision_dict = visual_prompt_decision_to_dict(decision)
-    if llm_raw is not None:
-        decision_dict.setdefault("debug", {})
-        decision_dict["debug"]["llm_raw"] = llm_raw
+    decision_dict.setdefault("debug", {})
     if llm_error:
-        decision_dict.setdefault("debug", {})
         decision_dict["debug"]["llm_error"] = llm_error
+    if verifier_error:
+        decision_dict["debug"]["verifier_error"] = verifier_error
 
     image_href = _image_href_for_overlay(image_path=image_path, image_url=image_url)
     overlay_svg = _render_prompt_overlay_svg(
@@ -1995,12 +2110,26 @@ async def run_zero_shot_visual_prompt_agent(
         title="Mode-Aware Visual Prompt",
     )
 
+    generator_overlay_svg: str | None = None
+    generator_overlay_svg_data_url: str | None = None
+    if generator_decision is not None and isinstance(generator_decision.rendered_prompt, dict):
+        generator_overlay_svg = _render_prompt_overlay_svg(
+            image_href=image_href,
+            image_width=image_width,
+            image_height=image_height,
+            rendered_prompt=generator_decision.rendered_prompt,
+            title="Generator Visual Prompt (Pre-Verifier)",
+        )
+        generator_overlay_svg_data_url = _svg_to_data_url(generator_overlay_svg)
+
     return {
         "route_context": route_context_dict,
         "local_bev_context": local_bev_dict,
         "arbiter_decision": decision_dict,
         "overlay_svg": overlay_svg,
         "overlay_svg_data_url": _svg_to_data_url(overlay_svg),
+        "generator_overlay_svg": generator_overlay_svg,
+        "generator_overlay_svg_data_url": generator_overlay_svg_data_url,
     }
 
 
