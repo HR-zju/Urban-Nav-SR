@@ -502,6 +502,17 @@ def _normalize_via_points(via_points: Any) -> List[Dict[str, Any]]:
     return normalized
 
 
+def _locations_equivalent(a: Any, b: Any, *, tol: float = 1e-6) -> bool:
+    try:
+        a_text = _coerce_location_text(a)
+        b_text = _coerce_location_text(b)
+        a_lon, a_lat = parse_location_text(a_text)
+        b_lon, b_lat = parse_location_text(b_text)
+        return abs(a_lon - b_lon) <= tol and abs(a_lat - b_lat) <= tol
+    except Exception:
+        return str(a or "").strip() == str(b or "").strip()
+
+
 def _merge_route_segments(
     *,
     provider: str,
@@ -590,6 +601,102 @@ def _merge_route_segments(
         "route_polyline_text": encode_polyline_text(combined_polyline),
         "legs": legs_payload,
     }
+
+
+def _route_stop_locations(
+    *,
+    origin: str,
+    destination: str,
+    via_points: List[Dict[str, Any]],
+) -> List[str]:
+    return [origin] + [str(item.get("location") or "").strip() for item in via_points] + [destination]
+
+
+def _leg_matches_stop_pair(leg: Dict[str, Any], start: str, end: str) -> bool:
+    try:
+        return _locations_equivalent(leg.get("origin"), start) and _locations_equivalent(leg.get("destination"), end)
+    except Exception:
+        return False
+
+
+def _cached_legs_match_stops(
+    *,
+    legs: List[Dict[str, Any]],
+    stops: List[str],
+) -> bool:
+    if len(legs) != max(0, len(stops) - 1):
+        return False
+    for index, leg in enumerate(legs):
+        if not isinstance(leg, dict):
+            return False
+        if not _leg_matches_stop_pair(leg, stops[index], stops[index + 1]):
+            return False
+    return True
+
+
+async def _compute_incremental_route_plan_with_inserted_via(
+    *,
+    app_context: AppContext,
+    origin: str,
+    destination: str,
+    mode: str,
+    cached_route_plan: Dict[str, Any],
+    old_via_points: List[Dict[str, Any]],
+    new_via_points: List[Dict[str, Any]],
+    insert_index: int,
+) -> Optional[Dict[str, Any]]:
+    cached_legs = cached_route_plan.get("legs") or []
+    if not isinstance(cached_legs, list):
+        return None
+
+    old_stops = _route_stop_locations(origin=origin, destination=destination, via_points=old_via_points)
+    if not _cached_legs_match_stops(legs=cached_legs, stops=old_stops):
+        return None
+
+    if insert_index < 0 or insert_index > len(old_via_points):
+        return None
+
+    split_leg_index = insert_index
+    if split_leg_index >= len(cached_legs):
+        return None
+
+    previous_stop = old_stops[split_leg_index]
+    next_stop = old_stops[split_leg_index + 1]
+    inserted_via = new_via_points[insert_index]
+    inserted_location = str(inserted_via.get("location") or "").strip()
+    if not inserted_location:
+        return None
+
+    first_new_leg = await app_context.osm_client.get_coarse_waypoints(
+        origin=previous_stop,
+        destination=inserted_location,
+        mode=mode,
+    )
+    second_new_leg = await app_context.osm_client.get_coarse_waypoints(
+        origin=inserted_location,
+        destination=next_stop,
+        mode=mode,
+    )
+
+    reused_prefix = cached_legs[:split_leg_index]
+    reused_suffix = cached_legs[split_leg_index + 1 :]
+    merged_legs = reused_prefix + [first_new_leg, second_new_leg] + reused_suffix
+    route_plan = _merge_route_segments(
+        provider=app_context.provider,
+        origin=origin,
+        destination=destination,
+        mode=mode,
+        via_points=new_via_points,
+        leg_results=merged_legs,
+    )
+    route_plan["replan_strategy"] = "incremental_insert_via_split_leg"
+    route_plan["incremental_replan"] = {
+        "reused_prefix_leg_count": len(reused_prefix),
+        "reused_suffix_leg_count": len(reused_suffix),
+        "recomputed_leg_count": 2,
+        "split_leg_index": split_leg_index,
+    }
+    return route_plan
 
 
 async def _compute_combined_route_plan(
@@ -1412,30 +1519,75 @@ async def add_via_point_to_session(
     normalized_new = _normalize_via_points([new_via_point])
     if not normalized_new:
         raise ValueError("new_via_point must include a valid location")
-    via_points = _normalize_via_points(session.get("via_points"))
+    old_via_points = _normalize_via_points(session.get("via_points"))
+    via_points = [dict(item) for item in old_via_points]
     item = normalized_new[0]
+    same_as_destination = _locations_equivalent(item.get("location"), session.get("destination"))
+    duplicate_index = next(
+        (
+            index for index, via in enumerate(via_points)
+            if _locations_equivalent(via.get("location"), item.get("location"))
+        ),
+        None,
+    )
+    if same_as_destination or duplicate_index is not None:
+        route_plan, cache_hit = await _route_plan_for_session(
+            app_context=app_context,
+            session=session,
+            force_replan=False,
+        )
+        return {
+            "session": session,
+            "route_plan": route_plan,
+            "route_plan_cache_hit": cache_hit,
+            "session_changed": False,
+            "change_reason": "matches_destination" if same_as_destination else f"duplicate_via_point:{duplicate_index}",
+            "route_plan_update_mode": "cache_reuse_noop",
+            "session_store": _route_session_store_info(),
+        }
+    inserted_index = len(via_points)
     if insert_before_index is None:
         via_points.append(item)
     else:
-        idx = max(0, min(int(insert_before_index), len(via_points)))
-        via_points.insert(idx, item)
+        inserted_index = max(0, min(int(insert_before_index), len(via_points)))
+        via_points.insert(inserted_index, item)
     for index, via in enumerate(via_points):
         via["index"] = index
     session["via_points"] = via_points
     session["updated_at"] = datetime.now().isoformat()
-    route_plan = await _compute_combined_route_plan(
-        app_context=app_context,
-        origin=session["origin"],
-        destination=session["destination"],
-        via_points=via_points,
-        mode=session["mode"],
-    )
+    cached_route_plan = session.get("route_plan_cache")
+    route_plan = None
+    route_plan_update_mode = "full_replan"
+    if isinstance(cached_route_plan, dict) and cached_route_plan:
+        route_plan = await _compute_incremental_route_plan_with_inserted_via(
+            app_context=app_context,
+            origin=session["origin"],
+            destination=session["destination"],
+            mode=session["mode"],
+            cached_route_plan=cached_route_plan,
+            old_via_points=old_via_points,
+            new_via_points=via_points,
+            insert_index=inserted_index,
+        )
+        if isinstance(route_plan, dict) and route_plan:
+            route_plan_update_mode = str(route_plan.get("replan_strategy") or "incremental_insert_via_split_leg")
+    if route_plan is None:
+        route_plan = await _compute_combined_route_plan(
+            app_context=app_context,
+            origin=session["origin"],
+            destination=session["destination"],
+            via_points=via_points,
+            mode=session["mode"],
+        )
     _cache_route_plan_on_session(session, route_plan)
     _save_persisted_route_session(session)
     return {
         "session": session,
         "route_plan": route_plan,
         "route_plan_cache_hit": False,
+        "session_changed": True,
+        "change_reason": "via_point_added",
+        "route_plan_update_mode": route_plan_update_mode,
         "session_store": _route_session_store_info(),
     }
 
@@ -1953,6 +2105,7 @@ async def run_zero_shot_visual_prompt_agent(
     candidate_top_k: int = 5,
     llm_detail: str = "auto",
     navigation_mode: str = "foot",
+    enable_verifier: bool = True,
 ) -> Dict[str, Any]:
     """
     Run a zero-shot visual prompt agent over the current FPV frame.
@@ -1969,7 +2122,8 @@ async def run_zero_shot_visual_prompt_agent(
     await ctx.info(
         "Running zero-shot visual prompt agent "
         f"heading={heading_deg if heading_deg is not None else 'none'} "
-        f"visual_top_k={visual_top_k} candidate_top_k={candidate_top_k}"
+        f"visual_top_k={visual_top_k} candidate_top_k={candidate_top_k} "
+        f"enable_verifier={enable_verifier}"
     )
     if not str(image_path or "").strip() and not str(image_url or "").strip():
         raise RuntimeError("run_zero_shot_visual_prompt_agent requires image_path or image_url")
@@ -2036,7 +2190,12 @@ async def run_zero_shot_visual_prompt_agent(
                 image_width=image_width,
                 image_height=image_height,
             )
-            if decision is not None and not decision.reject_all and isinstance(decision.rendered_prompt, dict):
+            if (
+                enable_verifier
+                and decision is not None
+                and not decision.reject_all
+                and isinstance(decision.rendered_prompt, dict)
+            ):
                 try:
                     verifier_question = build_direct_prompt_verifier_question(
                         route_context=route_context_dict,
@@ -2081,7 +2240,15 @@ async def run_zero_shot_visual_prompt_agent(
         except Exception as exc:
             llm_error = str(exc)
 
-    if decision is not None and not decision.reject_all and isinstance(decision.rendered_prompt, dict) and verifier_raw is None and not verifier_error and question:
+    if (
+        enable_verifier
+        and decision is not None
+        and not decision.reject_all
+        and isinstance(decision.rendered_prompt, dict)
+        and verifier_raw is None
+        and not verifier_error
+        and question
+    ):
         verifier_error = "visual prompt verifier did not run"
 
     if decision is None:
@@ -2100,6 +2267,8 @@ async def run_zero_shot_visual_prompt_agent(
         decision_dict["debug"]["llm_error"] = llm_error
     if verifier_error:
         decision_dict["debug"]["verifier_error"] = verifier_error
+    if not enable_verifier:
+        decision_dict["debug"]["verifier_skipped"] = True
 
     image_href = _image_href_for_overlay(image_path=image_path, image_url=image_url)
     overlay_svg = _render_prompt_overlay_svg(
@@ -3686,6 +3855,8 @@ async def recommend_destination_and_waypoints(
     max_candidates: int = 5,
     search_radius: float = 3000,
     mode: Optional[str] = None,
+    resolution_scope: str = "global_destination",
+    anchor_location: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Parse free-form human instructions, recommend candidate destinations, and return route key waypoints.
@@ -3706,6 +3877,8 @@ async def recommend_destination_and_waypoints(
         max_candidates=max_candidates,
         search_radius=search_radius,
         mode=mode,
+        resolution_scope=resolution_scope,
+        anchor_location=anchor_location,
         ctx=ctx,
     )
 

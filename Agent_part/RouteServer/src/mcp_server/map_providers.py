@@ -1099,6 +1099,113 @@ class AMapClient(BaseHTTPMapClient):
         self.api_key = api_key
 
     @staticmethod
+    def _poi_request_timeout() -> aiohttp.ClientTimeout:
+        total_timeout_s = float(os.getenv("AMAP_POI_TOTAL_TIMEOUT_S", os.getenv("MAP_HTTP_TOTAL_TIMEOUT_S", "45")) or 45)
+        connect_timeout_s = float(os.getenv("AMAP_POI_CONNECT_TIMEOUT_S", os.getenv("MAP_HTTP_CONNECT_TIMEOUT_S", "15")) or 15)
+        sock_read_timeout_raw = os.getenv("AMAP_POI_SOCK_READ_TIMEOUT_S", "").strip()
+        sock_read_timeout_s = float(sock_read_timeout_raw) if sock_read_timeout_raw else None
+        return aiohttp.ClientTimeout(
+            total=total_timeout_s,
+            connect=connect_timeout_s,
+            sock_read=sock_read_timeout_s,
+        )
+
+    @staticmethod
+    def _route_request_timeout() -> aiohttp.ClientTimeout:
+        total_timeout_s = float(os.getenv("AMAP_ROUTE_TOTAL_TIMEOUT_S", os.getenv("MAP_HTTP_TOTAL_TIMEOUT_S", "90")) or 90)
+        connect_timeout_s = float(os.getenv("AMAP_ROUTE_CONNECT_TIMEOUT_S", os.getenv("MAP_HTTP_CONNECT_TIMEOUT_S", "20")) or 20)
+        sock_read_timeout_raw = os.getenv("AMAP_ROUTE_SOCK_READ_TIMEOUT_S", "").strip()
+        sock_read_timeout_s = float(sock_read_timeout_raw) if sock_read_timeout_raw else None
+        return aiohttp.ClientTimeout(
+            total=total_timeout_s,
+            connect=connect_timeout_s,
+            sock_read=sock_read_timeout_s,
+        )
+
+    async def _request_amap_route_json(
+        self,
+        *,
+        mode: str,
+        origin: str,
+        destination: str,
+        extensions: str = "all",
+    ) -> dict[str, Any]:
+        session = self.require_session()
+        retries = max(int(os.getenv("AMAP_ROUTE_RETRIES", "2") or 2), 0)
+        backoff_s = max(float(os.getenv("AMAP_ROUTE_RETRY_BACKOFF_S", "1.5") or 1.5), 0.0)
+        last_exc: Exception | None = None
+
+        for attempt in range(retries + 1):
+            try:
+                async with session.get(
+                    f"https://restapi.amap.com/v3/direction/{mode}",
+                    params={
+                        "key": self.api_key,
+                        "origin": origin,
+                        "destination": destination,
+                        "extensions": extensions,
+                    },
+                    timeout=self._route_request_timeout(),
+                ) as response:
+                    data = await response.json(content_type=None)
+                    if response.status != 200 or data.get("status") != "1":
+                        raise Exception(f"AMap route failed: {data.get('info', response.status)}")
+                    return data
+            except (aiohttp.ClientConnectionError, aiohttp.ClientConnectorError, asyncio.TimeoutError) as exc:
+                last_exc = exc
+                if attempt < retries:
+                    await asyncio.sleep(backoff_s * (attempt + 1))
+                    continue
+                break
+
+        raise Exception(
+            "AMap routing endpoint timed out or was unreachable after retries. "
+            "You can retry, increase AMAP_ROUTE_CONNECT_TIMEOUT_S / AMAP_ROUTE_TOTAL_TIMEOUT_S, "
+            "or configure HTTPS_PROXY/HTTP_PROXY if the current network is unstable."
+        ) from last_exc
+
+    async def _request_amap_json(
+        self,
+        *,
+        endpoint: str,
+        params: dict[str, Any],
+        timeout: aiohttp.ClientTimeout | None = None,
+        retries_env: str = "AMAP_POI_RETRIES",
+        backoff_env: str = "AMAP_POI_RETRY_BACKOFF_S",
+        error_context: str = "AMap endpoint",
+    ) -> dict[str, Any]:
+        session = self.require_session()
+        retries = max(int(os.getenv(retries_env, "2") or 2), 0)
+        backoff_s = max(float(os.getenv(backoff_env, "1.0") or 1.0), 0.0)
+        last_exc: Exception | None = None
+
+        request_timeout = timeout or self._poi_request_timeout()
+        request_params = {"key": self.api_key, **params}
+        for attempt in range(retries + 1):
+            try:
+                async with session.get(
+                    endpoint,
+                    params=request_params,
+                    timeout=request_timeout,
+                ) as response:
+                    data = await response.json(content_type=None)
+                    if response.status != 200 or data.get("status") != "1":
+                        raise Exception(f"{error_context} failed: {data.get('info', response.status)}")
+                    return data
+            except (aiohttp.ClientConnectionError, aiohttp.ClientConnectorError, asyncio.TimeoutError) as exc:
+                last_exc = exc
+                if attempt < retries:
+                    await asyncio.sleep(backoff_s * (attempt + 1))
+                    continue
+                break
+
+        raise Exception(
+            f"{error_context} timed out or was unreachable after retries. "
+            "You can retry, increase AMap POI/geocode timeouts, "
+            "or configure HTTPS_PROXY/HTTP_PROXY if the current network is unstable."
+        ) from last_exc
+
+    @staticmethod
     def _split_location(location: str) -> tuple[float | None, float | None]:
         try:
             longitude, latitude = parse_location_text(location)
@@ -1107,46 +1214,44 @@ class AMapClient(BaseHTTPMapClient):
             return None, None
 
     async def geocode(self, query: str) -> list[dict[str, Any]]:
-        session = self.require_session()
         results: list[dict[str, Any]] = []
 
         # Phase 1: address geocoding (works well for concrete addresses).
-        async with session.get(
-            "https://restapi.amap.com/v3/geocode/geo",
-            params={"key": self.api_key, "address": query},
-        ) as response:
-            data = await response.json(content_type=None)
-            if response.status == 200 and data.get("status") == "1":
-                for item in data.get("geocodes", []):
-                    lat, lon = self._split_location(item.get("location", ""))
-                    if lat is None or lon is None:
-                        continue
-                    results.append(
-                        {
-                            "display_name": item.get("formatted_address", query),
-                            "lat": str(lat),
-                            "lon": str(lon),
-                            "source": "amap_geocode",
-                            "raw": item,
-                        }
-                    )
+        try:
+            data = await self._request_amap_json(
+                endpoint="https://restapi.amap.com/v3/geocode/geo",
+                params={"address": query},
+                error_context="AMap geocode",
+            )
+            for item in data.get("geocodes", []):
+                lat, lon = self._split_location(item.get("location", ""))
+                if lat is None or lon is None:
+                    continue
+                results.append(
+                    {
+                        "display_name": item.get("formatted_address", query),
+                        "lat": str(lat),
+                        "lon": str(lon),
+                        "source": "amap_geocode",
+                        "raw": item,
+                    }
+                )
+        except Exception:
+            data = {}
 
         if results:
             return results
 
         # Phase 2: POI text search for named places/landmarks (e.g. "West Lake").
-        async with session.get(
-            "https://restapi.amap.com/v3/place/text",
+        data = await self._request_amap_json(
+            endpoint="https://restapi.amap.com/v3/place/text",
             params={
-                "key": self.api_key,
                 "keywords": query,
                 "offset": 10,
                 "page": 1,
             },
-        ) as response:
-            data = await response.json(content_type=None)
-            if response.status != 200 or data.get("status") != "1":
-                raise Exception(f"AMap geocode/place-text failed: {data.get('info', response.status)}")
+            error_context="AMap geocode/place-text",
+        )
 
         poi_results: list[dict[str, Any]] = []
         for poi in data.get("pois", []):
@@ -1169,14 +1274,11 @@ class AMapClient(BaseHTTPMapClient):
         return poi_results
 
     async def reverse_geocode(self, lat: float, lon: float) -> dict[str, Any]:
-        session = self.require_session()
-        async with session.get(
-            "https://restapi.amap.com/v3/geocode/regeo",
-            params={"key": self.api_key, "location": f"{lon},{lat}", "extensions": "base"},
-        ) as response:
-            data = await response.json(content_type=None)
-            if response.status != 200 or data.get("status") != "1":
-                raise Exception(f"AMap reverse geocode failed: {data.get('info', response.status)}")
+        data = await self._request_amap_json(
+            endpoint="https://restapi.amap.com/v3/geocode/regeo",
+            params={"location": f"{lon},{lat}", "extensions": "base"},
+            error_context="AMap reverse geocode",
+        )
 
         regeocode = data.get("regeocode", {})
         return {
@@ -1193,12 +1295,10 @@ class AMapClient(BaseHTTPMapClient):
         sortrule: str = "distance",
         limit: int = 10,
     ) -> list[dict[str, Any]]:
-        session = self.require_session()
         origin_lon, origin_lat = parse_location_text(location)
-        async with session.get(
-            "https://restapi.amap.com/v3/place/around",
+        data = await self._request_amap_json(
+            endpoint="https://restapi.amap.com/v3/place/around",
             params={
-                "key": self.api_key,
                 "location": location,
                 "keywords": keywords,
                 "radius": int(radius),
@@ -1206,10 +1306,8 @@ class AMapClient(BaseHTTPMapClient):
                 "offset": max(1, min(limit, 25)),
                 "page": 1,
             },
-        ) as response:
-            data = await response.json(content_type=None)
-            if response.status != 200 or data.get("status") != "1":
-                raise Exception(f"AMap semantic POI search failed: {data.get('info', response.status)}")
+            error_context="AMap semantic POI search",
+        )
 
         return parse_amap_pois(
             data.get("pois", []),
@@ -1224,21 +1322,16 @@ class AMapClient(BaseHTTPMapClient):
         destination: str,
         mode: str = "foot",
     ) -> dict[str, Any]:
-        session = self.require_session()
         amap_mode = {"car": "driving", "foot": "walking", "bike": "walking"}.get(mode, "walking")
-        async with session.get(
-            f"https://restapi.amap.com/v3/direction/{amap_mode}",
-            params={
-                "key": self.api_key,
-                "origin": origin,
-                "destination": destination,
-                "extensions": "all",
-            },
-        ) as response:
-            data = await response.json(content_type=None)
-            if response.status != 200 or data.get("status") != "1":
-                raise Exception(f"AMap coarse waypoint route failed: {data.get('info', response.status)}")
-
+        try:
+            data = await self._request_amap_route_json(
+                mode=amap_mode,
+                origin=origin,
+                destination=destination,
+                extensions="all",
+            )
+        except Exception as exc:
+            raise Exception(f"AMap coarse waypoint route failed: {exc}") from exc
         return parse_amap_steps(data, origin=origin, destination=destination, mode=mode)
 
     async def get_nearby_pois(
@@ -1248,26 +1341,25 @@ class AMapClient(BaseHTTPMapClient):
         radius: float = 1000,
         categories: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        session = self.require_session()
         categories = categories or default_search_categories()
 
         results_by_id: dict[str, dict[str, Any]] = {}
         for category in categories:
-            async with session.get(
-                "https://restapi.amap.com/v3/place/around",
-                params={
-                    "key": self.api_key,
-                    "location": f"{lon},{lat}",
-                    "radius": int(radius),
-                    "keywords": _category_keyword(category),
-                    "sortrule": "distance",
-                    "offset": 25,
-                    "page": 1,
-                },
-            ) as response:
-                data = await response.json(content_type=None)
-                if response.status != 200 or data.get("status") != "1":
-                    continue
+            try:
+                data = await self._request_amap_json(
+                    endpoint="https://restapi.amap.com/v3/place/around",
+                    params={
+                        "location": f"{lon},{lat}",
+                        "radius": int(radius),
+                        "keywords": _category_keyword(category),
+                        "sortrule": "distance",
+                        "offset": 25,
+                        "page": 1,
+                    },
+                    error_context=f"AMap nearby POI search[{category}]",
+                )
+            except Exception:
+                continue
 
             for poi in data.get("pois", []):
                 poi_id = poi.get("id") or f"amap-{poi.get('location', '')}-{poi.get('name', '')}"
@@ -1322,20 +1414,13 @@ class AMapClient(BaseHTTPMapClient):
         overview: str = "overview",
         annotations: bool = True,
     ) -> dict[str, Any]:
-        session = self.require_session()
         amap_mode = {"car": "driving", "foot": "walking", "bike": "walking"}.get(mode, "driving")
-        async with session.get(
-            f"https://restapi.amap.com/v3/direction/{amap_mode}",
-            params={
-                "key": self.api_key,
-                "origin": f"{from_lon},{from_lat}",
-                "destination": f"{to_lon},{to_lat}",
-                "extensions": "all",
-            },
-        ) as response:
-            data = await response.json(content_type=None)
-            if response.status != 200 or data.get("status") != "1":
-                raise Exception(f"AMap route failed: {data.get('info', response.status)}")
+        data = await self._request_amap_route_json(
+            mode=amap_mode,
+            origin=f"{from_lon},{from_lat}",
+            destination=f"{to_lon},{to_lat}",
+            extensions="all",
+        )
 
         route = data.get("route", {})
         paths = route.get("paths", [])

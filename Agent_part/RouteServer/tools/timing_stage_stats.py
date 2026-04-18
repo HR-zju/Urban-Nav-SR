@@ -112,6 +112,8 @@ VALID_GROUP_FIELDS = (
     "artifact",
     "fast_intent",
     "resolution_path",
+    "parse_profile",
+    "intent_override_used",
 )
 
 

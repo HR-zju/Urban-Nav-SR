@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 import ast
 import base64
@@ -47,6 +47,13 @@ DESTINATION_KIND_VALUES = {
 }
 
 
+def _clamp_probability(value: Any, default: float = 0.0) -> float:
+    try:
+        return max(0.0, min(float(value), 1.0))
+    except Exception:
+        return max(0.0, min(float(default), 1.0))
+
+
 def _contains_cjk(text: str) -> bool:
     return bool(re.search(r"[\u3400-\u9fff]", str(text or "")))
 
@@ -67,7 +74,11 @@ class LLMSettings:
     model: str
     base_url: str
     temperature: float = 0.0
-    timeout_s: float = 20.0
+    timeout_s: float = 45.0
+    max_retries: int = 5
+    max_tokens: int | None = None
+    allow_api_style_fallback: bool = False
+    intent_parse_profile: str = "full"
     response_format: bool = True
 
     @classmethod
@@ -96,8 +107,17 @@ class LLMSettings:
         base_url = (
             os.getenv("LLM_API_BASE_URL", "").strip()
             or os.getenv("ARK_BASE_URL", "").strip()
+            or os.getenv("ARK_API_BASE", "").strip()
+            or os.getenv("OPENAI_BASE_URL", "").strip()
             or default_base_url
         )
+        default_timeout_s = 45.0 if provider == "ark" else 20.0
+        default_max_retries = 5 if provider == "ark" else 2
+        fallback_env = os.getenv("LLM_API_STYLE_FALLBACK", "").strip().lower()
+        if fallback_env:
+            allow_api_style_fallback = fallback_env in {"1", "true", "yes"}
+        else:
+            allow_api_style_fallback = provider != "ark"
         return cls(
             provider=provider,
             api_style=api_style,
@@ -105,8 +125,26 @@ class LLMSettings:
             model=model,
             base_url=base_url.rstrip("/"),
             temperature=float(os.getenv("LLM_TEMPERATURE", "0") or 0),
-            timeout_s=float(os.getenv("LLM_TIMEOUT_S", "20") or 20),
+            timeout_s=float(os.getenv("LLM_TIMEOUT_S", str(default_timeout_s)) or default_timeout_s),
+            max_retries=max(0, int(os.getenv("LLM_MAX_RETRIES", str(default_max_retries)) or default_max_retries)),
+            max_tokens=int(os.getenv("LLM_MAX_TOKENS", "0") or 0) or None,
+            allow_api_style_fallback=allow_api_style_fallback,
+            intent_parse_profile=os.getenv("LLM_INTENT_PARSE_PROFILE", "full").strip().lower() or "full",
             response_format=os.getenv("LLM_RESPONSE_FORMAT_JSON", "true").strip().lower() not in {"0", "false", "no"},
+        )
+
+    def for_intent_parser(self) -> "LLMSettings":
+        """Return settings for low-latency text intent parsing only."""
+        intent_model = os.getenv("LLM_INTENT_MODEL", "").strip()
+        intent_timeout = os.getenv("LLM_INTENT_TIMEOUT_S", "").strip()
+        intent_max_tokens = os.getenv("LLM_INTENT_MAX_TOKENS", "").strip()
+        intent_profile = os.getenv("LLM_INTENT_PARSE_PROFILE", "").strip().lower()
+        return replace(
+            self,
+            model=intent_model or self.model,
+            timeout_s=float(intent_timeout) if intent_timeout else self.timeout_s,
+            max_tokens=int(intent_max_tokens) if intent_max_tokens else (self.max_tokens or 256),
+            intent_parse_profile=intent_profile or self.intent_parse_profile or "full",
         )
 
 
@@ -270,6 +308,35 @@ def _parse_json_object_from_text(text: str) -> dict[str, Any]:
     raise ValueError(f"No valid JSON object parsed from LLM response: {preview}")
 
 
+def _parse_json_array_from_text(text: str) -> list[Any]:
+    candidates: list[str] = []
+    raw_text = str(text or "").strip()
+    if raw_text:
+        candidates.append(raw_text)
+    for match in JSON_FENCE_PATTERN.finditer(raw_text):
+        candidates.append(str(match.group(1) or "").strip())
+    first = raw_text.find("[")
+    last = raw_text.rfind("]")
+    if first >= 0 and last > first:
+        candidates.append(raw_text[first : last + 1])
+
+    for candidate in candidates:
+        for attempt in (candidate, _remove_trailing_commas(candidate)):
+            try:
+                parsed = json.loads(attempt)
+            except Exception:
+                try:
+                    parsed = ast.literal_eval(attempt)
+                except Exception:
+                    continue
+            if isinstance(parsed, list):
+                return parsed
+    preview = raw_text.replace("\n", " ")
+    if len(preview) > 240:
+        preview = preview[:240] + "..."
+    raise ValueError(f"No valid JSON array parsed from LLM response: {preview}")
+
+
 def extract_explicit_destination_query(user_instruction: str) -> str:
     text = str(user_instruction or "").strip()
     if not text:
@@ -395,6 +462,56 @@ def infer_destination_kind(
     return "generic_poi"
 
 
+def _heuristic_named_entity_confidence(
+    *,
+    user_instruction: str,
+    destination_type: str,
+    destination_kind: str,
+    search_keywords: str,
+) -> float:
+    explicit_query = extract_explicit_destination_query(user_instruction)
+    if not explicit_query:
+        return 0.08
+
+    score = 0.55
+    destination_type_key = re.sub(r"\s+", " ", str(destination_type or "").strip()).lower()
+    destination_kind_key = re.sub(r"\s+", " ", str(destination_kind or "").strip()).lower()
+    query = str(search_keywords or explicit_query).strip()
+    if destination_type_key in {"named_place", "named_landmark"}:
+        score += 0.15
+    if destination_kind_key in {"named_landmark", "specific_poi", "regional_scenic_area"}:
+        score += 0.18
+    if len(explicit_query) >= 4:
+        score += 0.04
+    if query and explicit_query and query.strip().lower() == explicit_query.strip().lower():
+        score += 0.05
+    return _clamp_probability(score, default=0.08)
+
+
+def _heuristic_parse_confidence(
+    *,
+    user_instruction: str,
+    destination_type: str,
+    destination_kind: str,
+) -> float:
+    score = 0.62
+    text = str(user_instruction or "").strip().lower()
+    if extract_explicit_destination_query(user_instruction):
+        score += 0.14
+    if str(destination_kind or "").strip().lower() in {
+        "generic_poi",
+        "named_landmark",
+        "regional_scenic_area",
+        "specific_poi",
+    }:
+        score += 0.06
+    if str(destination_type or "").strip().lower() in {"poi", "named_place", "named_landmark"}:
+        score += 0.04
+    if any(token in text for token in (" or ", "/", "或者", "还是", "maybe", "perhaps")):
+        score -= 0.16
+    return _clamp_probability(score, default=0.62)
+
+
 def _create_async_client(settings: LLMSettings) -> Any:
     if AsyncOpenAI is None:
         return None
@@ -402,7 +519,7 @@ def _create_async_client(settings: LLMSettings) -> Any:
         base_url=settings.base_url,
         api_key=settings.api_key,
         timeout=settings.timeout_s,
-        max_retries=0,
+        max_retries=settings.max_retries,
     )
 
 
@@ -413,7 +530,7 @@ def _create_async_client_with_timeout(settings: LLMSettings, timeout_s: float) -
         base_url=settings.base_url,
         api_key=settings.api_key,
         timeout=timeout_s,
-        max_retries=0,
+        max_retries=settings.max_retries,
     )
 
 
@@ -432,30 +549,23 @@ class BaseLLMService:
     def is_available(self) -> bool:
         return bool(self.settings.api_key and AsyncOpenAI is not None)
 
+    def _api_style_sequence(self) -> list[str]:
+        preferred_style = self.settings.api_style
+        if not self.settings.allow_api_style_fallback:
+            return [preferred_style]
+        fallback_style = "responses" if preferred_style == "chat_completions" else "chat_completions"
+        ordered: list[str] = []
+        for style in (preferred_style, fallback_style):
+            if style not in ordered:
+                ordered.append(style)
+        return ordered
+
 
 class IntentParser(BaseLLMService):
     """Parse recommendation instructions with an LLM and a heuristic fallback."""
 
-    async def _call_llm_with_fallback(self, client: Any, user_instruction: str) -> tuple[str, str]:
-        preferred_style = self.settings.api_style
-        fallback_style = "responses" if preferred_style == "chat_completions" else "chat_completions"
-        styles = [preferred_style, fallback_style]
-
-        errors: list[str] = []
-        for style in styles:
-            try:
-                if style == "responses":
-                    content = await self._call_responses_api(client, user_instruction)
-                else:
-                    content = await self._call_chat_completions(client, user_instruction)
-
-                if str(content or "").strip():
-                    return content, style
-                errors.append(f"{style}: empty_content")
-            except Exception as exc:
-                errors.append(f"{style}: {exc}")
-
-        raise RuntimeError(" | ".join(errors) if errors else "unknown_llm_call_error")
+    def __init__(self, settings: LLMSettings | None = None) -> None:
+        super().__init__((settings or LLMSettings.from_env()).for_intent_parser())
 
     def _extract_explicit_destination_query(self, user_instruction: str) -> str:
         return extract_explicit_destination_query(user_instruction)
@@ -493,23 +603,40 @@ class IntentParser(BaseLLMService):
         if any(token.lower() in text for token in rules.get("nearby_tokens", [])):
             radius = rules.get("nearby_radius_m", 2000)
 
+        destination_kind = infer_destination_kind(
+            user_instruction=user_instruction,
+            destination_type=destination_type,
+            search_keywords=search_keywords,
+        )
+
         return {
             "destination_type": destination_type,
-            "destination_kind": infer_destination_kind(
-                user_instruction=user_instruction,
-                destination_type=destination_type,
-                search_keywords=search_keywords,
-            ),
+            "destination_kind": destination_kind,
             "search_keywords": search_keywords,
             "mode": mode,
             "radius_m": radius,
             "optimize_for": optimize_for,
             "max_candidates": rules.get("default_max_candidates", 5),
             "hard_constraints": rules.get("default_hard_constraints", {}),
+            "confidence": _heuristic_parse_confidence(
+                user_instruction=user_instruction,
+                destination_type=destination_type,
+                destination_kind=destination_kind,
+            ),
+            "named_entity_confidence": _heuristic_named_entity_confidence(
+                user_instruction=user_instruction,
+                destination_type=destination_type,
+                destination_kind=destination_kind,
+                search_keywords=search_keywords,
+            ),
             "intent_source": "heuristic",
         }
 
-    def build_messages(self, user_instruction: str) -> list[dict[str, str]]:
+    def build_messages(self, user_instruction: str, *, parse_profile: str | None = None) -> list[dict[str, str]]:
+        profile = str(parse_profile or self.settings.intent_parse_profile or "full").strip().lower()
+        if profile == "compact":
+            return self.build_compact_messages(user_instruction)
+
         messages = [
             {
                 "role": "system",
@@ -517,12 +644,13 @@ class IntentParser(BaseLLMService):
                 "You are an intent parser for map recommendation and routing. "
                 "Return JSON only. The JSON schema must contain exactly these top-level keys: "
                 "destination_type, destination_kind, search_keywords, mode, radius_m, optimize_for, "
-                "max_candidates, hard_constraints. "
+                "max_candidates, hard_constraints, confidence, named_entity_confidence. "
                 "Allowed destination_kind values: generic_poi, named_landmark, regional_scenic_area, "
                 "administrative_area, road_or_route_label, specific_poi. "
                 "Allowed mode values: car, foot, bike. "
                 "Allowed optimize_for values: time, distance, balanced. "
                 "radius_m and max_candidates must be integers. "
+                "confidence and named_entity_confidence must be numbers between 0 and 1. "
                 "search_keywords must be a provider-facing keyword string, preferably pipe-delimited, "
                 "for example 'bookstore|cafe' or 'convenience store|tea shop'. "
                 "If the user gives an explicit destination name (for example 'West Lake' or 'Times Square'), "
@@ -575,8 +703,68 @@ class IntentParser(BaseLLMService):
         )
         return messages
 
-    def build_prompt(self, user_instruction: str) -> str:
-        sections = [self.build_messages(user_instruction)[0]["content"], "", "Few-shot examples:"]
+    def build_compact_messages(self, user_instruction: str) -> list[dict[str, str]]:
+        return [
+            {
+                "role": "system",
+                "content": (
+                    "You are a fast open-vocabulary intent parser for map recommendation. "
+                    "Return JSON only with keys: destination_type, destination_kind, search_keywords, "
+                    "mode, radius_m, optimize_for, max_candidates, hard_constraints, confidence, "
+                    "named_entity_confidence. Use concise provider-facing search_keywords for AMap/Baidu. "
+                    "Allowed mode: car, foot, bike. Allowed optimize_for: time, distance, balanced. "
+                    "Allowed destination_kind: generic_poi, named_landmark, regional_scenic_area, "
+                    "administrative_area, road_or_route_label, specific_poi. "
+                    "For local via/stop needs, prefer destination_type=poi or semantic_poi, "
+                    "destination_kind=generic_poi, radius_m under 1500 for foot, and max_candidates <= 5. "
+                    "Set hard_constraints to an object with max_route_duration_min, max_route_distance_m, "
+                    "must_include_keywords, exclude_keywords. For vague preferences or local stop needs, "
+                    "hard_constraints must be null distance/duration and empty include/exclude lists; encode the "
+                    "need in search_keywords instead. Do not explain."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"Parse request into compact map-search JSON. request: {user_instruction}",
+            },
+        ]
+
+    def build_batch_messages(self, instruction_items: list[dict[str, Any]]) -> list[dict[str, str]]:
+        payload = [
+            {
+                "index": int(item.get("index", index)),
+                "request": str(item.get("instruction") or item.get("text") or "").strip(),
+                "resolution_scope": str(item.get("resolution_scope") or "global_destination").strip(),
+                "mode": str(item.get("mode") or "").strip(),
+            }
+            for index, item in enumerate(instruction_items)
+        ]
+        return [
+            {
+                "role": "system",
+                "content": (
+                    "You are a fast open-vocabulary batch intent parser for map recommendation. "
+                    "Return a JSON array with exactly one object per input item, preserving index. "
+                    "Each object must include: index, destination_type, destination_kind, search_keywords, "
+                    "mode, radius_m, optimize_for, max_candidates, hard_constraints, confidence, "
+                    "named_entity_confidence. Use concise provider-facing search_keywords suitable for "
+                    "AMap/Baidu. Do not use hardcoded categories when the request is open-vocabulary; "
+                    "compress the user's need into retrievable search terms. For vague preferences or local "
+                    "stop needs, hard_constraints must be null distance/duration and empty include/exclude "
+                    "lists; do not turn the need into must_include_keywords. Do not explain."
+                ),
+            },
+            {
+                "role": "user",
+                "content": "Parse these instructions:\n" + json.dumps(payload, ensure_ascii=False),
+            },
+        ]
+
+    def build_prompt(self, user_instruction: str, *, parse_profile: str | None = None) -> str:
+        messages = self.build_messages(user_instruction, parse_profile=parse_profile)
+        if len(messages) <= 2 and str(parse_profile or self.settings.intent_parse_profile or "").lower() == "compact":
+            return "\n".join(message["content"] for message in messages)
+        sections = [messages[0]["content"], "", "Few-shot examples:"]
 
         for example in get_few_shot_examples():
             request = example.get("request", "")
@@ -595,12 +783,23 @@ class IntentParser(BaseLLMService):
         )
         return "\n".join(sections)
 
-    async def _call_chat_completions(self, client: Any, user_instruction: str) -> str:
+    async def _call_chat_completions(
+        self,
+        client: Any,
+        user_instruction: str,
+        *,
+        parse_profile: str | None = None,
+        messages: list[dict[str, str]] | None = None,
+        max_tokens: int | None = None,
+    ) -> str:
         payload: dict[str, Any] = {
             "model": self.settings.model,
             "temperature": self.settings.temperature,
-            "messages": self.build_messages(user_instruction),
+            "messages": messages or self.build_messages(user_instruction, parse_profile=parse_profile),
         }
+        token_limit = max_tokens or self.settings.max_tokens
+        if token_limit:
+            payload["max_tokens"] = int(token_limit)
         # ARK chat completions can reject JSON response_format on some endpoints/models.
         # Keep the prompt JSON-only and fall back to regex extraction instead.
         if self.settings.response_format and self.settings.provider != "ark":
@@ -609,20 +808,33 @@ class IntentParser(BaseLLMService):
         response = await client.chat.completions.create(**payload)
         return _extract_text_from_chat_response(response)
 
-    async def _call_responses_api(self, client: Any, user_instruction: str) -> str:
-        response = await client.responses.create(
-            model=self.settings.model,
-            input=[
+    async def _call_responses_api(
+        self,
+        client: Any,
+        user_instruction: str,
+        *,
+        parse_profile: str | None = None,
+        max_tokens: int | None = None,
+    ) -> str:
+        payload: dict[str, Any] = {
+            "model": self.settings.model,
+            "input": [
                 {
                     "role": "user",
                     "content": [
                         {
                             "type": "input_text",
-                            "text": self.build_prompt(user_instruction),
+                            "text": self.build_prompt(user_instruction, parse_profile=parse_profile),
                         }
                     ],
                 }
             ],
+        }
+        token_limit = max_tokens or self.settings.max_tokens
+        if token_limit:
+            payload["max_output_tokens"] = int(token_limit)
+        response = await client.responses.create(
+            **payload
         )
         return _extract_text_from_responses_response(response)
 
@@ -657,6 +869,23 @@ class IntentParser(BaseLLMService):
             default=default_intent_rules().get("destination_search_keywords", {}).get(
                 destination_type,
                 default_search_keywords(),
+            ),
+        )
+        normalized["confidence"] = _clamp_probability(
+            normalized.get("confidence"),
+            default=_heuristic_parse_confidence(
+                user_instruction=user_instruction,
+                destination_type=destination_type,
+                destination_kind=destination_kind,
+            ),
+        )
+        normalized["named_entity_confidence"] = _clamp_probability(
+            normalized.get("named_entity_confidence"),
+            default=_heuristic_named_entity_confidence(
+                user_instruction=user_instruction,
+                destination_type=destination_type,
+                destination_kind=destination_kind,
+                search_keywords=str(normalized.get("search_keywords") or normalized.get("keywords") or ""),
             ),
         )
         normalized["categories"] = default_search_categories()
@@ -699,7 +928,7 @@ class IntentParser(BaseLLMService):
 
         return normalized
 
-    async def parse(self, user_instruction: str) -> dict[str, Any]:
+    async def parse(self, user_instruction: str, *, parse_profile: str | None = None) -> dict[str, Any]:
         if not self.is_available():
             parsed = self.heuristic_parse(user_instruction)
             parsed["intent_source"] = "heuristic_no_llm"
@@ -708,7 +937,11 @@ class IntentParser(BaseLLMService):
         client = _create_async_client(self.settings)
         try:
             try:
-                content, api_style_used = await self._call_llm_with_fallback(client, user_instruction)
+                content, api_style_used = await self._call_llm_with_fallback(
+                    client,
+                    user_instruction,
+                    parse_profile=parse_profile,
+                )
             except Exception as exc:
                 parsed = self.heuristic_parse(user_instruction)
                 parsed["intent_source"] = "heuristic_llm_api_error"
@@ -726,11 +959,142 @@ class IntentParser(BaseLLMService):
             normalized = self._normalize_llm_output(user_instruction, parsed)
             normalized["intent_source"] = "llm"
             normalized["llm_api_style_used"] = api_style_used
+            normalized["intent_parse_profile"] = str(parse_profile or self.settings.intent_parse_profile or "full")
             return normalized
         except Exception:
             parsed = self.heuristic_parse(user_instruction)
             parsed["intent_source"] = "heuristic_llm_error"
             return parsed
+        finally:
+            await _close_async_client(client)
+
+    async def _call_llm_with_fallback(
+        self,
+        client: Any,
+        user_instruction: str,
+        *,
+        parse_profile: str | None = None,
+    ) -> tuple[str, str]:
+        errors: list[str] = []
+        for style in self._api_style_sequence():
+            try:
+                if style == "responses":
+                    content = await self._call_responses_api(
+                        client,
+                        user_instruction,
+                        parse_profile=parse_profile,
+                    )
+                else:
+                    content = await self._call_chat_completions(
+                        client,
+                        user_instruction,
+                        parse_profile=parse_profile,
+                    )
+
+                if str(content or "").strip():
+                    return content, style
+                errors.append(f"{style}: empty_content")
+            except Exception as exc:
+                errors.append(f"{style}: {exc}")
+
+        raise RuntimeError(" | ".join(errors) if errors else "unknown_llm_call_error")
+
+    async def parse_batch(self, instruction_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        valid_items = [
+            item
+            for item in instruction_items
+            if isinstance(item, dict) and str(item.get("instruction") or item.get("text") or "").strip()
+        ]
+        if not valid_items:
+            return []
+        if not self.is_available():
+            return [
+                {
+                    "index": int(item.get("index", index)),
+                    **self.heuristic_parse(str(item.get("instruction") or item.get("text") or "")),
+                    "intent_source": "heuristic_no_llm",
+                }
+                for index, item in enumerate(valid_items)
+            ]
+
+        client = _create_async_client(self.settings)
+        try:
+            messages = self.build_batch_messages(valid_items)
+            token_limit = max(int(self.settings.max_tokens or 256), len(valid_items) * 220)
+            content, api_style_used = "", self.settings.api_style
+            errors: list[str] = []
+            for style in self._api_style_sequence():
+                try:
+                    if style == "responses":
+                        response = await client.responses.create(
+                            model=self.settings.model,
+                            input=[
+                                {
+                                    "role": "user",
+                                    "content": [
+                                        {
+                                            "type": "input_text",
+                                            "text": "\n".join(message["content"] for message in messages),
+                                        }
+                                    ],
+                                }
+                            ],
+                            max_output_tokens=token_limit,
+                        )
+                        content = _extract_text_from_responses_response(response)
+                    else:
+                        payload: dict[str, Any] = {
+                            "model": self.settings.model,
+                            "temperature": self.settings.temperature,
+                            "messages": messages,
+                            "max_tokens": token_limit,
+                        }
+                        content = _extract_text_from_chat_response(await client.chat.completions.create(**payload))
+                    if str(content or "").strip():
+                        api_style_used = style
+                        break
+                    errors.append(f"{style}: empty_content")
+                except Exception as exc:
+                    errors.append(f"{style}: {exc}")
+            if not str(content or "").strip():
+                raise RuntimeError(" | ".join(errors) if errors else "unknown_llm_call_error")
+            raw_items = _parse_json_array_from_text(content)
+            parsed_by_index: dict[int, dict[str, Any]] = {}
+            for raw in raw_items:
+                if not isinstance(raw, dict):
+                    continue
+                try:
+                    item_index = int(raw.get("index"))
+                except Exception:
+                    continue
+                parsed_by_index[item_index] = raw
+            results: list[dict[str, Any]] = []
+            for index, item in enumerate(valid_items):
+                item_index = int(item.get("index", index))
+                instruction = str(item.get("instruction") or item.get("text") or "")
+                raw = parsed_by_index.get(item_index)
+                if raw is None:
+                    parsed = self.heuristic_parse(instruction)
+                    parsed["intent_source"] = "heuristic_batch_missing"
+                else:
+                    parsed = self._normalize_llm_output(instruction, raw)
+                    parsed["intent_source"] = "llm_batch"
+                    parsed["llm_api_style_used"] = api_style_used
+                parsed["index"] = item_index
+                parsed["intent_parse_profile"] = "batch_compact"
+                results.append(parsed)
+            return results
+        except Exception as exc:
+            results = []
+            for index, item in enumerate(valid_items):
+                item_index = int(item.get("index", index))
+                instruction = str(item.get("instruction") or item.get("text") or "")
+                parsed = self.heuristic_parse(instruction)
+                parsed["index"] = item_index
+                parsed["intent_source"] = "heuristic_batch_llm_error"
+                parsed["llm_error"] = str(exc)
+                results.append(parsed)
+            return results
         finally:
             await _close_async_client(client)
 
@@ -972,11 +1336,8 @@ class GoalDecomposer(BaseLLMService):
         return _extract_text_from_responses_response(response)
 
     async def _call_llm_with_fallback(self, client: Any, user_instruction: str) -> tuple[str, str]:
-        preferred_style = self.settings.api_style
-        fallback_style = "responses" if preferred_style == "chat_completions" else "chat_completions"
-        styles = [preferred_style, fallback_style]
         errors: list[str] = []
-        for style in styles:
+        for style in self._api_style_sequence():
             try:
                 content = (
                     await self._call_responses_api(client, user_instruction)
@@ -1431,12 +1792,8 @@ class CandidateReranker(BaseLLMService):
         parsed_intent: dict[str, Any],
         candidates: list[dict[str, Any]],
     ) -> tuple[str, str]:
-        preferred_style = self.settings.api_style
-        fallback_style = "responses" if preferred_style == "chat_completions" else "chat_completions"
-        styles = [preferred_style, fallback_style]
-
         errors: list[str] = []
-        for style in styles:
+        for style in self._api_style_sequence():
             try:
                 if style == "responses":
                     content = await self._call_responses_api(
@@ -1662,12 +2019,8 @@ class MapLocalizationService(BaseLLMService):
         messages: list[dict[str, Any]],
         prompt: str,
     ) -> str:
-        preferred_style = self.settings.api_style
-        fallback_style = "responses" if preferred_style == "chat_completions" else "chat_completions"
-        styles = [preferred_style, fallback_style]
-
         errors: list[str] = []
-        for style in styles:
+        for style in self._api_style_sequence():
             try:
                 if style == "responses":
                     content = await self._call_responses_api(client, prompt=prompt)
