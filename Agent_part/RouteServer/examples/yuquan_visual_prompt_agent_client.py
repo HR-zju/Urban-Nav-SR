@@ -7,9 +7,13 @@ from PIL.ExifTags import GPSTAGS, TAGS
 import argparse
 import asyncio
 import json
+import logging
 import math
+import hashlib
 import os
 from pathlib import Path
+from time import perf_counter
+import time
 import re
 from typing import Any
 from urllib.error import URLError
@@ -22,6 +26,138 @@ from mcp_server.map_providers import encode_polyline_text, sample_route_coordina
 DEFAULT_IMAGE_PATH = "/home/ubuntu/WorkSpace/project/SR/test4.jpg"
 DEFAULT_ORIGIN_NAME = "浙江大学玉泉校区南门 杭州"
 DEFAULT_DESTINATION_NAME = "浙江大学玉泉校区北门 杭州"
+DEFAULT_PERF_PROFILE = "latency"
+DEFAULT_CACHE_PATH = str(Path.home() / ".cache" / "urban_nav" / "yuquan_demo_cache.json")
+
+TIMING_LOGGER = logging.getLogger("yuquan.demo.timing")
+
+PROFILE_DEFAULTS: dict[str, dict[str, Any]] = {
+    "latency": {
+        "visual_top_k": 3,
+        "candidate_top_k": 3,
+        "llm_detail": "low",
+        "enable_verifier": False,
+        "auto_local_bev_svg": False,
+        "auto_map_bev_html": False,
+        "auto_map_bev_png": False,
+        "auto_planner_route_html": False,
+        "auto_planner_route_png": False,
+    },
+    "balanced": {
+        "visual_top_k": 4,
+        "candidate_top_k": 4,
+        "llm_detail": "auto",
+        "enable_verifier": True,
+        "auto_local_bev_svg": False,
+        "auto_map_bev_html": False,
+        "auto_map_bev_png": False,
+        "auto_planner_route_html": True,
+        "auto_planner_route_png": False,
+    },
+    "debug": {
+        "visual_top_k": 5,
+        "candidate_top_k": 5,
+        "llm_detail": "auto",
+        "enable_verifier": True,
+        "auto_local_bev_svg": True,
+        "auto_map_bev_html": True,
+        "auto_map_bev_png": False,
+        "auto_planner_route_html": True,
+        "auto_planner_route_png": False,
+    },
+}
+
+CACHE_VERSION = 1
+DIRECT_AMAP_LOOKUP_TIMEOUT_S = max(float(os.getenv("YUQUAN_AMAP_LOOKUP_TIMEOUT_S", "20") or 20.0), 1.0)
+DIRECT_AMAP_LOOKUP_RETRIES = max(int(os.getenv("YUQUAN_AMAP_LOOKUP_RETRIES", "2") or 2), 0)
+DIRECT_AMAP_LOOKUP_BACKOFF_S = max(float(os.getenv("YUQUAN_AMAP_LOOKUP_BACKOFF_S", "1.0") or 1.0), 0.0)
+
+
+def _setup_logging() -> None:
+    root = logging.getLogger()
+    if not root.handlers:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        )
+
+
+def _log_timing(stage: str, elapsed_s: float, **fields: Any) -> None:
+    payload = {
+        "component": "yuquan_demo",
+        "stage": stage,
+        "elapsed_ms": round(float(elapsed_s) * 1000.0, 2),
+    }
+    for key, value in fields.items():
+        if value is not None:
+            payload[key] = value
+    TIMING_LOGGER.info("TIMING %s", json.dumps(payload, ensure_ascii=True, sort_keys=True))
+
+
+def _profile_settings(profile: str) -> dict[str, Any]:
+    return dict(PROFILE_DEFAULTS.get(str(profile or DEFAULT_PERF_PROFILE), PROFILE_DEFAULTS[DEFAULT_PERF_PROFILE]))
+
+
+def _default_cache_payload() -> dict[str, Any]:
+    return {
+        "version": CACHE_VERSION,
+        "locations": {},
+        "routes": {},
+    }
+
+
+def _load_json_cache(cache_path: str) -> dict[str, Any]:
+    path = Path(cache_path).expanduser()
+    if not path.exists():
+        return _default_cache_payload()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return _default_cache_payload()
+    if not isinstance(payload, dict) or int(payload.get("version", -1)) != CACHE_VERSION:
+        return _default_cache_payload()
+    payload.setdefault("locations", {})
+    payload.setdefault("routes", {})
+    return payload
+
+
+def _save_json_cache(cache_path: str, payload: dict[str, Any]) -> None:
+    path = Path(cache_path).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _stable_cache_key(parts: list[Any]) -> str:
+    return hashlib.sha256(
+        json.dumps(parts, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _location_cache_key(*, coordinate: str | None, name: str) -> str:
+    if coordinate:
+        return _stable_cache_key(["coordinate", str(coordinate).strip()])
+    return _stable_cache_key(["name", _normalize_text(name)])
+
+
+def _route_cache_key(*, origin: str, destination: str, mode: str) -> str:
+    return _stable_cache_key(["route", str(origin).strip(), str(destination).strip(), str(mode).strip().lower()])
+
+
+def _urlopen_json_with_retries(url: str, *, timeout_s: float, retries: int, backoff_s: float) -> dict[str, Any]:
+    attempts = max(int(retries), 0) + 1
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            with urlopen(url, timeout=timeout_s) as response:
+                return json.loads(response.read().decode("utf-8", errors="ignore"))
+        except Exception as exc:
+            last_error = exc
+            if attempt >= attempts:
+                break
+            if backoff_s > 0:
+                time.sleep(backoff_s * attempt)
+    assert last_error is not None
+    raise RuntimeError(f"{last_error}")
 
 
 def first_text_content(result: Any) -> str:
@@ -52,6 +188,9 @@ async def call_tool_json(session: ClientSession, tool_name: str, arguments: dict
     if payload is not _JSON_PARSE_MISSING:
         return payload
     raw_text = first_text_content(result)
+    raw_text = raw_text.strip()
+    if raw_text.startswith("Error executing tool "):
+        raise RuntimeError(raw_text)
     raise RuntimeError(f"{tool_name} returned non-JSON payload: {raw_text}")
 
 
@@ -257,8 +396,12 @@ def _fetch_amap_place_text_candidates(name: str) -> list[dict[str, Any]]:
                 }
             )
         )
-        with urlopen(url, timeout=15) as response:
-            data = json.loads(response.read().decode("utf-8", errors="ignore"))
+        data = _urlopen_json_with_retries(
+            url,
+            timeout_s=DIRECT_AMAP_LOOKUP_TIMEOUT_S,
+            retries=DIRECT_AMAP_LOOKUP_RETRIES,
+            backoff_s=DIRECT_AMAP_LOOKUP_BACKOFF_S,
+        )
         if data.get("status") != "1":
             raise RuntimeError(f"AMap place/text failed for {query!r}: {data.get('info') or data}")
         for poi in data.get("pois", []) or []:
@@ -312,8 +455,12 @@ def _fetch_amap_inputtips_candidates(name: str) -> list[dict[str, Any]]:
                 }
             )
         )
-        with urlopen(url, timeout=15) as response:
-            data = json.loads(response.read().decode("utf-8", errors="ignore"))
+        data = _urlopen_json_with_retries(
+            url,
+            timeout_s=DIRECT_AMAP_LOOKUP_TIMEOUT_S,
+            retries=DIRECT_AMAP_LOOKUP_RETRIES,
+            backoff_s=DIRECT_AMAP_LOOKUP_BACKOFF_S,
+        )
         if data.get("status") != "1":
             raise RuntimeError(f"AMap inputtips failed for {query!r}: {data.get('info') or data}")
         for tip in data.get("tips", []) or []:
@@ -376,36 +523,122 @@ async def resolve_location(
     name: str,
     search_anchor: str,
     search_radius: int,
+    cache_payload: dict[str, Any] | None = None,
 ) -> tuple[str, dict[str, Any]]:
+    cache_key = _location_cache_key(coordinate=coordinate, name=name)
+    location_cache = (cache_payload or {}).get("locations", {}) if isinstance(cache_payload, dict) else {}
+    cached = location_cache.get(cache_key) if isinstance(location_cache, dict) else None
+    if isinstance(cached, dict):
+        cached_location = str(cached.get("location") or "").strip()
+        cached_selected = cached.get("selected")
+        if cached_location and isinstance(cached_selected, dict):
+            _log_timing(
+                "cache_hit",
+                0.0,
+                cache_kind="location",
+                name=name,
+                source=cached_selected.get("source"),
+            )
+            return cached_location, dict(cached_selected)
+
     if coordinate:
         lon, lat = parse_lnglat(coordinate)
-        return format_lnglat(lon, lat), {"source": "argument", "name": name, "coordinates": {"latitude": lat, "longitude": lon}}
+        location = format_lnglat(lon, lat)
+        selected = {"source": "argument", "name": name, "coordinates": {"latitude": lat, "longitude": lon}}
+        if isinstance(location_cache, dict):
+            location_cache[cache_key] = {"location": location, "selected": selected}
+        return location, selected
 
     errors: list[str] = []
     try:
+        started_at = perf_counter()
         results = await asyncio.to_thread(_fetch_amap_inputtips_candidates, name)
+        _log_timing(
+            "resolve_location_direct_amap",
+            perf_counter() - started_at,
+            source="amap_inputtips",
+            query_name=name,
+            candidate_count=len(results),
+        )
         location, selected = location_from_candidates(results, preferred_name=name)
         selected = dict(selected)
         selected["source"] = "amap_inputtips_direct"
+        _log_timing(
+            "resolve_location_attempt",
+            perf_counter() - started_at,
+            source="amap_inputtips_direct",
+            name=name,
+            status="ok",
+        )
+        _log_timing(
+            "resolve_location",
+            perf_counter() - started_at,
+            source="amap_inputtips_direct",
+            name=name,
+            status="ok",
+        )
+        if isinstance(location_cache, dict):
+            location_cache[cache_key] = {"location": location, "selected": selected}
         return location, selected
     except Exception as exc:
         errors.append(f"amap_inputtips_direct: {exc}")
 
     try:
+        started_at = perf_counter()
         results = await asyncio.to_thread(_fetch_amap_place_text_candidates, name)
+        _log_timing(
+            "resolve_location_direct_amap",
+            perf_counter() - started_at,
+            source="amap_place_text",
+            query_name=name,
+            candidate_count=len(results),
+        )
         location, selected = location_from_candidates(results, preferred_name=name)
         selected = dict(selected)
         selected["source"] = "amap_place_text_direct"
+        _log_timing(
+            "resolve_location_attempt",
+            perf_counter() - started_at,
+            source="amap_place_text_direct",
+            name=name,
+            status="ok",
+        )
+        _log_timing(
+            "resolve_location",
+            perf_counter() - started_at,
+            source="amap_place_text_direct",
+            name=name,
+            status="ok",
+        )
+        if isinstance(location_cache, dict):
+            location_cache[cache_key] = {"location": location, "selected": selected}
         return location, selected
     except Exception as exc:
         errors.append(f"amap_place_text_direct: {exc}")
 
     try:
+        started_at = perf_counter()
         results = await call_tool_json(session, "geocode_address", {"address": name})
         location, selected = location_from_candidates(results, preferred_name=name)
         selected = dict(selected)
         selected["source"] = "geocode_address"
         selected["fallback_errors"] = errors
+        _log_timing(
+            "resolve_location_attempt",
+            perf_counter() - started_at,
+            source="geocode_address",
+            name=name,
+            status="ok",
+        )
+        _log_timing(
+            "resolve_location",
+            perf_counter() - started_at,
+            source="geocode_address",
+            name=name,
+            status="ok",
+        )
+        if isinstance(location_cache, dict):
+            location_cache[cache_key] = {"location": location, "selected": selected}
         return location, selected
     except Exception as exc:
         errors.append(f"geocode_address: {exc}")
@@ -629,10 +862,39 @@ def render_prompt_preview_png(
     if isinstance(rendered_prompt, dict):
         prompt_type = str(rendered_prompt.get("type") or "arrow_path").lower()
         mask = rendered_prompt.get("mask")
+        coverage_polygon = rendered_prompt.get("coverage_polygon_uv")
+        path_samples = rendered_prompt.get("path_samples")
+        if isinstance(coverage_polygon, list) and len(coverage_polygon) >= 3:
+            polygon = [pt for pt in (_scaled_point(point, scale) for point in coverage_polygon) if pt is not None]
+            if len(polygon) >= 3:
+                draw.polygon(polygon, fill=(34, 197, 94, 60), outline=(34, 197, 94, 230))
         if isinstance(mask, list) and len(mask) >= 3:
             polygon = [pt for pt in (_scaled_point(point, scale) for point in mask) if pt is not None]
             if len(polygon) >= 3:
                 draw.polygon(polygon, fill=(56, 189, 248, 58), outline=(56, 189, 248, 230))
+        if isinstance(path_samples, list):
+            for sample in path_samples:
+                if not isinstance(sample, dict):
+                    continue
+                center = _scaled_point(sample.get("center_uv"), scale)
+                left_edge = _scaled_point(sample.get("left_edge_uv"), scale)
+                right_edge = _scaled_point(sample.get("right_edge_uv"), scale)
+                if center and left_edge and right_edge:
+                    draw.line([left_edge, right_edge], fill=(250, 204, 21, 210), width=max(2, int(round(scale * 10))))
+                    r_edge = max(3, int(round(scale * 18)))
+                    r_center = max(3, int(round(scale * 14)))
+                    draw.ellipse(
+                        [left_edge[0] - r_edge, left_edge[1] - r_edge, left_edge[0] + r_edge, left_edge[1] + r_edge],
+                        fill=(253, 224, 71, 255),
+                    )
+                    draw.ellipse(
+                        [right_edge[0] - r_edge, right_edge[1] - r_edge, right_edge[0] + r_edge, right_edge[1] + r_edge],
+                        fill=(253, 224, 71, 255),
+                    )
+                    draw.ellipse(
+                        [center[0] - r_center, center[1] - r_center, center[0] + r_center, center[1] + r_center],
+                        fill=(251, 113, 133, 255),
+                    )
 
         path_uv = rendered_prompt.get("path_uv")
         path_points = []
@@ -682,6 +944,10 @@ def render_prompt_preview_png(
             label = str(rendered_prompt.get("semantic_tag") or prompt_type)[:40]
             text_xy = (min(center[0] + marker_r * 1.7, dst_width - 10), max(center[1] - marker_r * 2.0, 10))
             draw.text(text_xy, label, fill=(226, 232, 240, 255), font=ImageFont.load_default())
+            termination = str(rendered_prompt.get("termination_semantics") or "").strip()
+            if termination:
+                term_xy = (min(center[0] + marker_r * 1.7, dst_width - 10), min(center[1] + marker_r * 1.5, dst_height - 18))
+                draw.text(term_xy, termination[:36], fill=(187, 247, 208, 255), font=ImageFont.load_default())
     else:
         draw.text((dst_width * 0.5, dst_height * 0.5), "No rendered prompt", anchor="mm", fill=(252, 165, 165, 255))
 
@@ -737,6 +1003,29 @@ def _compact_arbiter_decision(decision: dict[str, Any]) -> dict[str, Any]:
             key: raw.get(key)
             for key in ("selected_prompt_type", "instruction", "confidence", "reason", "reject_all")
         }
+    for debug_key in ("generator_raw", "verifier_raw"):
+        if isinstance(debug.get(debug_key), dict):
+            raw = debug[debug_key]
+            compact[f"{debug_key}_summary"] = {
+                key: raw.get(key)
+                for key in ("selected_prompt_type", "instruction", "confidence", "reason", "reject_all")
+            }
+            rendered_prompt = raw.get("rendered_prompt")
+            if isinstance(rendered_prompt, dict):
+                compact[f"{debug_key}_rendered_prompt"] = {
+                    key: rendered_prompt.get(key)
+                    for key in (
+                        "type",
+                        "center_uv",
+                        "path_uv",
+                        "path_samples",
+                        "coverage_polygon_uv",
+                        "termination_semantics",
+                        "support_confidence",
+                    )
+                }
+    if debug.get("verifier_error"):
+        compact["verifier_error"] = debug.get("verifier_error")
     return compact
 
 
@@ -768,6 +1057,8 @@ async def run_demo(
     visual_top_k: int,
     candidate_top_k: int,
     llm_detail: str,
+    perf_profile: str,
+    enable_verifier: bool,
     save_overlay: str,
     save_preview_png: str | None,
     save_local_bev_svg: str | None,
@@ -776,7 +1067,10 @@ async def run_demo(
     save_planner_route_png: str | None,
     save_planner_route_html: str | None,
     save_json: str | None,
+    cache_path: str,
 ) -> None:
+    overall_started_at = perf_counter()
+    cache_payload = _load_json_cache(cache_path)
     image_pose = read_image_pose_from_exif(image_path)
     image_gcj_longitude, image_gcj_latitude = wgs84_to_gcj02(
         float(image_pose["longitude"]),
@@ -800,19 +1094,52 @@ async def run_demo(
         async with ClientSession(read, write) as session:
             await session.initialize()
 
-            origin_location, origin_geocode = await resolve_location(
+            _log_timing(
+                "demo_profile_selected",
+                0.0,
+                perf_profile=perf_profile,
+                visual_top_k=visual_top_k,
+                candidate_top_k=candidate_top_k,
+                llm_detail=llm_detail,
+                enable_verifier=enable_verifier,
+                auto_enable_heavy_png=bool(save_map_bev_png or save_planner_route_png),
+            )
+
+            search_anchor = format_lnglat(image_gcj_longitude, image_gcj_latitude)
+            origin_task = resolve_location(
                 session,
                 coordinate=origin,
                 name=origin_name,
-                search_anchor=format_lnglat(image_gcj_longitude, image_gcj_latitude),
+                search_anchor=search_anchor,
                 search_radius=3000,
+                cache_payload=cache_payload,
             )
-            destination_location, destination_geocode = await resolve_location(
+            destination_task = resolve_location(
                 session,
                 coordinate=destination,
                 name=destination_name,
-                search_anchor=origin_location,
+                search_anchor=search_anchor,
                 search_radius=5000,
+                cache_payload=cache_payload,
+            )
+            origin_result, destination_result = await asyncio.gather(
+                origin_task,
+                destination_task,
+                return_exceptions=True,
+            )
+            resolution_errors: list[str] = []
+            if isinstance(origin_result, Exception):
+                resolution_errors.append(f"origin: {origin_result}")
+            if isinstance(destination_result, Exception):
+                resolution_errors.append(f"destination: {destination_result}")
+            if resolution_errors:
+                raise RuntimeError("Location resolution failed. " + " | ".join(resolution_errors))
+            origin_location, origin_geocode = origin_result
+            destination_location, destination_geocode = destination_result
+            _log_timing(
+                "demo_stage",
+                perf_counter() - overall_started_at,
+                stage_name="after_resolve_locations",
             )
             if (
                 str(origin_location).strip() == str(destination_location).strip()
@@ -826,21 +1153,61 @@ async def run_demo(
                     f"destination={destination_name} -> {destination_location} ({(destination_geocode or {}).get('name')})."
                 )
 
-            route_payload = await call_tool_json(
-                session,
-                "get_coarse_waypoints",
-                {
-                    "origin": origin_location,
-                    "destination": destination_location,
-                    "mode": mode,
-                },
+            route_cache = cache_payload.get("routes", {}) if isinstance(cache_payload, dict) else {}
+            route_cache_key = _route_cache_key(
+                origin=origin_location,
+                destination=destination_location,
+                mode=mode,
             )
+            cached_route_payload = route_cache.get(route_cache_key) if isinstance(route_cache, dict) else None
+            if isinstance(cached_route_payload, dict):
+                route_payload = dict(cached_route_payload)
+                _log_timing(
+                    "cache_hit",
+                    0.0,
+                    cache_kind="route",
+                    tool="get_coarse_waypoints",
+                    mode=mode,
+                )
+            else:
+                route_started_at = perf_counter()
+                try:
+                    route_payload = await call_tool_json(
+                        session,
+                        "get_coarse_waypoints",
+                        {
+                            "origin": origin_location,
+                            "destination": destination_location,
+                            "mode": mode,
+                        },
+                    )
+                    _log_timing(
+                        "mcp_tool_call",
+                        perf_counter() - route_started_at,
+                        tool="get_coarse_waypoints",
+                        status="ok",
+                    )
+                    if isinstance(route_cache, dict):
+                        route_cache[route_cache_key] = route_payload
+                except Exception:
+                    _log_timing(
+                        "mcp_tool_call",
+                        perf_counter() - route_started_at,
+                        tool="get_coarse_waypoints",
+                        status="non_json",
+                    )
+                    raise
             route_polyline = route_payload.get("route_polyline") or []
             coarse_waypoints = route_payload.get("coarse_waypoints") or []
             if not route_polyline and coarse_waypoints:
                 route_polyline = polyline_from_coarse_waypoints(coarse_waypoints)
             if not route_polyline or not coarse_waypoints:
                 raise RuntimeError("No usable route geometry returned by get_coarse_waypoints")
+            _log_timing(
+                "demo_stage",
+                perf_counter() - overall_started_at,
+                stage_name="after_route_payload",
+            )
 
             origin_lon, origin_lat = parse_lnglat(origin_location)
             if gps_source == "origin":
@@ -854,10 +1221,56 @@ async def run_demo(
             runtime_pose_location = format_lnglat(current_longitude, current_latitude)
             fpv_image_location = format_lnglat(image_gcj_longitude, image_gcj_latitude)
 
+            agent_started_at = perf_counter()
+            agent_payload = await call_tool_json(
+                session,
+                "run_zero_shot_visual_prompt_agent",
+                {
+                    "gps": {"lat": current_latitude, "lng": current_longitude},
+                    "heading_deg": current_heading,
+                    "route_polyline": route_polyline,
+                    "coarse_waypoints": coarse_waypoints,
+                    "lookahead_m": lookahead_m,
+                    "off_route_threshold_m": off_route_threshold_m,
+                    "image_path": image_path,
+                    "visual_top_k": visual_top_k,
+                    "candidate_top_k": candidate_top_k,
+                    "llm_detail": llm_detail,
+                    "navigation_mode": mode,
+                    "enable_verifier": enable_verifier,
+                },
+            )
+            _log_timing(
+                "mcp_tool_call",
+                perf_counter() - agent_started_at,
+                tool="run_zero_shot_visual_prompt_agent",
+                status="ok",
+            )
+            _log_timing(
+                "demo_stage",
+                perf_counter() - overall_started_at,
+                stage_name="after_visual_prompt_agent",
+            )
+
+            overlay_svg = agent_payload.get("overlay_svg")
+            if isinstance(overlay_svg, str) and overlay_svg.strip():
+                output_path = Path(save_overlay)
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_text(overlay_svg, encoding="utf-8")
+            preview_png = None
+            rendered_prompt = (agent_payload.get("arbiter_decision") or {}).get("rendered_prompt")
+            if save_preview_png:
+                preview_png = render_prompt_preview_png(
+                    image_path=image_path,
+                    rendered_prompt=rendered_prompt,
+                    output_path=save_preview_png,
+                )
+
             local_bev_payload = None
             local_bev_error = None
             if save_local_bev_svg:
                 try:
+                    local_bev_started_at = perf_counter()
                     local_bev_payload = await call_tool_json(
                         session,
                         "render_local_bev_patch",
@@ -873,8 +1286,26 @@ async def run_demo(
                     svg = str(local_bev_payload.get("svg") or "").strip()
                     if svg:
                         _write_text(save_local_bev_svg, svg)
+                    _log_timing(
+                        "mcp_tool_call",
+                        perf_counter() - local_bev_started_at,
+                        tool="render_local_bev_patch",
+                        status="ok",
+                    )
+                    _log_timing(
+                        "demo_stage",
+                        perf_counter() - overall_started_at,
+                        stage_name="render_local_bev_patch",
+                        status="ok",
+                    )
                 except Exception as exc:
                     local_bev_error = str(exc)
+                    _log_timing(
+                        "demo_stage",
+                        perf_counter() - overall_started_at,
+                        stage_name="render_local_bev_patch",
+                        status="failed",
+                    )
 
             map_bev_payload = None
             map_bev_error = None
@@ -886,6 +1317,7 @@ async def run_demo(
             planner_route_error = None
             if save_map_bev_png or save_map_bev_html:
                 try:
+                    map_bev_started_at = perf_counter()
                     map_bev_payload = await call_tool_json(
                         session,
                         "render_bev_route_context_snapshot",
@@ -919,11 +1351,30 @@ async def run_demo(
                         map_bev_html = _write_text(save_map_bev_html, html)
                     if save_map_bev_png and map_image_url:
                         map_bev_png = _save_remote_image(map_image_url, save_map_bev_png)
+                    _log_timing(
+                        "mcp_tool_call",
+                        perf_counter() - map_bev_started_at,
+                        tool="render_bev_route_context_snapshot",
+                        status="ok",
+                    )
+                    _log_timing(
+                        "demo_stage",
+                        perf_counter() - overall_started_at,
+                        stage_name="render_bev_route_context_snapshot",
+                        status="ok",
+                    )
                 except (RuntimeError, URLError, OSError) as exc:
                     map_bev_error = str(exc)
+                    _log_timing(
+                        "demo_stage",
+                        perf_counter() - overall_started_at,
+                        stage_name="render_bev_route_context_snapshot",
+                        status="failed",
+                    )
 
             if save_planner_route_png or save_planner_route_html:
                 try:
+                    planner_started_at = perf_counter()
                     planner_amap_key = _amap_key_from_env_or_url(map_image_url)
                     planner_route_url = _build_planner_route_overview_url(
                         route_polyline=route_polyline,
@@ -959,6 +1410,12 @@ async def run_demo(
                             )
                         if save_planner_route_png:
                             planner_route_png = _save_remote_image(planner_route_url, save_planner_route_png)
+                        _log_timing(
+                            "artifact_build",
+                            perf_counter() - planner_started_at,
+                            artifact="planner_route_overview",
+                            status="ok",
+                        )
                     else:
                         if not planner_amap_key:
                             planner_route_error = (
@@ -969,40 +1426,20 @@ async def run_demo(
                             planner_route_error = "route_polyline unavailable"
                         else:
                             planner_route_error = "planner route overview URL unavailable"
+                        _log_timing(
+                            "artifact_build",
+                            perf_counter() - planner_started_at,
+                            artifact="planner_route_overview",
+                            status="failed",
+                        )
                 except (RuntimeError, URLError, OSError) as exc:
                     planner_route_error = str(exc)
-
-            agent_payload = await call_tool_json(
-                session,
-                "run_zero_shot_visual_prompt_agent",
-                {
-                    "gps": {"lat": current_latitude, "lng": current_longitude},
-                    "heading_deg": current_heading,
-                    "route_polyline": route_polyline,
-                    "coarse_waypoints": coarse_waypoints,
-                    "lookahead_m": lookahead_m,
-                    "off_route_threshold_m": off_route_threshold_m,
-                    "image_path": image_path,
-                    "visual_top_k": visual_top_k,
-                    "candidate_top_k": candidate_top_k,
-                    "llm_detail": llm_detail,
-                    "navigation_mode": mode,
-                },
-            )
-
-            overlay_svg = agent_payload.get("overlay_svg")
-            if isinstance(overlay_svg, str) and overlay_svg.strip():
-                output_path = Path(save_overlay)
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                output_path.write_text(overlay_svg, encoding="utf-8")
-            preview_png = None
-            rendered_prompt = (agent_payload.get("arbiter_decision") or {}).get("rendered_prompt")
-            if save_preview_png:
-                preview_png = render_prompt_preview_png(
-                    image_path=image_path,
-                    rendered_prompt=rendered_prompt,
-                    output_path=save_preview_png,
-                )
+                    _log_timing(
+                        "artifact_build",
+                        perf_counter() - planner_started_at,
+                        artifact="planner_route_overview",
+                        status="failed",
+                    )
 
             origin_distance_m = haversine_m(
                 image_gcj_latitude,
@@ -1039,6 +1476,14 @@ async def run_demo(
                     "heading_deg": current_heading,
                     "image_to_origin_distance_m": round(origin_distance_m, 2),
                     "image_to_destination_distance_m": round(destination_distance_m, 2),
+                },
+                "demo_profile": {
+                    "perf_profile": perf_profile,
+                    "visual_top_k": visual_top_k,
+                    "candidate_top_k": candidate_top_k,
+                    "llm_detail": llm_detail,
+                    "enable_verifier": enable_verifier,
+                    "cache_path": str(Path(cache_path).expanduser()),
                 },
                 "agent": {
                     "route_context": _compact_route_context(agent_payload.get("route_context", {}) or {}),
@@ -1086,9 +1531,16 @@ async def run_demo(
                 print(f"Saved planner route PNG to: {summary['artifacts']['planner_route_png']}")
             if summary["artifacts"]["planner_route_html"]:
                 print(f"Saved planner route HTML to: {summary['artifacts']['planner_route_html']}")
+            _log_timing(
+                "demo_total",
+                perf_counter() - overall_started_at,
+                status="ok",
+            )
+            _save_json_cache(cache_path, cache_payload)
 
 
 if __name__ == "__main__":
+    _setup_logging()
     parser = argparse.ArgumentParser(
         description="Test the current zero-shot visual prompt agent on an iPhone FPV image for ZJU Yuquan South Gate -> North Gate."
     )
@@ -1112,9 +1564,28 @@ if __name__ == "__main__":
         default=35.0,
         help="Route matching tolerance. iPhone EXIF + campus map geometry often needs >20m.",
     )
-    parser.add_argument("--visual-top-k", type=int, default=5, help="Maximum visual regions")
-    parser.add_argument("--candidate-top-k", type=int, default=5, help="Maximum PoV candidates")
-    parser.add_argument("--llm-detail", default="auto", choices=["auto", "low", "high"], help="Vision detail level")
+    parser.add_argument(
+        "--perf-profile",
+        default=DEFAULT_PERF_PROFILE,
+        choices=sorted(PROFILE_DEFAULTS.keys()),
+        help="Execution profile. latency trims non-essential work; debug enables route-side debug artifacts.",
+    )
+    parser.add_argument("--visual-top-k", type=int, default=None, help="Maximum visual regions; defaults come from --perf-profile")
+    parser.add_argument("--candidate-top-k", type=int, default=None, help="Maximum PoV candidates; defaults come from --perf-profile")
+    parser.add_argument("--llm-detail", default=None, choices=["auto", "low", "high"], help="Vision detail level; defaults come from --perf-profile")
+    parser.add_argument(
+        "--enable-verifier",
+        dest="enable_verifier",
+        action="store_true",
+        default=None,
+        help="Force-enable the second-pass visual prompt verifier.",
+    )
+    parser.add_argument(
+        "--disable-verifier",
+        dest="enable_verifier",
+        action="store_false",
+        help="Force-disable the second-pass visual prompt verifier.",
+    )
     parser.add_argument("--save-overlay", default="/tmp/yuquan_visual_prompt_overlay.svg", help="Output SVG overlay path")
     parser.add_argument(
         "--save-preview-png",
@@ -1146,27 +1617,64 @@ if __name__ == "__main__":
         default=None,
         help="Output HTML wrapper for the pure planner-route overview URL. Defaults to the overlay path with _planner_route suffix.",
     )
+    parser.add_argument(
+        "--auto-enable-heavy-png",
+        action="store_true",
+        help="When profile defaults enable debug artifacts, also auto-generate remote PNG downloads in addition to HTML wrappers.",
+    )
+    parser.add_argument(
+        "--cache-path",
+        default=DEFAULT_CACHE_PATH,
+        help="Local JSON cache path for resolved places and route payloads.",
+    )
     parser.add_argument("--save-json", default="/tmp/yuquan_visual_prompt_result.json", help="Optional output JSON path")
 
     args = parser.parse_args()
+    profile_settings = _profile_settings(args.perf_profile)
+    visual_top_k = (
+        int(args.visual_top_k)
+        if args.visual_top_k is not None
+        else int(profile_settings["visual_top_k"])
+    )
+    candidate_top_k = (
+        int(args.candidate_top_k)
+        if args.candidate_top_k is not None
+        else int(profile_settings["candidate_top_k"])
+    )
+    llm_detail = str(args.llm_detail or profile_settings["llm_detail"])
+    enable_verifier = (
+        bool(args.enable_verifier)
+        if args.enable_verifier is not None
+        else bool(profile_settings["enable_verifier"])
+    )
     save_preview_png = args.save_preview_png
     overlay_path = Path(args.save_overlay)
     if save_preview_png is None and args.save_overlay:
         save_preview_png = str(overlay_path.with_suffix(".png"))
     save_local_bev_svg = args.save_local_bev_svg
-    if save_local_bev_svg is None and args.save_overlay:
+    if save_local_bev_svg is None and args.save_overlay and profile_settings["auto_local_bev_svg"]:
         save_local_bev_svg = str(overlay_path.with_name(f"{overlay_path.stem}_local_bev.svg"))
     save_map_bev_png = args.save_map_bev_png
-    if save_map_bev_png is None and args.save_overlay:
+    if (
+        save_map_bev_png is None
+        and args.save_overlay
+        and profile_settings["auto_map_bev_png"]
+        and args.auto_enable_heavy_png
+    ):
         save_map_bev_png = str(overlay_path.with_name(f"{overlay_path.stem}_map_bev.png"))
     save_map_bev_html = args.save_map_bev_html
-    if save_map_bev_html is None and args.save_overlay:
+    if save_map_bev_html is None and args.save_overlay and profile_settings["auto_map_bev_html"]:
         save_map_bev_html = str(overlay_path.with_name(f"{overlay_path.stem}_map_bev.html"))
     save_planner_route_png = args.save_planner_route_png
-    if save_planner_route_png is None and args.save_overlay:
+    if (
+        save_planner_route_png is None
+        and args.save_overlay
+        and profile_settings["auto_planner_route_png"]
+        and args.auto_enable_heavy_png
+    ):
         save_planner_route_png = str(overlay_path.with_name(f"{overlay_path.stem}_planner_route.png"))
     save_planner_route_html = args.save_planner_route_html
-    if save_planner_route_html is None and args.save_overlay:
+    if save_planner_route_html is None and args.save_overlay and profile_settings["auto_planner_route_html"]:
         save_planner_route_html = str(overlay_path.with_name(f"{overlay_path.stem}_planner_route.html"))
     asyncio.run(
         run_demo(
@@ -1180,9 +1688,11 @@ if __name__ == "__main__":
             heading_deg=args.heading_deg,
             lookahead_m=args.lookahead_m,
             off_route_threshold_m=args.off_route_threshold_m,
-            visual_top_k=args.visual_top_k,
-            candidate_top_k=args.candidate_top_k,
-            llm_detail=args.llm_detail,
+            visual_top_k=visual_top_k,
+            candidate_top_k=candidate_top_k,
+            llm_detail=llm_detail,
+            perf_profile=args.perf_profile,
+            enable_verifier=enable_verifier,
             save_overlay=args.save_overlay,
             save_preview_png=save_preview_png,
             save_local_bev_svg=save_local_bev_svg,
@@ -1191,5 +1701,6 @@ if __name__ == "__main__":
             save_planner_route_png=save_planner_route_png,
             save_planner_route_html=save_planner_route_html,
             save_json=args.save_json,
+            cache_path=args.cache_path,
         )
     )
