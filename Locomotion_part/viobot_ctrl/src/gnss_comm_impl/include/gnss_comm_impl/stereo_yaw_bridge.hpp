@@ -37,6 +37,7 @@ public:
     explicit StereoYawBridge(const Config &cfg);
 
     void set_origin(const Eigen::Vector3d &origin_ecef, const Eigen::Matrix3d &R_enu2ecef);
+    void update_origin(const Eigen::Vector3d &origin_ecef, const Eigen::Matrix3d &R_enu2ecef);
     void set_latest_raw_ecef(const Eigen::Vector3d &raw_ecef, double stamp_sec);
     void clear_raw_gnss();
     void reset();

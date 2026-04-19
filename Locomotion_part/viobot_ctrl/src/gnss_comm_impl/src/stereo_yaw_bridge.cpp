@@ -22,6 +22,14 @@ void StereoYawBridge::set_origin(const Eigen::Vector3d &origin_ecef, const Eigen
     clear_raw_gnss();
 }
 
+void StereoYawBridge::update_origin(const Eigen::Vector3d &origin_ecef, const Eigen::Matrix3d &R_enu2ecef)
+{
+    origin_ecef_ = origin_ecef;
+    R_enu2ecef_ = R_enu2ecef;
+    // 只重置运动锚点（GNSS ENU 坐标已变），保留 yaw 标定状态
+    has_motion_anchor_ = false;
+}
+
 void StereoYawBridge::set_latest_raw_ecef(const Eigen::Vector3d &raw_ecef, double stamp_sec)
 {
     latest_raw_ecef_ = raw_ecef;

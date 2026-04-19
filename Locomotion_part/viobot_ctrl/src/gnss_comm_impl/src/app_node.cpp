@@ -320,7 +320,8 @@ void GnssSppNode::meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPt
                     origin_ecef_ = mean_ecef;
                     origin_lla_  = gnss_comm::ecef2geo(origin_ecef_);
                     R_enu2ecef_  = gnss_comm::geo2rotation(origin_lla_);
-                    // 不再调用 yaw_bridge_.set_origin()，保留已标定的 yaw
+                    // 同步更新 yaw bridge 坐标参考，保留已标定的 yaw
+                    yaw_bridge_.update_origin(origin_ecef_, R_enu2ecef_);
                     is_origin_set_ = true;
                     transition_gnss_status(GnssStatusState::Fusing);
 
