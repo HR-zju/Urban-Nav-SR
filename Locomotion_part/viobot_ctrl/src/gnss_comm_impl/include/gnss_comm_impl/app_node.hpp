@@ -199,8 +199,8 @@ private:
     // yaw 收敛检测: 标定后等 yaw 变化率足够小才设定最终 origin
     double prev_yaw_offset_rad_ = 0.0;
     int yaw_stable_count_ = 0;
-    static constexpr int YAW_STABLE_REQUIRED = 5;       // 连续 N 次小变化
-    static constexpr double YAW_CONVERGE_THRESH_DEG = 1.0; // 每次变化 < 1°
+    static constexpr int YAW_STABLE_REQUIRED = 3;       // 连续 N 次小变化
+    static constexpr double YAW_CONVERGE_THRESH_DEG = 5.0; // 每次变化 < 5°
 
     // 里程计原点偏移: stereo 起点 ≠ GNSS origin, 需记录 origin 时刻的 stereo 位置
     Eigen::Vector3d origin_odom_offset_{0.0, 0.0, 0.0};

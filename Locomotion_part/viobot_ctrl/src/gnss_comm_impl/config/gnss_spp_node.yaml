@@ -5,13 +5,13 @@ gnss_spp_node:
     kml_raw_directory: /home/symc/data/kml_raw
 
     yaw_bridge.min_samples: 5
-    yaw_bridge.min_baseline_m: 2.0
+    yaw_bridge.min_baseline_m: 5.0
     yaw_bridge.gnss_stale_sec: 1.5
     yaw_bridge.update_gain: 0.03
     yaw_bridge.max_step_deg: 25.0
-    yaw_bridge.max_innovation_deg: 25.0
+    yaw_bridge.max_innovation_deg: 25.0 
 
-    gnss.initial_calibration_enu: [0.0, -12.5, 0.0]  # [m] (East, North, Up)
+    gnss.initial_calibration_enu: [-3.0, -4.5, 0.0]  # [m] (East, North, Up)
 
     diagnostics.enable_bridge: false
     diagnostics.bridge_topic: /baton/gnss/bridge_diagnostics

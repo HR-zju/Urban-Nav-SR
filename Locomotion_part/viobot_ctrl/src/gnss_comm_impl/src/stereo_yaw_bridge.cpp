@@ -75,10 +75,11 @@ StereoYawBridge::UpdateResult StereoYawBridge::update(const Eigen::Vector3d &enu
     if (result.used_new_gnss)
     {
         double yaw_meas = 0.0;
-        result.has_measurement = compute_yaw_measurement(enu_pos_raw, &yaw_meas);
+        double baseline = 0.0;
+        result.has_measurement = compute_yaw_measurement(enu_pos_raw, &yaw_meas, &baseline);
         if (result.has_measurement)
         {
-            update_yaw_offset_with_measurement(yaw_meas);
+            update_yaw_offset_with_measurement(yaw_meas, baseline);
         }
         has_new_raw_ecef_for_update_ = false;
     }
@@ -109,7 +110,7 @@ double StereoYawBridge::normalize_angle(double rad) const
     return rad;
 }
 
-bool StereoYawBridge::compute_yaw_measurement(const Eigen::Vector3d &enu_pos_raw, double *yaw_meas)
+bool StereoYawBridge::compute_yaw_measurement(const Eigen::Vector3d &enu_pos_raw, double *yaw_meas, double *baseline_out)
 {
     if (!has_latest_raw_ecef_) return false;
 
@@ -140,18 +141,23 @@ bool StereoYawBridge::compute_yaw_measurement(const Eigen::Vector3d &enu_pos_raw
     const double cross = odom_2d.x() * gnss_2d.y() - odom_2d.y() * gnss_2d.x();
     const double dot = odom_2d.dot(gnss_2d);
     if (yaw_meas) *yaw_meas = std::atan2(cross, dot);
+    if (baseline_out) *baseline_out = std::min(odom_norm, gnss_norm);
 
     anchor_odom_2d_ = odom_2d_curr;
     anchor_gnss_enu_2d_ = gnss_2d_curr;
     return true;
 }
 
-void StereoYawBridge::update_yaw_offset_with_measurement(double yaw_meas)
+void StereoYawBridge::update_yaw_offset_with_measurement(double yaw_meas, double baseline)
 {
+    // 基线长度加权：长基线 GNSS 噪声占比小，测量更可信
+    const double baseline_weight = std::min(baseline / cfg_.min_baseline_m, 5.0);
+
     if (!is_yaw_calibrated_)
     {
-        yaw_sin_sum_ += std::sin(yaw_meas);
-        yaw_cos_sum_ += std::cos(yaw_meas);
+        // 加权 circular mean：长基线贡献更大
+        yaw_sin_sum_ += baseline_weight * std::sin(yaw_meas);
+        yaw_cos_sum_ += baseline_weight * std::cos(yaw_meas);
         ++yaw_calib_samples_;
 
         if (yaw_calib_samples_ >= cfg_.min_samples)
@@ -172,8 +178,8 @@ void StereoYawBridge::update_yaw_offset_with_measurement(double yaw_meas)
         {
             is_yaw_calibrated_ = false;
             yaw_calib_samples_ = 1;
-            yaw_sin_sum_ = std::sin(yaw_meas);
-            yaw_cos_sum_ = std::cos(yaw_meas);
+            yaw_sin_sum_ = baseline_weight * std::sin(yaw_meas);
+            yaw_cos_sum_ = baseline_weight * std::cos(yaw_meas);
             yaw_update_reject_count_ = 0;
         }
         return;
@@ -187,7 +193,10 @@ void StereoYawBridge::update_yaw_offset_with_measurement(double yaw_meas)
     else if (clipped_innovation < -cfg_.max_innovation_rad)
         clipped_innovation = -cfg_.max_innovation_rad;
 
-    double step = cfg_.update_gain * clipped_innovation;
+    // 基线质量因子：长基线测量更可信，给予更大更新步长
+    const double baseline_factor = std::min(baseline / cfg_.min_baseline_m, 2.0);
+
+    double step = cfg_.update_gain * baseline_factor * clipped_innovation;
     if (step > cfg_.max_step_rad) step = cfg_.max_step_rad;
     if (step < -cfg_.max_step_rad) step = -cfg_.max_step_rad;
 

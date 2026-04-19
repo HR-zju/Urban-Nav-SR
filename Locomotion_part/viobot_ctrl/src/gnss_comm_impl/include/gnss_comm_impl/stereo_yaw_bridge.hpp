@@ -47,8 +47,8 @@ public:
 
 private:
     double normalize_angle(double rad) const;
-    bool compute_yaw_measurement(const Eigen::Vector3d &enu_pos_raw, double *yaw_meas);
-    void update_yaw_offset_with_measurement(double yaw_meas);
+    bool compute_yaw_measurement(const Eigen::Vector3d &enu_pos_raw, double *yaw_meas, double *baseline_out);
+    void update_yaw_offset_with_measurement(double yaw_meas, double baseline);
 
 private:
     Config cfg_;
