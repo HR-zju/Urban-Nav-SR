@@ -11,7 +11,7 @@ gnss_spp_node:
     yaw_bridge.max_step_deg: 25.0
     yaw_bridge.max_innovation_deg: 25.0
 
-    gnss.initial_calibration_enu: [0.0, -7.5, 0.0]  # [m] (East, North, Up)
+    gnss.initial_calibration_enu: [4.0, -14.5, 0.0]  # [m] (East, North, Up)
 
     diagnostics.enable_bridge: false
     diagnostics.bridge_topic: /baton/gnss/bridge_diagnostics

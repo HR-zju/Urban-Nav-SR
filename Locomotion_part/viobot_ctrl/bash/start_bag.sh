@@ -1,10 +1,12 @@
 #!/bin/bash
-export LD_LIBRARY_PATH=/root/Baton/install/baton/lib/baton/:$LD_LIBRARY_PATH
+sleep 1
+ros_domain_id_line=$(grep "export ROS_DOMAIN_ID" /home/PRR/.bashrc)
+export ROS_HOME=/root
 source /opt/ros/humble/setup.bash
 source /root/Baton/install/local_setup.bash  --extend
-$(grep "export ROS_DOMAIN_ID" /home/PRR/.bashrc)
-source /root/viobot_ctrl/install/local_setup.bash
-
+source /root/viobot_ctrl/install/local_setup.bash  --extend
+eval $ros_domain_id_line
+export LD_LIBRARY_PATH=/root/Baton/install/baton/lib/baton/:/usr/lib/aarch64-linux-gnu/libv4l/:$LD_LIBRARY_PATH
 
 # 等待核心驱动节点上线
 echo "[1/3] 等待核心驱动节点上线..."
@@ -16,18 +18,18 @@ timeout 3 ros2 topic pub /baton/stereo3_ctrl system_ctrl/AlgoCtrl "{header: {sta
 
 
 echo "[3/3] 等待算法状态反馈 (algo_status)..."
-WAIT_ALGO=0
-while [ $WAIT_ALGO -lt 15 ]; do
-    # 匹配 "algo_status: stereo3_running"
-    STATUS=$(timeout 2 ros2 topic echo --once /baton/algo_status | grep "algo_status: stereo3_running" | wc -l)
-    
-    if [ "$STATUS" -gt 0 ]; then
-        echo "算法成功运行 (stereo3_running)！开始录包..."
-        break
-    fi
-    echo "等待算法反馈中... (${WAIT_ALGO}s)"
-    let WAIT_ALGO+=2
-done
+
+# 设置最大超时时间为 15 秒
+# 启动一次 echo，持续监听，遇到第一个匹配项自动退出
+timeout 15 bash -c "ros2 topic echo /baton/algo_status | grep -m 1 'algo_status: stereo3_running'" > /dev/null 2>&1
+
+# 检查上一条命令（即 timeout/grep）的退出状态码
+if [ $? -eq 0 ]; then
+    echo "算法成功运行 (stereo3_running)！开始录包..."
+else
+    echo "[错误] 等待算法反馈超时 (15s) 或未获取到正确状态！"
+    exit 1 # 状态不对，建议直接退出脚本，不执行后续的录包
+fi
 
 RECORD_DIR="/root/record_data"
 # 确保父目录存在
