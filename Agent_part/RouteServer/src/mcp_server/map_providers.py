@@ -125,6 +125,64 @@ def normalize_duration_s(value: Any, default: int = 0) -> int:
         return default
 
 
+def estimate_duration_s(distance_m: float, mode: str = "foot") -> int:
+    speed_ms = {
+        "foot": 1.25,
+        "walking": 1.25,
+        "bike": 4.0,
+        "cycling": 4.0,
+        "car": 11.0,
+        "driving": 11.0,
+    }.get(str(mode or "").strip().lower(), 1.25)
+    if speed_ms <= 0:
+        speed_ms = 1.25
+    return int(round(float(distance_m) / speed_ms))
+
+
+def build_estimated_route_payload(
+    *,
+    provider: str,
+    origin: str,
+    destination: str,
+    mode: str,
+    reason: str,
+) -> dict[str, Any]:
+    origin_lon, origin_lat = parse_location_text(origin)
+    destination_lon, destination_lat = parse_location_text(destination)
+    distance_m = round(haversine_m(origin_lat, origin_lon, destination_lat, destination_lon))
+    duration_s = estimate_duration_s(distance_m, mode)
+    waypoint = build_coarse_waypoint_record(
+        longitude=destination_lon,
+        latitude=destination_lat,
+        instruction=f"Proceed to the destination for approximately {distance_m} m.",
+        action="arrive",
+        road="",
+        distance_m=distance_m,
+        duration_s=duration_s,
+        extra={
+            "route_summary_source": "estimated_fallback",
+            "fallback_reason": reason,
+        },
+    )
+    return {
+        "provider": provider,
+        "origin": origin,
+        "destination": destination,
+        "mode": mode,
+        "route_summary": {
+            "distance_m": distance_m,
+            "duration_s": duration_s,
+            "step_count": 1,
+            "route_summary_source": "estimated_fallback",
+            "fallback_reason": reason,
+        },
+        "coarse_waypoints": [waypoint],
+        "route_polyline": [[origin_lon, origin_lat], [destination_lon, destination_lat]],
+        "route_polyline_text": encode_polyline_text([[origin_lon, origin_lat], [destination_lon, destination_lat]]),
+        "route_error": reason,
+    }
+
+
 def infer_action(instruction: str, fallback: str = "") -> str:
     text = (instruction or "").strip()
     lowered = text.lower()
@@ -1322,15 +1380,37 @@ class AMapClient(BaseHTTPMapClient):
         destination: str,
         mode: str = "foot",
     ) -> dict[str, Any]:
+        short_leg_threshold_m = float(os.getenv("AMAP_ROUTE_SHORT_LEG_ESTIMATE_M", "20") or 20)
+        if short_leg_threshold_m > 0:
+            origin_lon, origin_lat = parse_location_text(origin)
+            destination_lon, destination_lat = parse_location_text(destination)
+            direct_distance_m = haversine_m(origin_lat, origin_lon, destination_lat, destination_lon)
+            if direct_distance_m <= short_leg_threshold_m:
+                return build_estimated_route_payload(
+                    provider="amap",
+                    origin=origin,
+                    destination=destination,
+                    mode=mode,
+                    reason=f"short_leg_estimate:{round(direct_distance_m, 2)}m",
+                )
+
         amap_mode = {"car": "driving", "foot": "walking", "bike": "walking"}.get(mode, "walking")
         try:
             data = await self._request_amap_route_json(
                 mode=amap_mode,
                 origin=origin,
                 destination=destination,
-                extensions="all",
+                extensions=os.getenv("AMAP_ROUTE_EXTENSIONS", "all").strip() or "all",
             )
         except Exception as exc:
+            if os.getenv("AMAP_ROUTE_ALLOW_ESTIMATED_FALLBACK", "").strip().lower() in {"1", "true", "yes"}:
+                return build_estimated_route_payload(
+                    provider="amap",
+                    origin=origin,
+                    destination=destination,
+                    mode=mode,
+                    reason=str(exc),
+                )
             raise Exception(f"AMap coarse waypoint route failed: {exc}") from exc
         return parse_amap_steps(data, origin=origin, destination=destination, mode=mode)
 

@@ -526,19 +526,52 @@ def _merge_route_segments(
     combined_waypoints: List[Dict[str, Any]] = []
     total_distance_m = 0.0
     total_duration_s = 0.0
-    stop_sequence: List[Dict[str, Any]] = [{"type": "origin", "location": origin, "name": "Origin"}]
-    for via in via_points:
-        stop_sequence.append({"type": "via", "location": via["location"], "name": via.get("name") or "Via"})
-    stop_sequence.append({"type": "destination", "location": destination, "name": "Destination"})
+
+    # Build stop_sequence: each leg[i] ends at stop[i+1], so stop[i+1] gets leg[i]'s summary.
+    # Origin (stop 0) has no incoming leg, so no route_leg_summary.
+    # Each via stop i gets leg[i-1]'s summary (leg going INTO this via from previous stop).
+    # Destination (last stop) gets leg[N-1]'s summary (final leg's summary).
+    stop_sequence: List[Dict[str, Any]] = [
+        {"type": "origin", "location": origin, "name": "Origin"}
+    ]
+
+    for leg_index, leg in enumerate(leg_results):
+        leg_summary = dict(leg.get("route_summary", {}) or {})
+        total_distance_m += float(leg_summary.get("distance_m", 0.0) or 0.0)
+        total_duration_s += float(leg_summary.get("duration_s", 0.0) or 0.0)
+
+        if leg_index < len(via_points):
+            # Leg ends at a via point
+            via = via_points[leg_index]
+            stop_sequence.append({
+                "type": "via",
+                "location": via.get("location") or leg.get("destination"),
+                "name": via.get("name") or f"Via {leg_index + 1}",
+                "route_leg_summary": {
+                    "distance_m": round(float(leg_summary.get("distance_m", 0.0) or 0.0), 1),
+                    "duration_s": round(float(leg_summary.get("duration_s", 0.0) or 0.0), 1),
+                    "duration_min": round(float(leg_summary.get("duration_s", 0.0) or 0.0) / 60.0, 1),
+                }
+            })
+        else:
+            # Leg ends at the final destination
+            final_destination = leg.get("destination") or destination
+            stop_sequence.append({
+                "type": "destination",
+                "location": final_destination,
+                "name": "Destination",
+                "route_leg_summary": {
+                    "distance_m": round(float(leg_summary.get("distance_m", 0.0) or 0.0), 1),
+                    "duration_s": round(float(leg_summary.get("duration_s", 0.0) or 0.0), 1),
+                    "duration_min": round(float(leg_summary.get("duration_s", 0.0) or 0.0) / 60.0, 1),
+                }
+            })
 
     global_waypoint_index = 0
     legs_payload: List[Dict[str, Any]] = []
     for leg_index, leg in enumerate(leg_results):
         leg_origin = leg.get("origin")
         leg_destination = leg.get("destination")
-        leg_summary = dict(leg.get("route_summary", {}) or {})
-        total_distance_m += float(leg_summary.get("distance_m", 0.0) or 0.0)
-        total_duration_s += float(leg_summary.get("duration_s", 0.0) or 0.0)
 
         leg_polyline = []
         for point in leg.get("route_polyline", []) or []:
