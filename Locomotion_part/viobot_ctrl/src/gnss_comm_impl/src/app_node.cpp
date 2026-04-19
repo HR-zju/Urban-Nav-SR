@@ -476,19 +476,23 @@ void GnssSppNode::odom_callback(const nav_msgs::msg::Odometry::ConstSharedPtr ms
     heading_msg.data = heading_deg;
     pub_heading_->publish(heading_msg);
 
-    // 增量式偏航旋转：只旋转当前帧的位移增量，避免 yaw 更新时累计位移的刚性摆动
+    // 直接旋转：计算当前 yaw 下的理想位置
+    const Eigen::Vector3d ideal_enu_pos = yaw_bridge_.rotate_raw_to_enu(enu_pos_rel);
+
+    // 渐进修正注入：增量式保平滑 + 渐进追踪直接旋转的理想位置
     if (!has_prev_enu_pos_raw_) {
-        prev_enu_pos_raw_ = enu_pos_rel;
-        // 首次初始化：用当前 yaw 旋转相对于 origin 的位移
-        accumulated_enu_pos_ = yaw_bridge_.rotate_raw_to_enu(enu_pos_rel);
+        accumulated_enu_pos_ = ideal_enu_pos;
         has_prev_enu_pos_raw_ = true;
+    } else {
+        // 增量式累积（帧间平滑）
+        const Eigen::Vector3d delta_raw = enu_pos_rel - prev_enu_pos_raw_;
+        accumulated_enu_pos_ += yaw_bridge_.rotate_raw_to_enu(delta_raw);
+
+        // 渐进注入修正量，使累积位置逐渐收敛到理想位置
+        const Eigen::Vector3d correction = ideal_enu_pos - accumulated_enu_pos_;
+        accumulated_enu_pos_ += YAW_CORRECTION_RATE * correction;
     }
-
-    const Eigen::Vector3d delta_raw = enu_pos_rel - prev_enu_pos_raw_;
     prev_enu_pos_raw_ = enu_pos_rel;
-
-    // 只对当前帧的小增量应用偏航旋转
-    accumulated_enu_pos_ += yaw_bridge_.rotate_raw_to_enu(delta_raw);
 
     // Transform to ECEF
     Eigen::Vector3d delta_ecef = R_enu2ecef_ * accumulated_enu_pos_;

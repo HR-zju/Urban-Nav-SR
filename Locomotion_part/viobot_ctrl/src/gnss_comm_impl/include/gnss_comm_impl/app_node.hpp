@@ -190,7 +190,8 @@ private:
     Eigen::Vector3d origin_lla_{0.0, 0.0, 0.0};
     Eigen::Matrix3d R_enu2ecef_{Eigen::Matrix3d::Identity()};
 
-    // 增量式偏航旋转: 避免 yaw 更新时累计位移的刚性摆动
+    // 渐进修正注入: 增量式保平滑 + 逐帧追踪直接旋转的理想位置，消除 yaw 误差固化
+    static constexpr double YAW_CORRECTION_RATE = 0.05; // 每帧注入 5% 修正量，半衰期 ~14帧
     Eigen::Vector3d prev_enu_pos_raw_{0.0, 0.0, 0.0};
     Eigen::Vector3d accumulated_enu_pos_{0.0, 0.0, 0.0};
     bool has_prev_enu_pos_raw_ = false;
