@@ -28,6 +28,7 @@
 #include <string>
 #include <regex>
 #include <sstream>
+#include <cctype>
 
 GlobalOptimization globalEstimator;
 ros::Publisher pub_global_odometry, pub_global_path, pub_car;
@@ -38,7 +39,7 @@ std::mutex m_buf;
 
 std::string route_json_path;
 std::string route_output_path;
-std::string last_route_json_content;
+std::string last_route_id;
 
 struct JsonWaypoint
 {
@@ -78,11 +79,289 @@ bool parse_number_field(const std::string &object_str, const std::vector<std::st
     return false;
 }
 
+bool extract_top_level_array_by_key(const std::string &json_content,
+                                    const std::string &target_key,
+                                    std::string &array_content)
+{
+    array_content.clear();
+
+    int object_depth = 0;
+    bool in_string = false;
+    bool escape = false;
+
+    for (size_t i = 0; i < json_content.size(); ++i)
+    {
+        const char c = json_content[i];
+
+        if (escape)
+        {
+            escape = false;
+            continue;
+        }
+
+        if (c == '\\' && in_string)
+        {
+            escape = true;
+            continue;
+        }
+
+        if (c == '"')
+        {
+            in_string = !in_string;
+            continue;
+        }
+
+        if (in_string)
+            continue;
+
+        if (c == '{')
+        {
+            object_depth++;
+            continue;
+        }
+
+        if (c == '}')
+        {
+            object_depth--;
+            continue;
+        }
+
+        if (object_depth != 1)
+            continue;
+
+        if (c != '"')
+            continue;
+
+        size_t key_begin = i + 1;
+        size_t key_end = key_begin;
+        bool key_escape = false;
+        while (key_end < json_content.size())
+        {
+            if (key_escape)
+            {
+                key_escape = false;
+                key_end++;
+                continue;
+            }
+            if (json_content[key_end] == '\\')
+            {
+                key_escape = true;
+                key_end++;
+                continue;
+            }
+            if (json_content[key_end] == '"')
+                break;
+            key_end++;
+        }
+
+        if (key_end >= json_content.size())
+            return false;
+
+        std::string key = json_content.substr(key_begin, key_end - key_begin);
+        i = key_end;
+
+        if (key != target_key)
+            continue;
+
+        size_t pos = i + 1;
+        while (pos < json_content.size() && std::isspace(static_cast<unsigned char>(json_content[pos])))
+            pos++;
+        if (pos >= json_content.size() || json_content[pos] != ':')
+            return false;
+
+        pos++;
+        while (pos < json_content.size() && std::isspace(static_cast<unsigned char>(json_content[pos])))
+            pos++;
+        if (pos >= json_content.size() || json_content[pos] != '[')
+            return false;
+
+        size_t arr_begin = pos;
+        int array_depth = 0;
+        bool arr_in_string = false;
+        bool arr_escape = false;
+        for (; pos < json_content.size(); ++pos)
+        {
+            const char ac = json_content[pos];
+
+            if (arr_escape)
+            {
+                arr_escape = false;
+                continue;
+            }
+
+            if (ac == '\\' && arr_in_string)
+            {
+                arr_escape = true;
+                continue;
+            }
+
+            if (ac == '"')
+            {
+                arr_in_string = !arr_in_string;
+                continue;
+            }
+
+            if (arr_in_string)
+                continue;
+
+            if (ac == '[')
+                array_depth++;
+            else if (ac == ']')
+            {
+                array_depth--;
+                if (array_depth == 0)
+                {
+                    array_content = json_content.substr(arr_begin, pos - arr_begin + 1);
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    return false;
+}
+
+bool extract_top_level_string_by_key(const std::string &json_content,
+                                     const std::string &target_key,
+                                     std::string &value)
+{
+    value.clear();
+
+    int object_depth = 0;
+    bool in_string = false;
+    bool escape = false;
+
+    for (size_t i = 0; i < json_content.size(); ++i)
+    {
+        const char c = json_content[i];
+
+        if (escape)
+        {
+            escape = false;
+            continue;
+        }
+
+        if (c == '\\' && in_string)
+        {
+            escape = true;
+            continue;
+        }
+
+        if (c == '"')
+        {
+            in_string = !in_string;
+            continue;
+        }
+
+        if (in_string)
+            continue;
+
+        if (c == '{')
+        {
+            object_depth++;
+            continue;
+        }
+
+        if (c == '}')
+        {
+            object_depth--;
+            continue;
+        }
+
+        if (object_depth != 1)
+            continue;
+
+        if (c != '"')
+            continue;
+
+        size_t key_begin = i + 1;
+        size_t key_end = key_begin;
+        bool key_escape = false;
+        while (key_end < json_content.size())
+        {
+            if (key_escape)
+            {
+                key_escape = false;
+                key_end++;
+                continue;
+            }
+            if (json_content[key_end] == '\\')
+            {
+                key_escape = true;
+                key_end++;
+                continue;
+            }
+            if (json_content[key_end] == '"')
+                break;
+            key_end++;
+        }
+
+        if (key_end >= json_content.size())
+            return false;
+
+        std::string key = json_content.substr(key_begin, key_end - key_begin);
+        i = key_end;
+        if (key != target_key)
+            continue;
+
+        size_t pos = i + 1;
+        while (pos < json_content.size() && std::isspace(static_cast<unsigned char>(json_content[pos])))
+            pos++;
+        if (pos >= json_content.size() || json_content[pos] != ':')
+            return false;
+
+        pos++;
+        while (pos < json_content.size() && std::isspace(static_cast<unsigned char>(json_content[pos])))
+            pos++;
+        if (pos >= json_content.size() || json_content[pos] != '"')
+            return false;
+
+        pos++;
+        std::string out;
+        bool val_escape = false;
+        for (; pos < json_content.size(); ++pos)
+        {
+            char vc = json_content[pos];
+            if (val_escape)
+            {
+                out.push_back(vc);
+                val_escape = false;
+                continue;
+            }
+
+            if (vc == '\\')
+            {
+                val_escape = true;
+                continue;
+            }
+
+            if (vc == '"')
+            {
+                value = out;
+                return true;
+            }
+
+            out.push_back(vc);
+        }
+
+        return false;
+    }
+
+    return false;
+}
+
 bool parse_waypoints_from_json(const std::string &json_content, std::vector<JsonWaypoint> &waypoints)
 {
     waypoints.clear();
+
+    std::string waypoint_array;
+    if (!extract_top_level_array_by_key(json_content, "waypoints", waypoint_array))
+        return false;
+
     std::regex object_regex("\\{[^\\{\\}]*\\}");
-    std::sregex_iterator it(json_content.begin(), json_content.end(), object_regex);
+    std::sregex_iterator it(waypoint_array.begin(), waypoint_array.end(), object_regex);
     std::sregex_iterator end;
 
     for (; it != end; ++it)
@@ -212,21 +491,27 @@ void route_file_timer_callback(const ros::TimerEvent &)
         return;
     }
 
-    if (current_content == last_route_json_content)
+    std::string current_route_id;
+    if (!extract_top_level_string_by_key(current_content, "route_id", current_route_id))
+    {
+        ROS_WARN("Route JSON missing top-level route_id in %s", route_json_path.c_str());
+        return;
+    }
+
+    if (!last_route_id.empty() && current_route_id == last_route_id)
         return;
 
     std::vector<JsonWaypoint> waypoints;
     if (!parse_waypoints_from_json(current_content, waypoints))
     {
         ROS_WARN("Route JSON changed but no valid waypoints found in %s", route_json_path.c_str());
-        last_route_json_content = current_content;
         return;
     }
 
-    ROS_INFO("Detected route JSON update. Reloading %lu waypoints from %s",
-             waypoints.size(), route_json_path.c_str());
+    ROS_INFO("Detected route_id change (%s). Reloading %lu waypoints from %s",
+             current_route_id.c_str(), waypoints.size(), route_json_path.c_str());
     convert_json_waypoints_to_utm(waypoints);
-    last_route_json_content = current_content;
+    last_route_id = current_route_id;
 }
 
 void vio_callback(const nav_msgs::Odometry::ConstPtr &pose_msg)
@@ -297,7 +582,7 @@ void vio_callback(const nav_msgs::Odometry::ConstPtr &pose_msg)
 
 
     // write result to file
-    std::ofstream foutC("/home/tony-ws1/output/vio_global.csv", ios::app);
+    std::ofstream foutC("/home/nuvo/SR/foundation-policy/Policy_part/topomaps/LLM_Policy/gkj/output/vio_global.csv", ios::app);
     foutC.setf(ios::fixed, ios::floatfield);
     foutC.precision(0);
     foutC << pose_msg->header.stamp.toSec() * 1e9 << ",";
