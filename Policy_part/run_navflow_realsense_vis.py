@@ -45,6 +45,7 @@ from std_msgs.msg import Bool, Float32MultiArray
 import ast
 
 import matplotlib
+import math
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
@@ -429,13 +430,13 @@ class RealSenseNavflowNode(Node):
         # Odom subscriptions
         self.localodom_sub = self.create_subscription(
             Odometry,
-            "/mfla/dr_odom",
+            "/globalEstimator/global_odometry",
             self.localodom_callback,
             20,
         )
         self.odom_sub = self.create_subscription(
             Odometry,
-            "/mfla/dr_odom",
+            "/globalEstimator/global_odometry",
             self.odom_callback,
             100,
         )
