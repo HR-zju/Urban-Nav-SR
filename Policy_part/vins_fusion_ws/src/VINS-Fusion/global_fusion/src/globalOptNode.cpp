@@ -335,7 +335,7 @@ bool parse_waypoints_from_json(const std::string &json_content, std::vector<Json
             continue;
 
         if (!parse_number_field(obj, {"altitude", "alt", "z"}, wp.altitude))
-            wp.altitude = 99.0;
+            wp.altitude = 90.0;
 
         if (!parse_number_field(obj, {"qw", "w"}, wp.qw))
             wp.qw = 1.0;
