@@ -84,7 +84,6 @@ bool extract_top_level_array_by_key(const std::string &json_content,
                                     std::string &array_content)
 {
     array_content.clear();
-
     int object_depth = 0;
     bool in_string = false;
     bool escape = false;
@@ -93,131 +92,110 @@ bool extract_top_level_array_by_key(const std::string &json_content,
     {
         const char c = json_content[i];
 
-        if (escape)
+        if (in_string)
         {
-            escape = false;
-            continue;
-        }
-
-        if (c == '\\' && in_string)
-        {
-            escape = true;
+            if (escape)
+                escape = false;
+            else if (c == '\\')
+                escape = true;
+            else if (c == '"')
+                in_string = false;
             continue;
         }
 
         if (c == '"')
         {
-            in_string = !in_string;
-            continue;
-        }
-
-        if (in_string)
-            continue;
-
-        if (c == '{')
-        {
-            object_depth++;
-            continue;
-        }
-
-        if (c == '}')
-        {
-            object_depth--;
-            continue;
-        }
-
-        if (object_depth != 1)
-            continue;
-
-        if (c != '"')
-            continue;
-
-        size_t key_begin = i + 1;
-        size_t key_end = key_begin;
-        bool key_escape = false;
-        while (key_end < json_content.size())
-        {
-            if (key_escape)
+            if (object_depth != 1)
             {
-                key_escape = false;
-                key_end++;
-                continue;
-            }
-            if (json_content[key_end] == '\\')
-            {
-                key_escape = true;
-                key_end++;
-                continue;
-            }
-            if (json_content[key_end] == '"')
-                break;
-            key_end++;
-        }
-
-        if (key_end >= json_content.size())
-            return false;
-
-        std::string key = json_content.substr(key_begin, key_end - key_begin);
-        i = key_end;
-
-        if (key != target_key)
-            continue;
-
-        size_t pos = i + 1;
-        while (pos < json_content.size() && std::isspace(static_cast<unsigned char>(json_content[pos])))
-            pos++;
-        if (pos >= json_content.size() || json_content[pos] != ':')
-            return false;
-
-        pos++;
-        while (pos < json_content.size() && std::isspace(static_cast<unsigned char>(json_content[pos])))
-            pos++;
-        if (pos >= json_content.size() || json_content[pos] != '[')
-            return false;
-
-        size_t arr_begin = pos;
-        int array_depth = 0;
-        bool arr_in_string = false;
-        bool arr_escape = false;
-        for (; pos < json_content.size(); ++pos)
-        {
-            const char ac = json_content[pos];
-
-            if (arr_escape)
-            {
-                arr_escape = false;
+                in_string = true;
                 continue;
             }
 
-            if (ac == '\\' && arr_in_string)
+            size_t key_begin = i + 1;
+            size_t key_end = key_begin;
+            bool key_escape = false;
+            while (key_end < json_content.size())
             {
-                arr_escape = true;
-                continue;
-            }
-
-            if (ac == '"')
-            {
-                arr_in_string = !arr_in_string;
-                continue;
-            }
-
-            if (arr_in_string)
-                continue;
-
-            if (ac == '[')
-                array_depth++;
-            else if (ac == ']')
-            {
-                array_depth--;
-                if (array_depth == 0)
+                const char kc = json_content[key_end];
+                if (key_escape)
                 {
-                    array_content = json_content.substr(arr_begin, pos - arr_begin + 1);
-                    return true;
+                    key_escape = false;
+                    key_end++;
+                    continue;
+                }
+                if (kc == '\\')
+                {
+                    key_escape = true;
+                    key_end++;
+                    continue;
+                }
+                if (kc == '"')
+                    break;
+                key_end++;
+            }
+            if (key_end >= json_content.size())
+                return false;
+
+            std::string key = json_content.substr(key_begin, key_end - key_begin);
+            i = key_end;
+
+            if (key != target_key)
+                continue;
+
+            size_t pos = i + 1;
+            while (pos < json_content.size() && std::isspace(static_cast<unsigned char>(json_content[pos])))
+                pos++;
+            if (pos >= json_content.size() || json_content[pos] != ':')
+                return false;
+
+            pos++;
+            while (pos < json_content.size() && std::isspace(static_cast<unsigned char>(json_content[pos])))
+                pos++;
+            if (pos >= json_content.size() || json_content[pos] != '[')
+                return false;
+
+            size_t arr_begin = pos;
+            int array_depth = 0;
+            bool arr_in_string = false;
+            bool arr_escape = false;
+            for (; pos < json_content.size(); ++pos)
+            {
+                const char ac = json_content[pos];
+                if (arr_in_string)
+                {
+                    if (arr_escape)
+                        arr_escape = false;
+                    else if (ac == '\\')
+                        arr_escape = true;
+                    else if (ac == '"')
+                        arr_in_string = false;
+                    continue;
+                }
+
+                if (ac == '"')
+                {
+                    arr_in_string = true;
+                    continue;
+                }
+                if (ac == '[')
+                    array_depth++;
+                else if (ac == ']')
+                {
+                    array_depth--;
+                    if (array_depth == 0)
+                    {
+                        array_content = json_content.substr(arr_begin, pos - arr_begin + 1);
+                        return true;
+                    }
                 }
             }
+            return false;
         }
 
-        return false;
+        if (c == '{')
+            object_depth++;
+        else if (c == '}')
+            object_depth--;
     }
 
     return false;
@@ -228,7 +206,6 @@ bool extract_top_level_string_by_key(const std::string &json_content,
                                      std::string &value)
 {
     value.clear();
-
     int object_depth = 0;
     bool in_string = false;
     bool escape = false;
@@ -237,116 +214,99 @@ bool extract_top_level_string_by_key(const std::string &json_content,
     {
         const char c = json_content[i];
 
-        if (escape)
+        if (in_string)
         {
-            escape = false;
-            continue;
-        }
-
-        if (c == '\\' && in_string)
-        {
-            escape = true;
+            if (escape)
+                escape = false;
+            else if (c == '\\')
+                escape = true;
+            else if (c == '"')
+                in_string = false;
             continue;
         }
 
         if (c == '"')
         {
-            in_string = !in_string;
-            continue;
-        }
+            if (object_depth != 1)
+            {
+                in_string = true;
+                continue;
+            }
 
-        if (in_string)
-            continue;
+            size_t key_begin = i + 1;
+            size_t key_end = key_begin;
+            bool key_escape = false;
+            while (key_end < json_content.size())
+            {
+                const char kc = json_content[key_end];
+                if (key_escape)
+                {
+                    key_escape = false;
+                    key_end++;
+                    continue;
+                }
+                if (kc == '\\')
+                {
+                    key_escape = true;
+                    key_end++;
+                    continue;
+                }
+                if (kc == '"')
+                    break;
+                key_end++;
+            }
+
+            if (key_end >= json_content.size())
+                return false;
+
+            std::string key = json_content.substr(key_begin, key_end - key_begin);
+            i = key_end;
+            if (key != target_key)
+                continue;
+
+            size_t pos = i + 1;
+            while (pos < json_content.size() && std::isspace(static_cast<unsigned char>(json_content[pos])))
+                pos++;
+            if (pos >= json_content.size() || json_content[pos] != ':')
+                return false;
+
+            pos++;
+            while (pos < json_content.size() && std::isspace(static_cast<unsigned char>(json_content[pos])))
+                pos++;
+            if (pos >= json_content.size() || json_content[pos] != '"')
+                return false;
+
+            pos++;
+            std::string out;
+            bool val_escape = false;
+            for (; pos < json_content.size(); ++pos)
+            {
+                char vc = json_content[pos];
+                if (val_escape)
+                {
+                    out.push_back(vc);
+                    val_escape = false;
+                    continue;
+                }
+                if (vc == '\\')
+                {
+                    val_escape = true;
+                    continue;
+                }
+                if (vc == '"')
+                {
+                    value = out;
+                    return true;
+                }
+                out.push_back(vc);
+            }
+            return false;
+        }
 
         if (c == '{')
-        {
             object_depth++;
-            continue;
-        }
-
-        if (c == '}')
-        {
+        else if (c == '}')
             object_depth--;
-            continue;
-        }
-
-        if (object_depth != 1)
-            continue;
-
-        if (c != '"')
-            continue;
-
-        size_t key_begin = i + 1;
-        size_t key_end = key_begin;
-        bool key_escape = false;
-        while (key_end < json_content.size())
-        {
-            if (key_escape)
-            {
-                key_escape = false;
-                key_end++;
-                continue;
-            }
-            if (json_content[key_end] == '\\')
-            {
-                key_escape = true;
-                key_end++;
-                continue;
-            }
-            if (json_content[key_end] == '"')
-                break;
-            key_end++;
-        }
-
-        if (key_end >= json_content.size())
-            return false;
-
-        std::string key = json_content.substr(key_begin, key_end - key_begin);
-        i = key_end;
-        if (key != target_key)
-            continue;
-
-        size_t pos = i + 1;
-        while (pos < json_content.size() && std::isspace(static_cast<unsigned char>(json_content[pos])))
-            pos++;
-        if (pos >= json_content.size() || json_content[pos] != ':')
-            return false;
-
-        pos++;
-        while (pos < json_content.size() && std::isspace(static_cast<unsigned char>(json_content[pos])))
-            pos++;
-        if (pos >= json_content.size() || json_content[pos] != '"')
-            return false;
-
-        pos++;
-        std::string out;
-        bool val_escape = false;
-        for (; pos < json_content.size(); ++pos)
-        {
-            char vc = json_content[pos];
-            if (val_escape)
-            {
-                out.push_back(vc);
-                val_escape = false;
-                continue;
-            }
-
-            if (vc == '\\')
-            {
-                val_escape = true;
-                continue;
-            }
-
-            if (vc == '"')
-            {
-                value = out;
-                return true;
-            }
-
-            out.push_back(vc);
-        }
-
-        return false;
     }
 
     return false;
@@ -607,7 +567,7 @@ int main(int argc, char **argv)
     n.param<std::string>("route_json_path", route_json_path,
                          "/home/nuvo/SR/foundation-policy/Policy_part/topomaps/LLM_Policy/route_waypoints.json");
     n.param<std::string>("route_output_path", route_output_path,
-                         "/home/nuvo/SR/foundation-policy/Policy_part/topomaps/LLM_UTM_odom_poses.txt");
+                         "/home/nuvo/SR/foundation-policy/Policy_part/topomaps/LLM_Policy/LLM_UTM_odom_poses.txt");
 
     ros::Subscriber sub_GPS = n.subscribe("/acu_driver/gps_nav_topic", 100, GPS_callback);
     ros::Subscriber sub_vio = n.subscribe("/odom", 100, vio_callback);
