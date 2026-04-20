@@ -379,6 +379,7 @@ class RealSenseNavflowNode(Node):
         super().__init__("navflow_realsense_runner")
         self.session = session
         self.device = device
+        self.model_input_names = [inp.name for inp in self.session.get_inputs()]
         self.target_xy = target_xy
         self.distance_threshold = distance_threshold
         self.frames = frames
@@ -449,17 +450,14 @@ class RealSenseNavflowNode(Node):
             10,
         )
 
+        self.get_logger().info(f"ONNX input names: {self.model_input_names}")
+
         self.get_logger().info("Warming up ONNX model (this may take 10+ seconds)...")
         # 构建一个全 0 的 dummy 输入
         dummy_obs = np.zeros((1, self.frames, 3, 288, 512), dtype=np.float32)
-        dummy_metric = np.array([[0.0, 0.51, -0.26, 0.26]], dtype=np.float32)
-        dummy_embodiment = np.array([[0]], dtype=np.int64)
         try:
-            self.session.run(None, {
-                "observation": dummy_obs,
-                "embodiment_id": dummy_embodiment,
-                "metric_spacing": dummy_metric
-            })
+            warmup_feed = self.build_onnx_feed(dummy_obs)
+            self.session.run(None, warmup_feed)
             self.get_logger().info("ONNX warmup complete!")
         except Exception as e:
             self.get_logger().warn(f"Warmup failed: {e}")
@@ -655,7 +653,33 @@ class RealSenseNavflowNode(Node):
                 self.inference_event.clear()
                 continue
 
-            self.process_batch(batch_snapshot)
+            try:
+                self.process_batch(batch_snapshot)
+            except Exception as e:  # noqa: BLE001
+                self.get_logger().error(f"Error in process_batch: {e}")
+                self.inference_event.clear()
+
+    def build_onnx_feed(self, observation: np.ndarray):
+        """Build ONNX feed dict based on actual model input names."""
+
+        metric_spacing = np.array([[0.0, 0.51, -0.26, 0.26]], dtype=np.float32).reshape(1, 4)
+        embodiment_id = np.array([[0]], dtype=np.int64)
+
+        input_names = set(self.model_input_names)
+        feed = {}
+        if "observation" in input_names:
+            feed["observation"] = observation
+        elif self.model_input_names:
+            # Fallback: some exported models rename the first input.
+            feed[self.model_input_names[0]] = observation
+        else:
+            raise RuntimeError("ONNX model has no inputs")
+
+        if "metric_spacing" in input_names:
+            feed["metric_spacing"] = metric_spacing
+        if "embodiment_id" in input_names:
+            feed["embodiment_id"] = embodiment_id
+        return feed
 
     @staticmethod
     def pose_to_matrix(pose):
@@ -874,17 +898,10 @@ class RealSenseNavflowNode(Node):
 
         input_obs = video_frames_small[0]
         with torch.no_grad():
-            metric_spacing = np.array([[0.0, 0.51, -0.26, 0.26]], dtype=np.float32).reshape(1, 4)
-            embodiment_id = np.array([[0]], dtype=np.int64)
+            observation = input_obs.unsqueeze(0).cpu().numpy().astype(np.float32)
+            onnx_feed = self.build_onnx_feed(observation)
             t0 = time.perf_counter()
-            output = self.session.run(
-                None,
-                {
-                    "observation": input_obs.unsqueeze(0).cpu().numpy().astype(np.float32),
-                    "embodiment_id": embodiment_id,
-                    "metric_spacing": metric_spacing,
-                },
-            )
+            output = self.session.run(None, onnx_feed)
             t1 = time.perf_counter()
             infer_dt = max(t1 - t0, 1e-8)
             infer_fps = 1.0 / infer_dt
@@ -892,8 +909,16 @@ class RealSenseNavflowNode(Node):
                 f"[perf] onnx inference: {infer_dt*1000:.2f} ms, fps={infer_fps:.2f}"
             )
 
-            traj_raw = output[0][:, 1:]
-            score_raw = output[1][:, 1:]
+            traj_raw = output[0]
+            score_raw = output[1]
+            if (
+                traj_raw.ndim >= 3
+                and score_raw.ndim >= 2
+                and traj_raw.shape[1] > 1
+                and score_raw.shape[1] > 1
+            ):
+                traj_raw = traj_raw[:, 1:]
+                score_raw = score_raw[:, 1:]
             traj_raw_t = torch.from_numpy(traj_raw)
             score_raw_t = torch.from_numpy(score_raw)
 
