@@ -18,9 +18,6 @@
 #include <eigen3/Eigen/Geometry>
 #include <iostream>
 #include <stdio.h>
-#include <visualization_msgs/msg/marker.hpp>
-#include <visualization_msgs/msg/marker_array.hpp>
-#include <fstream>
 #include <queue>
 #include <mutex>
 #include <functional>
@@ -28,7 +25,6 @@
 GlobalOptimization globalEstimator;
 rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_global_odometry;
 rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_global_path;
-rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_car;
 nav_msgs::msg::Path *global_path;
 std::string world_frame_id;
 std::string body_frame_id;
@@ -36,54 +32,8 @@ double last_vio_t = -1;
 std::queue<sensor_msgs::msg::NavSatFix::SharedPtr> gpsQueue;
 std::mutex m_buf;
 
-void publish_car_model(double t, Eigen::Vector3d t_w_car, Eigen::Quaterniond q_w_car)
-{
-    visualization_msgs::msg::MarkerArray markerArray_msg;
-    visualization_msgs::msg::Marker car_mesh;
-
-    int sec_ts = (int)t;
-    uint nsec_ts = (uint)((t - sec_ts) * 1e9);
-    car_mesh.header.stamp.sec = sec_ts;
-    car_mesh.header.stamp.nanosec = nsec_ts;
-
-    car_mesh.header.frame_id = world_frame_id;
-    car_mesh.type = visualization_msgs::msg::Marker::MESH_RESOURCE;
-    car_mesh.action = visualization_msgs::msg::Marker::ADD;
-    car_mesh.id = 0;
-
-    car_mesh.mesh_resource = "package://global_fusion/models/car.dae";
-
-    Eigen::Matrix3d rot;
-    rot << 0, 0, -1, 0, -1, 0, -1, 0, 0;
-    
-    Eigen::Quaterniond Q;
-    Q = q_w_car * rot; 
-    car_mesh.pose.position.x    = t_w_car.x();
-    car_mesh.pose.position.y    = t_w_car.y();
-    car_mesh.pose.position.z    = t_w_car.z();
-    car_mesh.pose.orientation.w = Q.w();
-    car_mesh.pose.orientation.x = Q.x();
-    car_mesh.pose.orientation.y = Q.y();
-    car_mesh.pose.orientation.z = Q.z();
-
-    car_mesh.color.a = 1.0;
-    car_mesh.color.r = 1.0;
-    car_mesh.color.g = 0.0;
-    car_mesh.color.b = 0.0;
-
-    float major_scale = 2.0;
-
-    car_mesh.scale.x = major_scale;
-    car_mesh.scale.y = major_scale;
-    car_mesh.scale.z = major_scale;
-    markerArray_msg.markers.push_back(car_mesh);
-    pub_car->publish(markerArray_msg);
-}
-
-
 void vio_callback(const nav_msgs::msg::Odometry::SharedPtr pose_msg)
 {
-    //printf("vio_callback! \n");
     double t = pose_msg->header.stamp.sec;
     last_vio_t = t;
     Eigen::Vector3d vio_t(pose_msg->pose.pose.position.x, pose_msg->pose.pose.position.y, pose_msg->pose.pose.position.z);
@@ -104,17 +54,13 @@ void vio_callback(const nav_msgs::msg::Odometry::SharedPtr pose_msg)
         // 10ms sync tolerance
         if(gps_t >= t - 0.01 && gps_t <= t + 0.01)
         {
-            //printf("receive GPS with timestamp %f\n", GPS_msg->header.stamp.sec);
             double latitude = GPS_msg->latitude;
             double longitude = GPS_msg->longitude;
             double altitude = GPS_msg->altitude;
-            //int numSats = GPS_msg->status.service;
             double pos_accuracy = GPS_msg->position_covariance[0];
             if(pos_accuracy <= 0)
                 pos_accuracy = 1;
-            //printf("receive covariance %lf \n", pos_accuracy);
-            //if(GPS_msg->status.status > 8)
-                globalEstimator.inputGPS(t, latitude, longitude, altitude, pos_accuracy);
+            globalEstimator.inputGPS(t, latitude, longitude, altitude, pos_accuracy);
             gpsQueue.pop();
             break;
         }
@@ -142,23 +88,6 @@ void vio_callback(const nav_msgs::msg::Odometry::SharedPtr pose_msg)
     odometry.pose.pose.orientation.w = global_q.w();
     pub_global_odometry->publish(odometry);
     pub_global_path->publish(*global_path);
-    publish_car_model(t, global_t, global_q);
-
-
-    // write result to file
-    std::ofstream foutC("/home/tony-ws1/output/vio_global.csv", ios::app);
-    foutC.setf(ios::fixed, ios::floatfield);
-    foutC.precision(0);
-    foutC << pose_msg->header.stamp.sec * 1e9 << ",";
-    foutC.precision(5);
-    foutC << global_t.x() << ","
-            << global_t.y() << ","
-            << global_t.z() << ","
-            << global_q.w() << ","
-            << global_q.x() << ","
-            << global_q.y() << ","
-            << global_q.z() << endl;
-    foutC.close();
 }
 
 
@@ -190,8 +119,6 @@ int main(int argc, char **argv)
 
     pub_global_path = n->create_publisher<nav_msgs::msg::Path>("global_path", 100);
     pub_global_odometry = n->create_publisher<nav_msgs::msg::Odometry>("global_odometry", 100);
-    pub_car = n->create_publisher<visualization_msgs::msg::MarkerArray>("car_model", 1000);
-
 
     global_path = &(globalEstimator.global_path);
     rclcpp::spin(n);

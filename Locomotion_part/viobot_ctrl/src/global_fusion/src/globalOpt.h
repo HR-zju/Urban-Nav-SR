@@ -26,8 +26,6 @@
 #include <rclcpp/rclcpp.hpp>
 #include <stdio.h>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
-#include <visualization_msgs/msg/marker.hpp>
-#include <visualization_msgs/msg/marker_array.hpp>
 #include <queue>
 
 using namespace std;
