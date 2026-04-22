@@ -253,6 +253,32 @@ void GnssSppNode::meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPt
 
     yaw_bridge_.set_latest_raw_ecef(corrected_ecef_pos, this->now().seconds());
 
+    // ====== 动态平移修正更新 ======
+    if (is_origin_set_ && is_algo_running_) {
+        // 当前 SPP 转换到初始原点的 ENU 坐标系下
+        Eigen::Vector3d gnss_enu = R_enu2ecef_.transpose() * (corrected_ecef_pos - origin_ecef_);
+        // 与里程计推算的理想位置之间的误差
+        Eigen::Vector3d error = gnss_enu - latest_ideal_enu_pos_;
+        
+        // 异常点剔除: 检查瞬时误差与当前平滑值的差异
+        Eigen::Vector3d innovation = error - smoothed_translation_offset_;
+        double innovation_2d = std::hypot(innovation.x(), innovation.y());
+        
+        if (innovation_2d > TRANSLATION_OUTLIER_THRESHOLD) {
+            RCLCPP_WARN_THROTTLE(logger, *clock, 2000,
+                                 "SPP Translation Outlier: 2D jump %.2f m > %.2f m. Ignoring.",
+                                 innovation_2d, TRANSLATION_OUTLIER_THRESHOLD);
+        } else {
+            // 低通滤波平滑更新偏移量
+            smoothed_translation_offset_ += TRANSLATION_FILTER_GAIN * innovation;
+            
+            RCLCPP_DEBUG_THROTTLE(logger, *clock, 2000,
+                                  "Translation Offset: err=[%.2f, %.2f, %.2f], smoothed=[%.2f, %.2f, %.2f]",
+                                  error.x(), error.y(), error.z(),
+                                  smoothed_translation_offset_.x(), smoothed_translation_offset_.y(), smoothed_translation_offset_.z());
+        }
+    }
+
     RCLCPP_INFO_THROTTLE(logger, *clock, 2000,
                             "SPP Succeeded | Lat: %.8f, Lon: %.8f, Alt: %.2f m | Sats: %zu",
                             lat_deg, lon_deg, alt, robust_obs.size());
@@ -368,6 +394,8 @@ void GnssSppNode::algo_status_callback(const system_ctrl::msg::AlgoStatus::Const
         has_latest_odom_ = false;
         prev_yaw_offset_rad_ = 0.0;
         yaw_stable_count_ = 0;
+        smoothed_translation_offset_.setZero();
+        latest_ideal_enu_pos_.setZero();
         transition_gnss_status(GnssStatusState::Idle);
     }
 }
@@ -480,17 +508,21 @@ void GnssSppNode::odom_callback(const nav_msgs::msg::Odometry::ConstSharedPtr ms
     // 直接旋转：计算当前 yaw 下的理想位置
     const Eigen::Vector3d ideal_enu_pos = yaw_bridge_.rotate_raw_to_enu(enu_pos_rel);
 
+    // 记录并应用动态平移修正
+    latest_ideal_enu_pos_ = ideal_enu_pos;
+    const Eigen::Vector3d ideal_enu_pos_corrected = ideal_enu_pos + smoothed_translation_offset_;
+
     // 渐进修正注入：增量式保平滑 + 渐进追踪直接旋转的理想位置
     if (!has_prev_enu_pos_raw_) {
-        accumulated_enu_pos_ = ideal_enu_pos;
+        accumulated_enu_pos_ = ideal_enu_pos_corrected;
         has_prev_enu_pos_raw_ = true;
     } else {
         // 增量式累积（帧间平滑）
         const Eigen::Vector3d delta_raw = enu_pos_rel - prev_enu_pos_raw_;
         accumulated_enu_pos_ += yaw_bridge_.rotate_raw_to_enu(delta_raw);
 
-        // 渐进注入修正量，使累积位置逐渐收敛到理想位置
-        const Eigen::Vector3d correction = ideal_enu_pos - accumulated_enu_pos_;
+        // 渐进注入修正量，使累积位置逐渐收敛到修正后的理想位置
+        const Eigen::Vector3d correction = ideal_enu_pos_corrected - accumulated_enu_pos_;
         accumulated_enu_pos_ += YAW_CORRECTION_RATE * correction;
     }
     prev_enu_pos_raw_ = enu_pos_rel;

@@ -206,4 +206,10 @@ private:
     Eigen::Vector3d origin_odom_offset_{0.0, 0.0, 0.0};
     Eigen::Vector3d latest_odom_pos_raw_{0.0, 0.0, 0.0};
     bool has_latest_odom_ = false;
+
+    // 动态平移修正: 跟踪 GNSS 原点的缓慢漂移，并平滑注入修正中
+    static constexpr double TRANSLATION_FILTER_GAIN = 0.01; // 较小增益实现平滑收敛
+    static constexpr double TRANSLATION_OUTLIER_THRESHOLD = 10.0; // 异常点剔除阈值
+    Eigen::Vector3d smoothed_translation_offset_{0.0, 0.0, 0.0};
+    Eigen::Vector3d latest_ideal_enu_pos_{0.0, 0.0, 0.0};
 };
