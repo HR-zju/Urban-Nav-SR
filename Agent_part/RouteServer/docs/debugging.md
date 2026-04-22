@@ -45,6 +45,18 @@ python examples/zero_shot_visual_prompt_agent_client.py \
   --save-overlay /tmp/visual_prompt.svg
 ```
 
+带 SAM3 segmentation 约束：
+
+```bash
+python examples/yuquan_visual_prompt_agent_client.py \
+  --image-path /home/ubuntu/WorkSpace/project/SR/test4.jpg \
+  --fpv-segmentation-npy /path/to/000005_segmentation.npy \
+  --fpv-segmentation-class-mapping /path/to/class_mapping.json \
+  --fpv-segmentation-visualization /path/to/000005_visualization.jpg \
+  --save-overlay /tmp/yuquan_visual_prompt_overlay.svg \
+  --save-json /tmp/yuquan_visual_prompt_result.json
+```
+
 ### Dynamic Via Points
 
 ```bash
