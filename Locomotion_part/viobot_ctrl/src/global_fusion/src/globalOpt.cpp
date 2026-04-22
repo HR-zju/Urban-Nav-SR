@@ -11,6 +11,8 @@
 
 #include "globalOpt.h"
 #include "Factors.h"
+#include <fstream>
+#include <iomanip>
 
 
 GlobalOptimization::GlobalOptimization()
@@ -24,6 +26,15 @@ GlobalOptimization::GlobalOptimization()
 GlobalOptimization::~GlobalOptimization()
 {
     threadOpt.detach();
+    if (kml_file.is_open()) {
+        kml_file << "        </coordinates>\n";
+        kml_file << "      </LineString>\n";
+        kml_file << "    </Placemark>\n";
+        kml_file << "  </Document>\n";
+        kml_file << "</kml>\n";
+        kml_file.close();
+        std::cout << "\033[1;32m [Global Fusion] KML file saved successfully! \033[0m" << std::endl;
+    }
 }
 
 void GlobalOptimization::GPS2XYZ(double latitude, double longitude, double altitude, double* xyz)
@@ -34,6 +45,45 @@ void GlobalOptimization::GPS2XYZ(double latitude, double longitude, double altit
         initGPS = true;
     }
     geoConverter.Forward(latitude, longitude, altitude, xyz[0], xyz[1], xyz[2]);
+}
+
+bool GlobalOptimization::XYZ2LLA(Eigen::Vector3d P, double &lat, double &lon, double &alt)
+{
+    if(!initGPS) return false;
+    geoConverter.Reverse(P.x(), P.y(), P.z(), lat, lon, alt);
+    return true;
+}
+
+void GlobalOptimization::openKML(const std::string& file_path) {
+    kml_file.open(file_path, std::ios::out);
+    if (kml_file.is_open()) {
+        kml_file << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
+        kml_file << "<kml xmlns=\"http://www.opengis.net/kml/2.2\">\n";
+        kml_file << "  <Document>\n";
+        kml_file << "    <name>GNSS Trajectory</name>\n";
+        kml_file << "    <Style id=\"track_style\">\n";
+        kml_file << "      <LineStyle>\n";
+        kml_file << "        <color>ff0000ff</color>\n";
+        kml_file << "        <width>4</width>\n";
+        kml_file << "      </LineStyle>\n";
+        kml_file << "    </Style>\n";
+        kml_file << "    <Placemark>\n";
+        kml_file << "      <name>Path</name>\n";
+        kml_file << "      <styleUrl>#track_style</styleUrl>\n";
+        kml_file << "      <LineString>\n";
+        kml_file << "        <tessellate>1</tessellate>\n";
+        kml_file << "        <coordinates>\n";
+    } else {
+        std::cerr << "Failed to open KML file: " << file_path << std::endl;
+    }
+}
+
+void GlobalOptimization::appendKML(double lat, double lon, double alt) {
+    if (kml_file.is_open()) {
+        kml_file << std::fixed << std::setprecision(8) 
+                 << "          " << lon << "," << lat << "," << alt << "\n";
+        kml_file.flush();
+    }
 }
 
 void GlobalOptimization::inputOdom(double t, Eigen::Vector3d OdomP, Eigen::Quaterniond OdomQ)
@@ -103,7 +153,7 @@ void GlobalOptimization::optimize()
             ceres::Problem problem;
             ceres::Solver::Options options;
             options.linear_solver_type = ceres::SPARSE_NORMAL_CHOLESKY;
-            options.max_num_iterations = 5;
+            options.max_num_iterations = 10;
             ceres::Solver::Summary summary;
             ceres::LossFunction *loss_function;
             loss_function = new ceres::HuberLoss(1.0);
@@ -169,6 +219,7 @@ void GlobalOptimization::optimize()
 
             }
             ceres::Solve(options, &problem, &summary);
+            std::cout << "[Global Fusion] Ceres Report: " << summary.BriefReport() << std::endl;
 
             // update global pose
             iter = globalPoseMap.begin();
@@ -224,4 +275,5 @@ void GlobalOptimization::updateGlobalPath()
         pose_stamped.pose.orientation.z = iter->second[6];
         global_path.poses.push_back(pose_stamped);
     }
+
 }

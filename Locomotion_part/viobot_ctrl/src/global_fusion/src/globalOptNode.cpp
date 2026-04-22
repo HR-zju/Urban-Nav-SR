@@ -25,6 +25,7 @@
 GlobalOptimization globalEstimator;
 rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_global_odometry;
 rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_global_path;
+rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr pub_global_lla;
 nav_msgs::msg::Path *global_path;
 std::string world_frame_id;
 std::string body_frame_id;
@@ -34,7 +35,7 @@ std::mutex m_buf;
 
 void vio_callback(const nav_msgs::msg::Odometry::SharedPtr pose_msg)
 {
-    double t = pose_msg->header.stamp.sec;
+    double t = pose_msg->header.stamp.sec + pose_msg->header.stamp.nanosec * 1e-9;
     last_vio_t = t;
     Eigen::Vector3d vio_t(pose_msg->pose.pose.position.x, pose_msg->pose.pose.position.y, pose_msg->pose.pose.position.z);
     Eigen::Quaterniond vio_q;
@@ -42,6 +43,7 @@ void vio_callback(const nav_msgs::msg::Odometry::SharedPtr pose_msg)
     vio_q.x() = pose_msg->pose.pose.orientation.x;
     vio_q.y() = pose_msg->pose.pose.orientation.y;
     vio_q.z() = pose_msg->pose.pose.orientation.z;
+
     globalEstimator.inputOdom(t, vio_t, vio_q);
 
 
@@ -49,10 +51,21 @@ void vio_callback(const nav_msgs::msg::Odometry::SharedPtr pose_msg)
     while(!gpsQueue.empty())
     {
         sensor_msgs::msg::NavSatFix::ConstPtr GPS_msg = gpsQueue.front();
-        double gps_t = GPS_msg->header.stamp.sec;
-        printf("vio t: %f, gps t: %f \n", t, gps_t);
-        // 10ms sync tolerance
-        if(gps_t >= t - 0.01 && gps_t <= t + 0.01)
+        double gps_t = GPS_msg->header.stamp.sec + GPS_msg->header.stamp.nanosec * 1e-9;
+        
+        // Auto-align massive time offsets (e.g. days of difference in dataset)
+        static bool time_offset_init = false;
+        static double time_offset = 0.0;
+        if (!time_offset_init) {
+            time_offset = gps_t - t;
+            time_offset_init = true;
+            printf("[Global Fusion] Auto-aligned GPS and VIO time. Offset: %f s\n", time_offset);
+        }
+
+        double aligned_gps_t = gps_t - time_offset;
+
+        // 20ms sync tolerance
+        if(aligned_gps_t >= t - 0.02 && aligned_gps_t <= t + 0.02)
         {
             double latitude = GPS_msg->latitude;
             double longitude = GPS_msg->longitude;
@@ -64,9 +77,9 @@ void vio_callback(const nav_msgs::msg::Odometry::SharedPtr pose_msg)
             gpsQueue.pop();
             break;
         }
-        else if(gps_t < t - 0.01)
+        else if(aligned_gps_t < t - 0.02)
             gpsQueue.pop();
-        else if(gps_t > t + 0.01)
+        else if(aligned_gps_t > t + 0.02)
             break;
     }
     m_buf.unlock();
@@ -88,6 +101,22 @@ void vio_callback(const nav_msgs::msg::Odometry::SharedPtr pose_msg)
     odometry.pose.pose.orientation.w = global_q.w();
     pub_global_odometry->publish(odometry);
     pub_global_path->publish(*global_path);
+
+    double lat, lon, alt;
+    if (globalEstimator.XYZ2LLA(global_t, lat, lon, alt))
+    {
+        sensor_msgs::msg::NavSatFix lla_msg;
+        lla_msg.header = pose_msg->header;
+        lla_msg.header.frame_id = world_frame_id;
+        lla_msg.latitude = lat;
+        lla_msg.longitude = lon;
+        lla_msg.altitude = alt;
+        pub_global_lla->publish(lla_msg);
+
+        globalEstimator.appendKML(lat, lon, alt);
+    } else {
+        std::cout << "[Global Fusion] Failed to convert XYZ to LLA" << std::endl;
+    }
 }
 
 
@@ -109,9 +138,13 @@ int main(int argc, char **argv)
 
     n->declare_parameter<std::string>("world_frame_id", "world");
     n->declare_parameter<std::string>("body_frame_id", "body");
+    n->declare_parameter<std::string>("kml_output_path", "/tmp/global_fusion_path.kml");
     world_frame_id = n->get_parameter("world_frame_id").as_string();
     body_frame_id = n->get_parameter("body_frame_id").as_string();
     globalEstimator.world_frame_id = world_frame_id;
+    
+    std::string kml_output_path = n->get_parameter("kml_output_path").as_string();
+    globalEstimator.openKML(kml_output_path);
 
     auto sub_GPS = n->create_subscription<sensor_msgs::msg::NavSatFix>("/baton/gnss/spp_fix_raw", rclcpp::QoS(rclcpp::KeepLast(100)), GPS_callback);
 
@@ -119,6 +152,7 @@ int main(int argc, char **argv)
 
     pub_global_path = n->create_publisher<nav_msgs::msg::Path>("global_path", 100);
     pub_global_odometry = n->create_publisher<nav_msgs::msg::Odometry>("global_odometry", 100);
+    pub_global_lla = n->create_publisher<sensor_msgs::msg::NavSatFix>("/baton/nav/global_lla", 100);
 
     global_path = &(globalEstimator.global_path);
     rclcpp::spin(n);

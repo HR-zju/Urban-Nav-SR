@@ -13,6 +13,7 @@
 #include <vector>
 #include <map>
 #include <iostream>
+#include <fstream>
 #include <mutex>
 #include <thread>
 #include <eigen3/Eigen/Dense>
@@ -38,8 +39,12 @@ public:
 	void inputGPS(double t, double latitude, double longitude, double altitude, double posAccuracy);
 	void inputOdom(double t, Eigen::Vector3d OdomP, Eigen::Quaterniond OdomQ);
 	void getGlobalOdom(Eigen::Vector3d &odomP, Eigen::Quaterniond &odomQ);
+	bool XYZ2LLA(Eigen::Vector3d P, double &lat, double &lon, double &alt);
 	nav_msgs::msg::Path global_path;
 	std::string world_frame_id = "world";
+	void openKML(const std::string& file_path);
+	void appendKML(double lat, double lon, double alt);
+	std::ofstream kml_file;
 
 private:
 	void GPS2XYZ(double latitude, double longitude, double altitude, double* xyz);
