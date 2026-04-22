@@ -32,6 +32,11 @@ from mcp_server.brain import (
     build_direct_prompt_verifier_system_prompt,
     coerce_direct_prompt_decision,
 )
+from mcp_server.brain.fpv_segmentation import (
+    load_fpv_segmentation_context,
+    segmentation_summary_for_llm,
+    validate_rendered_prompt_against_segmentation,
+)
 from mcp_server.llm import (
     GoalDecomposer,
     ItineraryCandidateJudge,
@@ -460,6 +465,37 @@ def _reject_visual_prompt_decision(
         rendered_prompt=None,
         debug={},
     )
+
+
+def _apply_segmentation_constraint(
+    *,
+    decision: VisualPromptDecision | None,
+    route_context: Dict[str, Any],
+    segmentation_context: Dict[str, Any] | None,
+) -> tuple[VisualPromptDecision | None, Dict[str, Any] | None]:
+    if decision is None or not isinstance(decision.rendered_prompt, dict) or not isinstance(segmentation_context, dict):
+        return decision, None
+    validation = validate_rendered_prompt_against_segmentation(decision.rendered_prompt, segmentation_context)
+    if validation is None:
+        return decision, None
+    decision.debug = dict(decision.debug or {})
+    decision.debug["fpv_segmentation_validation"] = validation
+    if validation.get("valid"):
+        return decision, validation
+    reason = (
+        "FPV segmentation traversability constraint rejected the rendered prompt: "
+        f"{validation.get('reason')}"
+    )
+    rejected = _reject_visual_prompt_decision(
+        reason=reason,
+        arbiter_source="fpv_segmentation_reject",
+        route_context=route_context,
+    )
+    rejected.debug["fpv_segmentation_validation"] = validation
+    rejected.debug["rejected_rendered_prompt"] = decision.rendered_prompt
+    rejected.debug["rejected_instruction"] = decision.instruction
+    rejected.debug["rejected_confidence"] = decision.confidence
+    return rejected, validation
 
 
 def _coerce_location_text(value: Any) -> str:
@@ -2128,6 +2164,7 @@ async def run_zero_shot_visual_prompt_agent(
     ctx: Context,
     image_path: Optional[str] = None,
     image_url: Optional[str] = None,
+    fpv_segmentation: Optional[Dict[str, Any]] = None,
     heading_deg: Optional[float] = None,
     lookahead_m: float = 20.0,
     off_route_threshold_m: float = 20.0,
@@ -2175,6 +2212,20 @@ async def run_zero_shot_visual_prompt_agent(
     route_context_dict = route_context_to_dict(state.route_context)
     local_bev_dict = local_bev_context_to_dict(state.local_bev_context)
     image_width, image_height = _prompt_image_size(image_path=image_path, image_url=image_url)
+    segmentation_context = None
+    segmentation_summary = None
+    segmentation_error: str | None = None
+    if isinstance(fpv_segmentation, dict):
+        try:
+            segmentation_context = load_fpv_segmentation_context(
+                fpv_segmentation,
+                navigation_mode=navigation_mode,
+                image_width=image_width,
+                image_height=image_height,
+            )
+            segmentation_summary = segmentation_summary_for_llm(segmentation_context)
+        except Exception as exc:
+            segmentation_error = str(exc)
 
     llm_raw: Dict[str, Any] | None = None
     verifier_raw: Dict[str, Any] | None = None
@@ -2201,6 +2252,7 @@ async def run_zero_shot_visual_prompt_agent(
                 image_width=image_width,
                 image_height=image_height,
                 navigation_mode=navigation_mode,
+                fpv_segmentation_summary=segmentation_summary,
             )
             system_prompt = build_direct_prompt_system_prompt()
             if str(image_path or "").strip():
@@ -2223,6 +2275,11 @@ async def run_zero_shot_visual_prompt_agent(
                 image_width=image_width,
                 image_height=image_height,
             )
+            decision, _ = _apply_segmentation_constraint(
+                decision=decision,
+                route_context=route_context_dict,
+                segmentation_context=segmentation_context,
+            )
             if (
                 enable_verifier
                 and decision is not None
@@ -2236,6 +2293,7 @@ async def run_zero_shot_visual_prompt_agent(
                         image_width=image_width,
                         image_height=image_height,
                         navigation_mode=navigation_mode,
+                        fpv_segmentation_summary=segmentation_summary,
                     )
                     verifier_system_prompt = build_direct_prompt_verifier_system_prompt()
                     if str(image_path or "").strip():
@@ -2258,6 +2316,11 @@ async def run_zero_shot_visual_prompt_agent(
                         route_context=route_context_dict,
                         image_width=image_width,
                         image_height=image_height,
+                    )
+                    verified_decision, _ = _apply_segmentation_constraint(
+                        decision=verified_decision,
+                        route_context=route_context_dict,
+                        segmentation_context=segmentation_context,
                     )
                     if verified_decision is not None:
                         verified_decision.arbiter_source = "llm_direct_verified"
@@ -2300,6 +2363,10 @@ async def run_zero_shot_visual_prompt_agent(
         decision_dict["debug"]["llm_error"] = llm_error
     if verifier_error:
         decision_dict["debug"]["verifier_error"] = verifier_error
+    if segmentation_error:
+        decision_dict["debug"]["fpv_segmentation_error"] = segmentation_error
+    if segmentation_summary:
+        decision_dict["debug"]["fpv_segmentation_summary"] = segmentation_summary
     if not enable_verifier:
         decision_dict["debug"]["verifier_skipped"] = True
 
@@ -2332,6 +2399,7 @@ async def run_zero_shot_visual_prompt_agent(
         "overlay_svg_data_url": _svg_to_data_url(overlay_svg),
         "generator_overlay_svg": generator_overlay_svg,
         "generator_overlay_svg_data_url": generator_overlay_svg_data_url,
+        "fpv_segmentation_summary": segmentation_summary,
     }
 
 
