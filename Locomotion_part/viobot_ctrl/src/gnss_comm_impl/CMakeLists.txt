@@ -24,12 +24,12 @@ find_package(glog REQUIRED)
 
 set(SOURCE_FILES
   src/app_node.cpp
-  src/stereo_yaw_bridge.cpp
   src/gnss_ros.cpp
   src/gnss_spp.cpp
   src/gnss_utility.cpp
   src/rinex_helper.cpp
   src/kml_exporter.cpp
+  src/dynamic_aligner.cpp
 )
 
 add_executable(app_node ${SOURCE_FILES})

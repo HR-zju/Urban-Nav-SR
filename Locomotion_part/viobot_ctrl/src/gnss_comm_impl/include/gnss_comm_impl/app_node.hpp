@@ -23,7 +23,7 @@
 #include "gnss_comm_impl/gnss_spp.hpp"
 #include "gnss_comm_impl/gnss_utility.hpp"
 #include "gnss_comm_impl/kml_exporter.hpp"
-#include "gnss_comm_impl/stereo_yaw_bridge.hpp"
+#include "gnss_comm_impl/dynamic_aligner.hpp"
 
 class GnssSppNode : public rclcpp::Node
 {
@@ -40,16 +40,14 @@ public:
         const std::string kml_directory = this->declare_parameter<std::string>("kml_directory", "/home/symc/data/kml");
         const std::string kml_raw_directory = this->declare_parameter<std::string>("kml_raw_directory", "/home/symc/data/kml_raw");
 
-        const int yaw_min_samples = this->declare_parameter<int>("yaw_bridge.min_samples", 5);
-        const double yaw_min_baseline_m = this->declare_parameter<double>("yaw_bridge.min_baseline_m", 2.0);
-        const double yaw_gnss_stale_sec = this->declare_parameter<double>("yaw_bridge.gnss_stale_sec", 1.5);
-        const double yaw_update_gain = this->declare_parameter<double>("yaw_bridge.update_gain", 0.03);
-        const double yaw_max_step_deg = this->declare_parameter<double>("yaw_bridge.max_step_deg", 2.0);
-        const double yaw_max_innovation_deg = this->declare_parameter<double>("yaw_bridge.max_innovation_deg", 25.0);
+        const int aligner_window_size = this->declare_parameter<int>("dynamic_aligner.window_size", 100);
+        const double aligner_min_dist = this->declare_parameter<double>("dynamic_aligner.min_dist", 1.0);
+        const int aligner_ransac_iters = this->declare_parameter<int>("dynamic_aligner.ransac_iters", 100);
+        const double aligner_inlier_thresh = this->declare_parameter<double>("dynamic_aligner.inlier_thresh", 2.0);
+        const double aligner_filter_gain = this->declare_parameter<double>("dynamic_aligner.filter_gain", 0.05);
+        const int aligner_anchor_window = this->declare_parameter<int>("dynamic_aligner.anchor_window_size", 50);
+        const double aligner_anchor_dist = this->declare_parameter<double>("dynamic_aligner.anchor_min_dist", 10.0);
         const std::vector<double> gnss_initial_calibration_enu = this->declare_parameter<std::vector<double>>("gnss.initial_calibration_enu", std::vector<double>{0.0, 0.0, 0.0});
-
-        enable_bridge_diagnostics_ = this->declare_parameter<bool>("diagnostics.enable_bridge", false);
-        bridge_diag_topic_ = this->declare_parameter<std::string>("diagnostics.bridge_topic", "/baton/gnss/bridge_diagnostics");
 
         if (gnss_initial_calibration_enu.size() == 3) {
             gnss_initial_calibration_enu_ = Eigen::Vector3d(gnss_initial_calibration_enu[0], gnss_initial_calibration_enu[1], gnss_initial_calibration_enu[2]);
@@ -58,22 +56,19 @@ public:
             gnss_initial_calibration_enu_.setZero();
         }
 
-        gnss_comm_impl::StereoYawBridge::Config yaw_cfg;
-        yaw_cfg.min_samples = std::max(1, yaw_min_samples);
-        yaw_cfg.min_baseline_m = std::max(0.1, yaw_min_baseline_m);
-        yaw_cfg.gnss_stale_sec = std::max(0.1, yaw_gnss_stale_sec);
-        yaw_cfg.update_gain = std::max(0.001, yaw_update_gain);
-        yaw_cfg.max_step_rad = std::max(0.1, yaw_max_step_deg) * gnss_comm_impl::StereoYawBridge::PI / 180.0;
-        yaw_cfg.max_innovation_rad = std::max(1.0, yaw_max_innovation_deg) * gnss_comm_impl::StereoYawBridge::PI / 180.0;
-        yaw_bridge_ = gnss_comm_impl::StereoYawBridge(yaw_cfg);
+        gnss_comm_impl::DynamicAligner::Config aligner_cfg;
+        aligner_cfg.window_size = std::max(10, aligner_window_size);
+        aligner_cfg.min_dist_between_pairs = std::max(0.1, aligner_min_dist);
+        aligner_cfg.ransac_iterations = std::max(10, aligner_ransac_iters);
+        aligner_cfg.ransac_inlier_thresh = std::max(0.1, aligner_inlier_thresh);
+        aligner_cfg.filter_gain = std::max(0.001, aligner_filter_gain);
+        aligner_cfg.anchor_window_size = std::max(1, aligner_anchor_window);
+        aligner_cfg.anchor_min_dist = std::max(1.0, aligner_anchor_dist);
+        dynamic_aligner_ = gnss_comm_impl::DynamicAligner(aligner_cfg);
 
         if (enable_kml_export) {
             kml_exporter_ = std::make_unique<gnss_comm::KmlExporter>(kml_directory);
             kml_exporter_raw_ = std::make_unique<gnss_comm::KmlExporter>(kml_raw_directory);
-        }
-
-        if (enable_bridge_diagnostics_) {
-            pub_bridge_diag_ = this->create_publisher<std_msgs::msg::String>(bridge_diag_topic_, 10);
         }
 
         sub_ephem_ = this->create_subscription<gnss_comm::msg::GnssEphemMsg>(
@@ -133,7 +128,6 @@ private:
     void transition_gnss_status(GnssStatusState next_state);
     void publish_gnss_status();
     static const char *gnss_status_to_string(GnssStatusState state);
-    void publish_bridge_diagnostics(const gnss_comm_impl::StereoYawBridge::UpdateResult &result);
     
 private:
     void filter_iono_free(const std::vector<gnss_comm::ObsPtr>& obs_in, const std::vector<gnss_comm::EphemBasePtr>& ephem_in, std::vector<gnss_comm::ObsPtr>& obs_out, std::vector<gnss_comm::EphemBasePtr>& ephem_out);
@@ -177,39 +171,17 @@ private:
     static constexpr double STABILITY_THRESHOLD = 1.0; // 稳定阈值
 
     bool is_algo_running_ = false;
-    bool is_yaw_bridge_initialized_ = false;  // 阶段1: yaw bridge 有临时 origin
-    bool is_yaw_calibrated_flag_ = false;     // yaw 已标定
-    bool is_origin_set_   = false;            // 阶段2: 最终融合 origin 已设定
+    bool is_origin_set_   = false;
     GnssStatusState current_gnss_status_ = GnssStatusState::Idle;
-    gnss_comm_impl::StereoYawBridge yaw_bridge_;
-    bool enable_bridge_diagnostics_ = false;
-    std::string bridge_diag_topic_;
+    
+    gnss_comm_impl::DynamicAligner dynamic_aligner_;
+    
     Eigen::Vector3d gnss_initial_calibration_enu_{0.0, 0.0, 0.0};
 
     Eigen::Vector3d origin_ecef_{0.0, 0.0, 0.0};
     Eigen::Vector3d origin_lla_{0.0, 0.0, 0.0};
     Eigen::Matrix3d R_enu2ecef_{Eigen::Matrix3d::Identity()};
 
-    // 渐进修正注入: 增量式保平滑 + 逐帧追踪直接旋转的理想位置，消除 yaw 误差固化
-    static constexpr double YAW_CORRECTION_RATE = 0.05; // 每帧注入 5% 修正量，半衰期 ~14帧
-    Eigen::Vector3d prev_enu_pos_raw_{0.0, 0.0, 0.0};
-    Eigen::Vector3d accumulated_enu_pos_{0.0, 0.0, 0.0};
-    bool has_prev_enu_pos_raw_ = false;
-
-    // yaw 收敛检测: 标定后等 yaw 变化率足够小才设定最终 origin
-    double prev_yaw_offset_rad_ = 0.0;
-    int yaw_stable_count_ = 0;
-    static constexpr int YAW_STABLE_REQUIRED = 3;       // 连续 N 次小变化
-    static constexpr double YAW_CONVERGE_THRESH_DEG = 5.0; // 每次变化 < 5°
-
-    // 里程计原点偏移: stereo 起点 ≠ GNSS origin, 需记录 origin 时刻的 stereo 位置
-    Eigen::Vector3d origin_odom_offset_{0.0, 0.0, 0.0};
     Eigen::Vector3d latest_odom_pos_raw_{0.0, 0.0, 0.0};
     bool has_latest_odom_ = false;
-
-    // 动态平移修正: 跟踪 GNSS 原点的缓慢漂移，并平滑注入修正中
-    static constexpr double TRANSLATION_FILTER_GAIN = 0.01; // 较小增益实现平滑收敛
-    static constexpr double TRANSLATION_OUTLIER_THRESHOLD = 10.0; // 异常点剔除阈值
-    Eigen::Vector3d smoothed_translation_offset_{0.0, 0.0, 0.0};
-    Eigen::Vector3d latest_ideal_enu_pos_{0.0, 0.0, 0.0};
 };

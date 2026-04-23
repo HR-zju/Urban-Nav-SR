@@ -53,22 +53,7 @@ void GnssSppNode::transition_gnss_status(GnssStatusState next_state)
     publish_gnss_status();
 }
 
-void GnssSppNode::publish_bridge_diagnostics(const gnss_comm_impl::StereoYawBridge::UpdateResult &result)
-{
-    if (!enable_bridge_diagnostics_ || !pub_bridge_diag_) return;
 
-    std_msgs::msg::String msg;
-    std::ostringstream oss;
-    oss << "calibrated=" << (result.calibrated ? 1 : 0)
-        << ",samples=" << result.calib_samples
-        << ",gnss_fresh=" << (result.gnss_fresh ? 1 : 0)
-        << ",used_new_gnss=" << (result.used_new_gnss ? 1 : 0)
-        << ",has_measurement=" << (result.has_measurement ? 1 : 0)
-        << ",reject_count=" << result.reject_count
-        << ",yaw_deg=" << result.yaw_offset_rad * 180.0 / M_PI;
-    msg.data = oss.str();
-    pub_bridge_diag_->publish(msg);
-}
 
 Eigen::Vector3d GnssSppNode::apply_gnss_initial_calibration(const Eigen::Vector3d &ecef_pos) const
 {
@@ -251,32 +236,11 @@ void GnssSppNode::meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPt
         return;
     }
 
-    yaw_bridge_.set_latest_raw_ecef(corrected_ecef_pos, this->now().seconds());
-
-    // ====== 动态平移修正更新 ======
-    if (is_origin_set_ && is_algo_running_) {
-        // 当前 SPP 转换到初始原点的 ENU 坐标系下
+    if (is_origin_set_ && is_algo_running_ && has_latest_odom_) {
         Eigen::Vector3d gnss_enu = R_enu2ecef_.transpose() * (corrected_ecef_pos - origin_ecef_);
-        // 与里程计推算的理想位置之间的误差
-        Eigen::Vector3d error = gnss_enu - latest_ideal_enu_pos_;
-        
-        // 异常点剔除: 检查瞬时误差与当前平滑值的差异
-        Eigen::Vector3d innovation = error - smoothed_translation_offset_;
-        double innovation_2d = std::hypot(innovation.x(), innovation.y());
-        
-        if (innovation_2d > TRANSLATION_OUTLIER_THRESHOLD) {
-            RCLCPP_WARN_THROTTLE(logger, *clock, 2000,
-                                 "SPP Translation Outlier: 2D jump %.2f m > %.2f m. Ignoring.",
-                                 innovation_2d, TRANSLATION_OUTLIER_THRESHOLD);
-        } else {
-            // 低通滤波平滑更新偏移量
-            smoothed_translation_offset_ += TRANSLATION_FILTER_GAIN * innovation;
-            
-            RCLCPP_DEBUG_THROTTLE(logger, *clock, 2000,
-                                  "Translation Offset: err=[%.2f, %.2f, %.2f], smoothed=[%.2f, %.2f, %.2f]",
-                                  error.x(), error.y(), error.z(),
-                                  smoothed_translation_offset_.x(), smoothed_translation_offset_.y(), smoothed_translation_offset_.z());
-        }
+        Eigen::Vector2d odom_2d(latest_odom_pos_raw_.x(), latest_odom_pos_raw_.y());
+        Eigen::Vector2d gnss_2d(gnss_enu.x(), gnss_enu.y());
+        dynamic_aligner_.addMeasurement(odom_2d, gnss_2d);
     }
 
     RCLCPP_INFO_THROTTLE(logger, *clock, 2000,
@@ -305,9 +269,7 @@ void GnssSppNode::meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPt
         kml_exporter_raw_->add_point(lat_deg, lon_deg, alt);
     }
 
-    // ====== 两阶段 origin 建立 ======
-    // 阶段1: SPP 稳定后给 yaw bridge 设临时 origin（用于 yaw 方向计算）
-    // 阶段2: yaw 标定完成后，重新收集 SPP 设最终融合 origin（此时 stereo 位移≈0）
+    // ====== origin 建立 ======
     if (is_algo_running_ && !is_origin_set_) {
         init_ecef_buffer_.push_back(corrected_ecef_pos);
         if (init_ecef_buffer_.size() > INIT_WINDOW_SIZE) init_ecef_buffer_.pop_front();
@@ -327,43 +289,17 @@ void GnssSppNode::meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPt
             double std_dev = std::sqrt(variance);
 
             if (std_dev < STABILITY_THRESHOLD) {
-                if (!is_yaw_bridge_initialized_) {
-                    // === 阶段1: 给 yaw bridge 设临时 origin ===
-                    origin_ecef_ = mean_ecef;
-                    origin_lla_  = gnss_comm::ecef2geo(origin_ecef_);
-                    R_enu2ecef_  = gnss_comm::geo2rotation(origin_lla_);
-                    yaw_bridge_.set_origin(origin_ecef_, R_enu2ecef_);
-                    is_yaw_bridge_initialized_ = true;
-                    init_ecef_buffer_.clear();  // 清空，阶段2 重新收集
-                    transition_gnss_status(GnssStatusState::WaitingOrigin);
+                origin_ecef_ = mean_ecef;
+                origin_lla_  = gnss_comm::ecef2geo(origin_ecef_);
+                R_enu2ecef_  = gnss_comm::geo2rotation(origin_lla_);
+                is_origin_set_ = true;
+                transition_gnss_status(GnssStatusState::Fusing);
 
-                    RCLCPP_INFO(this->get_logger(),
-                        "Phase1: Yaw bridge origin set. LLA: [%.8f, %.8f, %.2f]. Waiting for yaw calibration...",
-                        origin_lla_[0], origin_lla_[1], origin_lla_[2]);
-
-                } else if (is_yaw_calibrated_flag_) {
-                    // === 阶段2: yaw 已标定，设最终融合 origin ===
-                    origin_ecef_ = mean_ecef;
-                    origin_lla_  = gnss_comm::ecef2geo(origin_ecef_);
-                    R_enu2ecef_  = gnss_comm::geo2rotation(origin_lla_);
-                    // 同步更新 yaw bridge 坐标参考，保留已标定的 yaw
-                    yaw_bridge_.update_origin(origin_ecef_, R_enu2ecef_);
-                    is_origin_set_ = true;
-                    transition_gnss_status(GnssStatusState::Fusing);
-
-                    // 记录此刻 stereo 位置作为零点偏移
-                    init_ecef_buffer_.clear();
-                    has_prev_enu_pos_raw_ = false;
-                    accumulated_enu_pos_.setZero();
-                    if (has_latest_odom_) {
-                        origin_odom_offset_ = latest_odom_pos_raw_;
-                    }
-
-                    RCLCPP_INFO(this->get_logger(),
-                        "Phase2: Fusion Origin Set! LLA: [%.8f, %.8f, %.2f]. odom_offset=[%.2f,%.2f,%.2f]",
-                        origin_lla_[0], origin_lla_[1], origin_lla_[2],
-                        origin_odom_offset_.x(), origin_odom_offset_.y(), origin_odom_offset_.z());
-                }
+                init_ecef_buffer_.clear();
+                
+                RCLCPP_INFO(this->get_logger(),
+                    "Fusion Origin Set! LLA: [%.8f, %.8f, %.2f]",
+                    origin_lla_[0], origin_lla_[1], origin_lla_[2]);
             } else {
                 RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
                     "Waiting for GNSS to stabilize... StdDev: %.2f m (need < %.2f m)",
@@ -382,20 +318,10 @@ void GnssSppNode::algo_status_callback(const system_ctrl::msg::AlgoStatus::Const
     } else {
         is_algo_running_ = false;
         // reset all states
-        is_yaw_bridge_initialized_ = false;
-        is_yaw_calibrated_flag_ = false;
         is_origin_set_ = false;
         init_ecef_buffer_.clear();
-        yaw_bridge_.reset();
-        yaw_bridge_.clear_raw_gnss();
-        has_prev_enu_pos_raw_ = false;
-        accumulated_enu_pos_.setZero();
-        origin_odom_offset_.setZero();
+        dynamic_aligner_.reset();
         has_latest_odom_ = false;
-        prev_yaw_offset_rad_ = 0.0;
-        yaw_stable_count_ = 0;
-        smoothed_translation_offset_.setZero();
-        latest_ideal_enu_pos_.setZero();
         transition_gnss_status(GnssStatusState::Idle);
     }
 }
@@ -415,86 +341,29 @@ void GnssSppNode::odom_callback(const nav_msgs::msg::Odometry::ConstSharedPtr ms
     has_latest_odom_ = true;
 
     if (!is_algo_running_) return;
-
-    // ====== 阶段1: yaw bridge 标定 + 收敛等待 ======
-    if (is_yaw_bridge_initialized_ && !is_yaw_calibrated_flag_) {
-        const auto yaw_result = yaw_bridge_.update(enu_pos_raw, this->now().seconds());
-        publish_bridge_diagnostics(yaw_result);
-
-        if (!yaw_result.calibrated) {
-            // 尚未达到 min_samples，继续采集
-            if (yaw_result.used_new_gnss && !yaw_result.has_measurement) {
-                RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 3000,
-                    "Measuring yaw: baseline too short. odom=[%.3f,%.3f,%.3f]m", x, y, z);
-            } else {
-                RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 3000,
-                    "Calibrating stereo yaw... samples=%d, gnss_fresh=%d",
-                    yaw_result.calib_samples, yaw_result.gnss_fresh ? 1 : 0);
-            }
-        } else {
-            // 已标定，只在有新 GNSS 测量导致 yaw 实际更新时才检查收敛
-            if (yaw_result.used_new_gnss && yaw_result.has_measurement) {
-                const double yaw_change_deg = std::abs(yaw_result.yaw_offset_rad - prev_yaw_offset_rad_) * 180.0 / M_PI;
-                prev_yaw_offset_rad_ = yaw_result.yaw_offset_rad;
-
-                if (yaw_change_deg < YAW_CONVERGE_THRESH_DEG) {
-                    ++yaw_stable_count_;
-                } else {
-                    yaw_stable_count_ = 0;
-                }
-
-                RCLCPP_INFO(this->get_logger(),
-                    "Yaw stabilizing... offset=%.2f deg, change=%.3f deg, stable=%d/%d",
-                    yaw_result.yaw_offset_rad * 180.0 / M_PI, yaw_change_deg,
-                    yaw_stable_count_, YAW_STABLE_REQUIRED);
-
-                if (yaw_stable_count_ >= YAW_STABLE_REQUIRED) {
-                    is_yaw_calibrated_flag_ = true;
-                    RCLCPP_INFO(this->get_logger(),
-                        "Yaw converged! offset=%.2f deg. Collecting SPP for final origin...",
-                        yaw_result.yaw_offset_rad * 180.0 / M_PI);
-                }
-            }
-        }
-        return;  // 等待收敛 + 最终 origin 设定
-    }
-
-    // ====== 阶段2: 最终 origin 已设定，输出位置 ======
     if (!is_origin_set_) return;
 
-    // 减去 origin 时刻的 stereo 位置，得到相对于 GNSS origin 的位移
-    const Eigen::Vector3d enu_pos_rel = enu_pos_raw - origin_odom_offset_;
+    auto align_res = dynamic_aligner_.align();
 
-    // yaw bridge 继续更新（精化 yaw）
-    const auto yaw_result = yaw_bridge_.update(enu_pos_raw, this->now().seconds());
-    publish_bridge_diagnostics(yaw_result);
-
-    if (!yaw_result.calibrated)
-    {
-        // yaw 丢失（连续拒绝过多导致 re-bootstrap），暂停输出
+    if (!align_res.success) {
         RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 3000,
-            "Yaw lost (re-bootstrapping). samples=%d, reject=%d",
-            yaw_result.calib_samples, yaw_result.reject_count);
+            "Dynamic aligner waiting for enough inliers. Buffer size: %zu",
+            dynamic_aligner_.getBufferSize());
         return;
-    }
-
-    if (yaw_result.used_new_gnss && yaw_result.reject_count > 0)
-    {
-        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 3000,
-            "Yaw update rejected. reject_count=%d, yaw_offset=%.2f deg",
-            yaw_result.reject_count,
-            yaw_result.yaw_offset_rad * 180.0 / M_PI);
     }
 
     const auto &q = msg->pose.pose.orientation;
     const double siny_cosp = 2.0 * (q.w * q.z + q.x * q.y);
     const double cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z);
-    const double yaw_rel = std::atan2(siny_cosp, cosy_cosp);
+    double yaw_rel = std::atan2(siny_cosp, cosy_cosp);
+    
+    // Compensate for initial VIO yaw offset (-90 degrees)
+    yaw_rel += 1.57079632679;
 
     const double e_raw_fwd = -std::sin(yaw_rel);
     const double n_raw_fwd = std::cos(yaw_rel);
-    const double c = std::cos(yaw_result.yaw_offset_rad);
-    const double s = std::sin(yaw_result.yaw_offset_rad);
+    const double c = std::cos(align_res.yaw);
+    const double s = std::sin(align_res.yaw);
     const double e_fwd = c * e_raw_fwd - s * n_raw_fwd;
     const double n_fwd = s * e_raw_fwd + c * n_raw_fwd;
 
@@ -505,41 +374,14 @@ void GnssSppNode::odom_callback(const nav_msgs::msg::Odometry::ConstSharedPtr ms
     heading_msg.data = heading_deg;
     pub_heading_->publish(heading_msg);
 
-    // 直接旋转：计算当前 yaw 下的理想位置
-    const Eigen::Vector3d ideal_enu_pos = yaw_bridge_.rotate_raw_to_enu(enu_pos_rel);
-
-    // 记录并应用动态平移修正
-    latest_ideal_enu_pos_ = ideal_enu_pos;
-    const Eigen::Vector3d ideal_enu_pos_corrected = ideal_enu_pos + smoothed_translation_offset_;
-
-    // 渐进修正注入：增量式保平滑 + 渐进追踪直接旋转的理想位置
-    if (!has_prev_enu_pos_raw_) {
-        accumulated_enu_pos_ = ideal_enu_pos_corrected;
-        has_prev_enu_pos_raw_ = true;
-    } else {
-        // 增量式累积（帧间平滑）
-        const Eigen::Vector3d delta_raw = enu_pos_rel - prev_enu_pos_raw_;
-        accumulated_enu_pos_ += yaw_bridge_.rotate_raw_to_enu(delta_raw);
-
-        // 渐进注入修正量，使累积位置逐渐收敛到修正后的理想位置
-        const Eigen::Vector3d correction = ideal_enu_pos_corrected - accumulated_enu_pos_;
-        accumulated_enu_pos_ += YAW_CORRECTION_RATE * correction;
-    }
-    prev_enu_pos_raw_ = enu_pos_rel;
-
-    // Transform to ECEF
-    Eigen::Vector3d delta_ecef = R_enu2ecef_ * accumulated_enu_pos_;
-    Eigen::Vector3d cur_ecef = origin_ecef_ + delta_ecef;
-
-    // Convert ECEF back to Geodetic LLA
+    Eigen::Vector3d fused_enu = dynamic_aligner_.transform(enu_pos_raw);
+    Eigen::Vector3d cur_ecef = origin_ecef_ + R_enu2ecef_ * fused_enu;
     Eigen::Vector3d cur_lla = gnss_comm::ecef2geo(cur_ecef);
 
     RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
-                            "Fused | Lat: %.8f, Lon: %.8f, Alt: %.2f m | acc_enu=[%.2f,%.2f,%.2f]",
-                            cur_lla[0], cur_lla[1], cur_lla[2],
-                            accumulated_enu_pos_.x(), accumulated_enu_pos_.y(), accumulated_enu_pos_.z());
+        "Fused | Lat: %.8f, Lon: %.8f, Alt: %.2f m, Heading: %.1f deg | inliers=%d",
+        cur_lla[0], cur_lla[1], cur_lla[2], heading_deg, align_res.inlier_count);
 
-    // Publish high precision fused nav sat fix
     sensor_msgs::msg::NavSatFix fix_msg;
     fix_msg.header = msg->header;
     fix_msg.header.frame_id = "gnss_link"; 
@@ -552,7 +394,6 @@ void GnssSppNode::odom_callback(const nav_msgs::msg::Odometry::ConstSharedPtr ms
     
     pub_spp_fix_->publish(fix_msg);
 
-    // Save to KML
     if (kml_exporter_) {
         kml_exporter_->add_point(cur_lla[0], cur_lla[1], cur_lla[2]);
     }
