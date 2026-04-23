@@ -57,6 +57,26 @@ python examples/yuquan_visual_prompt_agent_client.py \
   --save-json /tmp/yuquan_visual_prompt_result.json
 ```
 
+单命令串联 SAM3 和 visual prompt demo：
+
+```bash
+python tools/run_sam3_visual_prompt_pipeline.py \
+  --client yuquan \
+  --run-sam3 \
+  --rides-base-dir /path/to/rides \
+  --frames-base-dir /path/to/frames \
+  --sam3-output-base-dir /path/to/sam3_outputs \
+  --sequence-name ride_16446_20240115041752 \
+  --camera-view camera_front \
+  --fps 1.0 \
+  --checkpoint-path /media/ubuntu/data1/checkpoints/checkpoint_35_merged.pt \
+  --frame-name 000005 \
+  --client-args -- \
+  --image-path /home/ubuntu/WorkSpace/project/SR/test4.jpg \
+  --save-overlay /tmp/yuquan_visual_prompt_overlay.svg \
+  --save-json /tmp/yuquan_visual_prompt_result.json
+```
+
 ### Dynamic Via Points
 
 ```bash

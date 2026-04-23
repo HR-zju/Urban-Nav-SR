@@ -242,6 +242,28 @@ python examples/yuquan_visual_prompt_agent_client.py \
 - 对最终 `rendered_prompt` 做基于可通行类别的硬校验
 - 在输出 JSON 中返回 `agent.fpv_segmentation_summary`
 
+如果想把 “运行 SAM3” 和 “运行 visual prompt demo” 合并成一个命令，可用：
+
+```bash
+python tools/run_sam3_visual_prompt_pipeline.py \
+  --client yuquan \
+  --run-sam3 \
+  --rides-base-dir /path/to/rides \
+  --frames-base-dir /path/to/frames \
+  --sam3-output-base-dir /path/to/sam3_outputs \
+  --sequence-name ride_16446_20240115041752 \
+  --camera-view camera_front \
+  --fps 1.0 \
+  --checkpoint-path /media/ubuntu/data1/checkpoints/checkpoint_35_merged.pt \
+  --frame-name 000005 \
+  --client-args -- \
+  --image-path /home/ubuntu/WorkSpace/project/SR/test4.jpg \
+  --save-overlay /tmp/yuquan_visual_prompt_overlay.svg \
+  --save-json /tmp/yuquan_visual_prompt_result.json
+```
+
+如果 SAM3 结果已经存在，只想直接跑 demo，可去掉 `--run-sam3` 和 SAM3 预处理参数，保留 `--sam3-output-base-dir`、`--sequence-name`、`--camera-view`、`--frame-name` 即可。
+
 ### 动态途经点
 
 直接追加坐标途经点：
