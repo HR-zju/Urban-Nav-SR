@@ -316,12 +316,12 @@ bool parse_waypoints_from_json(const std::string &json_content, std::vector<Json
 {
     waypoints.clear();
 
-    std::string waypoint_array;
-    if (!extract_top_level_array_by_key(json_content, "waypoints", waypoint_array))
+    std::string polyline_array;
+    if (!extract_top_level_array_by_key(json_content, "route_polyline", polyline_array))
         return false;
 
     std::regex object_regex("\\{[^\\{\\}]*\\}");
-    std::sregex_iterator it(waypoint_array.begin(), waypoint_array.end(), object_regex);
+    std::sregex_iterator it(polyline_array.begin(), polyline_array.end(), object_regex);
     std::sregex_iterator end;
 
     for (; it != end; ++it)
@@ -335,7 +335,7 @@ bool parse_waypoints_from_json(const std::string &json_content, std::vector<Json
             continue;
 
         if (!parse_number_field(obj, {"altitude", "alt", "z"}, wp.altitude))
-            wp.altitude = 90.0;
+            wp.altitude = 33.0;
 
         if (!parse_number_field(obj, {"qw", "w"}, wp.qw))
             wp.qw = 1.0;
@@ -347,6 +347,29 @@ bool parse_waypoints_from_json(const std::string &json_content, std::vector<Json
             wp.qz = 0.0;
 
         waypoints.push_back(wp);
+    }
+
+    // Also support route_polyline as coordinate arrays, e.g. [[lon, lat], [lon, lat, alt], ...].
+    if (waypoints.empty())
+    {
+        std::regex pair_regex("\\[\\s*([-+]?[0-9]*\\.?[0-9]+(?:[eE][-+]?[0-9]+)?)\\s*,\\s*([-+]?[0-9]*\\.?[0-9]+(?:[eE][-+]?[0-9]+)?)(?:\\s*,\\s*([-+]?[0-9]*\\.?[0-9]+(?:[eE][-+]?[0-9]+)?))?\\s*\\]");
+        std::sregex_iterator pit(polyline_array.begin(), polyline_array.end(), pair_regex);
+        for (; pit != end; ++pit)
+        {
+            JsonWaypoint wp;
+            wp.longitude = std::stod((*pit)[1].str());
+            wp.latitude = std::stod((*pit)[2].str());
+            if ((*pit)[3].matched)
+                wp.altitude = std::stod((*pit)[3].str());
+            else
+                wp.altitude = 33.0;
+
+            wp.qw = 1.0;
+            wp.qx = 0.0;
+            wp.qy = 0.0;
+            wp.qz = 0.0;
+            waypoints.push_back(wp);
+        }
     }
 
     return !waypoints.empty();
@@ -418,7 +441,7 @@ void convert_json_waypoints_to_utm(const std::vector<JsonWaypoint> &waypoints)
         double latitude = waypoints[i].latitude;
         double longitude = waypoints[i].longitude;
         cout << "latitude: " << latitude << " longitude: " << longitude << std::endl;
-        double altitude = 99.0; //route_msg->poses[i].pose.position.z;   // z contains altitude
+        double altitude = 33.0; //route_msg->poses[i].pose.position.z;   // z contains altitude
         
         // Use the same conversion method as in globalOpt.cpp
         double xyz[3];
