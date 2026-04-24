@@ -537,7 +537,7 @@ void vio_callback(const nav_msgs::Odometry::ConstPtr &pose_msg)
     // printf("pub_global_odometry");
 
     // printf("pub_global_path");
-    // pub_global_path.publish(*global_path);
+    pub_global_path.publish(*global_path);
   //  publish_car_model(t, global_t, global_q);
 
 
