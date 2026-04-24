@@ -31,7 +31,6 @@ from mcp_server.map_providers import (
     MapProviderClient,
     build_amap_staticmap_url,
     create_map_client,
-    dedupe_route_coordinates,
     encode_polyline_text,
     format_location,
     parse_location_text,
@@ -2226,8 +2225,6 @@ async def find_schools_nearby(
         - Contact information if available
         - Other relevant metadata
     """
-    osm_client = ctx.request_context.lifespan_context.osm_client
-    
     # Convert radius to bounding box (approximate)
     lat_delta = radius / 111000
     lon_delta = radius / (111000 * math.cos(math.radians(latitude)))
@@ -2482,8 +2479,6 @@ async def find_ev_charging_stations(
         - Access restrictions
         - Other relevant metadata
     """
-    osm_client = ctx.request_context.lifespan_context.osm_client
-    
     # Convert radius to bounding box
     lat_delta = radius / 111000
     lon_delta = radius / (111000 * math.cos(math.radians(latitude)))
@@ -2498,7 +2493,7 @@ async def find_ev_charging_stations(
     # Build Overpass query for EV charging stations
     overpass_url = "https://overpass-api.de/api/interpreter"
     
-    query = f"""
+    query = """
     [out:json];
     (
         node["amenity"="charging_station"]({{bbox}});
@@ -2883,8 +2878,6 @@ async def find_parking_facilities(
         - Access restrictions
         - Distance from search point
     """
-    osm_client = ctx.request_context.lifespan_context.osm_client
-    
     # Convert radius to bounding box
     lat_delta = radius / 111000
     lon_delta = radius / (111000 * math.cos(math.radians(latitude)))
@@ -2899,7 +2892,7 @@ async def find_parking_facilities(
     # Build Overpass query for parking facilities
     overpass_url = "https://overpass-api.de/api/interpreter"
     
-    query = f"""
+    query = """
     [out:json];
     (
         node["amenity"="parking"]({{bbox}});

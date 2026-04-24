@@ -36,7 +36,6 @@ def get_route_progress(
     next_waypoint_index = None
     next_waypoint_distance = None
     next_turn_type = "go_straight"
-    next_waypoint = None
 
     for index, route_distance_m, item in sorted(waypoint_distances, key=lambda x: x[1]):
         if route_distance_m <= matched_distance_m:
@@ -45,7 +44,6 @@ def get_route_progress(
         next_waypoint_index = index
         next_waypoint_distance = max(0.0, route_distance_m - matched_distance_m)
         next_turn_type = str(item.get("action") or "go_straight")
-        next_waypoint = item
         break
 
     remaining_distance_m = max(0.0, route_total_m - matched_distance_m)

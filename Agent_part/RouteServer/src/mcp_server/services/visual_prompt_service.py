@@ -106,7 +106,6 @@ def _render_prompt_overlay_svg(
         dy = float(direction[1])
     except Exception:
         dx, dy = 0.0, -1.0
-    mask = rendered_prompt.get("mask")
     coverage_polygon = rendered_prompt.get("coverage_polygon_uv")
     path_samples = rendered_prompt.get("path_samples")
 

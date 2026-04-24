@@ -488,9 +488,9 @@ def _scope_limited_radius_m(radius_m: float, *, mode: str, resolution_scope: str
     if str(resolution_scope or "").strip().lower() != "session_local_via":
         return float(radius_m)
     defaults = {
-        "foot": float(os.getenv("LOCAL_VIA_MAX_RADIUS_M_FOOT", "1800") or 1800),
-        "bike": float(os.getenv("LOCAL_VIA_MAX_RADIUS_M_BIKE", "3000") or 3000),
-        "car": float(os.getenv("LOCAL_VIA_MAX_RADIUS_M_CAR", "5000") or 5000),
+        "foot": float(os.getenv("LOCAL_VIA_MAX_RADIUS_M_FOOT", "1800") or 3800),
+        "bike": float(os.getenv("LOCAL_VIA_MAX_RADIUS_M_BIKE", "3000") or 6000),
+        "car": float(os.getenv("LOCAL_VIA_MAX_RADIUS_M_CAR", "5000") or 10000),
     }
     return min(float(radius_m), defaults.get(str(mode or "").strip().lower(), 1800.0))
 
@@ -1905,7 +1905,6 @@ class DestinationRecommendationEngine:
         radius = _scope_limited_radius_m(radius, mode=chosen_mode, resolution_scope=normalized_scope)
         origin_location = f"{search_longitude},{search_latitude}"
         poi_limit = max(top_k, min(eval_limit, 25))
-        destination_type = str(parsed.get("destination_type", "poi")).strip().lower()
         destination_kind = _resolve_destination_kind(working_instruction, parsed)
         query_terms = _collect_query_terms(working_instruction, parsed)
         parsed["destination_kind"] = destination_kind
