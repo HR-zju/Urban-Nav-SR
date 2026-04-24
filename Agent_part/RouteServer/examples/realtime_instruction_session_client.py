@@ -271,10 +271,12 @@ def _instruction_cache_key(
     max_candidates: int,
     resolution_scope: str = "global_destination",
     anchor_location: str | None = None,
+    cache_namespace: str = "",
 ) -> str:
     return _stable_cache_key(
         [
             "instruction_resolution",
+            str(cache_namespace or "").strip().lower(),
             _normalize_text(instruction),
             round(float(current_latitude), 6),
             round(float(current_longitude), 6),
@@ -287,8 +289,8 @@ def _instruction_cache_key(
     )
 
 
-def _name_location_cache_key(name: str) -> str:
-    return _stable_cache_key(["name_location", _normalize_text(name)])
+def _name_location_cache_key(name: str, *, cache_namespace: str = "") -> str:
+    return _stable_cache_key(["name_location", str(cache_namespace or "").strip().lower(), _normalize_text(name)])
 
 
 def as_location_text(chosen_destination: Dict[str, Any]) -> Optional[str]:
@@ -316,11 +318,18 @@ async def resolve_instruction_to_destination(
     cache_payload: Optional[Dict[str, Any]] = None,
     resolution_scope: str = "global_destination",
     anchor_location: Optional[str] = None,
+    cache_enabled: bool = True,
+    cache_namespace: str = "",
 ) -> Dict[str, Any]:
-    instruction_cache = (cache_payload or {}).get("instruction_results", {}) if isinstance(cache_payload, dict) else {}
-    name_cache = (cache_payload or {}).get("name_locations", {}) if isinstance(cache_payload, dict) else {}
+    cache_is_enabled = bool(cache_enabled) and isinstance(cache_payload, dict)
+    instruction_cache = (cache_payload or {}).get("instruction_results", {}) if cache_is_enabled else {}
+    name_cache = (cache_payload or {}).get("name_locations", {}) if cache_is_enabled else {}
 
-    name_cached = name_cache.get(_name_location_cache_key(instruction)) if isinstance(name_cache, dict) else None
+    name_cached = (
+        name_cache.get(_name_location_cache_key(instruction, cache_namespace=cache_namespace))
+        if isinstance(name_cache, dict)
+        else None
+    )
     if isinstance(name_cached, dict) and str(name_cached.get("location") or "").strip():
         _log_timing(
             "cache_hit",
@@ -346,6 +355,7 @@ async def resolve_instruction_to_destination(
         max_candidates=max_candidates,
         resolution_scope=resolution_scope,
         anchor_location=anchor_location,
+        cache_namespace=cache_namespace,
     )
     cached = instruction_cache.get(cache_key) if isinstance(instruction_cache, dict) else None
     if isinstance(cached, dict) and str(cached.get("location") or "").strip():
@@ -357,20 +367,21 @@ async def resolve_instruction_to_destination(
         )
         return dict(cached)
 
+    tool_arguments = {
+        "user_instruction": instruction,
+        "current_latitude": current_latitude,
+        "current_longitude": current_longitude,
+        "mode": mode,
+        "search_radius": search_radius,
+        "max_candidates": max_candidates,
+        "resolution_scope": resolution_scope,
+        "anchor_location": anchor_location,
+    }
     started_at = perf_counter()
     result = await call_tool_json(
         session,
         "recommend_destination_and_waypoints",
-        {
-            "user_instruction": instruction,
-            "current_latitude": current_latitude,
-            "current_longitude": current_longitude,
-            "mode": mode,
-            "search_radius": search_radius,
-            "max_candidates": max_candidates,
-            "resolution_scope": resolution_scope,
-            "anchor_location": anchor_location,
-        },
+        tool_arguments,
     )
     _log_timing(
         "mcp_tool_call",
@@ -382,13 +393,41 @@ async def resolve_instruction_to_destination(
     )
 
     chosen = result.get("chosen_destination") or {}
+    first_attempt_result = result
+    if (not isinstance(chosen, dict) or not chosen) and str(resolution_scope).strip().lower() == "session_local_via":
+        fallback_scope = "global_destination"
+        fallback_started_at = perf_counter()
+        fallback_result = await call_tool_json(
+            session,
+            "recommend_destination_and_waypoints",
+            {
+                **tool_arguments,
+                "resolution_scope": fallback_scope,
+            },
+        )
+        _log_timing(
+            "mcp_tool_call",
+            perf_counter() - fallback_started_at,
+            tool="recommend_destination_and_waypoints",
+            instruction=instruction,
+            status="ok",
+            resolution_scope=fallback_scope,
+            reason="fallback_after_session_local_via_empty",
+        )
+        fallback_chosen = fallback_result.get("chosen_destination") or {}
+        if isinstance(fallback_chosen, dict) and fallback_chosen:
+            result = fallback_result
+            chosen = fallback_chosen
+
     if not isinstance(chosen, dict) or not chosen:
         raise RuntimeError(
             f"No chosen_destination for instruction: {instruction}\n"
             f"resolution_scope={resolution_scope}, anchor_location={anchor_location}\n"
             f"message={result.get('message')!r}, "
             f"retrieval_errors={result.get('retrieval_errors')!r}, "
-            f"meta={result.get('meta')!r}"
+            f"meta={result.get('meta')!r}\n"
+            f"first_attempt_message={first_attempt_result.get('message')!r}, "
+            f"first_attempt_meta={first_attempt_result.get('meta')!r}"
         )
     location = as_location_text(chosen)
     if not location:
@@ -401,10 +440,10 @@ async def resolve_instruction_to_destination(
         "recommend_result": result,
         "resolution_path": str((result.get("meta") or {}).get("resolution_scope") or resolution_scope),
     }
-    if isinstance(instruction_cache, dict):
+    if cache_is_enabled and isinstance(instruction_cache, dict):
         instruction_cache[cache_key] = resolved
-    if isinstance(name_cache, dict):
-        name_cache[_name_location_cache_key(resolved["name"])] = {
+    if cache_is_enabled and isinstance(name_cache, dict):
+        name_cache[_name_location_cache_key(resolved["name"], cache_namespace=cache_namespace)] = {
             "name": resolved["name"],
             "location": resolved["location"],
             "raw": chosen,
@@ -494,6 +533,7 @@ async def run_demo(
     max_candidates: int,
     cache_path: str,
     clear_cache: bool,
+    append_cache_mode: str = "disabled",
     perf_profile: str = "quality",
     session_id: str | None = None,
     non_interactive: bool = False,
@@ -502,12 +542,18 @@ async def run_demo(
     intent_model: Optional[str] = None,
 ) -> None:
     overall_started_at = perf_counter()
+    normalized_append_cache_mode = str(append_cache_mode or "disabled").strip().lower()
+    if normalized_append_cache_mode not in {"disabled", "session", "global"}:
+        normalized_append_cache_mode = "disabled"
+    use_local_cache_for_init = session_id is None
+    use_local_cache_for_append = normalized_append_cache_mode in {"session", "global"}
+    should_access_local_cache = use_local_cache_for_init or use_local_cache_for_append
     if clear_cache:
         try:
             Path(cache_path).expanduser().unlink(missing_ok=True)
         except Exception:
             pass
-    cache_payload = _load_json_cache(cache_path)
+    cache_payload = _load_json_cache(cache_path) if should_access_local_cache else _default_cache_payload()
 
     server_env = os.environ.copy()
     if map_provider:
@@ -575,6 +621,7 @@ async def run_demo(
                     search_radius=search_radius,
                     max_candidates=max_candidates,
                     cache_payload=cache_payload,
+                    cache_enabled=True,
                 )
                 _log_timing(
                     "demo_stage",
@@ -648,18 +695,50 @@ async def run_demo(
                 )
 
                 append_resolve_started_at = perf_counter()
-                resolved = await resolve_instruction_to_destination(
-                    session=session,
-                    instruction=instruction,
-                    current_latitude=current_latitude,
-                    current_longitude=current_longitude,
-                    mode=mode,
-                    search_radius=search_radius,
-                    max_candidates=max_candidates,
-                    cache_payload=cache_payload,
-                    resolution_scope="session_local_via",
-                    anchor_location=anchor_location,
-                )
+                append_cache_enabled = normalized_append_cache_mode in {"session", "global"}
+                append_cache_namespace = ""
+                if normalized_append_cache_mode == "session":
+                    append_cache_namespace = f"session:{active_session_id}"
+                try:
+                    resolved = await resolve_instruction_to_destination(
+                        session=session,
+                        instruction=instruction,
+                        current_latitude=current_latitude,
+                        current_longitude=current_longitude,
+                        mode=mode,
+                        search_radius=search_radius,
+                        max_candidates=max_candidates,
+                        cache_payload=cache_payload,
+                        resolution_scope="session_local_via",
+                        anchor_location=anchor_location,
+                        cache_enabled=append_cache_enabled,
+                        cache_namespace=append_cache_namespace,
+                    )
+                except RuntimeError as exc:
+                    if "No chosen_destination for instruction:" not in str(exc):
+                        raise
+                    _log_timing(
+                        "demo_stage",
+                        perf_counter() - append_started_at,
+                        stage_name="append_instruction",
+                        instruction=instruction,
+                        status="skipped_no_candidate",
+                    )
+                    if not non_interactive:
+                        print(
+                            json.dumps(
+                                {
+                                    "instruction": instruction,
+                                    "session_changed": False,
+                                    "skipped": True,
+                                    "reason": "no_candidate",
+                                    "error": str(exc),
+                                },
+                                indent=2,
+                                ensure_ascii=True,
+                            )
+                        )
+                    continue
                 resolution_path = str(resolved.get("resolution_path") or "session_local_via")
                 _log_timing(
                     "demo_stage",
@@ -780,7 +859,8 @@ async def run_demo(
                     )
                 )
 
-            _save_json_cache(cache_path, cache_payload)
+            if should_access_local_cache:
+                _save_json_cache(cache_path, cache_payload)
             _log_timing(
                 "demo_total",
                 perf_counter() - overall_started_at,
@@ -830,6 +910,15 @@ if __name__ == "__main__":
         help="Delete the local session demo cache before running for a cold-start measurement",
     )
     parser.add_argument(
+        "--append-cache-mode",
+        choices=["disabled", "session", "global"],
+        default="disabled",
+        help=(
+            "Local cache behavior for append instructions: disabled skips local cache reads/writes; "
+            "session isolates cache by session_id; global uses shared cache."
+        ),
+    )
+    parser.add_argument(
         "--perf-profile",
         choices=["quality", "latency"],
         default="quality",
@@ -875,6 +964,7 @@ if __name__ == "__main__":
             max_candidates=args.max_candidates,
             cache_path=args.cache_path,
             clear_cache=args.clear_cache,
+            append_cache_mode=args.append_cache_mode,
             perf_profile=args.perf_profile,
             session_id=args.session_id,
             non_interactive=args.non_interactive,
