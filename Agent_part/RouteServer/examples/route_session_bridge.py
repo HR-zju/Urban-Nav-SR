@@ -81,6 +81,73 @@ def as_location_text(chosen: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def session_search_anchor(*, session_payload: Dict[str, Any], current_lat: float, current_lon: float) -> str:
+    via_points = session_payload.get("via_points", []) or []
+    if via_points and isinstance(via_points[-1], dict):
+        via_location = str(via_points[-1].get("location") or "").strip()
+        if via_location:
+            return via_location
+    origin = str(session_payload.get("origin") or "").strip()
+    if origin:
+        return origin
+    return f"{float(current_lon)},{float(current_lat)}"
+
+
+def compact_recommendation_debug(recommend: Dict[str, Any], *, top_k: int = 3) -> Dict[str, Any]:
+    parsed = recommend.get("parsed_intent") if isinstance(recommend.get("parsed_intent"), dict) else {}
+    meta = recommend.get("meta") if isinstance(recommend.get("meta"), dict) else {}
+    recommendations = recommend.get("recommendations") if isinstance(recommend.get("recommendations"), list) else []
+    top_candidates = []
+    for item in recommendations[: max(0, int(top_k))]:
+        if not isinstance(item, dict):
+            continue
+        top_candidates.append(
+            {
+                "id": item.get("id"),
+                "name": item.get("name"),
+                "location": item.get("location"),
+                "candidate_kind": item.get("candidate_kind"),
+                "query_affinity": item.get("query_affinity"),
+                "score": item.get("score"),
+                "score_breakdown": item.get("score_breakdown"),
+                "tags": {
+                    "type": (item.get("tags") or {}).get("type") if isinstance(item.get("tags"), dict) else None,
+                    "address": (item.get("tags") or {}).get("address") if isinstance(item.get("tags"), dict) else None,
+                },
+            }
+        )
+    chosen = recommend.get("chosen_destination") if isinstance(recommend.get("chosen_destination"), dict) else {}
+    return {
+        "parsed_intent": {
+            "intent_source": parsed.get("intent_source"),
+            "search_keywords": parsed.get("search_keywords"),
+            "destination_type": parsed.get("destination_type"),
+            "destination_kind": parsed.get("destination_kind"),
+            "confidence": parsed.get("confidence"),
+            "named_entity_confidence": parsed.get("named_entity_confidence"),
+            "llm_error": parsed.get("llm_error"),
+        },
+        "meta": {
+            "resolution_scope": meta.get("resolution_scope"),
+            "selection_radius_m": meta.get("selection_radius_m"),
+            "llm_rerank_enabled": meta.get("llm_rerank_enabled"),
+            "llm_rerank_reason": meta.get("llm_rerank_reason"),
+            "parse_confidence": meta.get("parse_confidence"),
+            "named_entity_confidence": meta.get("named_entity_confidence"),
+        },
+        "chosen": {
+            "id": chosen.get("id"),
+            "name": chosen.get("name"),
+            "location": chosen.get("location"),
+            "score": chosen.get("score"),
+            "score_breakdown": chosen.get("score_breakdown"),
+            "query_affinity": chosen.get("query_affinity"),
+        },
+        "top_candidates": top_candidates,
+        "retrieval_errors": recommend.get("retrieval_errors") or [],
+    }
+
+
 # ---------------------------------------------------------------------------
 # Actions
 # ---------------------------------------------------------------------------
@@ -123,15 +190,30 @@ async def action_resolve_and_add_via(session: ClientSession, args: argparse.Name
     Matches the behavior of realtime_instruction_session_client.py which does NOT call
     replan_route_session_from_origin after adding a via point.
     """
-    # Step 1: resolve instruction
-    recommend = await call_tool(session, "recommend_destination_and_waypoints", {
+    session_snapshot = await call_tool(session, "get_route_session", {
+        "session_id": args.session_id,
+        "force_replan": False,
+    })
+    session_payload = session_snapshot.get("session", {}) or {}
+    anchor_location = session_search_anchor(
+        session_payload=session_payload,
+        current_lat=args.current_lat,
+        current_lon=args.current_lon,
+    )
+    resolution_scope = "session_local_via"
+    recommend_request = {
         "user_instruction": args.instruction,
         "current_latitude": args.current_lat,
         "current_longitude": args.current_lon,
         "mode": args.mode,
         "search_radius": args.radius,
         "max_candidates": args.max_candidates,
-    })
+        "resolution_scope": resolution_scope,
+        "anchor_location": anchor_location,
+    }
+
+    # Step 1: resolve instruction against the active route session context.
+    recommend = await call_tool(session, "recommend_destination_and_waypoints", recommend_request)
 
     chosen = recommend.get("chosen_destination") or {}
     if not isinstance(chosen, dict) or not chosen:
@@ -157,6 +239,27 @@ async def action_resolve_and_add_via(session: ClientSession, args: argparse.Name
             "name": via_name,
             "location": location,
             "raw": chosen,
+        },
+        "append_resolution_debug": {
+            "request": {
+                "instruction": args.instruction,
+                "session_id": args.session_id,
+                "current_latitude": args.current_lat,
+                "current_longitude": args.current_lon,
+                "anchor_location": anchor_location,
+                "resolution_scope": resolution_scope,
+                "mode": args.mode,
+                "search_radius": args.radius,
+                "max_candidates": args.max_candidates,
+            },
+            "recommendation": compact_recommendation_debug(recommend),
+            "session_before_append": {
+                "session_id": args.session_id,
+                "origin": session_payload.get("origin"),
+                "destination": session_payload.get("destination"),
+                "via_points": session_payload.get("via_points", []),
+                "route_plan_cache_hit": session_snapshot.get("route_plan_cache_hit"),
+            },
         },
         "add_result": add_result,
         "route_plan": add_result.get("route_plan"),

@@ -1766,6 +1766,67 @@ def _session_local_via_bias(
     return bias
 
 
+def _recommendation_debug_snapshot(
+    *,
+    parsed: dict[str, Any],
+    meta: dict[str, Any],
+    recommendations: list[dict[str, Any]],
+    retrieval_errors: list[dict[str, str]],
+    top_k: int = 3,
+) -> dict[str, Any]:
+    chosen = recommendations[0] if recommendations else {}
+    top_candidates: list[dict[str, Any]] = []
+    for item in recommendations[: max(0, int(top_k))]:
+        tags = item.get("tags") if isinstance(item.get("tags"), dict) else {}
+        top_candidates.append(
+            {
+                "id": item.get("id"),
+                "name": item.get("name"),
+                "location": item.get("location"),
+                "candidate_kind": item.get("candidate_kind"),
+                "is_concrete_destination": item.get("is_concrete_destination"),
+                "query_affinity": item.get("query_affinity"),
+                "score": item.get("score"),
+                "score_breakdown": item.get("score_breakdown"),
+                "tags": {
+                    "type": tags.get("type"),
+                    "address": tags.get("address"),
+                },
+            }
+        )
+    return {
+        "parsed_intent": {
+            "intent_source": parsed.get("intent_source"),
+            "search_keywords": parsed.get("search_keywords"),
+            "destination_type": parsed.get("destination_type"),
+            "destination_kind": parsed.get("destination_kind"),
+            "confidence": parsed.get("confidence"),
+            "named_entity_confidence": parsed.get("named_entity_confidence"),
+            "llm_error": parsed.get("llm_error"),
+        },
+        "meta": {
+            "resolution_scope": meta.get("resolution_scope"),
+            "selection_radius_m": meta.get("selection_radius_m"),
+            "selection_top_k": meta.get("selection_top_k"),
+            "llm_rerank_enabled": meta.get("llm_rerank_enabled"),
+            "llm_rerank_reason": meta.get("llm_rerank_reason"),
+            "parse_confidence": meta.get("parse_confidence"),
+            "named_entity_confidence": meta.get("named_entity_confidence"),
+            "named_geocode_enabled": meta.get("named_geocode_enabled"),
+        },
+        "chosen": {
+            "id": chosen.get("id"),
+            "name": chosen.get("name"),
+            "location": chosen.get("location"),
+            "score": chosen.get("score"),
+            "score_breakdown": chosen.get("score_breakdown"),
+            "query_affinity": chosen.get("query_affinity"),
+        },
+        "top_candidates": top_candidates,
+        "retrieval_errors": retrieval_errors,
+    }
+
+
 class DestinationRecommendationEngine:
     def __init__(
         self,
@@ -2436,6 +2497,24 @@ class DestinationRecommendationEngine:
         )
 
         if not picked:
+            no_candidate_meta = {
+                "candidate_count": len(deduped),
+                "evaluated_count": len(stage1_filtered) + len(stage1_rejected),
+                "hard_filter_pass_count": len(stage1_filtered),
+                "hard_filter_reject_count": len(stage1_rejected),
+                "availability_reject_count": len(availability_rejections),
+                "selection_mode": chosen_mode,
+                "selection_radius_m": radius,
+                "selection_top_k": top_k,
+                "optimization_target": optimize_for,
+                "destination_kind": destination_kind,
+                "resolution_scope": normalized_scope,
+                "llm_rerank_enabled": bool(rerank_enabled),
+                "llm_rerank_reason": rerank_reason,
+                "parse_confidence": round(parsed_confidence, 4),
+                "named_entity_confidence": round(named_entity_confidence, 4),
+                "named_geocode_enabled": bool(use_named_place_geocode),
+            }
             return {
                 "provider": self.provider,
                 "input": {
@@ -2443,6 +2522,7 @@ class DestinationRecommendationEngine:
                     "provider_instruction": translated_instruction or original_instruction,
                     "current_latitude": current_latitude,
                     "current_longitude": current_longitude,
+                    "search_anchor_location": search_anchor_location or f"{current_longitude},{current_latitude}",
                 },
                 "parsed_intent": parsed,
                 "recommendations": [],
@@ -2450,6 +2530,13 @@ class DestinationRecommendationEngine:
                 "route_failures": route_failures,
                 "retrieval_errors": retrieval_errors,
                 "semantic_rerank": rerank_meta,
+                "meta": no_candidate_meta,
+                "debug": _recommendation_debug_snapshot(
+                    parsed=parsed,
+                    meta=no_candidate_meta,
+                    recommendations=[],
+                    retrieval_errors=retrieval_errors,
+                ),
                 "message": "No candidates matched constraints.",
             }
 
@@ -2558,6 +2645,12 @@ class DestinationRecommendationEngine:
             "semantic_rerank": rerank_meta,
             "timestamp": datetime.now().isoformat(),
         }
+        result["debug"] = _recommendation_debug_snapshot(
+            parsed=parsed,
+            meta=result["meta"],
+            recommendations=recommendations,
+            retrieval_errors=retrieval_errors,
+        )
 
         if english_localization_active:
             result_localization_started_at = perf_counter()
