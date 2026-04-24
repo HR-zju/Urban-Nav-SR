@@ -393,31 +393,6 @@ async def resolve_instruction_to_destination(
     )
 
     chosen = result.get("chosen_destination") or {}
-    first_attempt_result = result
-    if (not isinstance(chosen, dict) or not chosen) and str(resolution_scope).strip().lower() == "session_local_via":
-        fallback_scope = "global_destination"
-        fallback_started_at = perf_counter()
-        fallback_result = await call_tool_json(
-            session,
-            "recommend_destination_and_waypoints",
-            {
-                **tool_arguments,
-                "resolution_scope": fallback_scope,
-            },
-        )
-        _log_timing(
-            "mcp_tool_call",
-            perf_counter() - fallback_started_at,
-            tool="recommend_destination_and_waypoints",
-            instruction=instruction,
-            status="ok",
-            resolution_scope=fallback_scope,
-            reason="fallback_after_session_local_via_empty",
-        )
-        fallback_chosen = fallback_result.get("chosen_destination") or {}
-        if isinstance(fallback_chosen, dict) and fallback_chosen:
-            result = fallback_result
-            chosen = fallback_chosen
 
     if not isinstance(chosen, dict) or not chosen:
         raise RuntimeError(
@@ -425,9 +400,7 @@ async def resolve_instruction_to_destination(
             f"resolution_scope={resolution_scope}, anchor_location={anchor_location}\n"
             f"message={result.get('message')!r}, "
             f"retrieval_errors={result.get('retrieval_errors')!r}, "
-            f"meta={result.get('meta')!r}\n"
-            f"first_attempt_message={first_attempt_result.get('message')!r}, "
-            f"first_attempt_meta={first_attempt_result.get('meta')!r}"
+            f"meta={result.get('meta')!r}"
         )
     location = as_location_text(chosen)
     if not location:
