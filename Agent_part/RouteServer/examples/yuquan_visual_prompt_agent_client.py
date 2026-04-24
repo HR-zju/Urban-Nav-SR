@@ -143,6 +143,27 @@ def _route_cache_key(*, origin: str, destination: str, mode: str) -> str:
     return _stable_cache_key(["route", str(origin).strip(), str(destination).strip(), str(mode).strip().lower()])
 
 
+def _build_fpv_segmentation_payload(
+    *,
+    segmentation_npy_path: str | None,
+    class_mapping_path: str | None,
+    visualization_path: str | None,
+) -> dict[str, Any] | None:
+    raw_npy = str(segmentation_npy_path or "").strip()
+    if not raw_npy:
+        return None
+    npy_path = Path(raw_npy).expanduser()
+    mapping_path = Path(str(class_mapping_path).strip()).expanduser() if str(class_mapping_path or "").strip() else npy_path.with_name("class_mapping.json")
+    payload: dict[str, Any] = {
+        "segmentation_npy_path": str(npy_path),
+        "class_mapping_path": str(mapping_path),
+    }
+    raw_vis = str(visualization_path or "").strip()
+    if raw_vis:
+        payload["visualization_path"] = str(Path(raw_vis).expanduser())
+    return payload
+
+
 def _urlopen_json_with_retries(url: str, *, timeout_s: float, retries: int, backoff_s: float) -> dict[str, Any]:
     attempts = max(int(retries), 0) + 1
     last_error: Exception | None = None
@@ -1045,6 +1066,7 @@ def _compact_map_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any] | N
 async def run_demo(
     *,
     image_path: str,
+    fpv_segmentation: dict[str, Any] | None,
     origin: str | None,
     destination: str | None,
     origin_name: str,
@@ -1233,6 +1255,7 @@ async def run_demo(
                     "lookahead_m": lookahead_m,
                     "off_route_threshold_m": off_route_threshold_m,
                     "image_path": image_path,
+                    "fpv_segmentation": fpv_segmentation,
                     "visual_top_k": visual_top_k,
                     "candidate_top_k": candidate_top_k,
                     "llm_detail": llm_detail,
@@ -1488,6 +1511,7 @@ async def run_demo(
                 "agent": {
                     "route_context": _compact_route_context(agent_payload.get("route_context", {}) or {}),
                     "arbiter_decision": _compact_arbiter_decision(agent_payload.get("arbiter_decision", {}) or {}),
+                    "fpv_segmentation_summary": (agent_payload.get("fpv_segmentation_summary") or {}),
                 },
                 "bev": {
                     "local_bev_context": (local_bev_payload or {}).get("local_bev_context", {}),
@@ -1558,6 +1582,15 @@ if __name__ == "__main__":
     )
     parser.add_argument("--heading-deg", type=float, default=None, help="Override EXIF GPSImgDirection")
     parser.add_argument("--lookahead-m", type=float, default=20.0, help="RouteContext lookahead distance")
+    parser.add_argument("--fpv-segmentation-npy", help="Optional SAM3 segmentation .npy path aligned with the FPV image")
+    parser.add_argument(
+        "--fpv-segmentation-class-mapping",
+        help="Optional SAM3 class_mapping.json path; defaults to class_mapping.json next to the segmentation file",
+    )
+    parser.add_argument(
+        "--fpv-segmentation-visualization",
+        help="Optional SAM3 visualization image path for bookkeeping/debugging",
+    )
     parser.add_argument(
         "--off-route-threshold-m",
         type=float,
@@ -1676,9 +1709,15 @@ if __name__ == "__main__":
     save_planner_route_html = args.save_planner_route_html
     if save_planner_route_html is None and args.save_overlay and profile_settings["auto_planner_route_html"]:
         save_planner_route_html = str(overlay_path.with_name(f"{overlay_path.stem}_planner_route.html"))
+    fpv_segmentation = _build_fpv_segmentation_payload(
+        segmentation_npy_path=args.fpv_segmentation_npy,
+        class_mapping_path=args.fpv_segmentation_class_mapping,
+        visualization_path=args.fpv_segmentation_visualization,
+    )
     asyncio.run(
         run_demo(
             image_path=args.image_path,
+            fpv_segmentation=fpv_segmentation,
             origin=args.origin,
             destination=args.destination,
             origin_name=args.origin_name,

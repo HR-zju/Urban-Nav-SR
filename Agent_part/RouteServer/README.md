@@ -224,6 +224,46 @@ python examples/yuquan_visual_prompt_agent_client.py \
 
 默认路线是 `浙江大学玉泉校区南门` 到 `浙江大学玉泉校区北门`。脚本会从图片 EXIF 读取 `lat/lon/GPSImgDirection`，并用它作为当前 FPV pose；如果只想排查路线起点附近的 prompt，可加 `--gps-source origin`。
 
+给 `yuquan_visual_prompt_agent_client.py` 接入 SAM3 可通行区域约束：
+
+```bash
+python examples/yuquan_visual_prompt_agent_client.py \
+  --image-path /home/ubuntu/WorkSpace/project/SR/test4.jpg \
+  --fpv-segmentation-npy /path/to/000005_segmentation.npy \
+  --fpv-segmentation-class-mapping /path/to/class_mapping.json \
+  --fpv-segmentation-visualization /path/to/000005_visualization.jpg \
+  --save-overlay /tmp/yuquan_visual_prompt_overlay.svg \
+  --save-json /tmp/yuquan_visual_prompt_result.json
+```
+
+当 `fpv_segmentation` 存在时，主链会同时：
+
+- 把 segmentation summary 提供给 visual prompt generator / verifier
+- 对最终 `rendered_prompt` 做基于可通行类别的硬校验
+- 在输出 JSON 中返回 `agent.fpv_segmentation_summary`
+
+如果想把 “运行 SAM3” 和 “运行 visual prompt demo” 合并成一个命令，可用：
+
+```bash
+python tools/run_sam3_visual_prompt_pipeline.py \
+  --client yuquan \
+  --run-sam3 \
+  --rides-base-dir /path/to/rides \
+  --frames-base-dir /path/to/frames \
+  --sam3-output-base-dir /path/to/sam3_outputs \
+  --sequence-name ride_16446_20240115041752 \
+  --camera-view camera_front \
+  --fps 1.0 \
+  --checkpoint-path /media/ubuntu/data1/checkpoints/checkpoint_35_merged.pt \
+  --frame-name 000005 \
+  --client-args -- \
+  --image-path /home/ubuntu/WorkSpace/project/SR/test4.jpg \
+  --save-overlay /tmp/yuquan_visual_prompt_overlay.svg \
+  --save-json /tmp/yuquan_visual_prompt_result.json
+```
+
+如果 SAM3 结果已经存在，只想直接跑 demo，可去掉 `--run-sam3` 和 SAM3 预处理参数，保留 `--sam3-output-base-dir`、`--sequence-name`、`--camera-view`、`--frame-name` 即可。
+
 ### 动态途经点
 
 直接追加坐标途经点：

@@ -81,6 +81,7 @@ def build_direct_prompt_system_prompt() -> str:
         "Prefer the nearest safe sidewalk-side opening over a farther but wider drivable area. "
         "The prompt must start near the lower image area and every point of the trajectory must lie on the visible mode-valid traversable surface. "
         "For pedestrian mode, every path point and every part of the support corridor must be on visible sidewalk, pedestrian paving, curb cut, plaza, or legal crossing surface. "
+        "If fpv_segmentation_summary is provided, treat it as an explicit traversability prior and keep the prompt inside its traversable classes. "
         "Represent the prompt as a center path plus left and right support boundaries sampled along the path and an explicit termination semantic. "
         "The termination semantic must explain whether the prompt stops because it reaches visible corridor depth, reaches a turn entry, or should stop before occlusion. "
         "Route/BEV/PoV candidates, when provided, are advisory priors only; reject or override them if they land on obstacles or non-walkable regions. "
@@ -100,6 +101,7 @@ def build_direct_prompt_verifier_system_prompt() -> str:
         "You must inspect the image, not trust the proposal text. "
         "For pedestrian mode, visible paved sidewalk, pedestrian path, curb cut, crosswalk, and plaza surfaces are valid support. "
         "Grass, shrubs, decorative green belts, planters, tree bases, exposed soil, walls, fences, and motor lanes are not valid support. "
+        "If fpv_segmentation_summary is provided, use it as an explicit traversability prior and reject prompts that leave those traversable classes. "
         "If the center path is reasonable but the support corridor is too wide, tighten the left/right support boundaries while preserving the path. "
         "If the path itself enters non-traversable support, revise the path and boundary samples together. "
         "If no safe and visible support corridor can be verified, set reject_all=true. "
@@ -117,6 +119,7 @@ def build_direct_prompt_question(
     image_height: int,
     navigation_mode: str = "foot",
     pov_prompt_candidates: list[dict[str, Any]] | None = None,
+    fpv_segmentation_summary: dict[str, Any] | None = None,
 ) -> str:
     compact_route = _compact_route_context(route_context)
     top_prior = None
@@ -159,6 +162,7 @@ def build_direct_prompt_question(
             "top_route_prior": top_prior,
             "visual_regions_hint": compact_regions,
             "optional_candidate_hints": compact_candidates,
+            "fpv_segmentation_summary": fpv_segmentation_summary,
             "hard_rules": [
                 "For foot mode, prioritize sidewalk or pedestrian-space openings.",
                 "Do not place the trajectory on apparent motor lanes or open roadway if sidewalk-like space exists.",
@@ -173,6 +177,7 @@ def build_direct_prompt_question(
                 "Prefer the shortest safe path that stays on pedestrian space.",
                 "Set termination_semantics to one of: continue_visible_corridor, reach_turn_entry, stop_before_occlusion.",
                 "If route prior and visible mode-valid space conflict, prefer visible mode-valid space and explain the conflict.",
+                "If fpv_segmentation_summary is present, keep the center path inside its traversable classes and keep support boundaries away from its forbidden classes.",
             ],
             "output_requirements": {
                 "selected_prompt_type": "path_corridor|arrow_path|arrow|sector|region",
@@ -211,6 +216,7 @@ def build_direct_prompt_verifier_question(
     image_width: int,
     image_height: int,
     navigation_mode: str = "foot",
+    fpv_segmentation_summary: dict[str, Any] | None = None,
 ) -> str:
     compact_route = _compact_route_context(route_context)
     return json.dumps(
@@ -223,10 +229,12 @@ def build_direct_prompt_verifier_question(
             "image_size": {"width": image_width, "height": image_height},
             "route_context": compact_route,
             "proposed_prompt": rendered_prompt,
+            "fpv_segmentation_summary": fpv_segmentation_summary,
             "verification_objectives": [
                 "Check whether the path centerline stays on visible mode-valid traversable surface.",
                 "Check whether the left and right support boundaries tightly match the visible support of the path rather than spilling into road, grass, shrubs, or obstacles.",
                 "Check whether the termination semantic matches the actual visible corridor depth or turn entry.",
+                "If fpv_segmentation_summary is present, verify that the path stays inside its traversable classes and does not cross its forbidden classes.",
                 "If the proposal is partially wrong, revise it instead of only commenting on it.",
                 "If the proposal cannot be grounded in visible support, reject it."
             ],
