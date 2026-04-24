@@ -1408,6 +1408,7 @@ async def run_zero_shot_visual_prompt_agent(
     llm_detail: str = "auto",
     navigation_mode: str = "foot",
     enable_verifier: bool = True,
+    emit_qa_bundle: bool = False,
 ) -> Dict[str, Any]:
     """
     Run a zero-shot visual prompt agent over the current FPV frame.
@@ -1445,6 +1446,7 @@ async def run_zero_shot_visual_prompt_agent(
         llm_detail=llm_detail,
         navigation_mode=navigation_mode,
         enable_verifier=enable_verifier,
+        emit_qa_bundle=emit_qa_bundle,
     )
 
 

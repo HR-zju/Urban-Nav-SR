@@ -27,6 +27,11 @@ from mcp_server.llm import (
     arbitrate_pov_candidates_with_llm,
     local_image_path_to_data_url,
 )
+from mcp_server.qa import (
+    build_pov_prompt_candidate_bundle,
+    build_visual_prompt_qa_bundle,
+    pov_candidate_bundle_to_dict,
+)
 from mcp_server.route_context import (
     build_route_state,
     local_bev_context_to_dict,
@@ -388,6 +393,7 @@ async def run_zero_shot_visual_prompt_pipeline(
     llm_detail: str = "auto",
     navigation_mode: str = "foot",
     enable_verifier: bool = True,
+    emit_qa_bundle: bool = False,
 ) -> Dict[str, Any]:
     del visual_top_k, candidate_top_k
 
@@ -408,6 +414,9 @@ async def run_zero_shot_visual_prompt_pipeline(
     route_context_dict = route_context_to_dict(state.route_context)
     local_bev_dict = local_bev_context_to_dict(state.local_bev_context)
     image_width, image_height = _prompt_image_size(image_path=image_path, image_url=image_url)
+    qa_bundle: Dict[str, Any] | None = None
+    candidate_bundle = None
+    segmentation_validation: Dict[str, Any] | None = None
     segmentation_context = None
     segmentation_summary = None
     segmentation_error: str | None = None
@@ -469,7 +478,7 @@ async def run_zero_shot_visual_prompt_pipeline(
                 image_width=image_width,
                 image_height=image_height,
             )
-            decision, _ = _apply_segmentation_constraint(
+            decision, segmentation_validation = _apply_segmentation_constraint(
                 decision=decision,
                 route_context=route_context_dict,
                 segmentation_context=segmentation_context,
@@ -511,7 +520,7 @@ async def run_zero_shot_visual_prompt_pipeline(
                         image_width=image_width,
                         image_height=image_height,
                     )
-                    verified_decision, _ = _apply_segmentation_constraint(
+                    verified_decision, segmentation_validation = _apply_segmentation_constraint(
                         decision=verified_decision,
                         route_context=route_context_dict,
                         segmentation_context=segmentation_context,
@@ -563,6 +572,31 @@ async def run_zero_shot_visual_prompt_pipeline(
         decision_dict["debug"]["fpv_segmentation_summary"] = segmentation_summary
     if not enable_verifier:
         decision_dict["debug"]["verifier_skipped"] = True
+    if emit_qa_bundle:
+        candidate_bundle = build_pov_prompt_candidate_bundle(
+            route_context=route_context_dict,
+            local_bev_context=local_bev_dict,
+            image_width=image_width,
+            image_height=image_height,
+            segmentation_context=segmentation_context,
+            rendered_prompt=decision.rendered_prompt,
+        )
+        qa_bundle = build_visual_prompt_qa_bundle(
+            route_context=route_context_dict,
+            local_bev_context=local_bev_dict,
+            image_width=image_width,
+            image_height=image_height,
+            fpv_segmentation_summary=segmentation_summary,
+            segmentation_validation=segmentation_validation,
+            rendered_prompt=decision.rendered_prompt,
+            arbiter_decision=decision_dict,
+            candidate_bundle=candidate_bundle,
+        )
+        decision_dict["debug"]["qa_bundle_summary"] = {
+            "schema_version": qa_bundle.get("schema_version"),
+            "task_counts": qa_bundle.get("task_counts", {}),
+            "family_counts": qa_bundle.get("family_counts", {}),
+        }
 
     image_href = _image_href_for_overlay(image_path=image_path, image_url=image_url)
     overlay_svg = _render_prompt_overlay_svg(
@@ -594,4 +628,6 @@ async def run_zero_shot_visual_prompt_pipeline(
         "generator_overlay_svg": generator_overlay_svg,
         "generator_overlay_svg_data_url": generator_overlay_svg_data_url,
         "fpv_segmentation_summary": segmentation_summary,
+        "qa_bundle": qa_bundle,
+        "pov_prompt_candidate_bundle": pov_candidate_bundle_to_dict(candidate_bundle) if emit_qa_bundle else None,
     }

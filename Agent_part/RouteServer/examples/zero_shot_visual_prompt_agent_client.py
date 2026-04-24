@@ -106,6 +106,7 @@ async def run_demo(
     visual_top_k: int,
     candidate_top_k: int,
     llm_detail: str,
+    emit_qa_bundle: bool,
     save_overlay: str | None,
 ) -> None:
     server_params = StdioServerParameters(
@@ -154,6 +155,7 @@ async def run_demo(
                     "visual_top_k": visual_top_k,
                     "candidate_top_k": candidate_top_k,
                     "llm_detail": llm_detail,
+                    "emit_qa_bundle": emit_qa_bundle,
                 },
             )
 
@@ -165,6 +167,9 @@ async def run_demo(
                         "chosen_destination": recommendation.get("chosen_destination", {}),
                         "arbiter_decision": payload.get("arbiter_decision", {}),
                         "fpv_segmentation_summary": payload.get("fpv_segmentation_summary"),
+                        "qa_bundle_summary": (
+                            ((payload.get("arbiter_decision", {}) or {}).get("debug", {}) or {}).get("qa_bundle_summary")
+                        ),
                         "route_context": {
                             "turn_semantics": ((payload.get("route_context", {}) or {}).get("local_semantics", {}) or {}).get("turn_semantics"),
                             "corridor_type": ((payload.get("route_context", {}) or {}).get("local_semantics", {}) or {}).get("corridor_type"),
@@ -202,6 +207,7 @@ if __name__ == "__main__":
     parser.add_argument("--visual-top-k", type=int, default=5, help="Maximum visual regions")
     parser.add_argument("--candidate-top-k", type=int, default=5, help="Maximum PoV prompt candidates sent to the arbiter")
     parser.add_argument("--llm-detail", default="auto", choices=["auto", "low", "high"], help="Vision detail level")
+    parser.add_argument("--emit-qa-bundle", action="store_true", help="Include structured QA teacher samples in the result")
     parser.add_argument("--save-overlay", help="Optional output path for the rendered prompt SVG overlay")
 
     args = parser.parse_args()
@@ -237,6 +243,7 @@ if __name__ == "__main__":
             visual_top_k=args.visual_top_k,
             candidate_top_k=args.candidate_top_k,
             llm_detail=args.llm_detail,
+            emit_qa_bundle=args.emit_qa_bundle,
             save_overlay=args.save_overlay,
         )
     )

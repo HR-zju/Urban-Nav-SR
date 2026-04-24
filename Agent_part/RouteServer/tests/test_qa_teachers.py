@@ -1,0 +1,51 @@
+from __future__ import annotations
+
+import unittest
+
+from mcp_server.qa import teachers
+
+
+class QATeachersTest(unittest.TestCase):
+    def test_bev_route_theta_from_local_segment(self) -> None:
+        local_bev = {
+            "local_segment_bev": [
+                {"x_m": 0.0, "y_m": 0.0},
+                {"x_m": 2.0, "y_m": 6.0},
+            ],
+            "route_polyline_local": [],
+            "corridor_sector_deg": {"center_deg": 0.0, "span_deg": 40.0},
+        }
+        teacher = teachers.teacher_bev_route_theta(local_bev)
+        self.assertGreater(teacher["theta"]["theta_deg"], 0.0)
+        self.assertEqual(teacher["theta"]["source"], "local_segment_bev")
+
+    def test_connector_component_teacher(self) -> None:
+        local_bev = {
+            "connector_bev": [
+                {"x_m": -1.0, "y_m": 4.0},
+                {"x_m": -2.0, "y_m": 8.0},
+            ],
+            "semantic_bev_layers": {},
+        }
+        exists = teachers.teacher_bev_component_exists(local_bev, "connector")
+        geometry = teachers.teacher_bev_component_theta_range(local_bev, "connector")
+        self.assertTrue(exists["exists"])
+        self.assertTrue(geometry["exists"])
+        self.assertLess(geometry["theta"]["theta_deg"], 0.0)
+
+    def test_point_prompt_teacher(self) -> None:
+        rendered_prompt = {
+            "type": "path_corridor",
+            "path_samples": [
+                {"center_uv": [400, 700]},
+                {"center_uv": [600, 400]},
+            ],
+        }
+        teacher = teachers.teacher_point_prompt(rendered_prompt, image_width=1000)
+        self.assertFalse(teacher["reject_all"])
+        self.assertEqual(teacher["target_point_uv"]["u"], 600.0)
+        self.assertGreater(teacher["theta"]["theta_deg"], 0.0)
+
+
+if __name__ == "__main__":
+    unittest.main()
