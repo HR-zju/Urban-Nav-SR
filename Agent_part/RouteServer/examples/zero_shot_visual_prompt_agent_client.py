@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 
 def first_text_content(result) -> str:
@@ -101,6 +102,7 @@ async def run_demo(
     lookahead_m: float,
     image_path: str | None,
     image_url: str | None,
+    fpv_segmentation: dict[str, Any] | None,
     visual_top_k: int,
     candidate_top_k: int,
     llm_detail: str,
@@ -148,6 +150,7 @@ async def run_demo(
                     "lookahead_m": lookahead_m,
                     "image_path": image_path,
                     "image_url": image_url,
+                    "fpv_segmentation": fpv_segmentation,
                     "visual_top_k": visual_top_k,
                     "candidate_top_k": candidate_top_k,
                     "llm_detail": llm_detail,
@@ -161,6 +164,7 @@ async def run_demo(
                         "provider": recommendation.get("provider"),
                         "chosen_destination": recommendation.get("chosen_destination", {}),
                         "arbiter_decision": payload.get("arbiter_decision", {}),
+                        "fpv_segmentation_summary": payload.get("fpv_segmentation_summary"),
                         "route_context": {
                             "turn_semantics": ((payload.get("route_context", {}) or {}).get("local_semantics", {}) or {}).get("turn_semantics"),
                             "corridor_type": ((payload.get("route_context", {}) or {}).get("local_semantics", {}) or {}).get("corridor_type"),
@@ -192,6 +196,9 @@ if __name__ == "__main__":
     parser.add_argument("--lookahead-m", type=float, default=20.0, help="Local segment lookahead distance in meters")
     parser.add_argument("--image-path", help="Local RGB/FPV image path")
     parser.add_argument("--image-url", help="Image URL or data URL")
+    parser.add_argument("--fpv-segmentation-npy", help="Optional SAM3 segmentation .npy path aligned with the FPV frame")
+    parser.add_argument("--fpv-segmentation-class-mapping", help="Optional SAM3 class_mapping.json path")
+    parser.add_argument("--fpv-segmentation-visualization", help="Optional SAM3 visualization image path")
     parser.add_argument("--visual-top-k", type=int, default=5, help="Maximum visual regions")
     parser.add_argument("--candidate-top-k", type=int, default=5, help="Maximum PoV prompt candidates sent to the arbiter")
     parser.add_argument("--llm-detail", default="auto", choices=["auto", "low", "high"], help="Vision detail level")
@@ -200,6 +207,19 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if not args.image_path and not args.image_url:
         parser.error("one of --image-path or --image-url is required")
+
+    fpv_segmentation = None
+    if args.fpv_segmentation_npy:
+        mapping_path = args.fpv_segmentation_class_mapping
+        if not mapping_path:
+            candidate = Path(args.fpv_segmentation_npy).expanduser().with_name("class_mapping.json")
+            if candidate.exists():
+                mapping_path = str(candidate)
+        fpv_segmentation = {
+            "segmentation_npy_path": str(Path(args.fpv_segmentation_npy).expanduser()),
+            "class_mapping_path": str(Path(mapping_path).expanduser()) if mapping_path else None,
+            "visualization_path": str(Path(args.fpv_segmentation_visualization).expanduser()) if args.fpv_segmentation_visualization else None,
+        }
 
     asyncio.run(
         run_demo(
@@ -213,6 +233,7 @@ if __name__ == "__main__":
             lookahead_m=args.lookahead_m,
             image_path=args.image_path,
             image_url=args.image_url,
+            fpv_segmentation=fpv_segmentation,
             visual_top_k=args.visual_top_k,
             candidate_top_k=args.candidate_top_k,
             llm_detail=args.llm_detail,

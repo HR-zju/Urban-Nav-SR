@@ -1928,6 +1928,7 @@ class DestinationRecommendationEngine:
         )
 
         normalized_candidates: list[dict[str, Any]] = []
+        retrieval_errors: list[dict[str, str]] = []
         retrieval_started_at = perf_counter()
         use_named_place_geocode = _should_use_named_place_geocode(
             resolution_scope=normalized_scope,
@@ -2081,13 +2082,32 @@ class DestinationRecommendationEngine:
                 candidates_raw = []
                 _log_timing("cache_hit", 0.0, provider=self.provider, cache_kind="semantic_search")
             else:
-                candidates_raw = await self.map_client.search_semantic_pois(
-                    location=origin_location,
-                    keywords=semantic_keywords,
-                    radius=int(radius),
-                    sortrule="distance",
-                    limit=poi_limit,
-                )
+                try:
+                    candidates_raw = await self.map_client.search_semantic_pois(
+                        location=origin_location,
+                        keywords=semantic_keywords,
+                        radius=int(radius),
+                        sortrule="distance",
+                        limit=poi_limit,
+                    )
+                except Exception as exc:
+                    candidates_raw = []
+                    retrieval_errors.append(
+                        {
+                            "stage": "map_semantic_poi_search",
+                            "provider": self.provider,
+                            "detail": str(exc),
+                        }
+                    )
+                    await _ctx_warning(ctx, f"Semantic POI search failed for provider={self.provider}: {exc}")
+                    _log_timing(
+                        "map_semantic_poi_search",
+                        perf_counter() - semantic_search_started_at,
+                        provider=self.provider,
+                        candidate_count=0,
+                        poi_limit=poi_limit,
+                        status="error",
+                    )
                 normalize_semantic_started_at = perf_counter()
                 normalized_candidates = _normalize_semantic_poi_candidates(
                     candidates_raw,
@@ -2429,6 +2449,7 @@ class DestinationRecommendationEngine:
                 "recommendations": [],
                 "hard_constraint_rejections": stage1_rejected,
                 "route_failures": route_failures,
+                "retrieval_errors": retrieval_errors,
                 "semantic_rerank": rerank_meta,
                 "message": "No candidates matched constraints.",
             }
@@ -2534,6 +2555,7 @@ class DestinationRecommendationEngine:
             "availability_rejections": availability_rejections,
             "hard_constraint_rejections": stage1_rejected,
             "route_failures": route_failures,
+            "retrieval_errors": retrieval_errors,
             "semantic_rerank": rerank_meta,
             "timestamp": datetime.now().isoformat(),
         }
