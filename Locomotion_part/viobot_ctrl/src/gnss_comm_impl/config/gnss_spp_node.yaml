@@ -11,5 +11,6 @@ gnss_spp_node:
     dynamic_aligner.filter_gain: 0.05
     dynamic_aligner.anchor_window_size: 100
     dynamic_aligner.anchor_min_dist: 10.0
+    dynamic_aligner.max_consecutive_jumps: 5
 
     gnss.initial_calibration_enu: [-3.0, -4.5, 0.0]  # [m] (East, North, Up)

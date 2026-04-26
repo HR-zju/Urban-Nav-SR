@@ -19,4 +19,4 @@ eval $ros_domain_id_line
 # -p image_height:=1080 \
 # -p framerate:=30.0
 
-ros2 run cam_pub cam_pub &
+ros2 run cam_pub cam_pub
