@@ -22,6 +22,7 @@ from mcp_server.brain.fpv_segmentation import (
     segmentation_summary_for_llm,
     validate_rendered_prompt_against_segmentation,
 )
+from mcp_server.services.fpv_segmentation_service import segment_fpv_frame
 from mcp_server.llm import (
     arbitrate_local_pov_candidates_with_llm,
     arbitrate_pov_candidates_with_llm,
@@ -382,6 +383,7 @@ async def run_zero_shot_visual_prompt_pipeline(
     image_path: Optional[str] = None,
     image_url: Optional[str] = None,
     fpv_segmentation: Optional[Dict[str, Any]] = None,
+    sam3_request: Optional[Dict[str, Any]] = None,
     heading_deg: Optional[float] = None,
     lookahead_m: float = 20.0,
     off_route_threshold_m: float = 20.0,
@@ -420,6 +422,17 @@ async def run_zero_shot_visual_prompt_pipeline(
     segmentation_context = None
     segmentation_summary = None
     segmentation_error: str | None = None
+    sam3_result: Dict[str, Any] | None = None
+    if not isinstance(fpv_segmentation, dict) and isinstance(sam3_request, dict):
+        try:
+            sam3_result = await segment_fpv_frame(**sam3_request)
+            generated_fpv_segmentation = sam3_result.get("fpv_segmentation")
+            if isinstance(generated_fpv_segmentation, dict):
+                fpv_segmentation = generated_fpv_segmentation
+            else:
+                segmentation_error = "segment_fpv_frame returned an invalid fpv_segmentation payload"
+        except Exception as exc:
+            segmentation_error = str(exc)
     if isinstance(fpv_segmentation, dict):
         try:
             segmentation_context = load_fpv_segmentation_context(
@@ -570,6 +583,8 @@ async def run_zero_shot_visual_prompt_pipeline(
         decision_dict["debug"]["fpv_segmentation_error"] = segmentation_error
     if segmentation_summary:
         decision_dict["debug"]["fpv_segmentation_summary"] = segmentation_summary
+    if sam3_result:
+        decision_dict["debug"]["sam3_result"] = sam3_result
     if not enable_verifier:
         decision_dict["debug"]["verifier_skipped"] = True
     if emit_qa_bundle:
@@ -627,6 +642,7 @@ async def run_zero_shot_visual_prompt_pipeline(
         "overlay_svg_data_url": _svg_to_data_url(overlay_svg),
         "generator_overlay_svg": generator_overlay_svg,
         "generator_overlay_svg_data_url": generator_overlay_svg_data_url,
+        "sam3": sam3_result,
         "fpv_segmentation_summary": segmentation_summary,
         "qa_bundle": qa_bundle,
         "pov_prompt_candidate_bundle": pov_candidate_bundle_to_dict(candidate_bundle) if emit_qa_bundle else None,
