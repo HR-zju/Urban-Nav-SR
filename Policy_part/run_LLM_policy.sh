@@ -21,9 +21,9 @@ tmux select-pane -t 0
 tmux send-keys "tmux set -g mouse on" Enter
 # tmux send-keys "sudo nvidia-smi -pm 1" Enter
 # tmux send-keys "sudo nvidia-smi -pl 100" Enter
-tmux send-keys "docker start ros1toros2" Enter
+# tmux send-keys "docker start ros1toros2" Enter
 sleep 1
-tmux send-keys "docker start vins_fusion" Enter
+# tmux send-keys "docker start vins_fusion" Enter
 sleep 1
 tmux send-keys "docker exec -it ros1toros2 zsh" Enter
 sleep 1
