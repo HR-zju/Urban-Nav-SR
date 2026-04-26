@@ -1,12 +1,12 @@
 #!/bin/zsh
 # notice running this script out of docker container, and running ./record_bag.sh <bag_name> 
 # Create a new tmux session
-session_name="LLM_foundation_policy"
+session_name="test_monitor"
 tmux kill-session -t $session_name 2>/dev/null
 tmux new-session -d -s $session_name
 
 
-for i in {1..7}; do
+for i in {1..4}; do
     tmux splitw
     tmux select-layout tiled
 done
@@ -36,7 +36,7 @@ tmux send-keys "ros2 topic echo /globalEstimator/global_odometry" Enter
 tmux select-pane -t 2
 tmux send-keys "docker exec -it ros1toros2 zsh" Enter
 sleep 1
-tmux send-keys "ros2 topic echo /waypoints" Enter
+tmux send-keys "ros2 topic echo /waypoint" Enter
 
 # run the robot by joy teleopic in pane 3
 # tmux select-pane -t 3
@@ -72,7 +72,7 @@ tmux send-keys "ros2 topic echo /waypoints" Enter
 # tmux send-keys "python pd_controller_ros2_new2.py" Enter 
 
 # record bag in pane 7
-tmux select-pane -t 7
+tmux select-pane -t 3
 tmux send-keys "docker exec -it ros1toros2 zsh" Enter
 sleep 1
 tmux send-keys "cd /home/nuvo/SR/foundation-policy/Policy_part/bags/" Enter
