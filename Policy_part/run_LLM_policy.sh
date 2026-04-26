@@ -84,10 +84,9 @@ tmux send-keys "python pd_controller_ros2_new2.py" Enter
 tmux select-pane -t 7
 tmux send-keys "docker exec -it ros1toros2 zsh" Enter
 sleep 1
-tmux send-keys "cd /home/nuvo/SR/foundation-policy/Policy_part/bags/" Enter
-# 录制需要手动确认
-tmux send-keys "ros2 bag record /camera/camera/color/image_raw/compressed  /globalEstimator/global_odometry  /tf_static -o $1" 
-
+tmux send-keys "cd /home/nuvo/SR/foundation-policy/Policy_part/" Enter
+tmux send-keys "mamba activate foundation_policy" Enter
+tmux send-keys "python ws_raw_message_listener.py" Enter
 
 
 # Attach to the tmux session
