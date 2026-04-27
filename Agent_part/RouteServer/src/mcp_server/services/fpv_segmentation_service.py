@@ -1,10 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import os
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Dict, List, Optional, Sequence
 from uuid import uuid4
+
+import numpy as np
+
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
 
 
 DEFAULT_SAM3_SCRIPT = "/home/ubuntu/WorkSpace/project/SR/Code/sam3/scripts/prepare_frames_and_run_batch_sam3.py"
@@ -17,6 +26,7 @@ ERR_COMMAND_FAILED = "SEGMENTATION_COMMAND_FAILED"
 ERR_ARTIFACT_MISSING = "SEGMENTATION_ARTIFACT_MISSING"
 ERR_PAYLOAD_INVALID = "SEGMENTATION_PAYLOAD_INVALID"
 ERR_PROVIDER_UNSUPPORTED = "SEGMENTATION_PROVIDER_UNSUPPORTED"
+CONTRACT_SCHEMA_VERSION = 1
 
 
 class SegmentationServiceError(RuntimeError):
@@ -25,6 +35,90 @@ class SegmentationServiceError(RuntimeError):
         self.code = str(code)
         self.message = str(message)
         self.retryable = bool(retryable)
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _image_size_from_path(image_path: Optional[str]) -> tuple[int, int] | None:
+    raw = str(image_path or "").strip()
+    if not raw or Image is None:
+        return None
+    path = Path(raw).expanduser()
+    if not path.exists() or not path.is_file():
+        return None
+    with Image.open(path) as image:
+        width, height = image.size
+    return int(width), int(height)
+
+
+def _artifact_contract(
+    *,
+    segmentation_npy: Path,
+    class_mapping: Path,
+    sequence_name: str,
+    camera_view: str,
+    frame_name: str,
+    image_path: Optional[str],
+) -> Dict[str, Any]:
+    mask = np.load(segmentation_npy, mmap_mode="r")
+    if mask.ndim != 2:
+        raise SegmentationServiceError(
+            code=ERR_PAYLOAD_INVALID,
+            message=f"Expected segmentation mask HxW, got shape={tuple(mask.shape)}",
+            retryable=False,
+        )
+    mask_h = int(mask.shape[0])
+    mask_w = int(mask.shape[1])
+    image_size = _image_size_from_path(image_path)
+    image_shape_hw = [int(image_size[1]), int(image_size[0])] if image_size else None
+    include_hashes = str(os.getenv("SEGMENTATION_CONTRACT_INCLUDE_SHA256", "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    contract: Dict[str, Any] = {
+        "schema_version": CONTRACT_SCHEMA_VERSION,
+        "coordinate_space": {
+            "name": "image_uv",
+            "origin": "top_left",
+            "axis": {"u": "right", "v": "down"},
+            "units": "pixel",
+        },
+        "frame_identity": {
+            "sequence_name": str(sequence_name),
+            "camera_view": str(camera_view),
+            "frame_name": str(frame_name),
+        },
+        "mask_shape_hw": [mask_h, mask_w],
+        "image_shape_hw": image_shape_hw,
+        "shape_aligned_with_image": (
+            bool(image_shape_hw and image_shape_hw[0] == mask_h and image_shape_hw[1] == mask_w)
+            if image_shape_hw
+            else None
+        ),
+        "source_image_path": str(Path(str(image_path)).expanduser()) if str(image_path or "").strip() else None,
+        "transform_to_image_uv": {
+            "type": "identity",
+            "matrix_3x3": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        },
+    }
+    if include_hashes:
+        contract["sha256"] = {
+            "segmentation_npy": _sha256_file(segmentation_npy),
+            "class_mapping_json": _sha256_file(class_mapping),
+            "source_image": _sha256_file(Path(str(image_path)).expanduser()) if str(image_path or "").strip() else None,
+        }
+    return contract
 
 
 def _find_option_value(args: Sequence[str], option_name: str) -> str | None:
@@ -246,6 +340,7 @@ def _resolve_artifacts(
     sequence_name: str,
     camera_view: str,
     frame_name: str,
+    image_path: Optional[str],
     retriable: bool,
 ) -> Dict[str, Any]:
     if provider_name != "sam3":
@@ -278,10 +373,19 @@ def _resolve_artifacts(
             ),
             retryable=bool(retriable),
         )
+    contract = _artifact_contract(
+        segmentation_npy=segmentation_npy,
+        class_mapping=class_mapping,
+        sequence_name=sequence_name,
+        camera_view=camera_view,
+        frame_name=frame_name,
+        image_path=image_path,
+    )
     return {
         "segmentation_npy_path": str(segmentation_npy),
         "class_mapping_path": str(class_mapping),
         "visualization_path": str(visualization) if visualization.exists() else None,
+        "alignment_contract": contract,
     }
 
 
@@ -427,6 +531,7 @@ async def segment_fpv_frame(
             sequence_name=sequence_name,
             camera_view=camera_view,
             frame_name=resolved_frame_name,
+            image_path=image_path,
             retriable=bool(run_sam3),
         )
     except SegmentationServiceError as exc:
@@ -441,6 +546,7 @@ async def segment_fpv_frame(
     fpv_segmentation: Dict[str, Any] = {
         "segmentation_npy_path": artifacts["segmentation_npy_path"],
         "class_mapping_path": artifacts["class_mapping_path"],
+        "alignment_contract": artifacts.get("alignment_contract"),
     }
     if artifacts["visualization_path"]:
         fpv_segmentation["visualization_path"] = str(artifacts["visualization_path"])

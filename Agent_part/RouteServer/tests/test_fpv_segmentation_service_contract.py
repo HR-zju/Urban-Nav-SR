@@ -6,6 +6,8 @@ from pathlib import Path
 import sys
 import unittest
 
+import numpy as np
+
 
 _MODULE_PATH = Path(__file__).resolve().parents[1] / "src" / "mcp_server" / "services" / "fpv_segmentation_service.py"
 _SPEC = importlib.util.spec_from_file_location("fpv_segmentation_service", _MODULE_PATH)
@@ -27,7 +29,7 @@ class FpvSegmentationServiceContractTest(unittest.TestCase):
                 base = Path(tmp)
                 frame_dir = base / "ride_foo" / "camera_front"
                 frame_dir.mkdir(parents=True, exist_ok=True)
-                (frame_dir / "000005_segmentation.npy").write_bytes(b"npy")
+                np.save(frame_dir / "000005_segmentation.npy", np.zeros((6, 8), dtype=np.int32))
                 (frame_dir / "class_mapping.json").write_text("{}", encoding="utf-8")
                 (frame_dir / "000005_visualization.jpg").write_bytes(b"jpg")
 
@@ -52,6 +54,14 @@ class FpvSegmentationServiceContractTest(unittest.TestCase):
         self.assertIn("artifact_resolve_ms", payload["timing_ms"])
         self.assertIsInstance(payload.get("artifacts"), dict)
         self.assertIsInstance(payload.get("fpv_segmentation"), dict)
+        contract = (payload.get("artifacts") or {}).get("alignment_contract") or {}
+        self.assertIsInstance(contract, dict)
+        self.assertEqual(contract.get("schema_version"), 1)
+        self.assertEqual((contract.get("frame_identity") or {}).get("frame_name"), "000005")
+        self.assertEqual(contract.get("mask_shape_hw"), [6, 8])
+        self.assertIsNone(contract.get("image_shape_hw"))
+        self.assertIsNone(contract.get("shape_aligned_with_image"))
+        self.assertEqual((payload.get("fpv_segmentation") or {}).get("alignment_contract"), contract)
 
     def test_contract_error_when_artifact_missing(self) -> None:
         async def _run() -> dict:

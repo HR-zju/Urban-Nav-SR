@@ -158,6 +158,89 @@ def _present_classes(mask: np.ndarray, id_to_name: dict[int, str]) -> list[dict[
     return present
 
 
+def validate_fpv_segmentation_alignment(
+    fpv_segmentation: dict[str, Any] | None,
+    *,
+    image_width: int,
+    image_height: int,
+    sequence_name: str | None = None,
+    camera_view: str | None = None,
+    frame_name: str | None = None,
+) -> dict[str, Any]:
+    report: dict[str, Any] = {
+        "valid": False,
+        "reasons": [],
+        "checks": {},
+    }
+    if not isinstance(fpv_segmentation, dict):
+        report["reasons"].append("fpv_segmentation_missing")
+        return report
+
+    mask_path = _coerce_path(
+        fpv_segmentation.get("segmentation_npy_path")
+        or fpv_segmentation.get("mask_path")
+    )
+    mapping_path = _coerce_path(
+        fpv_segmentation.get("class_mapping_path")
+        or ((fpv_segmentation.get("summary") or {}).get("class_mapping_path") if isinstance(fpv_segmentation.get("summary"), dict) else None)
+    )
+    contract = fpv_segmentation.get("alignment_contract") if isinstance(fpv_segmentation.get("alignment_contract"), dict) else {}
+
+    report["checks"]["mask_exists"] = bool(mask_path and mask_path.exists())
+    report["checks"]["class_mapping_exists"] = bool(mapping_path and mapping_path.exists())
+    if not report["checks"]["mask_exists"]:
+        report["reasons"].append("mask_missing")
+    if not report["checks"]["class_mapping_exists"]:
+        report["reasons"].append("class_mapping_missing")
+    if report["reasons"]:
+        return report
+
+    mask = np.load(mask_path, mmap_mode="r")
+    if mask.ndim != 2:
+        report["checks"]["mask_ndim_hxw"] = False
+        report["reasons"].append(f"mask_not_hxw:{tuple(mask.shape)}")
+        return report
+
+    mask_h = int(mask.shape[0])
+    mask_w = int(mask.shape[1])
+    report["checks"]["mask_ndim_hxw"] = True
+    report["checks"]["mask_matches_image_size"] = bool(mask_h == int(image_height) and mask_w == int(image_width))
+    report["mask_shape_hw"] = [mask_h, mask_w]
+    report["image_shape_hw"] = [int(image_height), int(image_width)]
+    if not report["checks"]["mask_matches_image_size"]:
+        report["reasons"].append("mask_image_size_mismatch")
+
+    identity = contract.get("frame_identity") if isinstance(contract, dict) else {}
+    if sequence_name is not None:
+        report["checks"]["sequence_name_matches_contract"] = bool(not identity or str(identity.get("sequence_name")) == str(sequence_name))
+        if not report["checks"]["sequence_name_matches_contract"]:
+            report["reasons"].append("sequence_name_mismatch")
+    if camera_view is not None:
+        report["checks"]["camera_view_matches_contract"] = bool(not identity or str(identity.get("camera_view")) == str(camera_view))
+        if not report["checks"]["camera_view_matches_contract"]:
+            report["reasons"].append("camera_view_mismatch")
+    if frame_name is not None:
+        report["checks"]["frame_name_matches_contract"] = bool(not identity or str(identity.get("frame_name")) == str(frame_name))
+        if not report["checks"]["frame_name_matches_contract"]:
+            report["reasons"].append("frame_name_mismatch")
+
+    report["valid"] = not report["reasons"]
+    return report
+
+
+def build_segmentation_teacher_bundle(segmentation_context: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(segmentation_context, dict):
+        return None
+    summary = segmentation_context.get("summary") if isinstance(segmentation_context.get("summary"), dict) else None
+    alignment = segmentation_context.get("alignment_report") if isinstance(segmentation_context.get("alignment_report"), dict) else None
+    if summary is None:
+        return None
+    return {
+        "summary": summary,
+        "alignment_report": alignment,
+    }
+
+
 def load_fpv_segmentation_context(
     fpv_segmentation: dict[str, Any] | None,
     *,
@@ -183,6 +266,17 @@ def load_fpv_segmentation_context(
     )
     if mapping_path is None or not mapping_path.exists():
         return None
+
+    alignment_report = validate_fpv_segmentation_alignment(
+        fpv_segmentation,
+        image_width=image_width,
+        image_height=image_height,
+    )
+    if not alignment_report.get("valid"):
+        raise RuntimeError(
+            "fpv_segmentation alignment validation failed: "
+            + "; ".join(str(item) for item in alignment_report.get("reasons") or ["unknown_reason"])
+        )
 
     mask = np.load(mask_path)
     if mask.ndim != 2:
@@ -213,6 +307,7 @@ def load_fpv_segmentation_context(
     compact_summary = {
         "mask_path": str(mask_path),
         "class_mapping_path": str(mapping_path),
+        "alignment_report": alignment_report,
         "shape_hw": [int(mask.shape[0]), int(mask.shape[1])],
         "present_classes": _present_classes(mask, id_to_name)[:12],
         "traversable_class_ids": sorted(int(class_id) for class_id in traversable_ids),
@@ -240,6 +335,7 @@ def load_fpv_segmentation_context(
         "traversable_ids": traversable_ids,
         "boundary_ids": boundary_ids,
         "forbidden_ids": forbidden_ids,
+        "alignment_report": alignment_report,
         "summary": compact_summary,
     }
 
