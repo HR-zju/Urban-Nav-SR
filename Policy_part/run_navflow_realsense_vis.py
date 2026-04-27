@@ -113,7 +113,7 @@ class AsyncVideoWriter:
         self.fourcc = fourcc
         self.max_queue = max_queue
 
-        # Queue of (frame_bgr, wp_np) tuples, where wp_np is an
+        # Queue of (frame_bgr, wp_np, frame_time) tuples, where wp_np is an
         # optional (N, 2) array of waypoints in robot frame.
         self._queue = mp.Queue(maxsize=max_queue)
         self._stop_event = mp.Event()
@@ -127,7 +127,7 @@ class AsyncVideoWriter:
     def start(self):
         self._process.start()
 
-    def write(self, frame_bgr: np.ndarray, wp_np: Optional[np.ndarray]):
+    def write(self, frame_bgr: np.ndarray, wp_np: Optional[np.ndarray], frame_time: Optional[float] = None):
         """Queue a frame and optional waypoints for writing.
 
         This call is designed to be non-blocking from the main ROS
@@ -142,7 +142,8 @@ class AsyncVideoWriter:
             wp_copy = None
             if wp_np is not None:
                 wp_copy = np.array(wp_np, copy=True)
-            self._queue.put_nowait((frame_copy, wp_copy))
+            t_copy = float(frame_time) if frame_time is not None else time.time()
+            self._queue.put_nowait((frame_copy, wp_copy, t_copy))
         except queue.Full:
             if not self._queue_full_logged:
                 print("[overlay] queue full, dropping frames to keep callback non-blocking")
@@ -162,6 +163,39 @@ class AsyncVideoWriter:
         writer_size = None
         frames_written = 0
         init_error_logged = False
+        pending_items = []
+        pending_times = []
+
+        def estimate_fps_from_times(times, fallback_fps):
+            if len(times) < 2:
+                return max(float(fallback_fps), 1.0)
+            arr = np.asarray(times, dtype=np.float64)
+            deltas = np.diff(arr)
+            deltas = deltas[(deltas > 1e-4) & (deltas < 1.0)]
+            if deltas.size == 0:
+                return max(float(fallback_fps), 1.0)
+            est = 1.0 / float(np.median(deltas))
+            return float(np.clip(est, 1.0, 120.0))
+
+        def ensure_writer(frame_resized):
+            nonlocal writer, writer_size, init_error_logged
+            if writer is not None:
+                return True
+
+            h, w = frame_resized.shape[:2]
+            writer_size = (w, h)
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
+
+            estimated_fps = estimate_fps_from_times(pending_times, fps)
+            print(f"[overlay] init VideoWriter fps={estimated_fps:.2f}")
+            writer = cv2.VideoWriter(out_path, fourcc, estimated_fps, writer_size)
+            if not writer.isOpened():
+                if not init_error_logged:
+                    print(f"[overlay] ERROR: failed to open VideoWriter at {out_path}")
+                    init_error_logged = True
+                writer = None
+                return False
+            return True
 
         while True:
             if stop_event.is_set() and frame_queue.empty():
@@ -174,7 +208,10 @@ class AsyncVideoWriter:
             if item is None:
                 continue
 
-            frame_bgr, wp_np = item
+            frame_bgr, wp_np, frame_time = item
+            pending_times.append(frame_time)
+            if len(pending_times) > 240:
+                pending_times = pending_times[-240:]
 
             try:
                 # Resize to the target resolution and apply trajectory
@@ -204,36 +241,32 @@ class AsyncVideoWriter:
                     print(f"[overlay] resize/overlay pipeline error: {e}")
                     frame_resized = frame_bgr
 
+                pending_items.append(frame_resized)
+
+                # Delay writer initialization briefly to estimate real input FPS.
+                should_init = (writer is None) and (len(pending_items) >= 12 or (stop_event.is_set() and len(pending_items) > 0))
+                if should_init and not ensure_writer(frame_resized):
+                    continue
+
                 if writer is None:
-                    h, w = frame_resized.shape[:2]
-                    writer_size = (w, h)
-                    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-                    writer = cv2.VideoWriter(out_path, fourcc, fps, writer_size)
-                    if not writer.isOpened():
-                        if not init_error_logged:
-                            print(f"[overlay] ERROR: failed to open VideoWriter at {out_path}")
-                            init_error_logged = True
-                        writer = None
+                    continue
 
-                    if writer is None:
-                        # Cannot write; drop frame but continue draining queue
-                        continue
+                while pending_items:
+                    frame_out = pending_items.pop(0)
+                    if writer_size is not None:
+                        h, w = frame_out.shape[:2]
+                        w0, h0 = writer_size
+                        if (w, h) != (w0, h0):
+                            frame_out = cv2.resize(
+                                frame_out,
+                                (w0, h0),
+                                interpolation=cv2.INTER_LINEAR,
+                            )
 
-                frame_out = frame_resized
-                if writer_size is not None:
-                    h, w = frame_resized.shape[:2]
-                    w0, h0 = writer_size
-                    if (w, h) != (w0, h0):
-                        frame_out = cv2.resize(
-                            frame_resized,
-                            (w0, h0),
-                            interpolation=cv2.INTER_LINEAR,
-                        )
-
-                writer.write(frame_out)
-                frames_written += 1
-                if frames_written % 30 == 0:
-                    print(f"[overlay] frames written (async): {frames_written}")
+                    writer.write(frame_out)
+                    frames_written += 1
+                    if frames_written % 30 == 0:
+                        print(f"[overlay] frames written (async): {frames_written}")
             except Exception as e:  # noqa: BLE001
                 # Avoid spamming FFmpeg warnings; log once per failure type
                 print(f"[overlay] write error: {e}")
@@ -374,6 +407,7 @@ class RealSenseNavflowNode(Node):
         frames: int = 21,
         output_fps: float = 30.0,
         save_vis: bool = False,
+        show_window: bool = True,
         video_writer: Optional[AsyncVideoWriter] = None,
     ):
         super().__init__("navflow_realsense_runner")
@@ -385,9 +419,16 @@ class RealSenseNavflowNode(Node):
         self.frames = frames
         self.output_fps = float(output_fps) if float(output_fps) > 0.0 else 30.0
         self.save_vis = save_vis
+        self.show_window = bool(show_window)
         self.video_writer = video_writer
+        self.window_name = "navflow_realsense_overlay"
         # Zero-overhead bypass when both recording and save_vis are disabled.
-        self.enable_visualization = bool(self.video_writer is not None or self.save_vis)
+        self.enable_visualization = bool(
+            self.video_writer is not None or self.save_vis or self.show_window
+        )
+
+        if self.show_window:
+            cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
 
         # Sliding window of image tensors + poses used for ONNX
         self.image_batch = deque(maxlen=self.frames)
@@ -397,7 +438,6 @@ class RealSenseNavflowNode(Node):
 
         self.lock = threading.Lock()
         self.last_image_time = 0.0
-        self.last_video_time = 0.0
         self.inference_event = threading.Event()
 
         # Counter to track when new frames are appended to image_batch
@@ -548,6 +588,28 @@ class RealSenseNavflowNode(Node):
     # Image callback: capture, resize, push to batch, overlay, and record
     # ------------------------------------------------------------------
 
+    def render_overlay_frame(self, frame_bgr: np.ndarray):
+        frame_resized = cv2.resize(
+            frame_bgr,
+            (1920, 1080),
+            interpolation=cv2.INTER_LINEAR,
+        )
+        if self.last_wp_np is None:
+            return frame_resized
+
+        rgb_img = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
+        try:
+            frame_out = project_waypoints_to_fisheye_image_with_polygon_new(
+                self.last_wp_np,
+                self.intrinsic_params,
+                rgb_img,
+                save_fig=False,
+            )
+            return frame_out
+        except Exception as e:  # noqa: BLE001
+            self.get_logger().warning(f"Overlay render failed: {e}")
+            return frame_resized
+
     def image_callback(self, msg: CompressedImage):
         try:
             # Decode compressed image
@@ -557,19 +619,20 @@ class RealSenseNavflowNode(Node):
                 self.get_logger().warning("Failed to decode compressed image")
                 return
 
+            if self.show_window:
+                display_frame = self.render_overlay_frame(image_bgr)
+                cv2.imshow(self.window_name, display_frame)
+                cv2.waitKey(1)
+
             # Timestamp for rate control of ONNX enqueue (video itself runs at
             # full input frame rate).
             image_stamp = msg.header.stamp
             current_time = (image_stamp.nanosec + image_stamp.sec * 1e9) * 1e-9
             time_since_last = current_time - self.last_image_time
 
-            # Source-side strict throttling for video recording to prevent
-            # writer queue overflow and playback time compression on weak CPUs.
+            # Record every incoming frame for video; no fixed-rate throttle.
             if self.enable_visualization and self.video_writer is not None:
-                min_video_interval = 1.0 / self.output_fps
-                if (current_time - self.last_video_time) >= min_video_interval:
-                    self.video_writer.write(image_bgr, self.last_wp_np)
-                    self.last_video_time = current_time
+                self.video_writer.write(image_bgr, self.last_wp_np, frame_time=current_time)
 
             # Only every ~6 Hz frame is preprocessed for the ONNX model; all
             # intermediate frames skip the heavy PIL/torch pipeline.
@@ -1089,10 +1152,15 @@ def parse_args():
         help="Nominal FPS for the saved overlay video (default: 30Hz)",
     )
     parser.add_argument(
-        "--no_record_video",
+        "--record_video",
+        action="store_true",
+        help="Enable MP4 video recording (disabled by default)",
+    )
+    parser.add_argument(
+        "--no_show_window",
         action="store_false",
-        dest="record_video",
-        help="Disable MP4 video recording (AsyncVideoWriter)",
+        dest="show_window",
+        help="Disable realtime OpenCV preview window",
     )
     parser.add_argument(
         "--targets",
@@ -1146,15 +1214,15 @@ def main():
 
     # Async video writer: record overlay MP4 unless explicitly disabled.
     async_writer = None
-    if getattr(args, "record_video", True):
+    if getattr(args, "record_video", False):
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         out_dir = os.path.join(_REPO_ROOT, "Policy_part", "vis", "overlay")
         os.makedirs(out_dir, exist_ok=True)
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         out_path = os.path.join(out_dir, f"realsense_navflow_overlay_{ts}.mp4")
         print(
-            "[overlay] enabling AsyncVideoWriter at {}", out_path,
-            f"fps={args.output_fps}"
+            f"[overlay] enabling AsyncVideoWriter at {out_path} "
+            f"(fps estimate from input, fallback={args.output_fps})"
         )
         async_writer = AsyncVideoWriter(out_path, args.output_fps, fourcc)
         async_writer.start()
@@ -1168,6 +1236,7 @@ def main():
         frames=args.frames,
         output_fps=args.output_fps,
         save_vis=args.save_vis,
+        show_window=args.show_window,
         video_writer=async_writer,
     )
 
@@ -1178,6 +1247,8 @@ def main():
     finally:
         if async_writer is not None:
             async_writer.close()
+        if args.show_window:
+            cv2.destroyAllWindows()
         node.destroy_node()
         rclpy.shutdown()
 
