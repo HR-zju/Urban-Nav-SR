@@ -1,6 +1,7 @@
 [Unit]
 Description= ROS2 Viobot_ctrl Bag Record Service
-After=network.target
+Requires=ros2-startup.service
+After=ros2-startup.service
 
 [Service]
 Type=simple
@@ -11,6 +12,9 @@ RestartSec=5
 KillSignal=SIGINT
 TimeoutStopSec=15
 KillMode=mixed
+
+StandardOutput=append:/root/record_data/log/bag.log
+StandardError=appedn:/root/record_data/log/bag.log
 
 [Install]
 WantedBy=multi-user.target

@@ -4,7 +4,7 @@ ros_domain_id_line=$(grep "export ROS_DOMAIN_ID" /home/PRR/.bashrc)
 export ROS_HOME=/root
 source /opt/ros/humble/setup.bash
 source /root/Baton/install/local_setup.bash  --extend
-source /root/viobot_ctrl/install/local_setup.bash  --extend
+source /root/viobot_ctrl/install/local_setup.bash --extend
 eval $ros_domain_id_line
 export LD_LIBRARY_PATH=/root/Baton/install/baton/lib/baton/:/usr/lib/aarch64-linux-gnu/libv4l/:$LD_LIBRARY_PATH
 
@@ -12,13 +12,13 @@ export LD_LIBRARY_PATH=/root/Baton/install/baton/lib/baton/:/usr/lib/aarch64-lin
 echo "[1/3] 等待核心驱动节点上线..."
 sleep 25
 
-# 启动stereo3算法
-echo "[2/3] 发送算法启动指令..."
+# 启动定位算法
+echo "[2/3] 启动定位算法..."
 timeout 3 ros2 topic pub /baton/stereo3_ctrl system_ctrl/AlgoCtrl "{header: {stamp: {sec: 0, nanosec: 0}, frame_id: ''}, algo_enable: true, algo_reboot: false, algo_reset: false}" > /dev/null 2>&1
-
+sleep 1
+ros2 launch viobot_ctrl start_gnss_then_stereo3.launch.py &
 
 echo "[3/3] 等待算法状态反馈 (algo_status)..."
-
 # 设置最大超时时间为 15 秒
 # 启动一次 echo，持续监听，遇到第一个匹配项自动退出
 timeout 15 bash -c "ros2 topic echo /baton/algo_status | grep -m 1 'algo_status: stereo3_running'" > /dev/null 2>&1
@@ -48,7 +48,7 @@ while [ -d "$BAG_NAME" ]; do
 done
 
 exec ros2 bag record \
-    /baton/gnss/ephem /baton/gnss/meas /baton/stereo3/odometry /baton/algo_status \
+    /baton/gnss/ephem /baton/gnss/meas /baton/stereo3/odometry /baton/algo_status /camera_x001/image_raw/compressed /baton/gnss/status /baton/gnss/spp_fix_raw /baton/gnss/spp_fix /baton/gnss/heading\
     --storage mcap \
     --compression-mode file \
     --compression-format zstd \

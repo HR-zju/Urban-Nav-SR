@@ -21,10 +21,10 @@ tmux select-pane -t 0
 tmux send-keys "tmux set -g mouse on" Enter
 # tmux send-keys "sudo nvidia-smi -pm 1" Enter
 # tmux send-keys "sudo nvidia-smi -pl 100" Enter
-tmux send-keys "docker start ros1toros2" Enter
-sleep 1
-tmux send-keys "docker start vins_fusion" Enter
-sleep 1
+# tmux send-keys "docker start ros1toros2" Enter
+# sleep 1
+# tmux send-keys "docker start vins_fusion" Enter
+# sleep 1
 tmux send-keys "docker exec -it ros1toros2 zsh" Enter
 sleep 1
 tmux send-keys "ros2 launch realsense2_camera rs_launch.py \
@@ -82,12 +82,11 @@ tmux send-keys "python pd_controller_ros2_new2.py" Enter
 
 # record bag in pane 7
 tmux select-pane -t 7
-tmux send-keys "docker exec -it ros1toros2 zsh" Enter
-sleep 1
-tmux send-keys "cd /home/nuvo/SR/foundation-policy/Policy_part/bags/" Enter
-# 录制需要手动确认
-tmux send-keys "ros2 bag record /camera/camera/color/image_raw/compressed  /globalEstimator/global_odometry  /tf_static -o $1" 
-
+# tmux send-keys "docker exec -it ros1toros2 zsh" Enter
+# sleep 1
+tmux send-keys "cd /home/nuvo/SR/foundation-policy/Policy_part/" Enter
+# tmux send-keys "mamba activate foundation_policy" Enter
+tmux send-keys "python ws_raw_message_listener.py" Enter
 
 
 # Attach to the tmux session

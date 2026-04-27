@@ -48,7 +48,7 @@ def _run_sam3(args: argparse.Namespace) -> None:
         "run",
         "-n",
         args.sam3_env_name,
-        "python",
+        "sam3",
         args.sam3_script,
         "--rides_base_dir",
         args.rides_base_dir,
