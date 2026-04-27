@@ -69,7 +69,7 @@ sleep 1
 tmux send-keys "mamba activate foundation_policy" Enter
 tmux send-keys "cd /home/nuvo/SR/foundation-policy/Policy_part" Enter
 # 接收上位机LLM发来的目标点，并导航到目标点
-tmux send-keys "python run_navflow_realsense_vis.py --onnx onnx_ckpts/vint_goal_less.onnx --targets ./topomaps/LLM_Policy/LLM_UTM_odom_poses.txt --no_record_video" Enter
+tmux send-keys "python run_navflow_realsense_vis.py --onnx onnx_ckpts/vint_goal_less.onnx --targets ./topomaps/LLM_Policy/LLM_UTM_odom_poses.txt --no_show_window" Enter
 
 
 # run pd controller in pane 6
