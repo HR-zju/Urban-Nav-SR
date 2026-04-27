@@ -86,7 +86,7 @@ tmux select-pane -t 7
 # sleep 1
 tmux send-keys "cd /home/nuvo/SR/foundation-policy/Policy_part/" Enter
 # tmux send-keys "mamba activate foundation_policy" Enter
-tmux send-keys "python ws_raw_message_listener.py" Enter
+# tmux send-keys "python ws_raw_message_listener.py" Enter
 
 
 # Attach to the tmux session
