@@ -1459,6 +1459,9 @@ async def run_zero_shot_visual_prompt_agent(
     image_path: Optional[str] = None,
     image_url: Optional[str] = None,
     fpv_segmentation: Optional[Dict[str, Any]] = None,
+    fpv_segmentation_overlay_image_path: Optional[str] = None,
+    fpv_segmentation_overlay_image_url: Optional[str] = None,
+    enforce_alignment: bool = True,
     sam3_request: Optional[Dict[str, Any]] = None,
     heading_deg: Optional[float] = None,
     lookahead_m: float = 20.0,
@@ -1471,6 +1474,7 @@ async def run_zero_shot_visual_prompt_agent(
     llm_detail: str = "auto",
     navigation_mode: str = "foot",
     enable_verifier: bool = True,
+    enable_segmentation_overlay_input: bool = False,
     emit_qa_bundle: bool = False,
     request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -1490,8 +1494,18 @@ async def run_zero_shot_visual_prompt_agent(
         "Running zero-shot visual prompt agent "
         f"heading={heading_deg if heading_deg is not None else 'none'} "
         f"visual_top_k={visual_top_k} candidate_top_k={candidate_top_k} "
-        f"enable_verifier={enable_verifier}"
+        f"enable_verifier={enable_verifier} "
+        f"enable_segmentation_overlay_input={enable_segmentation_overlay_input} "
+        f"enforce_alignment={enforce_alignment}"
     )
+    resolved_fpv_segmentation = dict(fpv_segmentation or {}) if isinstance(fpv_segmentation, dict) else None
+    if str(fpv_segmentation_overlay_image_path or "").strip() or str(fpv_segmentation_overlay_image_url or "").strip():
+        if resolved_fpv_segmentation is None:
+            resolved_fpv_segmentation = {}
+        if str(fpv_segmentation_overlay_image_path or "").strip():
+            resolved_fpv_segmentation["visualization_path"] = str(fpv_segmentation_overlay_image_path).strip()
+        if str(fpv_segmentation_overlay_image_url or "").strip():
+            resolved_fpv_segmentation["visualization_url"] = str(fpv_segmentation_overlay_image_url).strip()
     resolved_request_id = str(request_id or uuid4())
     return await run_zero_shot_visual_prompt_pipeline(
         gps=gps,
@@ -1499,7 +1513,7 @@ async def run_zero_shot_visual_prompt_agent(
         coarse_waypoints=coarse_waypoints,
         image_path=image_path,
         image_url=image_url,
-        fpv_segmentation=fpv_segmentation,
+        fpv_segmentation=resolved_fpv_segmentation,
         sam3_request=sam3_request,
         heading_deg=heading_deg,
         lookahead_m=lookahead_m,
@@ -1512,6 +1526,8 @@ async def run_zero_shot_visual_prompt_agent(
         llm_detail=llm_detail,
         navigation_mode=navigation_mode,
         enable_verifier=enable_verifier,
+        enable_segmentation_overlay_input=enable_segmentation_overlay_input,
+        enforce_alignment=enforce_alignment,
         emit_qa_bundle=emit_qa_bundle,
         request_id=resolved_request_id,
     )

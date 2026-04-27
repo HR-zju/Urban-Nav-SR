@@ -146,6 +146,12 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--output-dir", required=True, help="Output directory for per-frame overlay/json/log and manifest")
     parser.add_argument("--continue-on-error", action="store_true", help="Continue when a frame fails")
+    parser.add_argument(
+        "--alignment-mode",
+        default="error",
+        choices=["error", "warn"],
+        help="Preflight behavior for segmentation/image alignment checks in wrapper",
+    )
 
     parser.add_argument(
         "--client-args",
@@ -235,6 +241,8 @@ def main() -> None:
             str(args.min_score),
             "--frame-name",
             str(seed_frame),
+            "--alignment-mode",
+            str(args.alignment_mode),
             "--print-only",
             "--client-args",
             "--image-path",
@@ -299,6 +307,8 @@ def main() -> None:
             str(args.camera_view),
             "--frame-name",
             str(frame_name),
+            "--alignment-mode",
+            str(args.alignment_mode),
             "--client-args",
             *per_frame_client_args,
         ]

@@ -1067,6 +1067,9 @@ async def run_demo(
     *,
     image_path: str,
     fpv_segmentation: dict[str, Any] | None,
+    fpv_segmentation_overlay_image_path: str | None,
+    fpv_segmentation_overlay_image_url: str | None,
+    enforce_alignment: bool,
     origin: str | None,
     destination: str | None,
     origin_name: str,
@@ -1081,6 +1084,7 @@ async def run_demo(
     llm_detail: str,
     perf_profile: str,
     enable_verifier: bool,
+    enable_segmentation_overlay_input: bool,
     save_overlay: str,
     save_preview_png: str | None,
     save_local_bev_svg: str | None,
@@ -1256,11 +1260,15 @@ async def run_demo(
                     "off_route_threshold_m": off_route_threshold_m,
                     "image_path": image_path,
                     "fpv_segmentation": fpv_segmentation,
+                    "fpv_segmentation_overlay_image_path": fpv_segmentation_overlay_image_path,
+                    "fpv_segmentation_overlay_image_url": fpv_segmentation_overlay_image_url,
+                    "enforce_alignment": bool(enforce_alignment),
                     "visual_top_k": visual_top_k,
                     "candidate_top_k": candidate_top_k,
                     "llm_detail": llm_detail,
                     "navigation_mode": mode,
                     "enable_verifier": enable_verifier,
+                    "enable_segmentation_overlay_input": bool(enable_segmentation_overlay_input),
                 },
             )
             _log_timing(
@@ -1592,6 +1600,27 @@ if __name__ == "__main__":
         help="Optional SAM3 visualization image path for bookkeeping/debugging",
     )
     parser.add_argument(
+        "--fpv-segmentation-overlay-image-path",
+        help="Optional explicit overlay image path passed to MCP",
+    )
+    parser.add_argument(
+        "--fpv-segmentation-overlay-image-url",
+        help="Optional explicit overlay image URL passed to MCP",
+    )
+    parser.add_argument(
+        "--enforce-alignment",
+        dest="enforce_alignment",
+        action="store_true",
+        default=True,
+        help="Require segmentation/image alignment validation (default: true)",
+    )
+    parser.add_argument(
+        "--no-enforce-alignment",
+        dest="enforce_alignment",
+        action="store_false",
+        help="Allow proceeding when segmentation alignment validation fails",
+    )
+    parser.add_argument(
         "--off-route-threshold-m",
         type=float,
         default=35.0,
@@ -1618,6 +1647,11 @@ if __name__ == "__main__":
         dest="enable_verifier",
         action="store_false",
         help="Force-disable the second-pass visual prompt verifier.",
+    )
+    parser.add_argument(
+        "--enable-segmentation-overlay-input",
+        action="store_true",
+        help="Enable multi-image arbiter input by appending segmentation visualization when available",
     )
     parser.add_argument("--save-overlay", default="/tmp/yuquan_visual_prompt_overlay.svg", help="Output SVG overlay path")
     parser.add_argument(
@@ -1718,6 +1752,9 @@ if __name__ == "__main__":
         run_demo(
             image_path=args.image_path,
             fpv_segmentation=fpv_segmentation,
+            fpv_segmentation_overlay_image_path=args.fpv_segmentation_overlay_image_path,
+            fpv_segmentation_overlay_image_url=args.fpv_segmentation_overlay_image_url,
+            enforce_alignment=args.enforce_alignment,
             origin=args.origin,
             destination=args.destination,
             origin_name=args.origin_name,
@@ -1732,6 +1769,7 @@ if __name__ == "__main__":
             llm_detail=llm_detail,
             perf_profile=args.perf_profile,
             enable_verifier=enable_verifier,
+            enable_segmentation_overlay_input=args.enable_segmentation_overlay_input,
             save_overlay=args.save_overlay,
             save_preview_png=save_preview_png,
             save_local_bev_svg=save_local_bev_svg,

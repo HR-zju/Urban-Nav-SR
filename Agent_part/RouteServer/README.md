@@ -232,6 +232,8 @@ python examples/yuquan_visual_prompt_agent_client.py \
   --fpv-segmentation-npy /path/to/000005_segmentation.npy \
   --fpv-segmentation-class-mapping /path/to/class_mapping.json \
   --fpv-segmentation-visualization /path/to/000005_visualization.jpg \
+  --enable-segmentation-overlay-input \
+  --enforce-alignment \
   --save-overlay /tmp/yuquan_visual_prompt_overlay.svg \
   --save-json /tmp/yuquan_visual_prompt_result.json
 ```
@@ -241,6 +243,12 @@ python examples/yuquan_visual_prompt_agent_client.py \
 - 把 segmentation summary 提供给 visual prompt generator / verifier
 - 对最终 `rendered_prompt` 做基于可通行类别的硬校验
 - 在输出 JSON 中返回 `agent.fpv_segmentation_summary`
+
+可选三路输入与对齐参数：
+
+- `--enable-segmentation-overlay-input`：让 A/V arbiter 在主图之外再接收 segmentation overlay（默认关闭）
+- `--fpv-segmentation-overlay-image-path` / `--fpv-segmentation-overlay-image-url`：显式指定 overlay 图像输入（会透传到 MCP 参数 `fpv_segmentation_overlay_image_path/url`）
+- `--enforce-alignment` / `--no-enforce-alignment`：控制 segmentation 与图像平面对齐失败时是否继续（默认强制）
 
 如果想把 “运行 SAM3” 和 “运行 visual prompt demo” 合并成一个命令，可用：
 
@@ -263,7 +271,31 @@ python tools/run_sam3_visual_prompt_pipeline.py \
   --min-score 0.3 \
   --checkpoint-path /media/ubuntu/data1/checkpoints/checkpoint_35_merged.pt \
   --frame-name 000005 \
-  --client-args --image-path /home/ubuntu/WorkSpace/project/SR/test4.jpg --gps-source image --save-overlay /tmp/yuquan_visual_prompt_overlay.svg --save-json /tmp/yuquan_visual_prompt_result.json \
+  --client-args --image-path /home/ubuntu/WorkSpace/project/SR/test4.jpg --gps-source image --enable-segmentation-overlay-input --enforce-alignment --save-overlay /tmp/yuquan_visual_prompt_overlay.svg --save-json /tmp/yuquan_visual_prompt_result.json \
+  2>&1 | tee sam3_pipeline.log
+```
+
+按下面这一版参数也可以直接运行（与上面同用途，保留你当前使用的参数写法）：
+
+```bash
+python tools/run_sam3_visual_prompt_pipeline.py \
+  --repo-root /home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer \
+  --client yuquan \
+  --run-sam3 \
+  --sam3-env-name sam3 \
+  --sam3-script prepare_frames_and_run_batch_sam3.py \
+  --rides-base-dir /home/ubuntu/WorkSpace/dataset/output_rides_0 \
+  --frames-base-dir /home/ubuntu/WorkSpace/dataset/output_rides_0_frames \
+  --sam3-output-base-dir /home/ubuntu/WorkSpace/dataset/output_rides_0_sam3_frame_results \
+  --sequence-name ride_16446_20240115041752 \
+  --camera-view camera_front \
+  --fps 1.0 \
+  --gpus 0 \
+  --min-score 0.3 \
+  --checkpoint-path checkpoint_35_merged.pt \
+  --frame-name 000005 \
+  --alignment-mode error \
+  --client-args --image-path /home/ubuntu/WorkSpace/project/SR/test4.jpg --gps-source image --enable-segmentation-overlay-input --enforce-alignment --save-overlay /tmp/yuquan_visual_prompt_overlay.svg --save-json /tmp/yuquan_visual_prompt_result.json \
   2>&1 | tee sam3_pipeline.log
 ```
 

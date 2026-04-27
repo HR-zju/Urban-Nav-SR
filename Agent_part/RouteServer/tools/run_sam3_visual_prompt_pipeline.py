@@ -7,6 +7,13 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
+import numpy as np
+
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
+
 
 DEFAULT_SAM3_SCRIPT = "/home/ubuntu/WorkSpace/project/SR/Code/sam3/scripts/prepare_frames_and_run_batch_sam3.py"
 SUPPORTED_SEGMENTATION_PROVIDERS = ["sam3"]
@@ -137,6 +144,60 @@ def _provider_segmentation_paths(
     )
 
 
+def _image_size(image_path: str) -> tuple[int, int] | None:
+    raw = str(image_path or "").strip()
+    if not raw:
+        return None
+    path = Path(raw).expanduser()
+    if not path.exists() or not path.is_file() or Image is None:
+        return None
+    with Image.open(path) as image:
+        width, height = image.size
+    return int(width), int(height)
+
+
+def _alignment_preflight(
+    *,
+    frame_name: str,
+    image_path: str | None,
+    segmentation_npy: Path,
+    class_mapping: Path,
+    mode: str,
+) -> None:
+    issues: list[str] = []
+    if not class_mapping.exists():
+        issues.append(f"class_mapping_missing:{class_mapping}")
+    if not segmentation_npy.exists():
+        issues.append(f"segmentation_missing:{segmentation_npy}")
+    else:
+        mask = np.load(segmentation_npy, mmap_mode="r")
+        if mask.ndim != 2:
+            issues.append(f"mask_not_hxw:{tuple(mask.shape)}")
+        if segmentation_npy.stem != f"{frame_name}_segmentation":
+            issues.append("frame_name_and_segmentation_file_mismatch")
+
+    if str(image_path or "").strip():
+        image_stem = Path(str(image_path)).expanduser().stem
+        if image_stem and image_stem != str(frame_name):
+            issues.append("frame_name_and_image_stem_mismatch")
+        image_size = _image_size(str(image_path))
+        if image_size and segmentation_npy.exists():
+            mask = np.load(segmentation_npy, mmap_mode="r")
+            if mask.ndim == 2:
+                mask_h, mask_w = int(mask.shape[0]), int(mask.shape[1])
+                if mask_w != int(image_size[0]) or mask_h != int(image_size[1]):
+                    issues.append(
+                        f"mask_image_size_mismatch:mask_hw={[mask_h, mask_w]} image_hw={[int(image_size[1]), int(image_size[0])]}")
+
+    if not issues:
+        return
+    message = "Segmentation alignment preflight failed: " + "; ".join(issues)
+    if mode == "warn":
+        print("[WARN] " + message)
+        return
+    raise RuntimeError(message)
+
+
 def _build_client_command(args: argparse.Namespace) -> list[str]:
     repo_root = Path(args.repo_root).expanduser()
     client_script = _client_script_path(repo_root, args.client)
@@ -162,6 +223,14 @@ def _build_client_command(args: argparse.Namespace) -> list[str]:
     for path in [segmentation_npy, class_mapping]:
         if not path.exists():
             raise RuntimeError(f"Expected SAM3 artifact not found: {path}")
+
+    _alignment_preflight(
+        frame_name=frame_name,
+        image_path=image_path,
+        segmentation_npy=segmentation_npy,
+        class_mapping=class_mapping,
+        mode=str(args.alignment_mode),
+    )
 
     command = ["python", str(client_script), *client_args]
     if not _has_option(command, "--fpv-segmentation-npy"):
@@ -201,6 +270,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-frames", type=int, default=None, help="Optional max_frames forwarded to SAM3")
     parser.add_argument("--overwrite-frames", action="store_true", help="Overwrite extracted frames when re-running SAM3 preprocessing")
     parser.add_argument("--frame-name", default=None, help="Frame stem used to find segmentation artifacts, e.g. 000005")
+    parser.add_argument(
+        "--alignment-mode",
+        default="error",
+        choices=["error", "warn"],
+        help="Preflight behavior for segmentation/image alignment checks",
+    )
     parser.add_argument("--print-only", action="store_true", help="Print the final client command without running it")
     parser.add_argument(
         "--client-args",
