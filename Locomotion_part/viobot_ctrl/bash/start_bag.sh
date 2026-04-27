@@ -14,9 +14,9 @@ sleep 25
 
 # 启动定位算法
 echo "[2/3] 启动定位算法..."
-timeout 3 ros2 topic pub /baton/stereo3_ctrl system_ctrl/AlgoCtrl "{header: {stamp: {sec: 0, nanosec: 0}, frame_id: ''}, algo_enable: true, algo_reboot: false, algo_reset: false}" > /dev/null 2>&1
+ros2 topic pub --once /baton/stereo3_ctrl system_ctrl/AlgoCtrl "{header: {stamp: {sec: 0, nanosec: 0}, frame_id: ''}, algo_enable: true, algo_reboot: false, algo_reset: false}" > /dev/null 2>&1
 sleep 1
-ros2 launch viobot_ctrl start_gnss_then_stereo3.launch.py &
+ros2 launch gnss_comm_impl gnss_spp_node.launch.py &
 
 echo "[3/3] 等待算法状态反馈 (algo_status)..."
 # 设置最大超时时间为 15 秒
@@ -50,7 +50,6 @@ done
 exec ros2 bag record \
     /baton/gnss/ephem /baton/gnss/meas /baton/stereo3/odometry /baton/algo_status /camera_x001/image_raw/compressed /baton/gnss/status /baton/gnss/spp_fix_raw /baton/gnss/spp_fix /baton/gnss/heading\
     --storage mcap \
-    --compression-mode file \
-    --compression-format zstd \
+    --storage-config-file /root/viobot_ctrl/bash/mcap_config.yaml\
     --max-bag-duration 60 \
     -o $BAG_NAME
