@@ -120,6 +120,9 @@ def build_direct_prompt_question(
     navigation_mode: str = "foot",
     pov_prompt_candidates: list[dict[str, Any]] | None = None,
     fpv_segmentation_summary: dict[str, Any] | None = None,
+    alignment_report: dict[str, Any] | None = None,
+    overlay_legend: dict[str, Any] | None = None,
+    summary_source: str | None = None,
 ) -> str:
     compact_route = _compact_route_context(route_context)
     top_prior = None
@@ -163,6 +166,9 @@ def build_direct_prompt_question(
             "visual_regions_hint": compact_regions,
             "optional_candidate_hints": compact_candidates,
             "fpv_segmentation_summary": fpv_segmentation_summary,
+            "alignment_report": alignment_report,
+            "overlay_legend": overlay_legend,
+            "summary_source": str(summary_source or "from_same_mask_entity"),
             "hard_rules": [
                 "For foot mode, prioritize sidewalk or pedestrian-space openings.",
                 "Do not place the trajectory on apparent motor lanes or open roadway if sidewalk-like space exists.",
@@ -217,6 +223,9 @@ def build_direct_prompt_verifier_question(
     image_height: int,
     navigation_mode: str = "foot",
     fpv_segmentation_summary: dict[str, Any] | None = None,
+    alignment_report: dict[str, Any] | None = None,
+    overlay_legend: dict[str, Any] | None = None,
+    summary_source: str | None = None,
 ) -> str:
     compact_route = _compact_route_context(route_context)
     return json.dumps(
@@ -230,6 +239,9 @@ def build_direct_prompt_verifier_question(
             "route_context": compact_route,
             "proposed_prompt": rendered_prompt,
             "fpv_segmentation_summary": fpv_segmentation_summary,
+            "alignment_report": alignment_report,
+            "overlay_legend": overlay_legend,
+            "summary_source": str(summary_source or "from_same_mask_entity"),
             "verification_objectives": [
                 "Check whether the path centerline stays on visible mode-valid traversable surface.",
                 "Check whether the left and right support boundaries tightly match the visible support of the path rather than spilling into road, grass, shrubs, or obstacles.",

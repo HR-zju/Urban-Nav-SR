@@ -1677,28 +1677,39 @@ class VisionAnalyzer(BaseLLMService):
         question: str,
         detail: str = "auto",
         system_prompt: str | None = None,
+        extra_image_urls: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         prompt = system_prompt or (
             "You are a visual assistant. Answer the user's question about the image directly and concisely. "
             "If the image is unclear or inaccessible, say so plainly."
         )
+        image_urls = [str(image_url).strip()]
+        for extra in list(extra_image_urls or []):
+            value = str(extra or "").strip()
+            if value:
+                image_urls.append(value)
+        content: list[dict[str, Any]] = []
+        for url in image_urls:
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": url,
+                        "detail": detail,
+                    },
+                }
+            )
+        content.append(
+            {
+                "type": "text",
+                "text": question,
+            }
+        )
         return [
             {"role": "system", "content": prompt},
             {
                 "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": image_url,
-                            "detail": detail,
-                        },
-                    },
-                    {
-                        "type": "text",
-                        "text": question,
-                    },
-                ],
+                "content": content,
             },
         ]
 
@@ -1709,11 +1720,18 @@ class VisionAnalyzer(BaseLLMService):
         question: str,
         detail: str,
         system_prompt: str | None,
+        extra_image_urls: list[str] | None = None,
     ) -> str:
         response = await client.chat.completions.create(
             model=self.settings.model,
             temperature=self.settings.temperature,
-            messages=self.build_messages(image_url, question, detail, system_prompt),
+            messages=self.build_messages(
+                image_url,
+                question,
+                detail,
+                system_prompt,
+                extra_image_urls=extra_image_urls,
+            ),
         )
         return _extract_text_from_chat_response(response)
 
@@ -1724,20 +1742,26 @@ class VisionAnalyzer(BaseLLMService):
         question: str,
         detail: str,
         system_prompt: str | None,
+        extra_image_urls: list[str] | None = None,
     ) -> str:
         prompt = system_prompt or (
             "You are a visual assistant. Answer the user's question about the image directly and concisely."
         )
+        images = [str(image_url).strip()]
+        for extra in list(extra_image_urls or []):
+            value = str(extra or "").strip()
+            if value:
+                images.append(value)
+        content: list[dict[str, Any]] = [{"type": "input_text", "text": prompt}]
+        for url in images:
+            content.append({"type": "input_image", "image_url": url, "detail": detail})
+        content.append({"type": "input_text", "text": question})
         response = await client.responses.create(
             model=self.settings.model,
             input=[
                 {
                     "role": "user",
-                    "content": [
-                        {"type": "input_text", "text": prompt},
-                        {"type": "input_image", "image_url": image_url, "detail": detail},
-                        {"type": "input_text", "text": question},
-                    ],
+                    "content": content,
                 }
             ],
         )
@@ -1749,11 +1773,15 @@ class VisionAnalyzer(BaseLLMService):
         question: str = "What is in this image?",
         detail: str = "auto",
         system_prompt: str | None = None,
+        extra_image_urls: list[str] | None = None,
     ) -> dict[str, Any]:
         if not image_url.strip():
             raise ValueError("image_url is required")
         if detail not in {"auto", "low", "high"}:
             detail = "auto"
+        resolved_extra_image_urls = [
+            str(item).strip() for item in list(extra_image_urls or []) if str(item or "").strip()
+        ]
 
         if not self.is_available():
             raise RuntimeError("LLM image analysis is not configured. Set ARK_API_KEY or LLM_API_KEY.")
@@ -1761,15 +1789,30 @@ class VisionAnalyzer(BaseLLMService):
         client = _create_async_client_with_timeout(self.settings, self._vision_timeout_s())
         try:
             if self.settings.api_style == "responses":
-                answer = await self._call_responses_api(client, image_url, question, detail, system_prompt)
+                answer = await self._call_responses_api(
+                    client,
+                    image_url,
+                    question,
+                    detail,
+                    system_prompt,
+                    extra_image_urls=resolved_extra_image_urls,
+                )
             else:
-                answer = await self._call_chat_completions(client, image_url, question, detail, system_prompt)
+                answer = await self._call_chat_completions(
+                    client,
+                    image_url,
+                    question,
+                    detail,
+                    system_prompt,
+                    extra_image_urls=resolved_extra_image_urls,
+                )
 
             return {
                 "provider": self.settings.provider,
                 "api_style": self.settings.api_style,
                 "model": self.settings.model,
                 "image_url": image_url,
+                "image_urls": [str(image_url).strip(), *resolved_extra_image_urls],
                 "question": question,
                 "detail": detail,
                 "answer": answer.strip(),
@@ -2062,12 +2105,14 @@ async def arbitrate_pov_candidates_with_llm(
     question: str,
     detail: str = "auto",
     system_prompt: str | None = None,
+    extra_image_urls: list[str] | None = None,
 ) -> dict[str, Any] | None:
     result = await VisionAnalyzer().analyze(
         image_url=image_url,
         question=question,
         detail=detail,
         system_prompt=system_prompt,
+        extra_image_urls=extra_image_urls,
     )
     answer = str(result.get("answer", "")).strip()
     if not answer:
@@ -2085,6 +2130,7 @@ async def arbitrate_local_pov_candidates_with_llm(
     question: str,
     detail: str = "auto",
     system_prompt: str | None = None,
+    extra_image_urls: list[str] | None = None,
 ) -> dict[str, Any] | None:
     data_url = local_image_path_to_data_url(image_path)
     parsed = await arbitrate_pov_candidates_with_llm(
@@ -2092,6 +2138,7 @@ async def arbitrate_local_pov_candidates_with_llm(
         question=question,
         detail=detail,
         system_prompt=system_prompt,
+        extra_image_urls=extra_image_urls,
     )
     if parsed is not None:
         parsed["_arbiter_image_path"] = str(Path(image_path).expanduser())

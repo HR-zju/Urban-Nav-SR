@@ -20,6 +20,7 @@ from mcp_server.brain import (
     coerce_direct_prompt_decision,
 )
 from mcp_server.brain.fpv_segmentation import (
+    build_segmentation_teacher_bundle,
     load_fpv_segmentation_context,
     segmentation_summary_for_llm,
     validate_rendered_prompt_against_segmentation,
@@ -377,6 +378,225 @@ def _apply_segmentation_constraint(
     return rejected, validation
 
 
+def _arbiter_extra_image_urls(
+    *,
+    fpv_segmentation: Dict[str, Any] | None,
+    enable_segmentation_overlay_input: bool,
+) -> tuple[list[str], dict[str, Any]]:
+    debug: dict[str, Any] = {
+        "enabled": bool(enable_segmentation_overlay_input),
+        "used": False,
+        "source": None,
+        "error": None,
+    }
+    if not enable_segmentation_overlay_input or not isinstance(fpv_segmentation, dict):
+        return [], debug
+
+    visualization_url = str(
+        fpv_segmentation.get("visualization_url")
+        or fpv_segmentation.get("visualization_image_url")
+        or ""
+    ).strip()
+    if visualization_url:
+        debug["used"] = True
+        debug["source"] = "visualization_url"
+        return [visualization_url], debug
+
+    visualization_path = str(fpv_segmentation.get("visualization_path") or "").strip()
+    if not visualization_path:
+        debug["error"] = "visualization_path_missing"
+        return [], debug
+
+    try:
+        overlay_data_url = local_image_path_to_data_url(visualization_path)
+        debug["used"] = True
+        debug["source"] = "visualization_path"
+        debug["visualization_path"] = str(Path(visualization_path).expanduser())
+        return [overlay_data_url], debug
+    except Exception as exc:
+        debug["error"] = str(exc)
+        debug["visualization_path"] = str(Path(visualization_path).expanduser())
+        return [], debug
+
+
+def _segmentation_overlay_legend(fpv_segmentation_summary: Dict[str, Any] | None) -> Dict[str, Any] | None:
+    if not isinstance(fpv_segmentation_summary, dict):
+        return None
+    return {
+        "summary_source": "from_same_mask_entity",
+        "color_semantics": {
+            "traversable": "green",
+            "boundary": "teal",
+            "forbidden": "red",
+        },
+        "traversable_class_names": list(fpv_segmentation_summary.get("traversable_class_names") or []),
+        "boundary_class_names": list(fpv_segmentation_summary.get("boundary_class_names") or []),
+        "forbidden_class_names": list(fpv_segmentation_summary.get("forbidden_class_names") or []),
+    }
+
+
+def _segmentation_reject_code(validation: Dict[str, Any] | None) -> str | None:
+    if not isinstance(validation, dict):
+        return None
+    reason = str(validation.get("reason") or "")
+    if "low_center_traversable_ratio" in reason:
+        return "low_center_traversable_ratio"
+    if "center_path_hits_forbidden_surface" in reason:
+        return "center_hits_forbidden"
+    if "boundary_hits_forbidden_surface" in reason:
+        return "boundary_hits_forbidden"
+    if "no_center_path_samples" in reason:
+        return "no_center_path_samples"
+    return None
+
+
+def _build_inputs_for_A(
+    *,
+    route_context: Dict[str, Any],
+    image_width: int,
+    image_height: int,
+    navigation_mode: str,
+    fpv_segmentation_summary: Dict[str, Any] | None,
+) -> Dict[str, Any]:
+    teacher_alignment_report = None
+    overlay_legend = _segmentation_overlay_legend(fpv_segmentation_summary)
+    if isinstance(fpv_segmentation_summary, dict):
+        candidate_alignment = fpv_segmentation_summary.get("alignment_report")
+        if isinstance(candidate_alignment, dict):
+            teacher_alignment_report = candidate_alignment
+    return {
+        "summary_source": "from_same_mask_entity" if isinstance(fpv_segmentation_summary, dict) else "not_available",
+        "alignment_report": teacher_alignment_report,
+        "overlay_legend": overlay_legend,
+        "question": build_direct_prompt_question(
+            route_context=route_context,
+            prompt_proposals=[],
+            visual_regions={},
+            image_width=image_width,
+            image_height=image_height,
+            navigation_mode=navigation_mode,
+            fpv_segmentation_summary=fpv_segmentation_summary,
+            alignment_report=teacher_alignment_report,
+            overlay_legend=overlay_legend,
+            summary_source=(
+                "from_same_mask_entity" if isinstance(fpv_segmentation_summary, dict) else "not_available"
+            ),
+        ),
+        "system_prompt": build_direct_prompt_system_prompt(),
+    }
+
+
+async def _run_A_generator(
+    *,
+    image_path: Optional[str],
+    image_url: Optional[str],
+    question: str,
+    system_prompt: str,
+    llm_detail: str,
+    extra_image_urls: list[str],
+    route_context: Dict[str, Any],
+    image_width: int,
+    image_height: int,
+) -> tuple[Dict[str, Any] | None, VisualPromptDecision | None]:
+    if str(image_path or "").strip():
+        llm_raw = await arbitrate_local_pov_candidates_with_llm(
+            image_path=str(image_path),
+            question=question,
+            detail=llm_detail,
+            system_prompt=system_prompt,
+            extra_image_urls=extra_image_urls,
+        )
+    else:
+        llm_raw = await arbitrate_pov_candidates_with_llm(
+            image_url=str(image_url),
+            question=question,
+            detail=llm_detail,
+            system_prompt=system_prompt,
+            extra_image_urls=extra_image_urls,
+        )
+    decision = coerce_direct_prompt_decision(
+        raw=llm_raw,
+        route_context=route_context,
+        image_width=image_width,
+        image_height=image_height,
+    )
+    return llm_raw, decision
+
+
+def _run_V_constraint(
+    *,
+    decision: VisualPromptDecision | None,
+    route_context: Dict[str, Any],
+    segmentation_context: Dict[str, Any] | None,
+    constraint_stage: str,
+) -> tuple[VisualPromptDecision | None, Dict[str, Any] | None]:
+    constrained_decision, validation = _apply_segmentation_constraint(
+        decision=decision,
+        route_context=route_context,
+        segmentation_context=segmentation_context,
+    )
+    if isinstance(constrained_decision, VisualPromptDecision):
+        constrained_decision.debug = dict(constrained_decision.debug or {})
+        constrained_decision.debug["constraint_stage"] = str(constraint_stage)
+        reject_code = _segmentation_reject_code(validation)
+        if reject_code:
+            constrained_decision.debug["segmentation_reject_code"] = reject_code
+    return constrained_decision, validation
+
+
+async def _run_V_verifier(
+    *,
+    image_path: Optional[str],
+    image_url: Optional[str],
+    route_context: Dict[str, Any],
+    rendered_prompt: Dict[str, Any],
+    image_width: int,
+    image_height: int,
+    navigation_mode: str,
+    fpv_segmentation_summary: Dict[str, Any] | None,
+    alignment_report: Dict[str, Any] | None,
+    overlay_legend: Dict[str, Any] | None,
+    summary_source: str,
+    llm_detail: str,
+    extra_image_urls: list[str],
+) -> tuple[Dict[str, Any] | None, str, VisualPromptDecision | None]:
+    verifier_question = build_direct_prompt_verifier_question(
+        route_context=route_context,
+        rendered_prompt=rendered_prompt,
+        image_width=image_width,
+        image_height=image_height,
+        navigation_mode=navigation_mode,
+        fpv_segmentation_summary=fpv_segmentation_summary,
+        alignment_report=alignment_report,
+        overlay_legend=overlay_legend,
+        summary_source=summary_source,
+    )
+    verifier_system_prompt = build_direct_prompt_verifier_system_prompt()
+    if str(image_path or "").strip():
+        verifier_raw = await arbitrate_local_pov_candidates_with_llm(
+            image_path=str(image_path),
+            question=verifier_question,
+            detail=llm_detail,
+            system_prompt=verifier_system_prompt,
+            extra_image_urls=extra_image_urls,
+        )
+    else:
+        verifier_raw = await arbitrate_pov_candidates_with_llm(
+            image_url=str(image_url),
+            question=verifier_question,
+            detail=llm_detail,
+            system_prompt=verifier_system_prompt,
+            extra_image_urls=extra_image_urls,
+        )
+    verified_decision = coerce_direct_prompt_decision(
+        raw=verifier_raw,
+        route_context=route_context,
+        image_width=image_width,
+        image_height=image_height,
+    )
+    return verifier_raw, verifier_question, verified_decision
+
+
 async def run_zero_shot_visual_prompt_pipeline(
     *,
     gps: Dict[str, float],
@@ -397,6 +617,8 @@ async def run_zero_shot_visual_prompt_pipeline(
     llm_detail: str = "auto",
     navigation_mode: str = "foot",
     enable_verifier: bool = True,
+    enable_segmentation_overlay_input: bool = False,
+    enforce_alignment: bool = True,
     emit_qa_bundle: bool = False,
     request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -451,6 +673,12 @@ async def run_zero_shot_visual_prompt_pipeline(
     segmentation_summary = None
     segmentation_error: str | None = None
     segmentation_error_code: str | None = None
+    segmentation_teacher_bundle: Dict[str, Any] | None = None
+    extra_image_urls: list[str] = []
+    multi_image_debug: dict[str, Any] = {
+        "enabled": bool(enable_segmentation_overlay_input),
+        "used": False,
+    }
     sam3_result: Dict[str, Any] | None = None
     normalized_sam3: Dict[str, Any] | None = None
     segmentation_stage_started_at = perf_counter()
@@ -511,7 +739,11 @@ async def run_zero_shot_visual_prompt_pipeline(
         except Exception as exc:
             segmentation_error = str(exc)
             segmentation_error_code = "SEGMENTATION_PAYLOAD_INVALID"
+            if not enforce_alignment:
+                segmentation_error = None
+                segmentation_error_code = None
     if isinstance(segmentation_context, dict):
+        segmentation_teacher_bundle = build_segmentation_teacher_bundle(segmentation_context)
         _mark_stage("segmentation", segmentation_stage_started_at, status="ok")
     elif segmentation_error:
         _mark_stage(
@@ -523,6 +755,11 @@ async def run_zero_shot_visual_prompt_pipeline(
     else:
         _mark_stage("segmentation", segmentation_stage_started_at, status="skipped")
 
+    extra_image_urls, multi_image_debug = _arbiter_extra_image_urls(
+        fpv_segmentation=fpv_segmentation,
+        enable_segmentation_overlay_input=enable_segmentation_overlay_input,
+    )
+
     llm_raw: Dict[str, Any] | None = None
     verifier_raw: Dict[str, Any] | None = None
     llm_error: str | None = None
@@ -533,51 +770,53 @@ async def run_zero_shot_visual_prompt_pipeline(
     verifier_question = ""
     generator_stage_started_at = perf_counter()
     verifier_stage_started_at = perf_counter()
+    av_input_stage_started_at = perf_counter()
+    v_constraint_generator_started_at = perf_counter()
+    v_constraint_verifier_started_at = perf_counter()
     if _is_arrival_state(route_context_dict):
         decision = _arrival_visual_prompt_decision(
             route_context=route_context_dict,
             image_width=image_width,
             image_height=image_height,
         )
+        _mark_stage("A_build_inputs", av_input_stage_started_at, status="skipped")
+        _mark_stage("A_generator", generator_stage_started_at, status="skipped")
+        _mark_stage("V_constraint_generator", v_constraint_generator_started_at, status="skipped")
+        _mark_stage("V_verifier", verifier_stage_started_at, status="skipped")
+        _mark_stage("V_constraint_verifier", v_constraint_verifier_started_at, status="skipped")
         _mark_stage("generator_llm", generator_stage_started_at, status="skipped")
         _mark_stage("verifier_llm", verifier_stage_started_at, status="skipped")
     else:
         try:
-            question = build_direct_prompt_question(
+            av_inputs = _build_inputs_for_A(
                 route_context=route_context_dict,
-                prompt_proposals=[],
-                visual_regions={},
                 image_width=image_width,
                 image_height=image_height,
                 navigation_mode=navigation_mode,
                 fpv_segmentation_summary=segmentation_summary,
             )
-            system_prompt = build_direct_prompt_system_prompt()
-            if str(image_path or "").strip():
-                llm_raw = await arbitrate_local_pov_candidates_with_llm(
-                    image_path=str(image_path),
-                    question=question,
-                    detail=llm_detail,
-                    system_prompt=system_prompt,
-                )
-            else:
-                llm_raw = await arbitrate_pov_candidates_with_llm(
-                    image_url=str(image_url),
-                    question=question,
-                    detail=llm_detail,
-                    system_prompt=system_prompt,
-                )
-            decision = coerce_direct_prompt_decision(
-                raw=llm_raw,
+            question = str(av_inputs.get("question") or "")
+            _mark_stage("A_build_inputs", av_input_stage_started_at, status="ok")
+            llm_raw, decision = await _run_A_generator(
+                image_path=image_path,
+                image_url=image_url,
+                question=question,
+                system_prompt=str(av_inputs.get("system_prompt") or ""),
+                llm_detail=llm_detail,
+                extra_image_urls=extra_image_urls,
                 route_context=route_context_dict,
                 image_width=image_width,
                 image_height=image_height,
             )
-            decision, segmentation_validation = _apply_segmentation_constraint(
+            _mark_stage("A_generator", generator_stage_started_at, status="ok")
+            _mark_stage("generator_llm", generator_stage_started_at, status="ok")
+            decision, segmentation_validation = _run_V_constraint(
                 decision=decision,
                 route_context=route_context_dict,
                 segmentation_context=segmentation_context,
+                constraint_stage="generator",
             )
+            _mark_stage("V_constraint_generator", v_constraint_generator_started_at, status="ok")
             if (
                 enable_verifier
                 and decision is not None
@@ -585,41 +824,31 @@ async def run_zero_shot_visual_prompt_pipeline(
                 and isinstance(decision.rendered_prompt, dict)
             ):
                 try:
-                    verifier_question = build_direct_prompt_verifier_question(
+                    verifier_raw, verifier_question, verified_decision = await _run_V_verifier(
+                        image_path=image_path,
+                        image_url=image_url,
                         route_context=route_context_dict,
                         rendered_prompt=decision.rendered_prompt,
                         image_width=image_width,
                         image_height=image_height,
                         navigation_mode=navigation_mode,
                         fpv_segmentation_summary=segmentation_summary,
+                        alignment_report=av_inputs.get("alignment_report") if isinstance(av_inputs.get("alignment_report"), dict) else None,
+                        overlay_legend=av_inputs.get("overlay_legend") if isinstance(av_inputs.get("overlay_legend"), dict) else None,
+                        summary_source=str(av_inputs.get("summary_source") or "from_same_mask_entity"),
+                        llm_detail=llm_detail,
+                        extra_image_urls=extra_image_urls,
                     )
-                    verifier_system_prompt = build_direct_prompt_verifier_system_prompt()
-                    if str(image_path or "").strip():
-                        verifier_raw = await arbitrate_local_pov_candidates_with_llm(
-                            image_path=str(image_path),
-                            question=verifier_question,
-                            detail=llm_detail,
-                            system_prompt=verifier_system_prompt,
-                        )
-                    else:
-                        verifier_raw = await arbitrate_pov_candidates_with_llm(
-                            image_url=str(image_url),
-                            question=verifier_question,
-                            detail=llm_detail,
-                            system_prompt=verifier_system_prompt,
-                        )
                     generator_decision = decision
-                    verified_decision = coerce_direct_prompt_decision(
-                        raw=verifier_raw,
-                        route_context=route_context_dict,
-                        image_width=image_width,
-                        image_height=image_height,
-                    )
-                    verified_decision, segmentation_validation = _apply_segmentation_constraint(
+                    _mark_stage("V_verifier", verifier_stage_started_at, status="ok")
+                    _mark_stage("verifier_llm", verifier_stage_started_at, status="ok")
+                    verified_decision, segmentation_validation = _run_V_constraint(
                         decision=verified_decision,
                         route_context=route_context_dict,
                         segmentation_context=segmentation_context,
+                        constraint_stage="verifier",
                     )
+                    _mark_stage("V_constraint_verifier", v_constraint_verifier_started_at, status="ok")
                     if verified_decision is not None:
                         verified_decision.arbiter_source = "llm_direct_verified"
                         verified_decision.debug = {
@@ -627,11 +856,18 @@ async def run_zero_shot_visual_prompt_pipeline(
                             "generator_decision": visual_prompt_decision_to_dict(generator_decision),
                             "verifier_raw": verifier_raw,
                             "verifier_decision": visual_prompt_decision_to_dict(verified_decision),
+                            "av_alignment_report": av_inputs.get("alignment_report"),
+                            "av_summary_source": av_inputs.get("summary_source"),
                         }
                         decision = verified_decision
-                    _mark_stage("verifier_llm", verifier_stage_started_at, status="ok")
                 except Exception as exc:
                     verifier_error = str(exc)
+                    _mark_stage("V_verifier", verifier_stage_started_at, status="error", error_code="LLM_VERIFIER_FAILED")
+                    _mark_stage(
+                        "V_constraint_verifier",
+                        v_constraint_verifier_started_at,
+                        status="skipped",
+                    )
                     _mark_stage(
                         "verifier_llm",
                         verifier_stage_started_at,
@@ -639,10 +875,16 @@ async def run_zero_shot_visual_prompt_pipeline(
                         error_code="LLM_VERIFIER_FAILED",
                     )
             else:
+                _mark_stage("V_verifier", verifier_stage_started_at, status="skipped")
+                _mark_stage("V_constraint_verifier", v_constraint_verifier_started_at, status="skipped")
                 _mark_stage("verifier_llm", verifier_stage_started_at, status="skipped")
-            _mark_stage("generator_llm", generator_stage_started_at, status="ok")
         except Exception as exc:
             llm_error = str(exc)
+            _mark_stage("A_build_inputs", av_input_stage_started_at, status="error", error_code="LLM_GENERATOR_FAILED")
+            _mark_stage("A_generator", generator_stage_started_at, status="error", error_code="LLM_GENERATOR_FAILED")
+            _mark_stage("V_constraint_generator", v_constraint_generator_started_at, status="skipped")
+            _mark_stage("V_verifier", verifier_stage_started_at, status="skipped")
+            _mark_stage("V_constraint_verifier", v_constraint_verifier_started_at, status="skipped")
             _mark_stage(
                 "generator_llm",
                 generator_stage_started_at,
@@ -684,12 +926,18 @@ async def run_zero_shot_visual_prompt_pipeline(
         decision_dict["debug"]["fpv_segmentation_error_code"] = segmentation_error_code
     if segmentation_summary:
         decision_dict["debug"]["fpv_segmentation_summary"] = segmentation_summary
+    if segmentation_teacher_bundle:
+        decision_dict["debug"]["segmentation_teacher_bundle"] = segmentation_teacher_bundle
     if sam3_result:
         decision_dict["debug"]["sam3_result"] = sam3_result
     if normalized_sam3:
         decision_dict["debug"]["normalized_sam3"] = normalized_sam3
     if not enable_verifier:
         decision_dict["debug"]["verifier_skipped"] = True
+    decision_dict["debug"]["multi_image_arbiter"] = {
+        **multi_image_debug,
+        "extra_image_count": len(extra_image_urls),
+    }
 
     qa_stage_started_at = perf_counter()
     if emit_qa_bundle:
