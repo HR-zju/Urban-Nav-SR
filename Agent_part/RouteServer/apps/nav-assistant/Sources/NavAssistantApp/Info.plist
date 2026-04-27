@@ -6,6 +6,8 @@
     <string>NavAssistantApp</string>
     <key>CFBundleIdentifier</key>
     <string>com.minrui.navassistant</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleDisplayName</key>
     <string>Nav Assistant</string>
     <key>CFBundleName</key>

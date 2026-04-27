@@ -245,24 +245,62 @@ python examples/yuquan_visual_prompt_agent_client.py \
 如果想把 “运行 SAM3” 和 “运行 visual prompt demo” 合并成一个命令，可用：
 
 ```bash
+cd /home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer
 python tools/run_sam3_visual_prompt_pipeline.py \
+  --provider sam3 \
+  --repo-root /home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer \
   --client yuquan \
   --run-sam3 \
-  --rides-base-dir /path/to/rides \
-  --frames-base-dir /path/to/frames \
-  --sam3-output-base-dir /path/to/sam3_outputs \
+  --sam3-env-name sam3 \
+  --sam3-script /home/ubuntu/WorkSpace/project/SR/Code/sam3/scripts/prepare_frames_and_run_batch_sam3.py \
+  --rides-base-dir /home/ubuntu/WorkSpace/dataset/output_rides_0 \
+  --frames-base-dir /home/ubuntu/WorkSpace/dataset/output_rides_0_frames \
+  --sam3-output-base-dir /home/ubuntu/WorkSpace/dataset/output_rides_0_sam3_frame_results \
   --sequence-name ride_16446_20240115041752 \
   --camera-view camera_front \
   --fps 1.0 \
+  --gpus 0 \
+  --min-score 0.3 \
   --checkpoint-path /media/ubuntu/data1/checkpoints/checkpoint_35_merged.pt \
   --frame-name 000005 \
-  --client-args -- \
-  --image-path /home/ubuntu/WorkSpace/project/SR/test4.jpg \
-  --save-overlay /tmp/yuquan_visual_prompt_overlay.svg \
-  --save-json /tmp/yuquan_visual_prompt_result.json
+  --client-args --image-path /home/ubuntu/WorkSpace/project/SR/test4.jpg --gps-source image --save-overlay /tmp/yuquan_visual_prompt_overlay.svg --save-json /tmp/yuquan_visual_prompt_result.json \
+  2>&1 | tee sam3_pipeline.log
 ```
 
 如果 SAM3 结果已经存在，只想直接跑 demo，可去掉 `--run-sam3` 和 SAM3 预处理参数，保留 `--sam3-output-base-dir`、`--sequence-name`、`--camera-view`、`--frame-name` 即可。
+
+如果想对整个序列逐帧输出 visual prompt（每帧读取 RGB 和 ride pose、每帧落盘 overlay/json），可用：
+
+```bash
+cd /home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer
+python tools/run_sequence_visual_prompt_pipeline.py \
+  --provider sam3 \
+  --repo-root /home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer \
+  --client yuquan \
+  --run-sam3 \
+  --sam3-env-name sam3 \
+  --sam3-script /home/ubuntu/WorkSpace/project/SR/Code/sam3/scripts/prepare_frames_and_run_batch_sam3.py \
+  --rides-base-dir /home/ubuntu/WorkSpace/dataset/output_rides_0 \
+  --frames-base-dir /home/ubuntu/WorkSpace/dataset/output_rides_0_frames \
+  --sam3-output-base-dir /home/ubuntu/WorkSpace/dataset/output_rides_0_sam3_frame_results \
+  --sequence-name ride_16446_20240115041752 \
+  --camera-view camera_front \
+  --frame-start 1 \
+  --frame-end 50 \
+  --frame-step 1 \
+  --pose-source ride \
+  --checkpoint-path /media/ubuntu/data1/checkpoints/checkpoint_35_merged.pt \
+  --output-dir /tmp/sequence_visual_prompt \
+  --continue-on-error \
+  --client-args --destination-name 浙江大学玉泉校区北门 杭州 --mode foot
+```
+
+输出目录会包含：
+
+- `overlay/{frame}.svg`: 每帧叠加图
+- `json/{frame}.json`: 每帧结构化结果
+- `logs/{frame}.log`: 每帧执行日志
+- `manifest.json`: 序列级汇总（成功/失败帧统计）
 
 ### 动态途经点
 

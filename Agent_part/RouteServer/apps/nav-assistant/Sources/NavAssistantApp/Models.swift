@@ -164,6 +164,78 @@ struct MCPWaypoint: Codable {
     let instruction: String?
     let road: String?
     let action: String?
+
+    enum CodingKeys: String, CodingKey {
+        case longitude
+        case latitude
+        case instruction
+        case road
+        case action
+        case location
+        case coordinate
+    }
+
+    enum CoordinateCodingKeys: String, CodingKey {
+        case longitude
+        case latitude
+    }
+
+    init(longitude: Double, latitude: Double, instruction: String? = nil, road: String? = nil, action: String? = nil) {
+        self.longitude = longitude
+        self.latitude = latitude
+        self.instruction = instruction
+        self.road = road
+        self.action = action
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        if let lon = try container.decodeIfPresent(Double.self, forKey: .longitude),
+           let lat = try container.decodeIfPresent(Double.self, forKey: .latitude) {
+            longitude = lon
+            latitude = lat
+        } else if let coordinateContainer = try? container.nestedContainer(keyedBy: CoordinateCodingKeys.self, forKey: .coordinate),
+                  let lon = try coordinateContainer.decodeIfPresent(Double.self, forKey: .longitude),
+                  let lat = try coordinateContainer.decodeIfPresent(Double.self, forKey: .latitude) {
+            longitude = lon
+            latitude = lat
+        } else if let location = try container.decodeIfPresent(String.self, forKey: .location) {
+            let parts = location.split(separator: ",")
+            guard parts.count == 2,
+                  let lon = Double(parts[0]),
+                  let lat = Double(parts[1]) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .location,
+                    in: container,
+                    debugDescription: "Invalid location format, expected 'lon,lat'."
+                )
+            }
+            longitude = lon
+            latitude = lat
+        } else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.longitude,
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "Missing waypoint coordinates."
+                )
+            )
+        }
+
+        instruction = try container.decodeIfPresent(String.self, forKey: .instruction)
+        road = try container.decodeIfPresent(String.self, forKey: .road)
+        action = try container.decodeIfPresent(String.self, forKey: .action)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(longitude, forKey: .longitude)
+        try container.encode(latitude, forKey: .latitude)
+        try container.encodeIfPresent(instruction, forKey: .instruction)
+        try container.encodeIfPresent(road, forKey: .road)
+        try container.encodeIfPresent(action, forKey: .action)
+    }
 }
 
 struct MCPRouteSummary: Codable {
@@ -190,4 +262,226 @@ struct MCPRouteSummary: Codable {
         guard let minutes, minutes > 0 else { return nil }
         return String(format: "%.0f 分钟", minutes)
     }
+}
+
+// MARK: - Route Session Models
+
+struct RouteSession: Codable {
+    let sessionId: String
+    let sessionName: String?
+    let origin: String?
+    let destination: String?
+    let mode: String?
+    let viaPoints: [ViaPoint]?
+    let createdAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+        case sessionName = "session_name"
+        case origin
+        case destination
+        case mode
+        case viaPoints = "via_points"
+        case createdAt = "created_at"
+    }
+}
+
+struct ViaPoint: Codable, Identifiable {
+    var id: String { name }
+    let location: String?
+    let name: String
+    let stopType: String?
+    let insertBeforeIndex: Int?
+    let coordinates: MCPCoordinates?
+
+    enum CodingKeys: String, CodingKey {
+        case location
+        case name
+        case stopType = "stop_type"
+        case insertBeforeIndex = "insert_before_index"
+        case coordinates
+    }
+
+    var coordinate: CLLocationCoordinate2D? {
+        guard let coords = coordinates else { return nil }
+        return CLLocationCoordinate2D(latitude: coords.latitude, longitude: coords.longitude)
+    }
+
+    var locationCoordinate: CLLocationCoordinate2D? {
+        guard let loc = location, loc.contains(",") else { return nil }
+        let parts = loc.split(separator: ",")
+        guard parts.count == 2,
+              let lon = Double(parts[0]),
+              let lat = Double(parts[1]) else { return nil }
+        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    }
+}
+
+struct RouteLegSummary: Codable {
+    let distanceM: Double?
+    let durationMin: Double?
+    let fromStop: String?
+    let toStop: String?
+
+    enum CodingKeys: String, CodingKey {
+        case distanceM = "distance_m"
+        case durationMin = "duration_min"
+        case fromStop = "from_stop"
+        case toStop = "to_stop"
+    }
+
+    var distanceText: String? {
+        guard let distanceM, distanceM > 0 else { return nil }
+        if distanceM >= 1000 {
+            return String(format: "%.2f km", distanceM / 1000.0)
+        }
+        return String(format: "%.0f m", distanceM)
+    }
+
+    var durationText: String? {
+        guard let minutes = durationMin, minutes > 0 else { return nil }
+        return String(format: "%.0f 分钟", minutes)
+    }
+}
+
+struct StopSequenceItem: Codable {
+    let stopType: String?
+    let name: String?
+    let location: String?
+    let routeLegSummary: RouteLegSummary?
+
+    enum CodingKeys: String, CodingKey {
+        case stopType = "stop_type"
+        case fallbackType = "type"
+        case name
+        case location
+        case routeLegSummary = "route_leg_summary"
+    }
+
+    init(
+        stopType: String?,
+        name: String?,
+        location: String?,
+        routeLegSummary: RouteLegSummary?
+    ) {
+        self.stopType = stopType
+        self.name = name
+        self.location = location
+        self.routeLegSummary = routeLegSummary
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        stopType = try container.decodeIfPresent(String.self, forKey: .stopType)
+            ?? container.decodeIfPresent(String.self, forKey: .fallbackType)
+        name = try container.decodeIfPresent(String.self, forKey: .name)
+        location = try container.decodeIfPresent(String.self, forKey: .location)
+        routeLegSummary = try container.decodeIfPresent(RouteLegSummary.self, forKey: .routeLegSummary)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(stopType, forKey: .stopType)
+        try container.encodeIfPresent(name, forKey: .name)
+        try container.encodeIfPresent(location, forKey: .location)
+        try container.encodeIfPresent(routeLegSummary, forKey: .routeLegSummary)
+    }
+
+    var coordinate: CLLocationCoordinate2D? {
+        guard let loc = location, loc.contains(",") else { return nil }
+        let parts = loc.split(separator: ",")
+        guard parts.count == 2,
+              let lon = Double(parts[0]),
+              let lat = Double(parts[1]) else { return nil }
+        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    }
+}
+
+struct MCPRoutePlan: Codable {
+    let routeSummary: MCPRouteSummary?
+    let stopSequence: [StopSequenceItem]?
+    let routePolyline: [MCPCoordinates]?
+    let coarseWaypoints: [MCPWaypoint]?
+    let legCount: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case routeSummary = "route_summary"
+        case stopSequence = "stop_sequence"
+        case routePolyline = "route_polyline"
+        case coarseWaypoints = "coarse_waypoints"
+        case legCount = "leg_count"
+    }
+}
+
+/// Raw JSON sub-result stored as a dictionary (used to break struct recursion).
+/// Decode manually after confirming the full object structure.
+struct RawJSONResult: Codable {
+    let data: [String: AnyCodableValue]
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        self.data = (try? container.decode([String: AnyCodableValue].self)) ?? [:]
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(data)
+    }
+}
+
+/// Type-erased Codable wrapper so any JSON value can be stored.
+enum AnyCodableValue: Codable {
+    case string(String)
+    case int(Int)
+    case double(Double)
+    case bool(Bool)
+    case array([AnyCodableValue])
+    case dictionary([String: AnyCodableValue])
+    case null
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let v = try? container.decode(String.self) { self = .string(v); return }
+        if let v = try? container.decode(Int.self) { self = .int(v); return }
+        if let v = try? container.decode(Double.self) { self = .double(v); return }
+        if let v = try? container.decode(Bool.self) { self = .bool(v); return }
+        if let v = try? container.decode([AnyCodableValue].self) { self = .array(v); return }
+        if let v = try? container.decode([String: AnyCodableValue].self) { self = .dictionary(v); return }
+        self = .null
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .string(let v): try container.encode(v)
+        case .int(let v): try container.encode(v)
+        case .double(let v): try container.encode(v)
+        case .bool(let v): try container.encode(v)
+        case .array(let v): try container.encode(v)
+        case .dictionary(let v): try container.encode(v)
+        case .null: try container.encodeNil()
+        }
+    }
+}
+
+struct MCPRouteSessionResult: Codable {
+    let session: RouteSession?
+    let routePlan: MCPRoutePlan?
+    let resolvedVia: ResolvedVia?
+    let addResult: RawJSONResult?
+    let replanResult: RawJSONResult?
+
+    enum CodingKeys: String, CodingKey {
+        case session
+        case routePlan = "route_plan"
+        case resolvedVia = "resolved_via"
+        case addResult = "add_result"
+        case replanResult = "replan_result"
+    }
+}
+
+struct ResolvedVia: Codable {
+    let name: String?
+    let location: String?
+    let raw: MCPRecommendationItem?
 }

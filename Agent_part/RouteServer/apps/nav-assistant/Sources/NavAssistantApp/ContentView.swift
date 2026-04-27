@@ -90,14 +90,27 @@ struct ContentView: View {
             Task { await mapVM.applySelectedCandidate(selected) }
         }
         .onReceive(mapVM.$userCoordinate) { newValue in
-            guard interactionMode == .voiceOnly, newValue != nil else { return }
+            guard newValue != nil else { return }
+            if interactionMode == .voiceOnly {
+                Task {
+                    await handleBlindLocationReady()
+                }
+                return
+            }
+            guard let pending = pendingBlindNavigationRequest,
+                  !pending.isEmpty,
+                  !candidateVM.isPlanning else { return }
             Task {
-                await handleBlindLocationReady()
+                await submitConfirmedText(pending)
             }
         }
         .onReceive(candidateVM.$lastPlanningResult) { newValue in
             guard let planning = newValue else { return }
             Task { await mapVM.applyPlanningResult(planning) }
+        }
+        .onReceive(candidateVM.$lastRouteSessionResult) { newValue in
+            guard let sessionResult = newValue else { return }
+            mapVM.applyRouteSessionResult(sessionResult)
         }
     }
 
@@ -132,7 +145,18 @@ struct ContentView: View {
                 : "围绕“说出需求 -> 确认候选 -> 查看路线”展开，保留桌面端精细编辑与地图联动。",
             tone: isVoiceOnlyMode ? .accent : .neutral,
             accessory: {
-                NavStatusBadge(text: overallStatusText, tone: overallStatusTone, systemImage: overallStatusSymbol)
+                HStack(spacing: 8) {
+                    NavStatusBadge(text: overallStatusText, tone: overallStatusTone, systemImage: overallStatusSymbol)
+                    Button {
+                        resetAll()
+                    } label: {
+                        Image(systemName: "arrow.counterclockwise")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("重置所有状态")
+                }
             }
         ) {
             HStack(spacing: 12) {
@@ -484,6 +508,26 @@ struct ContentView: View {
         return "checkmark.circle.fill"
     }
 
+    private func resetAll() {
+        speech.resetAll()
+        voice.resetAll()
+        candidateVM.resetAll()
+        mapVM.resetAll()
+
+        interactionMode = .standard
+        outputMode = .streaming
+        editableText = ""
+        confirmedRecords = []
+        continueDialogInput = ""
+        recordingTarget = .mainText
+        continueDialogBaselineText = ""
+        blindRecordingContext = nil
+        blindPhase = .inactive
+        pendingBlindNavigationRequest = nil
+        suppressBlindRecognitionResult = false
+        lastBlindLocationAlert = ""
+    }
+
     private var speechStatusText: String {
         if speech.isRunning {
             return recordingTarget == .continueDialog ? "对话录音中" : "主需求录音中"
@@ -646,16 +690,16 @@ struct ContentView: View {
 
         rememberConfirmedText(normalized)
 
-        if interactionMode == .voiceOnly {
-            pendingBlindNavigationRequest = normalized
-        }
+        pendingBlindNavigationRequest = normalized
 
         guard let current = mapVM.userCoordinate else {
+            mapVM.requestLocationPermission()
+            mapVM.locateCurrentPosition()
             if interactionMode == .voiceOnly {
                 blindPhase = .waitingForLocation
-                blindSpeak("已记住你的导航需求。请点击定位当前位置；定位成功后我会自动规划并播报候选。")
+                blindSpeak("已记住你的导航需求。正在自动定位当前位置；定位成功后我会自动规划并播报候选。")
             } else {
-                mapVM.statusText = "请先点击「定位当前位置」后再进行规划"
+                mapVM.statusText = "已记住导航需求，正在自动定位当前位置..."
             }
             return
         }

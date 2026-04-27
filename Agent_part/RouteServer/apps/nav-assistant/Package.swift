@@ -20,6 +20,7 @@ let package = Package(
         .executableTarget(
             name: "NavAssistantApp",
             exclude: ["Info.plist"],
+            resources: [.process("Assets.xcassets")],
             linkerSettings: [
                 .linkedFramework("AVFoundation"),
                 .linkedFramework("Speech"),

@@ -1411,6 +1411,8 @@ async def segment_fpv_frame(
     checkpoint_path: Optional[str] = None,
     max_frames: Optional[int] = None,
     overwrite_frames: bool = False,
+    provider: str = "sam3",
+    request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Build or load SAM3 segmentation artifacts for an FPV frame.
@@ -1443,6 +1445,8 @@ async def segment_fpv_frame(
         checkpoint_path=checkpoint_path,
         max_frames=max_frames,
         overwrite_frames=overwrite_frames,
+        provider=provider,
+        request_id=request_id,
     )
 
 
@@ -1468,6 +1472,7 @@ async def run_zero_shot_visual_prompt_agent(
     navigation_mode: str = "foot",
     enable_verifier: bool = True,
     emit_qa_bundle: bool = False,
+    request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Run a zero-shot visual prompt agent over the current FPV frame.
@@ -1487,6 +1492,7 @@ async def run_zero_shot_visual_prompt_agent(
         f"visual_top_k={visual_top_k} candidate_top_k={candidate_top_k} "
         f"enable_verifier={enable_verifier}"
     )
+    resolved_request_id = str(request_id or uuid4())
     return await run_zero_shot_visual_prompt_pipeline(
         gps=gps,
         route_polyline=route_polyline,
@@ -1507,6 +1513,7 @@ async def run_zero_shot_visual_prompt_agent(
         navigation_mode=navigation_mode,
         enable_verifier=enable_verifier,
         emit_qa_bundle=emit_qa_bundle,
+        request_id=resolved_request_id,
     )
 
 

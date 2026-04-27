@@ -10,7 +10,12 @@ final class MapNavigationViewModel: NSObject, ObservableObject {
     @Published var destinationCoordinate: CLLocationCoordinate2D?
     @Published var route: MKRoute?
     @Published var routeWaypoints: [CLLocationCoordinate2D] = []
+    @Published var routeSegments: [[CLLocationCoordinate2D]] = []
     @Published var routeSummary: MCPRouteSummary?
+    @Published var viaPoints: [ViaPoint] = []
+    @Published var nextWaypointName: String?
+    @Published var nextWaypointDistance: String?
+    @Published var nextWaypointDuration: String?
 
     private let locationManager = CLLocationManager()
 
@@ -27,6 +32,21 @@ final class MapNavigationViewModel: NSObject, ObservableObject {
     func locateCurrentPosition() {
         statusText = "正在定位当前位置..."
         locationManager.requestLocation()
+    }
+
+    func resetAll() {
+        targetAddress = ""
+        statusText = "等待定位"
+        userCoordinate = nil
+        destinationCoordinate = nil
+        route = nil
+        routeWaypoints = []
+        routeSegments = []
+        routeSummary = nil
+        viaPoints = []
+        nextWaypointName = nil
+        nextWaypointDistance = nil
+        nextWaypointDuration = nil
     }
 
     func searchAddressAndRoute() async {
@@ -49,7 +69,9 @@ final class MapNavigationViewModel: NSObject, ObservableObject {
             statusText = "已定位目标地址"
 
             guard let userCoordinate else {
-                statusText = "已定位目标地址，等待当前位置"
+                requestLocationPermission()
+                locationManager.requestLocation()
+                statusText = "已定位目标地址，正在自动定位当前位置..."
                 return
             }
             route = try await calculateRoute(from: userCoordinate, to: coordinate)
@@ -155,6 +177,219 @@ final class MapNavigationViewModel: NSObject, ObservableObject {
         }
     }
 
+    // MARK: - Route Session Result Handling
+
+    func applyRouteSessionResult(_ result: MCPRouteSessionResult) {
+        guard let routePlan = result.routePlan else {
+            statusText = "Route session 响应中缺少 route_plan"
+            return
+        }
+
+        // Update via points from session
+        if let session = result.session, let viaPointsList = session.viaPoints {
+            viaPoints = viaPointsList
+        }
+
+        // Extract next waypoint info from stop sequence (index 1 = first via point)
+        nextWaypointName = nil
+        nextWaypointDistance = nil
+        nextWaypointDuration = nil
+        if let stopSequence = routePlan.stopSequence, stopSequence.count > 1,
+           let firstVia = stopSequence[1] as StopSequenceItem?,
+           firstVia.stopType == "via" {
+            nextWaypointName = firstVia.name
+            if let leg = firstVia.routeLegSummary {
+                nextWaypointDistance = leg.distanceText
+                nextWaypointDuration = leg.durationText
+            }
+        }
+
+        // Update route summary
+        routeSummary = routePlan.routeSummary
+
+        // Prefer explicit route geometry from route_plan. Using only stop_sequence
+        // (origin/destination/via) can degrade into straight segments.
+        let finePolyline = (routePlan.routePolyline ?? []).map {
+            CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude)
+        }
+        let coarsePolyline = (routePlan.coarseWaypoints ?? []).map {
+            CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude)
+        }
+
+        // Build segments for colored multi-leg rendering.
+        // With via points, use buildSegmentsFromStopSequence for per-leg colored segments.
+        // With no via points, use the full polyline as a single segment.
+        let viaCount = (routePlan.stopSequence ?? []).filter { $0.stopType == "via" }.count
+        let hasMultipleLegs = viaCount > 0
+
+        if hasMultipleLegs {
+            // Multi-colored segment rendering: split the actual polyline at via point boundaries.
+            // This preserves the real OSRM route geometry for each leg instead of straight lines.
+            if finePolyline.count >= 2 {
+                let segments = buildPolylineSegments(finePolyline, stopSequence: routePlan.stopSequence ?? [])
+                routeSegments = segments
+                routeWaypoints = finePolyline
+
+                if let lastStop = (routePlan.stopSequence ?? []).last, let coord = lastStop.coordinate {
+                    destinationCoordinate = coord
+                }
+                statusText = "途经点路线已更新，共 \(viaCount) 个途经点（polyline 分段）"
+                return
+            }
+
+            // Fallback: no polyline, use straight-line segments between stops
+            if let stopSequence = routePlan.stopSequence, !stopSequence.isEmpty {
+                let segments = buildSegmentsFromStopSequence(stopSequence, routePlan: routePlan)
+                routeSegments = segments
+                routeWaypoints = segments.flatMap { $0 }
+
+                if let lastStop = stopSequence.last, let coord = lastStop.coordinate {
+                    destinationCoordinate = coord
+                }
+                statusText = "途经点路线已更新，共 \(viaCount) 个途经点（直线分段）"
+                return
+            }
+        }
+
+        // Single-leg path (no via points): use the full polyline
+        routeWaypoints = finePolyline.count >= 2 ? finePolyline : coarsePolyline
+        routeSegments = routeWaypoints.count >= 2 ? [routeWaypoints] : []
+
+        if routeWaypoints.count >= 2 {
+            route = nil
+
+            if let stopSequence = routePlan.stopSequence,
+               let lastStop = stopSequence.last,
+               let coord = lastStop.coordinate {
+                destinationCoordinate = coord
+            } else if let last = routeWaypoints.last {
+                destinationCoordinate = last
+            }
+
+            if routeSummary == nil {
+                let distance = polylineDistanceMeters(routeWaypoints)
+                routeSummary = MCPRouteSummary(
+                    distanceM: distance,
+                    durationS: nil,
+                    durationMin: nil
+                )
+            }
+
+            statusText = finePolyline.count >= 2
+                ? "路线已更新，已使用 route_session polyline"
+                : "路线已更新，已使用路线关键点"
+            return
+        }
+
+        statusText = "Route session 响应缺少路线坐标"
+    }
+
+    /// Splits the full route polyline into per-leg segments using via point coordinates as boundaries.
+    /// Each segment contains the actual OSRM route coordinates for one leg, preserving the real
+    /// route geometry instead of drawing straight lines between stops.
+    private func buildPolylineSegments(
+        _ polyline: [CLLocationCoordinate2D],
+        stopSequence: [StopSequenceItem]
+    ) -> [[CLLocationCoordinate2D]] {
+        guard polyline.count >= 2 else { return [] }
+
+        // Find the index in polyline nearest to a given coordinate
+        func nearestPolylineIndex(to coord: CLLocationCoordinate2D) -> Int {
+            var bestIdx = 0
+            var bestDist = Double.infinity
+            for (i, pt) in polyline.enumerated() {
+                let loc1 = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
+                let loc2 = CLLocation(latitude: pt.latitude, longitude: pt.longitude)
+                let d = loc1.distance(from: loc2)
+                if d < bestDist {
+                    bestDist = d
+                    bestIdx = i
+                }
+            }
+            return bestIdx
+        }
+
+        // For each stop (except origin), find its nearest polyline index
+        var stopPolylineIndices: [Int] = []
+        for stop in stopSequence {
+            if let coord = stop.coordinate {
+                stopPolylineIndices.append(nearestPolylineIndex(to: coord))
+            }
+        }
+
+        // Build segments: polyline[0..stop1] for leg 0, polyline[stop1..stop2] for leg 1, etc.
+        var segments: [[CLLocationCoordinate2D]] = []
+        var start = 0
+
+        for endIdx in stopPolylineIndices {
+            guard start <= endIdx && endIdx < polyline.count else {
+                start += 1
+                continue
+            }
+            let segment = Array(polyline[start...endIdx])
+            if !segment.isEmpty {
+                segments.append(segment)
+            }
+            start = endIdx
+        }
+
+        // Add remaining polyline points after the last via (up to the destination)
+        if start < polyline.count {
+            let lastSegment = Array(polyline[start...])
+            if !lastSegment.isEmpty {
+                // Avoid duplicating the last point if already added
+                let sameAsLast = segments.last?.last.map { last in
+                    lastSegment.first.map { $0.latitude == last.latitude && $0.longitude == last.longitude } ?? false
+                } ?? false
+                if !sameAsLast {
+                    segments.append(lastSegment)
+                }
+            }
+        }
+
+        // Ensure we have at least one segment
+        if segments.isEmpty && !polyline.isEmpty {
+            segments.append(polyline)
+        }
+
+        return segments
+    }
+
+    private func buildSegmentsFromStopSequence(
+        _ stopSequence: [StopSequenceItem],
+        routePlan: MCPRoutePlan
+    ) -> [[CLLocationCoordinate2D]] {
+        var segments: [[CLLocationCoordinate2D]] = []
+        var currentSegment: [CLLocationCoordinate2D] = []
+
+        for (index, stop) in stopSequence.enumerated() {
+            if let coord = stop.coordinate {
+                currentSegment.append(coord)
+            }
+
+            // End of a leg: stop is destination or via (end of segment)
+            let isLegEnd = stop.stopType == "destination" ||
+                (stop.stopType == "via" && index + 1 < stopSequence.count)
+            let isLast = index == stopSequence.count - 1
+
+            if isLegEnd && !currentSegment.isEmpty {
+                segments.append(currentSegment)
+                // Don't clear currentSegment if we're at the last stop
+                // (it's already included in the segment we just added)
+                if !isLast {
+                    // Start a new segment with the current stop as the beginning
+                    if let coord = stop.coordinate {
+                        currentSegment = [coord]
+                    } else {
+                        currentSegment = []
+                    }
+                }
+            }
+        }
+
+        return segments
+    }
+
     private func polylineDistanceMeters(_ coordinates: [CLLocationCoordinate2D]) -> Double {
         guard coordinates.count >= 2 else { return 0 }
         var total: Double = 0
@@ -175,7 +410,7 @@ final class MapNavigationViewModel: NSObject, ObservableObject {
         let request = MKDirections.Request()
         request.source = sourceItem
         request.destination = destinationItem
-        request.transportType = .automobile
+        request.transportType = .walking
 
         let directions = MKDirections(request: request)
         let response = try await directions.calculate()
@@ -229,7 +464,7 @@ extension MapNavigationViewModel: CLLocationManagerDelegate {
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         Task { @MainActor in
             guard let location = locations.last else { return }
-            self.userCoordinate = location.coordinate
+            self.userCoordinate = CoordinateTransform.wgs84ToGCJ02(location.coordinate)
             await self.refreshRouteAfterLocationUpdateIfNeeded()
             if self.destinationCoordinate == nil {
                 self.statusText = "当前位置已更新"
