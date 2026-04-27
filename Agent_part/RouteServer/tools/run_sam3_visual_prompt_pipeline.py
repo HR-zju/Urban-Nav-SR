@@ -9,6 +9,7 @@ from typing import Sequence
 
 
 DEFAULT_SAM3_SCRIPT = "/home/ubuntu/WorkSpace/project/SR/Code/sam3/scripts/prepare_frames_and_run_batch_sam3.py"
+SUPPORTED_SEGMENTATION_PROVIDERS = ["sam3"]
 
 
 def _normalize_client_args(raw_args: Sequence[str]) -> list[str]:
@@ -43,13 +44,20 @@ def _client_script_path(repo_root: Path, client: str) -> Path:
 
 
 def _run_sam3(args: argparse.Namespace) -> None:
+    script_path = Path(str(args.sam3_script)).expanduser()
+    if not script_path.exists():
+        raise RuntimeError(
+            f"SAM3 script not found: {script_path}. "
+            "Set --sam3-script to an existing absolute path."
+        )
+
     command = [
         "conda",
         "run",
         "-n",
         args.sam3_env_name,
         "python",
-        args.sam3_script,
+        str(script_path),
         "--rides_base_dir",
         args.rides_base_dir,
         "--frames_base_dir",
@@ -84,6 +92,16 @@ def _run_sam3(args: argparse.Namespace) -> None:
     subprocess.run(command, check=True)
 
 
+def _run_provider(args: argparse.Namespace) -> None:
+    if args.provider == "sam3":
+        _run_sam3(args)
+        return
+    raise RuntimeError(
+        f"Provider '{args.provider}' does not support online inference in this script. "
+        f"Supported online providers: {SUPPORTED_SEGMENTATION_PROVIDERS}"
+    )
+
+
 def _segmentation_paths(
     *,
     sam3_output_base_dir: str,
@@ -96,6 +114,27 @@ def _segmentation_paths(
     class_mapping = base_dir / "class_mapping.json"
     visualization = base_dir / f"{frame_name}_visualization.jpg"
     return segmentation_npy, class_mapping, visualization
+
+
+def _provider_segmentation_paths(
+    *,
+    provider: str,
+    sam3_output_base_dir: str,
+    sequence_name: str,
+    camera_view: str,
+    frame_name: str,
+) -> tuple[Path, Path, Path]:
+    if provider == "sam3":
+        return _segmentation_paths(
+            sam3_output_base_dir=sam3_output_base_dir,
+            sequence_name=sequence_name,
+            camera_view=camera_view,
+            frame_name=frame_name,
+        )
+    raise RuntimeError(
+        f"Provider '{provider}' does not support artifact resolution in this script. "
+        f"Supported providers: {SUPPORTED_SEGMENTATION_PROVIDERS}"
+    )
 
 
 def _build_client_command(args: argparse.Namespace) -> list[str]:
@@ -113,7 +152,8 @@ def _build_client_command(args: argparse.Namespace) -> list[str]:
     else:
         raise RuntimeError("Unable to determine frame name. Set --frame-name or pass --image-path in --client-args.")
 
-    segmentation_npy, class_mapping, visualization = _segmentation_paths(
+    segmentation_npy, class_mapping, visualization = _provider_segmentation_paths(
+        provider=args.provider,
         sam3_output_base_dir=args.sam3_output_base_dir,
         sequence_name=args.sequence_name,
         camera_view=args.camera_view,
@@ -142,6 +182,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]), help="RouteServer/OpenStreetMCP repo root")
     parser.add_argument("--client", default="yuquan", choices=["yuquan", "zero-shot"], help="Visual prompt client to run after SAM3")
+    parser.add_argument("--provider", default="sam3", choices=SUPPORTED_SEGMENTATION_PROVIDERS, help="Segmentation provider")
     parser.add_argument("--run-sam3", action="store_true", help="Run the external SAM3 pipeline before invoking the client")
     parser.add_argument("--sam3-env-name", default="sam3", help="Conda env name for SAM3")
     parser.add_argument("--sam3-script", default=DEFAULT_SAM3_SCRIPT, help="Path to prepare_frames_and_run_batch_sam3.py")
@@ -187,7 +228,21 @@ def main() -> None:
         ]
         if missing:
             raise RuntimeError(f"Missing required arguments with --run-sam3: {', '.join(missing)}")
-        _run_sam3(args)
+
+        required_paths = [
+            ("--rides-base-dir", args.rides_base_dir, True),
+            ("--frames-base-dir", args.frames_base_dir, True),
+            ("--checkpoint-path", args.checkpoint_path, False),
+            ("--sam3-script", args.sam3_script, False),
+        ]
+        for name, raw_path, expect_dir in required_paths:
+            path = Path(str(raw_path)).expanduser()
+            if not path.exists():
+                raise RuntimeError(f"{name} does not exist: {path}")
+            if expect_dir and not path.is_dir():
+                raise RuntimeError(f"{name} must be a directory: {path}")
+
+        _run_provider(args)
 
     client_command = _build_client_command(args)
     print("Running visual prompt client:")

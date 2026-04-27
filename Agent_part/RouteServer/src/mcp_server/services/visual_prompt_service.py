@@ -5,8 +5,10 @@ import io
 import os
 from html import escape
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
+from uuid import uuid4
 
 from PIL import Image, ImageOps
 
@@ -22,6 +24,7 @@ from mcp_server.brain.fpv_segmentation import (
     segmentation_summary_for_llm,
     validate_rendered_prompt_against_segmentation,
 )
+from mcp_server.services.fpv_segmentation_service import segment_fpv_frame
 from mcp_server.llm import (
     arbitrate_local_pov_candidates_with_llm,
     arbitrate_pov_candidates_with_llm,
@@ -382,6 +385,7 @@ async def run_zero_shot_visual_prompt_pipeline(
     image_path: Optional[str] = None,
     image_url: Optional[str] = None,
     fpv_segmentation: Optional[Dict[str, Any]] = None,
+    sam3_request: Optional[Dict[str, Any]] = None,
     heading_deg: Optional[float] = None,
     lookahead_m: float = 20.0,
     off_route_threshold_m: float = 20.0,
@@ -394,12 +398,37 @@ async def run_zero_shot_visual_prompt_pipeline(
     navigation_mode: str = "foot",
     enable_verifier: bool = True,
     emit_qa_bundle: bool = False,
+    request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     del visual_top_k, candidate_top_k
+    started_at = perf_counter()
+    resolved_request_id = str(request_id or uuid4())
+    telemetry: Dict[str, Any] = {
+        "request_id": resolved_request_id,
+        "elapsed_ms": 0,
+        "error_code": None,
+        "stages": {},
+    }
+
+    def _mark_stage(
+        stage: str,
+        stage_started_at: float,
+        *,
+        status: str,
+        error_code: str | None = None,
+    ) -> None:
+        telemetry["stages"][stage] = {
+            "status": str(status),
+            "elapsed_ms": int(round((perf_counter() - stage_started_at) * 1000.0)),
+            "error_code": str(error_code) if error_code else None,
+        }
+        if error_code and telemetry.get("error_code") is None:
+            telemetry["error_code"] = str(error_code)
 
     if not str(image_path or "").strip() and not str(image_url or "").strip():
         raise RuntimeError("run_zero_shot_visual_prompt_agent requires image_path or image_url")
 
+    route_stage_started_at = perf_counter()
     state = build_route_state(
         gps=gps,
         heading_deg=heading_deg,
@@ -411,6 +440,7 @@ async def run_zero_shot_visual_prompt_pipeline(
         back_extent_m=back_extent_m,
         side_extent_m=side_extent_m,
     )
+    _mark_stage("route_context", route_stage_started_at, status="ok")
     route_context_dict = route_context_to_dict(state.route_context)
     local_bev_dict = local_bev_context_to_dict(state.local_bev_context)
     image_width, image_height = _prompt_image_size(image_path=image_path, image_url=image_url)
@@ -420,6 +450,55 @@ async def run_zero_shot_visual_prompt_pipeline(
     segmentation_context = None
     segmentation_summary = None
     segmentation_error: str | None = None
+    segmentation_error_code: str | None = None
+    sam3_result: Dict[str, Any] | None = None
+    normalized_sam3: Dict[str, Any] | None = None
+    segmentation_stage_started_at = perf_counter()
+    if not isinstance(fpv_segmentation, dict) and isinstance(sam3_request, dict):
+        try:
+            sam3_payload = dict(sam3_request)
+            sam3_payload.setdefault("request_id", resolved_request_id)
+            sam3_result = await segment_fpv_frame(**sam3_payload)
+            normalized_sam3 = {
+                "status": sam3_result.get("status"),
+                "provider": sam3_result.get("provider"),
+                "schema_version": sam3_result.get("schema_version"),
+                "request_id": sam3_result.get("request_id"),
+                "timing_ms": sam3_result.get("timing_ms"),
+                "artifacts": sam3_result.get("artifacts"),
+                "error": sam3_result.get("error"),
+            }
+            generated_fpv_segmentation = sam3_result.get("fpv_segmentation")
+            if not isinstance(generated_fpv_segmentation, dict):
+                artifacts = sam3_result.get("artifacts")
+                if isinstance(artifacts, dict):
+                    seg_npy = str(artifacts.get("segmentation_npy_path") or "").strip()
+                    class_map = str(artifacts.get("class_mapping_path") or "").strip()
+                    vis_path = str(artifacts.get("visualization_path") or "").strip()
+                    if seg_npy and class_map:
+                        generated_fpv_segmentation = {
+                            "segmentation_npy_path": seg_npy,
+                            "class_mapping_path": class_map,
+                        }
+                        if vis_path:
+                            generated_fpv_segmentation["visualization_path"] = vis_path
+            if str(sam3_result.get("status") or "").lower() != "ok":
+                error_payload = sam3_result.get("error") or {}
+                segmentation_error_code = str(error_payload.get("code") or "SEGMENTATION_PAYLOAD_INVALID")
+                segmentation_error = str(
+                    error_payload.get("message")
+                    or "segment_fpv_frame returned status=error"
+                )
+                generated_fpv_segmentation = None
+            if isinstance(generated_fpv_segmentation, dict):
+                fpv_segmentation = generated_fpv_segmentation
+            else:
+                if segmentation_error is None:
+                    segmentation_error = "segment_fpv_frame returned an invalid fpv_segmentation payload"
+                    segmentation_error_code = "SEGMENTATION_PAYLOAD_INVALID"
+        except Exception as exc:
+            segmentation_error = str(exc)
+            segmentation_error_code = "SEGMENTATION_COMMAND_FAILED"
     if isinstance(fpv_segmentation, dict):
         try:
             segmentation_context = load_fpv_segmentation_context(
@@ -431,6 +510,18 @@ async def run_zero_shot_visual_prompt_pipeline(
             segmentation_summary = segmentation_summary_for_llm(segmentation_context)
         except Exception as exc:
             segmentation_error = str(exc)
+            segmentation_error_code = "SEGMENTATION_PAYLOAD_INVALID"
+    if isinstance(segmentation_context, dict):
+        _mark_stage("segmentation", segmentation_stage_started_at, status="ok")
+    elif segmentation_error:
+        _mark_stage(
+            "segmentation",
+            segmentation_stage_started_at,
+            status="error",
+            error_code=segmentation_error_code or "SEGMENTATION_PAYLOAD_INVALID",
+        )
+    else:
+        _mark_stage("segmentation", segmentation_stage_started_at, status="skipped")
 
     llm_raw: Dict[str, Any] | None = None
     verifier_raw: Dict[str, Any] | None = None
@@ -440,12 +531,16 @@ async def run_zero_shot_visual_prompt_pipeline(
     generator_decision = None
     question = ""
     verifier_question = ""
+    generator_stage_started_at = perf_counter()
+    verifier_stage_started_at = perf_counter()
     if _is_arrival_state(route_context_dict):
         decision = _arrival_visual_prompt_decision(
             route_context=route_context_dict,
             image_width=image_width,
             image_height=image_height,
         )
+        _mark_stage("generator_llm", generator_stage_started_at, status="skipped")
+        _mark_stage("verifier_llm", verifier_stage_started_at, status="skipped")
     else:
         try:
             question = build_direct_prompt_question(
@@ -534,10 +629,27 @@ async def run_zero_shot_visual_prompt_pipeline(
                             "verifier_decision": visual_prompt_decision_to_dict(verified_decision),
                         }
                         decision = verified_decision
+                    _mark_stage("verifier_llm", verifier_stage_started_at, status="ok")
                 except Exception as exc:
                     verifier_error = str(exc)
+                    _mark_stage(
+                        "verifier_llm",
+                        verifier_stage_started_at,
+                        status="error",
+                        error_code="LLM_VERIFIER_FAILED",
+                    )
+            else:
+                _mark_stage("verifier_llm", verifier_stage_started_at, status="skipped")
+            _mark_stage("generator_llm", generator_stage_started_at, status="ok")
         except Exception as exc:
             llm_error = str(exc)
+            _mark_stage(
+                "generator_llm",
+                generator_stage_started_at,
+                status="error",
+                error_code="LLM_GENERATOR_FAILED",
+            )
+            _mark_stage("verifier_llm", verifier_stage_started_at, status="skipped")
 
     if (
         enable_verifier
@@ -568,10 +680,18 @@ async def run_zero_shot_visual_prompt_pipeline(
         decision_dict["debug"]["verifier_error"] = verifier_error
     if segmentation_error:
         decision_dict["debug"]["fpv_segmentation_error"] = segmentation_error
+    if segmentation_error_code:
+        decision_dict["debug"]["fpv_segmentation_error_code"] = segmentation_error_code
     if segmentation_summary:
         decision_dict["debug"]["fpv_segmentation_summary"] = segmentation_summary
+    if sam3_result:
+        decision_dict["debug"]["sam3_result"] = sam3_result
+    if normalized_sam3:
+        decision_dict["debug"]["normalized_sam3"] = normalized_sam3
     if not enable_verifier:
         decision_dict["debug"]["verifier_skipped"] = True
+
+    qa_stage_started_at = perf_counter()
     if emit_qa_bundle:
         candidate_bundle = build_pov_prompt_candidate_bundle(
             route_context=route_context_dict,
@@ -597,7 +717,11 @@ async def run_zero_shot_visual_prompt_pipeline(
             "task_counts": qa_bundle.get("task_counts", {}),
             "family_counts": qa_bundle.get("family_counts", {}),
         }
+        _mark_stage("qa_bundle", qa_stage_started_at, status="ok")
+    else:
+        _mark_stage("qa_bundle", qa_stage_started_at, status="skipped")
 
+    render_stage_started_at = perf_counter()
     image_href = _image_href_for_overlay(image_path=image_path, image_url=image_url)
     overlay_svg = _render_prompt_overlay_svg(
         image_href=image_href,
@@ -618,8 +742,13 @@ async def run_zero_shot_visual_prompt_pipeline(
             title="Generator Visual Prompt (Pre-Verifier)",
         )
         generator_overlay_svg_data_url = _svg_to_data_url(generator_overlay_svg)
+    _mark_stage("render", render_stage_started_at, status="ok")
+
+    telemetry["elapsed_ms"] = int(round((perf_counter() - started_at) * 1000.0))
+    decision_dict["debug"]["telemetry"] = telemetry
 
     return {
+        "request_id": resolved_request_id,
         "route_context": route_context_dict,
         "local_bev_context": local_bev_dict,
         "arbiter_decision": decision_dict,
@@ -627,7 +756,9 @@ async def run_zero_shot_visual_prompt_pipeline(
         "overlay_svg_data_url": _svg_to_data_url(overlay_svg),
         "generator_overlay_svg": generator_overlay_svg,
         "generator_overlay_svg_data_url": generator_overlay_svg_data_url,
+        "sam3": sam3_result,
         "fpv_segmentation_summary": segmentation_summary,
         "qa_bundle": qa_bundle,
         "pov_prompt_candidate_bundle": pov_candidate_bundle_to_dict(candidate_bundle) if emit_qa_bundle else None,
+        "telemetry": telemetry,
     }

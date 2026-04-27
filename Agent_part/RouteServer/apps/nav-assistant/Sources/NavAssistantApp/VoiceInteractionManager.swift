@@ -54,6 +54,12 @@ final class VoiceInteractionManager: NSObject, ObservableObject {
         synthesizer.stopSpeaking(at: .immediate)
     }
 
+    func resetAll() {
+        stopSpeaking()
+        lastSpokenText = ""
+        lastError = nil
+    }
+
     func announceCandidates(from response: MCPRecommendationResponse, onFinish: (() -> Void)? = nil) {
         speak(Self.buildCandidateAnnouncement(from: response), onFinish: onFinish)
     }

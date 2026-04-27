@@ -41,7 +41,7 @@ struct MCPAddressCandidateService: AddressCandidateService {
     private let bridgeScriptCandidates: [String]
     private let fallback = MockAddressCandidateService()
 
-    init(timeoutSeconds: TimeInterval = 20.0) {
+    init(timeoutSeconds: TimeInterval = 120.0) {
         let envScript = ProcessInfo.processInfo.environment["MCP_BRIDGE_SCRIPT_PATH"]
         self.timeoutSeconds = timeoutSeconds
         self.bridgeScriptCandidates = Self.resolveBridgeScriptCandidates(envScript: envScript)
@@ -113,6 +113,7 @@ struct MCPAddressCandidateService: AddressCandidateService {
         selectedIndex: Int
     ) async throws -> MCPRecommendationResponse {
         guard let scriptPath = bridgeScriptCandidates.first(where: { FileManager.default.fileExists(atPath: $0) }) else {
+            NSLog("[MCPAddressCandidateService] script not found, candidates: %@", bridgeScriptCandidates.joined(separator: ", "))
             throw PlanningServiceError.missingBridgeScript
         }
         let scriptURL = URL(fileURLWithPath: scriptPath)
@@ -121,18 +122,7 @@ struct MCPAddressCandidateService: AddressCandidateService {
         let pythonCandidates = [
             ProcessInfo.processInfo.environment["PYTHON_BIN"],
             "/opt/anaconda3/envs/openstreet/bin/python3",
-            "/opt/anaconda3/envs/openstreet/bin/python",
-            "/Library/Developer/CommandLineTools/usr/bin/python3",
-            "/usr/bin/python3",
-            "python3"
-        ]
-            .compactMap { $0 }
-            .filter { !$0.isEmpty }
-        let uvCandidates = [
-            ProcessInfo.processInfo.environment["UV_BIN"],
-            "/opt/homebrew/bin/uv",
-            "/usr/local/bin/uv",
-            "uv"
+            "/opt/anaconda3/envs/openstreet/bin/python"
         ]
             .compactMap { $0 }
             .filter { !$0.isEmpty }
@@ -152,8 +142,7 @@ struct MCPAddressCandidateService: AddressCandidateService {
                         "--radius", String(searchRadius)
                     ]
                     let pythonRunners = pythonCandidates.map { [$0, scriptPath] + commonArguments }
-                    let uvRunners = uvCandidates.map { [$0, "--directory", openStreetRoot, "run", "python", scriptPath] + commonArguments }
-                    let runners: [[String]] = pythonRunners + uvRunners
+                    let runners: [[String]] = pythonRunners
 
                     let promptPreview = confirmedText.replacingOccurrences(of: "\n", with: "\\n")
                     NSLog("[MCPAddressCandidateService] Running script: %@", scriptPath)
@@ -182,7 +171,9 @@ struct MCPAddressCandidateService: AddressCandidateService {
                         process.currentDirectoryURL = URL(fileURLWithPath: openStreetRoot)
                         process.standardOutput = outputPipe
                         process.standardError = errorPipe
-                        NSLog("[MCPAddressCandidateService] trying runner: %@", runner.prefix(4).joined(separator: " "))
+                        let runnerStr = runner.prefix(4).joined(separator: " ")
+                        NSLog("[MCPAddressCandidateService] trying runner: %@", runnerStr)
+                        NSLog("[MCPAddressCandidateService] env PATH: %@", env["PATH"] ?? "nil")
 
                         do {
                             try process.run()
@@ -198,6 +189,7 @@ struct MCPAddressCandidateService: AddressCandidateService {
 
                         if process.isRunning {
                             process.terminate()
+                            NSLog("[MCPAddressCandidateService] runner TIMED OUT after %@s: %@", String(timeoutSeconds), runner.first ?? "unknown")
                             runnerErrors.append("超时(\(runner.first ?? "unknown"))")
                             continue
                         }
@@ -215,6 +207,7 @@ struct MCPAddressCandidateService: AddressCandidateService {
 
                         guard process.terminationStatus == 0 else {
                             let reason = stderr.isEmpty ? stdout : stderr
+                            NSLog("[MCPAddressCandidateService] runner failed stderr: %@", String(reason.prefix(500)))
                             runnerErrors.append("退出非0(\(runner.first ?? "unknown")): \(reason)")
                             continue
                         }
@@ -226,9 +219,11 @@ struct MCPAddressCandidateService: AddressCandidateService {
                                 continue
                             }
                             let decoded = try JSONDecoder().decode(MCPRecommendationResponse.self, from: jsonData)
+                            NSLog("[MCPAddressCandidateService] SUCCESS with runner: %@", runner.first ?? "unknown")
                             continuation.resume(returning: decoded)
                             return
                         } catch {
+                            NSLog("[MCPAddressCandidateService] parse/JSON error: %@", error.localizedDescription)
                             runnerErrors.append("解析失败(\(runner.first ?? "unknown")): \(error.localizedDescription)")
                             continue
                         }
@@ -286,7 +281,12 @@ struct MCPAddressCandidateService: AddressCandidateService {
     }
 
     private func buildBridgeEnvironment() -> [String: String] {
-        var env = ProcessInfo.processInfo.environment
+        var env = [String: String]()
+        // Start with current environment as base
+        for (key, value) in ProcessInfo.processInfo.environment {
+            env[key] = value
+        }
+
         let fallbackPath = [
             "/opt/anaconda3/envs/openstreet/bin",
             "/opt/homebrew/bin",
@@ -297,14 +297,20 @@ struct MCPAddressCandidateService: AddressCandidateService {
             "/sbin"
         ].joined(separator: ":")
 
-        if let existingPath = env["PATH"], !existingPath.isEmpty {
-            if !existingPath.contains("/opt/anaconda3/envs/openstreet/bin") {
-                env["PATH"] = "\(fallbackPath):\(existingPath)"
-            }
-        } else {
-            env["PATH"] = fallbackPath
-        }
+        // Always put conda env python first in PATH
+        let existingPath = env["PATH"] ?? ""
+        env["PATH"] = "\(fallbackPath):\(existingPath)"
 
+        // Also set CONDA_PREFIX so Python finds site-packages correctly
+        env["CONDA_PREFIX"] = "/opt/anaconda3/envs/openstreet"
+        env["CONDA_DEFAULT_ENV"] = "openstreet"
+
+        // Set PYTHONPATH explicitly to ensure Python finds site-packages
+        env["PYTHONPATH"] = "/opt/anaconda3/envs/openstreet/lib/python3.12/site-packages:/Users/minruiliu/Nav/OpenStreetMcp/src"
+
+        NSLog("[MCPAddressCandidateService] buildBridgeEnvironment: final PATH=%@", env["PATH"] ?? "nil")
+        NSLog("[MCPAddressCandidateService] buildBridgeEnvironment: CONDA_PREFIX=%@", env["CONDA_PREFIX"] ?? "nil")
+        NSLog("[MCPAddressCandidateService] buildBridgeEnvironment: PYTHONPATH=%@", env["PYTHONPATH"] ?? "nil")
         return env
     }
 
@@ -313,6 +319,7 @@ struct MCPAddressCandidateService: AddressCandidateService {
 
         if let envScript, !envScript.isEmpty {
             rawCandidates.append(envScript)
+            NSLog("[MCPAddressCandidateService] resolveBridgeScriptCandidates: envScript=%@", envScript)
         }
 
         let relativeCandidates = [
@@ -328,6 +335,8 @@ struct MCPAddressCandidateService: AddressCandidateService {
             }
         }
 
+        NSLog("[MCPAddressCandidateService] resolveBridgeScriptCandidates: rawCandidates count=%d", rawCandidates.count)
+
         var resolved: [String] = []
         var seen: Set<String> = []
         for candidate in rawCandidates where !candidate.isEmpty {
@@ -336,6 +345,7 @@ struct MCPAddressCandidateService: AddressCandidateService {
                 resolved.append(normalized)
             }
         }
+        NSLog("[MCPAddressCandidateService] resolveBridgeScriptCandidates: resolved=%@", resolved.joined(separator: ", "))
         return resolved
     }
 
@@ -343,6 +353,7 @@ struct MCPAddressCandidateService: AddressCandidateService {
         var directories: [URL] = []
         let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
         directories.append(cwd)
+        NSLog("[MCPAddressCandidateService] candidateBaseDirectories: cwd=%@", cwd.path)
 
         if Bundle.main.bundleURL.pathExtension == "app" {
             let bundleURL = Bundle.main.bundleURL
@@ -354,6 +365,8 @@ struct MCPAddressCandidateService: AddressCandidateService {
 
             directories.append(appProjectRootURL)
             directories.append(openStreetRootURL)
+            NSLog("[MCPAddressCandidateService] candidateBaseDirectories: bundle appProjectRoot=%@, openStreetRoot=%@",
+                  appProjectRootURL.path, openStreetRootURL.path)
         }
 
         var uniqueDirectories: [URL] = []
@@ -364,6 +377,7 @@ struct MCPAddressCandidateService: AddressCandidateService {
                 uniqueDirectories.append(directory.standardizedFileURL)
             }
         }
+        NSLog("[MCPAddressCandidateService] candidateBaseDirectories: final dirs=%@", uniqueDirectories.map { $0.path }.joined(separator: ", "))
         return uniqueDirectories
     }
 }

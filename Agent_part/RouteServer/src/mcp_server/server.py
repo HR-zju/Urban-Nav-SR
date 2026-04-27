@@ -58,6 +58,7 @@ from mcp_server.services.route_session_service import (
     _route_session_store_info,
     _save_persisted_route_session,
 )
+from mcp_server.services.fpv_segmentation_service import segment_fpv_frame as segment_fpv_frame_service
 from mcp_server.services.visual_prompt_service import run_zero_shot_visual_prompt_pipeline
 
 # Create application context
@@ -1389,6 +1390,67 @@ async def get_route_state(
 
 
 @mcp.tool()
+async def segment_fpv_frame(
+    ctx: Context,
+    sequence_name: str,
+    sam3_output_base_dir: str,
+    image_path: Optional[str] = None,
+    frame_name: Optional[str] = None,
+    camera_view: str = "camera_front",
+    run_sam3: bool = False,
+    sam3_env_name: str = "sam3",
+    sam3_script: str = "/home/ubuntu/WorkSpace/project/SR/Code/sam3/scripts/prepare_frames_and_run_batch_sam3.py",
+    rides_base_dir: Optional[str] = None,
+    frames_base_dir: Optional[str] = None,
+    recordings_subdir: str = "recordings",
+    stream_pattern: str = "*_video.m3u8",
+    fps: float = 1.0,
+    gpus: Optional[List[int]] = None,
+    min_score: float = 0.3,
+    finetuned: bool = True,
+    checkpoint_path: Optional[str] = None,
+    max_frames: Optional[int] = None,
+    overwrite_frames: bool = False,
+    provider: str = "sam3",
+    request_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Build or load SAM3 segmentation artifacts for an FPV frame.
+
+    This tool supports two modes:
+    - artifact lookup only: run_sam3=false, expects existing SAM3 outputs
+    - full execution: run_sam3=true, launches external SAM3 pipeline first
+    """
+    await ctx.info(
+        "Resolving SAM3 segmentation artifacts "
+        f"sequence={sequence_name} camera={camera_view} run_sam3={run_sam3}"
+    )
+    return await segment_fpv_frame_service(
+        sequence_name=sequence_name,
+        sam3_output_base_dir=sam3_output_base_dir,
+        image_path=image_path,
+        frame_name=frame_name,
+        camera_view=camera_view,
+        run_sam3=run_sam3,
+        sam3_env_name=sam3_env_name,
+        sam3_script=sam3_script,
+        rides_base_dir=rides_base_dir,
+        frames_base_dir=frames_base_dir,
+        recordings_subdir=recordings_subdir,
+        stream_pattern=stream_pattern,
+        fps=fps,
+        gpus=gpus,
+        min_score=min_score,
+        finetuned=finetuned,
+        checkpoint_path=checkpoint_path,
+        max_frames=max_frames,
+        overwrite_frames=overwrite_frames,
+        provider=provider,
+        request_id=request_id,
+    )
+
+
+@mcp.tool()
 async def run_zero_shot_visual_prompt_agent(
     gps: Dict[str, float],
     route_polyline: List[Dict[str, Any]] | List[List[float]],
@@ -1397,6 +1459,7 @@ async def run_zero_shot_visual_prompt_agent(
     image_path: Optional[str] = None,
     image_url: Optional[str] = None,
     fpv_segmentation: Optional[Dict[str, Any]] = None,
+    sam3_request: Optional[Dict[str, Any]] = None,
     heading_deg: Optional[float] = None,
     lookahead_m: float = 20.0,
     off_route_threshold_m: float = 20.0,
@@ -1409,6 +1472,7 @@ async def run_zero_shot_visual_prompt_agent(
     navigation_mode: str = "foot",
     enable_verifier: bool = True,
     emit_qa_bundle: bool = False,
+    request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Run a zero-shot visual prompt agent over the current FPV frame.
@@ -1428,6 +1492,7 @@ async def run_zero_shot_visual_prompt_agent(
         f"visual_top_k={visual_top_k} candidate_top_k={candidate_top_k} "
         f"enable_verifier={enable_verifier}"
     )
+    resolved_request_id = str(request_id or uuid4())
     return await run_zero_shot_visual_prompt_pipeline(
         gps=gps,
         route_polyline=route_polyline,
@@ -1435,6 +1500,7 @@ async def run_zero_shot_visual_prompt_agent(
         image_path=image_path,
         image_url=image_url,
         fpv_segmentation=fpv_segmentation,
+        sam3_request=sam3_request,
         heading_deg=heading_deg,
         lookahead_m=lookahead_m,
         off_route_threshold_m=off_route_threshold_m,
@@ -1447,6 +1513,7 @@ async def run_zero_shot_visual_prompt_agent(
         navigation_mode=navigation_mode,
         enable_verifier=enable_verifier,
         emit_qa_bundle=emit_qa_bundle,
+        request_id=resolved_request_id,
     )
 
 

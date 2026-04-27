@@ -22,6 +22,7 @@ public:
         double max_trans_jump_m = 10.0;           // Max allowed translation jump (m) in a single step
         size_t anchor_window_size = 50;           // Max number of pairs in sparse anchor buffer
         double anchor_min_dist = 10.0;            // Minimum distance (m) to add a new anchor point
+        size_t max_consecutive_jumps = 3;         // Max allowed consecutive jumps before reset
     };
 
     struct AlignPair {
@@ -59,7 +60,11 @@ private:
     Config cfg_;
     bool is_aligned_ = false;
     double current_yaw_ = 0.0;
+    size_t jump_counter_ = 0;
     Eigen::Vector2d current_translation_ = Eigen::Vector2d::Zero();
+
+    bool dirty_ = true;                   // True when buffer changed since last align()
+    AlignmentResult cached_result_;        // Cached result from last successful align()
 
     std::deque<AlignPair> buffer_;
     std::deque<AlignPair> anchor_buffer_;

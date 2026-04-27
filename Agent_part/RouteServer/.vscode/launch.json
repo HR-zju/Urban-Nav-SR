@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:OpenStreetMcp}/apps/nav-assistant",
+            "name": "Debug NavAssistantApp (apps/nav-assistant)",
+            "target": "NavAssistantApp",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug NavAssistantApp (apps/nav-assistant)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:OpenStreetMcp}/apps/nav-assistant",
+            "name": "Release NavAssistantApp (apps/nav-assistant)",
+            "target": "NavAssistantApp",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release NavAssistantApp (apps/nav-assistant)"
+        }
+    ]
+}

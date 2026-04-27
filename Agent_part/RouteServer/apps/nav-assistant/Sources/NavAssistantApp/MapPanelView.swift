@@ -41,9 +41,18 @@ struct MapPanelView: View {
                     spacing: 10
                 ) {
                     NavMetricBadge(label: "当前位置", value: viewModel.userCoordinate == nil ? "未定位" : "已获取")
-                    NavMetricBadge(label: "目的地", value: currentDestinationTitle, emphasized: viewModel.destinationCoordinate != nil)
+                    if let nextName = viewModel.nextWaypointName {
+                        NavMetricBadge(label: "下一途经点", value: nextName, emphasized: true)
+                    } else {
+                        NavMetricBadge(label: "目的地", value: currentDestinationTitle, emphasized: viewModel.destinationCoordinate != nil)
+                    }
                     NavMetricBadge(label: "路线距离", value: routeDistanceText)
                     NavMetricBadge(label: "预计耗时", value: routeDurationText)
+
+                    if viewModel.nextWaypointName != nil {
+                        NavMetricBadge(label: "到途经点距离", value: viewModel.nextWaypointDistance ?? "--")
+                        NavMetricBadge(label: "到途经点耗时", value: viewModel.nextWaypointDuration ?? "--")
+                    }
                 }
 
                 if !viewModel.targetAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -90,18 +99,53 @@ struct MapPanelView: View {
                     }
 
                     if viewModel.routeWaypoints.count >= 2 {
-                        MapPolyline(
-                            MKPolyline(
-                                coordinates: viewModel.routeWaypoints,
-                                count: viewModel.routeWaypoints.count
-                            )
-                        )
-                        .stroke(.green, lineWidth: 5)
+                        // Render each route segment with a distinct color
+                        ForEach(Array(viewModel.routeSegments.enumerated()), id: \.offset) { segmentIndex, segment in
+                            if segment.count >= 2 {
+                                let isLastSegment = segmentIndex == viewModel.routeSegments.count - 1
+                                let isFirstSegment = segmentIndex == 0
+                                MapPolyline(
+                                    MKPolyline(
+                                        coordinates: segment,
+                                        count: segment.count
+                                    )
+                                )
+                                .stroke(
+                                    segmentColor(for: segmentIndex, totalSegments: viewModel.routeSegments.count),
+                                    style: StrokeStyle(
+                                        lineWidth: isFirstSegment || isLastSegment ? 5 : 4,
+                                        lineCap: .round,
+                                        lineJoin: .round,
+                                        dash: (segmentIndex < viewModel.routeSegments.count - 1 && viewModel.routeSegments.count > 1)
+                                            ? [8, 4]
+                                            : []
+                                    )
+                                )
+                            }
+                        }
                     }
 
                     if let route = viewModel.route {
                         MapPolyline(route.polyline)
                             .stroke(.green, lineWidth: 5)
+                    }
+
+                    // Via point markers from route segments
+                    ForEach(Array(viewModel.viaPoints.enumerated()), id: \.offset) { index, viaPoint in
+                        if let coord = viaPoint.coordinate {
+                            Annotation(viaPoint.name, coordinate: coord) {
+                                VStack(spacing: 2) {
+                                    Image(systemName: "mappin.circle.fill")
+                                        .font(.system(size: 18))
+                                        .foregroundStyle(.orange)
+                                    Text("\(index + 1)")
+                                        .font(.caption2.bold())
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 4)
+                                        .background(Capsule().fill(.orange))
+                                }
+                            }
+                        }
                     }
                 }
                 .id(mapReloadToken)
@@ -141,16 +185,36 @@ struct MapPanelView: View {
                     if viewModel.userCoordinate != nil {
                         NavStatusBadge(text: "我的位置", tone: .accent, systemImage: "location.fill")
                     }
+                    if !viewModel.viaPoints.isEmpty {
+                        NavStatusBadge(text: "途经点 \(viewModel.viaPoints.count) 个", tone: .warning, systemImage: "mappin.and.ellipse")
+                    }
                     if viewModel.destinationCoordinate != nil {
                         NavStatusBadge(text: "目的地", tone: .danger, systemImage: "mappin.circle.fill")
                     }
                     if hasActiveRoute {
-                        NavStatusBadge(text: "路线", tone: .success, systemImage: "arrow.triangle.branch")
+                        NavStatusBadge(text: "路线 \(viewModel.routeSegments.count) 段", tone: .success, systemImage: "arrow.triangle.branch")
                     }
                 }
                 .padding(16)
             }
         }
+    }
+
+    /// Returns a distinct color for each route segment index.
+    private func segmentColor(for index: Int, totalSegments: Int) -> Color {
+        let palette: [Color] = [.green, .blue, .orange, .purple, .pink, .teal, .mint, .indigo]
+        if totalSegments == 1 {
+            return .green
+        }
+        // Last segment (origin → first via OR last via → destination) uses green
+        // Middle segments use distinct colors
+        if index == totalSegments - 1 {
+            return .green
+        }
+        if index == 0 {
+            return .blue
+        }
+        return palette[index % palette.count]
     }
 
     private var manualLookupSection: some View {
@@ -162,6 +226,9 @@ struct MapPanelView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     TextField("输入目标地址", text: $viewModel.targetAddress)
                         .textFieldStyle(.roundedBorder)
+                        .onSubmit {
+                            Task { await viewModel.searchAddressAndRoute() }
+                        }
 
                     HStack(spacing: 10) {
                         Button("路径规划") {

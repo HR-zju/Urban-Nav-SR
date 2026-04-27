@@ -47,6 +47,10 @@ public:
         const double aligner_filter_gain = this->declare_parameter<double>("dynamic_aligner.filter_gain", 0.05);
         const int aligner_anchor_window = this->declare_parameter<int>("dynamic_aligner.anchor_window_size", 50);
         const double aligner_anchor_dist = this->declare_parameter<double>("dynamic_aligner.anchor_min_dist", 10.0);
+        const int aligner_min_inliers = this->declare_parameter<int>("dynamic_aligner.min_inliers_required", 10);
+        const double aligner_max_yaw_jump = this->declare_parameter<double>("dynamic_aligner.max_yaw_jump_rad", 0.5);
+        const double aligner_max_trans_jump = this->declare_parameter<double>("dynamic_aligner.max_trans_jump_m", 10.0);
+        const int aligner_max_consecutive_jumps = this->declare_parameter<int>("dynamic_aligner.max_consecutive_jumps", 3);
         const std::vector<double> gnss_initial_calibration_enu = this->declare_parameter<std::vector<double>>("gnss.initial_calibration_enu", std::vector<double>{0.0, 0.0, 0.0});
 
         if (gnss_initial_calibration_enu.size() == 3) {
@@ -55,7 +59,7 @@ public:
             RCLCPP_WARN(this->get_logger(), "gnss.initial_calibration_enu must have 3 elements, falling back to [0, 0, 0]");
             gnss_initial_calibration_enu_.setZero();
         }
-
+        
         gnss_comm_impl::DynamicAligner::Config aligner_cfg;
         aligner_cfg.window_size = std::max(10, aligner_window_size);
         aligner_cfg.min_dist_between_pairs = std::max(0.1, aligner_min_dist);
@@ -64,6 +68,10 @@ public:
         aligner_cfg.filter_gain = std::max(0.001, aligner_filter_gain);
         aligner_cfg.anchor_window_size = std::max(1, aligner_anchor_window);
         aligner_cfg.anchor_min_dist = std::max(1.0, aligner_anchor_dist);
+        aligner_cfg.min_inliers_required = static_cast<size_t>(std::max(3, aligner_min_inliers));
+        aligner_cfg.max_yaw_jump_rad = std::max(0.01, aligner_max_yaw_jump);
+        aligner_cfg.max_trans_jump_m = std::max(0.1, aligner_max_trans_jump);
+        aligner_cfg.max_consecutive_jumps = static_cast<size_t>(std::max(1, aligner_max_consecutive_jumps));
         dynamic_aligner_ = gnss_comm_impl::DynamicAligner(aligner_cfg);
 
         if (enable_kml_export) {

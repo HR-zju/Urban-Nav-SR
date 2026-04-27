@@ -25,6 +25,7 @@ build-backend = "hatchling.build"
 
 [project.scripts]
 osm-mcp-server = "mcp_server:main"
+osm-http-api = "mcp_server.api_http:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mcp_server"]

@@ -1,0 +1,348 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 60;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A10000000000000000000001 /* AppConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* AppConfiguration.swift */; };
+		A10000000000000000000002 /* NavAssistantiOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* NavAssistantiOSApp.swift */; };
+		A10000000000000000000003 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000003 /* ContentView.swift */; };
+		A10000000000000000000004 /* RequestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* RequestView.swift */; };
+		A10000000000000000000005 /* CandidateListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* CandidateListView.swift */; };
+		A10000000000000000000006 /* RouteMapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* RouteMapView.swift */; };
+		A10000000000000000000007 /* VoiceAssistantSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007 /* VoiceAssistantSheet.swift */; };
+		A10000000000000000000008 /* NavModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000008 /* NavModels.swift */; };
+		A10000000000000000000009 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* APIClient.swift */; };
+		A1000000000000000000000A /* HTTPRecommendationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000A /* HTTPRecommendationService.swift */; };
+		A1000000000000000000000B /* HTTPRouteSessionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000B /* HTTPRouteSessionService.swift */; };
+		A1000000000000000000000C /* WaypointPushService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000C /* WaypointPushService.swift */; };
+		A1000000000000000000000D /* WebSocketRouteSessionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000D /* WebSocketRouteSessionClient.swift */; };
+		A1000000000000000000000E /* SpeechRecognitionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000E /* SpeechRecognitionManager.swift */; };
+		A1000000000000000000000F /* VoiceInteractionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000F /* VoiceInteractionManager.swift */; };
+		A10000000000000000000010 /* NavigationFlowViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000010 /* NavigationFlowViewModel.swift */; };
+		A10000000000000000000011 /* RouteMapViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000011 /* RouteMapViewModel.swift */; };
+		A10000000000000000000012 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000013 /* Assets.xcassets */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A20000000000000000000001 /* AppConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfiguration.swift; sourceTree = "<group>"; };
+		A20000000000000000000002 /* NavAssistantiOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavAssistantiOSApp.swift; sourceTree = "<group>"; };
+		A20000000000000000000003 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		A20000000000000000000004 /* RequestView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RequestView.swift; sourceTree = "<group>"; };
+		A20000000000000000000005 /* CandidateListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CandidateListView.swift; sourceTree = "<group>"; };
+		A20000000000000000000006 /* RouteMapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RouteMapView.swift; sourceTree = "<group>"; };
+		A20000000000000000000007 /* VoiceAssistantSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceAssistantSheet.swift; sourceTree = "<group>"; };
+		A20000000000000000000008 /* NavModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavModels.swift; sourceTree = "<group>"; };
+		A20000000000000000000009 /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
+		A2000000000000000000000A /* HTTPRecommendationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HTTPRecommendationService.swift; sourceTree = "<group>"; };
+		A2000000000000000000000B /* HTTPRouteSessionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HTTPRouteSessionService.swift; sourceTree = "<group>"; };
+		A2000000000000000000000C /* WaypointPushService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaypointPushService.swift; sourceTree = "<group>"; };
+		A2000000000000000000000D /* WebSocketRouteSessionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketRouteSessionClient.swift; sourceTree = "<group>"; };
+		A2000000000000000000000E /* SpeechRecognitionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechRecognitionManager.swift; sourceTree = "<group>"; };
+		A2000000000000000000000F /* VoiceInteractionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceInteractionManager.swift; sourceTree = "<group>"; };
+		A20000000000000000000010 /* NavigationFlowViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationFlowViewModel.swift; sourceTree = "<group>"; };
+		A20000000000000000000011 /* RouteMapViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RouteMapViewModel.swift; sourceTree = "<group>"; };
+		A20000000000000000000012 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A20000000000000000000013 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A20000000000000000000014 /* NavAssistantiOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NavAssistantiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A30000000000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A40000000000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				A40000000000000000000002 /* NavAssistantiOS */,
+				A40000000000000000000003 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A40000000000000000000002 /* NavAssistantiOS */ = {
+			isa = PBXGroup;
+			children = (
+				A40000000000000000000004 /* App */,
+				A40000000000000000000005 /* Features */,
+				A40000000000000000000006 /* Models */,
+				A40000000000000000000007 /* Services */,
+				A40000000000000000000008 /* ViewModels */,
+				A40000000000000000000009 /* Resources */,
+			);
+			path = NavAssistantiOS;
+			sourceTree = "<group>";
+		};
+		A40000000000000000000003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000014 /* NavAssistantiOS.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A40000000000000000000004 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000001 /* AppConfiguration.swift */,
+				A20000000000000000000002 /* NavAssistantiOSApp.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		A40000000000000000000005 /* Features */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000003 /* ContentView.swift */,
+				A20000000000000000000004 /* RequestView.swift */,
+				A20000000000000000000005 /* CandidateListView.swift */,
+				A20000000000000000000006 /* RouteMapView.swift */,
+				A20000000000000000000007 /* VoiceAssistantSheet.swift */,
+			);
+			path = Features;
+			sourceTree = "<group>";
+		};
+		A40000000000000000000006 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000008 /* NavModels.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		A40000000000000000000007 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000009 /* APIClient.swift */,
+				A2000000000000000000000A /* HTTPRecommendationService.swift */,
+				A2000000000000000000000B /* HTTPRouteSessionService.swift */,
+				A2000000000000000000000C /* WaypointPushService.swift */,
+				A2000000000000000000000D /* WebSocketRouteSessionClient.swift */,
+				A2000000000000000000000E /* SpeechRecognitionManager.swift */,
+				A2000000000000000000000F /* VoiceInteractionManager.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		A40000000000000000000008 /* ViewModels */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000010 /* NavigationFlowViewModel.swift */,
+				A20000000000000000000011 /* RouteMapViewModel.swift */,
+			);
+			path = ViewModels;
+			sourceTree = "<group>";
+		};
+		A40000000000000000000009 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000012 /* Info.plist */,
+				A20000000000000000000013 /* Assets.xcassets */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A50000000000000000000001 /* NavAssistantiOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A80000000000000000000002 /* Build configuration list for PBXNativeTarget "NavAssistantiOS" */;
+			buildPhases = (
+				A30000000000000000000002 /* Sources */,
+				A30000000000000000000001 /* Frameworks */,
+				A30000000000000000000003 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = NavAssistantiOS;
+			productName = NavAssistantiOS;
+			productReference = A20000000000000000000014 /* NavAssistantiOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A60000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					A50000000000000000000001 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+				};
+			};
+			buildConfigurationList = A80000000000000000000001 /* Build configuration list for PBXProject "NavAssistantiOS" */;
+			compatibilityVersion = "Xcode 15.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A40000000000000000000001;
+			productRefGroup = A40000000000000000000003 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A50000000000000000000001 /* NavAssistantiOS */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A30000000000000000000003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000012 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A30000000000000000000002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000001 /* AppConfiguration.swift in Sources */,
+				A10000000000000000000002 /* NavAssistantiOSApp.swift in Sources */,
+				A10000000000000000000003 /* ContentView.swift in Sources */,
+				A10000000000000000000004 /* RequestView.swift in Sources */,
+				A10000000000000000000005 /* CandidateListView.swift in Sources */,
+				A10000000000000000000006 /* RouteMapView.swift in Sources */,
+				A10000000000000000000007 /* VoiceAssistantSheet.swift in Sources */,
+				A10000000000000000000008 /* NavModels.swift in Sources */,
+				A10000000000000000000009 /* APIClient.swift in Sources */,
+				A1000000000000000000000A /* HTTPRecommendationService.swift in Sources */,
+				A1000000000000000000000B /* HTTPRouteSessionService.swift in Sources */,
+				A1000000000000000000000C /* WaypointPushService.swift in Sources */,
+				A1000000000000000000000D /* WebSocketRouteSessionClient.swift in Sources */,
+				A1000000000000000000000E /* SpeechRecognitionManager.swift in Sources */,
+				A1000000000000000000000F /* VoiceInteractionManager.swift in Sources */,
+				A10000000000000000000010 /* NavigationFlowViewModel.swift in Sources */,
+				A10000000000000000000011 /* RouteMapViewModel.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A70000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		A70000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		A70000000000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = YUU74422RY;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = NavAssistantiOS/Resources/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.minruiliu.NavAssistantiOS;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A70000000000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = YUU74422RY;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = NavAssistantiOS/Resources/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.minruiliu.NavAssistantiOS;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A80000000000000000000001 /* Build configuration list for PBXProject "NavAssistantiOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A70000000000000000000001 /* Debug */,
+				A70000000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A80000000000000000000002 /* Build configuration list for PBXNativeTarget "NavAssistantiOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A70000000000000000000003 /* Debug */,
+				A70000000000000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A60000000000000000000001 /* Project object */;
+}
