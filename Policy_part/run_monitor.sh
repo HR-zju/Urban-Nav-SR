@@ -77,7 +77,7 @@ tmux send-keys "docker exec -it ros1toros2 zsh" Enter
 sleep 1
 tmux send-keys "cd /home/nuvo/SR/foundation-policy/Policy_part/bags/" Enter
 # 录制需要手动确认
-tmux send-keys "ros2 bag record /camera/camera/color/image_raw/compressed  /globalEstimator/global_odometry  /tf -o $1" 
+tmux send-keys "ros2 bag record /camera/camera/color/image_raw/compressed  /gps/fix  /mfla/dr_odom  /tf -o $1" 
 
 
 
