@@ -68,30 +68,33 @@ def _candidate_compact(candidate: dict[str, Any]) -> dict[str, Any]:
 
 def build_direct_prompt_system_prompt() -> str:
     return (
-        "You are a mode-aware first-person navigation visual prompt generator. "
-        "Your job is to generate one conservative image-plane guidance prompt for the next 1 to 3 seconds. "
-        "Use route context only as route intent; it is not permission to ignore visible scene safety. "
-        "For pedestrian mode, treat sidewalks, pedestrian plazas, curb cuts, entrances, and marked crossings as preferred space. "
-        "For pedestrian mode, treat motor-vehicle lanes, open roadway, sky, walls, fences, parked cars, and freestanding obstacles such as signboards as forbidden unless a legal crossing is visually obvious. "
-        "For pedestrian mode, keep the prompt inside the visible sidewalk or pedestrian-safe corridor; do not spill outside curb boundaries when a sidewalk exists. "
-        "Treat grass, shrubs, planters, tree bases, decorative green belts, and other non-paved landscaping as non-traversable support surfaces for pedestrian prompts. "
-        "Avoid trees, poles, bollards, stairs, planters, building facades, and people. "
-        "Prefer a structured path corridor over a wide sector. "
-        "Prefer the nearest safe sidewalk-side opening over a farther but wider drivable area. "
-        "The prompt must start near the lower image area and every point of the trajectory must lie on the visible mode-valid traversable surface. "
-        "For pedestrian mode, every path point and every part of the support corridor must be on visible sidewalk, pedestrian paving, curb cut, plaza, or legal crossing surface. "
-        "If fpv_segmentation_summary is provided, treat it as an explicit traversability prior and keep the prompt inside its traversable classes. "
-        "If fpv_segmentation_summary is provided, prefer the widest bottom opening and keep the center path near the middle of the traversable corridor (maximize clearance from landscaping and obstacles). "
-        "If the traversable corridor becomes ambiguous ahead (e.g., mixed with landscaping), keep the corridor short and terminate early with stop_before_occlusion rather than drifting into uncertain regions. "
-        "Represent the prompt as a center path plus left and right support boundaries sampled along the path and an explicit termination semantic. "
-        "The termination semantic must explain whether the prompt stops because it reaches visible corridor depth, reaches a turn entry, or should stop before occlusion. "
-        "Route/BEV/PoV candidates, when provided, are advisory priors only; reject or override them if they land on obstacles or non-walkable regions. "
-        "If the scene is uncertain, be conservative and set reject_all=true. "
-        "Return JSON only with keys: selected_prompt_type, instruction, confidence, reason, reject_all, rendered_prompt. "
-        "For type=path_corridor, rendered_prompt must include path_samples and termination_semantics. "
-        "Each path sample must contain center_uv, left_edge_uv, right_edge_uv, and support_label. "
-        "Do not freehand a wide polygon first; define the corridor by boundary samples anchored to visible traversable edges. "
-        "Prefer type=path_corridor. Do not output prose outside JSON."
+        "Role: first-person navigation visual prompt generator.\n"
+        "Goal: produce ONE conservative image-plane prompt for the next 1–3 seconds.\n"
+        "Inputs: image (primary), route_context (intent only), fpv_segmentation_summary (soft prior), optional segmentation overlay image.\n"
+        "Output: JSON ONLY with keys: selected_prompt_type, instruction, confidence, reason, reject_all, rendered_prompt.\n"
+        "\n"
+        "Keywords: traversable, forbidden, bottom_openings, corridor_centerline, clearance, occlusion, reject_all.\n"
+        "\n"
+        "Rules:\n"
+        "- Image-first: never ignore visible safety to satisfy route intent.\n"
+        "- Prefer selected_prompt_type=path_corridor.\n"
+        "- The prompt must start near the lower image region.\n"
+        "- For path_corridor: provide 3–6 path_samples; each sample has center_uv, left_edge_uv, right_edge_uv, support_label.\n"
+        "- Corridor width must be realistic: do not span the whole image unless the traversable corridor truly spans it.\n"
+        "- Avoid people, vehicles, poles, walls, fences, stairs, planters, trees, and any obvious obstacles.\n"
+        "\n"
+        "Foot-mode semantics:\n"
+        "- Prefer sidewalk / pedestrian paving / curb-cuts / marked crossings.\n"
+        "- Treat grass/natural/landscaping as non-traversable.\n"
+        "- Do not guide into motor lanes unless a legal crossing is visually obvious.\n"
+        "\n"
+        "If fpv_segmentation_summary is present:\n"
+        "- Keep the CENTER path inside traversable classes.\n"
+        "- Keep LEFT/RIGHT boundaries inside boundary support classes and away from forbidden.\n"
+        "- Use bottom_openings: start from the widest opening and keep the center path near its middle (maximize clearance).\n"
+        "- If traversable becomes ambiguous ahead, shorten the corridor and set termination_semantics=stop_before_occlusion.\n"
+        "\n"
+        "If you cannot draw a corridor that stays on visible traversable support, set reject_all=true."
     )
 
 
@@ -153,11 +156,9 @@ def build_direct_prompt_question(
     return json.dumps(
         {
             "task": (
-                "Generate one conservative image-plane navigation trajectory prompt. "
-                "Use the image first, then route context, then the top route prior. "
-                "Represent the result as a center path with left/right traversable boundary samples along that path. "
-                "Prefer a single path corridor through a visible mode-valid opening and avoid blocked central obstacles. "
-                "Candidate hints are advisory and must not override visible walkability."
+                "Generate ONE conservative image-plane navigation prompt (prefer path_corridor). "
+                "Use the image first. route_context is intent only. "
+                "If segmentation is provided, use it to stay inside traversable and maximize clearance."
             ),
             "navigation_mode": str(navigation_mode or "foot"),
             "navigation_constraints": _navigation_mode_note(navigation_mode),
@@ -171,22 +172,15 @@ def build_direct_prompt_question(
             "overlay_legend": overlay_legend,
             "summary_source": str(summary_source or "from_same_mask_entity"),
             "hard_rules": [
-                "For foot mode, prioritize sidewalk or pedestrian-space openings.",
-                "Do not place the trajectory on apparent motor lanes or open roadway if sidewalk-like space exists.",
-                "Do not run the trajectory through a central obstacle such as a signboard.",
-                "Keep both the center path and the left/right support boundaries inside the visible pedestrian-safe corridor and away from curb edges.",
-                "If fpv_segmentation_summary.bottom_openings is present, start from the widest bottom opening and keep the center path in the middle of that opening (avoid hugging left/right edges).",
-                "If fpv_segmentation_summary.traversable_bbox_uv is present, keep the path corridor inside that bbox and avoid terminating at its extreme boundary; prefer a shorter corridor over drifting into uncertain regions.",
-                "Do not use grass, shrubs, planters, or decorative green belts as support boundaries in foot mode.",
-                "Prefer a path_corridor that follows the sidewalk centerline.",
-                "The path should begin near the lower image region and every point must stay on the visible traversable surface for the current mode.",
-                "Every path sample must provide the visible left and right traversable edges around the center path.",
-                "Boundary samples must touch the visible traversable support around the center path, not sky, building facade, or landscaping.",
-                "If you cannot see a continuous traversable support surface for the whole path corridor, set reject_all=true instead of drawing.",
-                "Prefer the shortest safe path that stays on pedestrian space.",
-                "Set termination_semantics to one of: continue_visible_corridor, reach_turn_entry, stop_before_occlusion.",
-                "If route prior and visible mode-valid space conflict, prefer visible mode-valid space and explain the conflict.",
-                "If fpv_segmentation_summary is present, keep the center path inside its traversable classes and keep support boundaries away from its forbidden classes.",
+                "Return JSON only (no prose).",
+                "Prefer selected_prompt_type=path_corridor.",
+                "Start near the lower image region.",
+                "Provide 3–6 path_samples (center/left/right) with realistic corridor width.",
+                "Avoid obstacles and people; do not place center or boundaries on them.",
+                "If segmentation summary is present: keep center inside traversable and keep boundaries away from forbidden.",
+                "If bottom_openings is present: start from the widest opening and keep center near opening midline (maximize clearance).",
+                "If traversable becomes ambiguous: shorten corridor and use stop_before_occlusion.",
+                "If you cannot stay on traversable support: set reject_all=true.",
             ],
             "output_requirements": {
                 "selected_prompt_type": "path_corridor|arrow_path|arrow|sector|region",
