@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import math
 from datetime import datetime
 import json
 import mimetypes
@@ -184,6 +185,56 @@ def image_path_to_data_url(path: str | None) -> str | None:
     return f"data:{mime_type};base64,{encoded}"
 
 
+def _forward_route_geometry(
+    *,
+    latitude: float,
+    longitude: float,
+    heading_deg: float | None,
+    lookahead_m: float,
+) -> tuple[list[dict[str, float]], list[dict[str, Any]]]:
+    heading = float(heading_deg) if heading_deg is not None else 0.0
+    heading_rad = math.radians(heading)
+    step_m = max(float(lookahead_m) * 0.35, 4.0)
+    target_m = max(float(lookahead_m), 12.0)
+    cos_lat = math.cos(math.radians(float(latitude)))
+    cos_lat = cos_lat if abs(cos_lat) > 1e-6 else 1e-6
+
+    route_polyline: list[dict[str, float]] = [
+        {"longitude": float(longitude), "latitude": float(latitude)},
+    ]
+    coarse_waypoints: list[dict[str, Any]] = []
+
+    distances: list[float] = []
+    current = step_m
+    while current < target_m + 1e-6:
+        distances.append(current)
+        current += step_m
+    if not distances:
+        distances.append(target_m)
+
+    for index, distance_m in enumerate(distances):
+        north_m = distance_m * math.cos(heading_rad)
+        east_m = distance_m * math.sin(heading_rad)
+        lat = float(latitude) + (north_m / 110540.0)
+        lng = float(longitude) + (east_m / (111320.0 * cos_lat))
+        route_polyline.append({"longitude": float(lng), "latitude": float(lat)})
+        coarse_waypoints.append(
+            {
+                "index": index,
+                "action": "go_straight",
+                "instruction": f"Proceed straight for approximately {int(round(distance_m))} m.",
+                "distance_m": float(distance_m),
+                "duration_s": int(round(distance_m / 1.25)),
+                "coordinate": {"longitude": float(lng), "latitude": float(lat)},
+                "location": f"{float(lng)},{float(lat)}",
+                "name": "forward_projection",
+                "road": "",
+            }
+        )
+
+    return route_polyline, coarse_waypoints
+
+
 async def ensure_route_geometry(
     session: ClientSession,
     *,
@@ -266,9 +317,11 @@ async def run_capture(
     radius: int,
     max_candidates: int,
     lookahead_m: float,
+    route_source: str,
     output_path: str,
     server_command: str,
     server_args: list[str],
+    images_base: str | None = None,
 ) -> None:
     if trajectory_path:
         frames = load_trajectory(trajectory_path)
@@ -285,7 +338,6 @@ async def run_capture(
             image_width=image_width,
             image_height=image_height,
         )
-    origin = frames[0]["gps"]
 
     server_params = StdioServerParameters(
         command=server_command,
@@ -297,26 +349,39 @@ async def run_capture(
         async with ClientSession(read, write) as session:
             await session.initialize()
 
-            recommendation = await call_tool_json(
-                session,
-                "recommend_destination_and_waypoints",
-                {
-                    "user_instruction": prompt,
-                    "current_latitude": origin["lat"],
-                    "current_longitude": origin["lng"],
-                    "mode": mode,
-                    "max_candidates": max_candidates,
-                    "search_radius": radius,
-                },
-            )
+            recommendation: dict[str, Any] = {
+                "provider": "forward_route" if route_source == "forward" else None,
+                "parsed_intent": {},
+                "chosen_destination": {},
+                "route_summary": {},
+            }
+            route_polyline: list[dict[str, float]] | None = None
+            coarse_waypoints: list[dict[str, Any]] | None = None
 
-            route_polyline, coarse_waypoints = await ensure_route_geometry(
-                session,
-                recommendation=recommendation,
-                origin_latitude=origin["lat"],
-                origin_longitude=origin["lng"],
-                mode=mode,
-            )
+            if route_source == "recommendation":
+                origin = frames[0]["gps"]
+                if not str(prompt or "").strip():
+                    raise ValueError("--prompt is required when --route-source recommendation")
+                recommendation = await call_tool_json(
+                    session,
+                    "recommend_destination_and_waypoints",
+                    {
+                        "user_instruction": prompt,
+                        "current_latitude": origin["lat"],
+                        "current_longitude": origin["lng"],
+                        "mode": mode,
+                        "max_candidates": max_candidates,
+                        "search_radius": radius,
+                    },
+                )
+
+                route_polyline, coarse_waypoints = await ensure_route_geometry(
+                    session,
+                    recommendation=recommendation,
+                    origin_latitude=origin["lat"],
+                    origin_longitude=origin["lng"],
+                    mode=mode,
+                )
 
             captured_frames: list[dict[str, Any]] = []
             for frame in frames:
@@ -324,11 +389,34 @@ async def run_capture(
                 image_height_px = int(frame.get("image_height") or image_height)
                 resolved_image_path = str(frame.get("image_path") or image_path or "").strip() or None
                 resolved_image_url = str(frame.get("image_url") or image_url or "").strip() or None
+
+                # If the resolved path does not exist, try resolving against images_base (if provided)
+                if resolved_image_path and not os.path.exists(resolved_image_path) and images_base:
+                    # Prefer joining basename into images_base
+                    candidate = os.path.join(images_base, os.path.basename(resolved_image_path))
+                    if os.path.exists(candidate):
+                        resolved_image_path = candidate
+                    else:
+                        # Try joining the full provided path relative to images_base
+                        candidate2 = os.path.join(images_base, resolved_image_path)
+                        if os.path.exists(candidate2):
+                            resolved_image_path = candidate2
+
+                frame_route_polyline = route_polyline
+                frame_coarse_waypoints = coarse_waypoints
+                if route_source == "forward":
+                    frame_route_polyline, frame_coarse_waypoints = _forward_route_geometry(
+                        latitude=float(frame["gps"]["lat"]),
+                        longitude=float(frame["gps"]["lng"]),
+                        heading_deg=frame.get("heading_deg"),
+                        lookahead_m=lookahead_m,
+                    )
+
                 state_args: dict[str, Any] = {
                     "gps": frame["gps"],
                     "heading_deg": frame.get("heading_deg"),
-                    "route_polyline": route_polyline,
-                    "coarse_waypoints": coarse_waypoints,
+                    "route_polyline": frame_route_polyline,
+                    "coarse_waypoints": frame_coarse_waypoints,
                     "lookahead_m": lookahead_m,
                 }
                 route_state = await call_tool_json(session, "get_route_state", state_args)
@@ -371,6 +459,7 @@ async def run_capture(
             "generated_at": datetime.now().isoformat(),
             "prompt": prompt,
             "mode": mode,
+            "route_source": route_source,
             "radius": radius,
             "max_candidates": max_candidates,
             "lookahead_m": lookahead_m,
@@ -404,12 +493,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--image-url", help="Shared image URL for inline capture or default frame image")
     parser.add_argument("--image-width", type=int, default=1280, help="Target RGB width for PoV projection")
     parser.add_argument("--image-height", type=int, default=720, help="Target RGB height for PoV projection")
-    parser.add_argument("--prompt", required=True, help="Natural language destination prompt")
+    parser.add_argument("--prompt", default="", help="Natural language destination prompt (required for route-source recommendation)")
+    parser.add_argument(
+        "--route-source",
+        default="forward",
+        choices=["forward", "recommendation"],
+        help="Build route context from a local forward projection or from destination recommendation",
+    )
     parser.add_argument("--mode", default="foot", choices=["car", "foot", "bike"], help="Routing mode")
     parser.add_argument("--radius", type=int, default=3000, help="Search radius in meters")
     parser.add_argument("--max-candidates", type=int, default=5, help="Maximum recommendation candidates")
     parser.add_argument("--lookahead-m", type=float, default=20.0, help="Local segment lookahead distance in meters")
     parser.add_argument("--output", required=True, help="Output JSON path for captured frames")
+    parser.add_argument("--images-base", help="Base directory to resolve image paths from trajectory when they don't exist locally")
     parser.add_argument("--server-command", default="osm-mcp-server", help="MCP server command")
     parser.add_argument("--server-arg", action="append", default=[], help="Additional server args")
     return parser.parse_args()
@@ -433,6 +529,7 @@ if __name__ == "__main__":
             radius=args.radius,
             max_candidates=args.max_candidates,
             lookahead_m=args.lookahead_m,
+            route_source=args.route_source,
             output_path=args.output,
             server_command=args.server_command,
             server_args=args.server_arg,

@@ -326,6 +326,18 @@ python tools/run_sequence_visual_prompt_pipeline.py \
   --continue-on-error \
   --client-args --destination-name 浙江大学玉泉校区北门 杭州 --mode foot
 ```
+```bash
+conda run -n UrbanNav python tools/run_sidewalk_images_visual_prompt_pipeline.py \
+  --images-dir /home/ubuntu/WorkSpace/dataset/sidewalk_he4_adapter/images \
+  --trajectory-json /home/ubuntu/WorkSpace/dataset/sidewalk_he4_adapter/trajectory.json \
+  --sequence-name sidewalk_he4_adapter \
+  --camera-view camera_front \
+  --sam3-output-base-dir /home/ubuntu/WorkSpace/dataset/sidewalk_he4_adapter_sam3 \
+  --output-dir /home/ubuntu/WorkSpace/dataset/sidewalk_visual_prompt \
+  --frame-start 50 --frame-end 52 --frame-step 1 \
+  --enable-segmentation-overlay-input \
+  --mode foot
+```
 
 输出目录会包含：
 

@@ -77,11 +77,12 @@ def build_direct_prompt_system_prompt() -> str:
         "Treat grass, shrubs, planters, tree bases, decorative green belts, and other non-paved landscaping as non-traversable support surfaces for pedestrian prompts. "
         "Avoid trees, poles, bollards, stairs, planters, building facades, and people. "
         "Prefer a structured path corridor over a wide sector. "
-        "Do not send the user into the middle of a road when pedestrian space exists, even if the route prior points forward or right. "
         "Prefer the nearest safe sidewalk-side opening over a farther but wider drivable area. "
         "The prompt must start near the lower image area and every point of the trajectory must lie on the visible mode-valid traversable surface. "
         "For pedestrian mode, every path point and every part of the support corridor must be on visible sidewalk, pedestrian paving, curb cut, plaza, or legal crossing surface. "
         "If fpv_segmentation_summary is provided, treat it as an explicit traversability prior and keep the prompt inside its traversable classes. "
+        "If fpv_segmentation_summary is provided, prefer the widest bottom opening and keep the center path near the middle of the traversable corridor (maximize clearance from landscaping and obstacles). "
+        "If the traversable corridor becomes ambiguous ahead (e.g., mixed with landscaping), keep the corridor short and terminate early with stop_before_occlusion rather than drifting into uncertain regions. "
         "Represent the prompt as a center path plus left and right support boundaries sampled along the path and an explicit termination semantic. "
         "The termination semantic must explain whether the prompt stops because it reaches visible corridor depth, reaches a turn entry, or should stop before occlusion. "
         "Route/BEV/PoV candidates, when provided, are advisory priors only; reject or override them if they land on obstacles or non-walkable regions. "
@@ -174,6 +175,8 @@ def build_direct_prompt_question(
                 "Do not place the trajectory on apparent motor lanes or open roadway if sidewalk-like space exists.",
                 "Do not run the trajectory through a central obstacle such as a signboard.",
                 "Keep both the center path and the left/right support boundaries inside the visible pedestrian-safe corridor and away from curb edges.",
+                "If fpv_segmentation_summary.bottom_openings is present, start from the widest bottom opening and keep the center path in the middle of that opening (avoid hugging left/right edges).",
+                "If fpv_segmentation_summary.traversable_bbox_uv is present, keep the path corridor inside that bbox and avoid terminating at its extreme boundary; prefer a shorter corridor over drifting into uncertain regions.",
                 "Do not use grass, shrubs, planters, or decorative green belts as support boundaries in foot mode.",
                 "Prefer a path_corridor that follows the sidewalk centerline.",
                 "The path should begin near the lower image region and every point must stay on the visible traversable surface for the current mode.",

@@ -767,6 +767,7 @@ async def run_zero_shot_visual_prompt_pipeline(
     decision = None
     generator_decision = None
     question = ""
+    system_prompt = ""
     verifier_question = ""
     generator_stage_started_at = perf_counter()
     verifier_stage_started_at = perf_counter()
@@ -796,12 +797,13 @@ async def run_zero_shot_visual_prompt_pipeline(
                 fpv_segmentation_summary=segmentation_summary,
             )
             question = str(av_inputs.get("question") or "")
+            system_prompt = str(av_inputs.get("system_prompt") or "")
             _mark_stage("A_build_inputs", av_input_stage_started_at, status="ok")
             llm_raw, decision = await _run_A_generator(
                 image_path=image_path,
                 image_url=image_url,
                 question=question,
-                system_prompt=str(av_inputs.get("system_prompt") or ""),
+                system_prompt=system_prompt,
                 llm_detail=llm_detail,
                 extra_image_urls=extra_image_urls,
                 route_context=route_context_dict,
@@ -937,6 +939,22 @@ async def run_zero_shot_visual_prompt_pipeline(
     decision_dict["debug"]["multi_image_arbiter"] = {
         **multi_image_debug,
         "extra_image_count": len(extra_image_urls),
+    }
+    # Export the exact LVLM prompt payload for audit/debug. This is offline/debug-only
+    # and can be large, but it avoids guessing whether the right constraints were sent.
+    try:
+        question_json = json.loads(question) if question else None
+    except Exception:
+        question_json = None
+    decision_dict["debug"]["arbiter_prompt"] = {
+        "generator": {
+            "system_prompt": system_prompt,
+            "question": question,
+            "question_json": question_json,
+        },
+        "verifier": {
+            "question": verifier_question,
+        },
     }
 
     qa_stage_started_at = perf_counter()
