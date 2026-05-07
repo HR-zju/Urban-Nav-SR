@@ -488,11 +488,13 @@ struct WaypointPushResponse: Codable {
     let wsInfo: String?
     let routeId: String?
     let totalCount: Int?
+    let routePolylineCount: Int?
 
     enum CodingKeys: String, CodingKey {
         case status
         case wsInfo = "ws_info"
         case routeId = "route_id"
         case totalCount = "total_count"
+        case routePolylineCount = "route_polyline_count"
     }
 }

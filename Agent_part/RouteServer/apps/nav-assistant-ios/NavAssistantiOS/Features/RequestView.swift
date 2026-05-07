@@ -2,6 +2,10 @@ import SwiftUI
 
 struct RequestView: View {
     @ObservedObject var viewModel: NavigationFlowViewModel
+    @ObservedObject var appConfiguration: AppConfiguration
+    @FocusState private var isPromptFocused: Bool
+    @State private var apiBaseURLDraft = ""
+    @State private var apiBaseURLErrorMessage: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -45,7 +49,52 @@ struct RequestView: View {
             }
             .pickerStyle(.segmented)
 
+            VStack(alignment: .leading, spacing: 8) {
+                Text("后端地址")
+                    .font(.headline)
+
+                TextField("例如：http://10.116.95.131:8080", text: $apiBaseURLDraft)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+                    .submitLabel(.done)
+                    .onSubmit {
+                        applyAPIBaseURL()
+                    }
+                    .padding(10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color(uiColor: .secondarySystemBackground))
+                    )
+
+                HStack(spacing: 12) {
+                    Button("应用地址") {
+                        applyAPIBaseURL()
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button("恢复默认") {
+                        appConfiguration.resetAPIBaseURL()
+                        apiBaseURLDraft = appConfiguration.apiBaseURLText
+                        apiBaseURLErrorMessage = nil
+                        hideKeyboard()
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                Text("当前生效：\(appConfiguration.apiBaseURLText)")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                if let apiBaseURLErrorMessage, !apiBaseURLErrorMessage.isEmpty {
+                    Text(apiBaseURLErrorMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                }
+            }
+
             TextEditor(text: $viewModel.promptText)
+                .focused($isPromptFocused)
                 .frame(minHeight: 120)
                 .padding(10)
                 .background(
@@ -66,6 +115,8 @@ struct RequestView: View {
                 Spacer()
 
                 Button(viewModel.isLoading ? "请求中…" : "推荐目的地") {
+                    isPromptFocused = false
+                    hideKeyboard()
                     Task { await viewModel.requestRecommendations() }
                 }
                 .buttonStyle(.borderedProminent)
@@ -90,5 +141,30 @@ struct RequestView: View {
                 .fill(Color(uiColor: .systemBackground))
                 .shadow(color: Color.black.opacity(0.06), radius: 14, y: 6)
         )
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("完成") {
+                    isPromptFocused = false
+                    hideKeyboard()
+                }
+            }
+        }
+        .onAppear {
+            apiBaseURLDraft = appConfiguration.apiBaseURLText
+        }
+        .onChange(of: appConfiguration.apiBaseURLText) { _, newValue in
+            apiBaseURLDraft = newValue
+        }
+    }
+
+    private func applyAPIBaseURL() {
+        if appConfiguration.updateAPIBaseURL(apiBaseURLDraft) {
+            apiBaseURLDraft = appConfiguration.apiBaseURLText
+            apiBaseURLErrorMessage = nil
+            hideKeyboard()
+            return
+        }
+        apiBaseURLErrorMessage = "后端地址无效，请输入 http://IP:端口 或 https://域名。"
     }
 }

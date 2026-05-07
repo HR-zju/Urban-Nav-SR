@@ -100,7 +100,9 @@ final class NavigationFlowViewModel: ObservableObject {
                 currentLocation: currentLocation,
                 mode: "foot",
                 maxCandidates: 5,
-                searchRadius: 3000
+                searchRadius: 3000,
+                resolutionScope: nil,
+                anchorLocation: nil
             )
             guard generation == resetGeneration else { return }
             recommendationResponse = result
@@ -240,12 +242,22 @@ final class NavigationFlowViewModel: ObservableObject {
         defer { isLoading = false }
         routeSessionErrorMessage = nil
         do {
+            let sessionSnapshot = try await routeService.getSession(sessionID: sessionID, forceReplan: false)
+            guard generation == resetGeneration else { return }
+
+            let sessionForResolve = sessionSnapshot.session ?? activeRouteSession
+            let anchorLocation = sessionSearchAnchor(
+                from: sessionForResolve,
+                fallbackCurrentLocation: currentLocation
+            )
             let recommendation = try await recommendationService.recommend(
                 prompt: prompt,
                 currentLocation: currentLocation,
-                mode: activeRouteSession?.mode ?? "foot",
+                mode: sessionForResolve?.mode ?? activeRouteSession?.mode ?? "foot",
                 maxCandidates: 1,
-                searchRadius: 2000
+                searchRadius: 2000,
+                resolutionScope: "session_local_via",
+                anchorLocation: anchorLocation
             )
             guard generation == resetGeneration else { return }
 
@@ -255,9 +267,17 @@ final class NavigationFlowViewModel: ObservableObject {
                 return
             }
 
-            let locationText = candidate.location?.contains(",") == true
-                ? candidate.location!
-                : "\(candidate.coordinates.longitude),\(candidate.coordinates.latitude)"
+            let locationText = recommendationLocationText(for: candidate)
+            if sessionUpdateIsNoop(session: sessionForResolve, resolvedLocation: locationText) {
+                applyRouteSessionResult(
+                    sessionSnapshot,
+                    destinationName: selectedCandidate?.title ?? mapViewModel.destinationName
+                )
+                viaPointPrompt = ""
+                flowStage = .sessionActive
+                return
+            }
+
             let result = try await routeService.addViaPoint(
                 sessionID: sessionID,
                 viaPoint: ViaPoint(
@@ -374,7 +394,8 @@ final class NavigationFlowViewModel: ObservableObject {
             guard generation == resetGeneration else { return }
             lastWaypointPushResponse = response
             if let totalCount = response.totalCount, let wsInfo = response.wsInfo {
-                waypointPushStatusMessage = "已向 \(wsInfo) 下发 \(totalCount) 个 waypoint。"
+                let routePolylineCount = response.routePolylineCount ?? 0
+                waypointPushStatusMessage = "已向 \(wsInfo) 下发 \(totalCount) 个 waypoint、\(routePolylineCount) 个 route_polyline 点。"
             } else {
                 waypointPushStatusMessage = "waypoint 下发完成。"
             }
@@ -517,6 +538,64 @@ final class NavigationFlowViewModel: ObservableObject {
         if activeRouteSession != nil {
             flowStage = .sessionActive
         }
+    }
+
+    private func sessionSearchAnchor(
+        from session: RouteSession?,
+        fallbackCurrentLocation: CLLocationCoordinate2D
+    ) -> String {
+        if let viaLocation = session?.viaPoints?.last?.location?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !viaLocation.isEmpty {
+            return viaLocation
+        }
+        if let origin = session?.origin?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !origin.isEmpty {
+            return origin
+        }
+        return "\(fallbackCurrentLocation.longitude),\(fallbackCurrentLocation.latitude)"
+    }
+
+    private func recommendationLocationText(for recommendation: MCPRecommendationItem) -> String {
+        if let location = recommendation.location?.trimmingCharacters(in: .whitespacesAndNewlines),
+           location.contains(",") {
+            return location
+        }
+        return "\(recommendation.coordinates.longitude),\(recommendation.coordinates.latitude)"
+    }
+
+    private func sessionUpdateIsNoop(session: RouteSession?, resolvedLocation: String) -> Bool {
+        if locationEquals(session?.destination, resolvedLocation) {
+            return true
+        }
+        for viaPoint in session?.viaPoints ?? [] {
+            if locationEquals(viaPoint.location, resolvedLocation) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func locationEquals(_ lhs: String?, _ rhs: String?, tolerance: Double = 1e-6) -> Bool {
+        let normalizedLeft = lhs?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let normalizedRight = rhs?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        guard !normalizedLeft.isEmpty, !normalizedRight.isEmpty else {
+            return normalizedLeft == normalizedRight
+        }
+
+        let leftParts = normalizedLeft.split(separator: ",", maxSplits: 1).map(String.init)
+        let rightParts = normalizedRight.split(separator: ",", maxSplits: 1).map(String.init)
+        if leftParts.count == 2,
+           rightParts.count == 2,
+           let leftLongitude = Double(leftParts[0]),
+           let leftLatitude = Double(leftParts[1]),
+           let rightLongitude = Double(rightParts[0]),
+           let rightLatitude = Double(rightParts[1]) {
+            return abs(leftLongitude - rightLongitude) <= tolerance
+                && abs(leftLatitude - rightLatitude) <= tolerance
+        }
+
+        return normalizedLeft == normalizedRight
     }
 
     private static let heartbeatTimeFormatter: DateFormatter = {
