@@ -58,6 +58,7 @@ def build_visual_prompt_qa_bundle(
     rendered_prompt: dict[str, Any] | None,
     arbiter_decision: dict[str, Any],
     candidate_bundle: PoVPromptCandidateBundle | dict[str, Any] | None,
+    som_summary: dict[str, Any] | None = None,
     sample_id: str = "visual_prompt",
 ) -> dict[str, Any]:
     candidate_bundle_dict = (
@@ -138,6 +139,7 @@ def build_visual_prompt_qa_bundle(
             inputs={
                 "candidate_regions": candidate_regions,
                 "fpv_segmentation_summary": fpv_segmentation_summary,
+                "som_summary": som_summary,
             },
             teacher_answer=teachers.teacher_fpv_main_region_selection(candidate_regions),
         )
@@ -148,6 +150,7 @@ def build_visual_prompt_qa_bundle(
             task_type="fpv_scene_stage",
             inputs={
                 "fpv_segmentation_summary": fpv_segmentation_summary,
+                "som_summary": som_summary,
                 "image_width": image_width,
                 "image_height": image_height,
             },
@@ -160,6 +163,7 @@ def build_visual_prompt_qa_bundle(
             task_type="fpv_reject_all",
             inputs={
                 "fpv_segmentation_summary": fpv_segmentation_summary,
+                "som_summary": som_summary,
                 "rendered_prompt": rendered_prompt,
                 "segmentation_validation": segmentation_validation,
             },
@@ -196,6 +200,7 @@ def build_visual_prompt_qa_bundle(
             inputs={
                 "candidate_bundle": candidate_bundle_dict or {},
                 "fpv_segmentation_summary": fpv_segmentation_summary,
+                "som_summary": som_summary,
             },
             teacher_answer=teachers.teacher_crossview_reject_all(candidate_bundle_dict or {}),
         )

@@ -1,3 +1,28 @@
+"""FPV segmentation artifact service and alignment contract builder.
+
+This service is the boundary between external SAM3 inference and the internal
+visual-prompt pipeline. It either resolves precomputed artifacts or launches the
+configured SAM3 batch script, then returns a small contract that downstream
+code can validate before using the mask.
+
+Artifact contract invariants:
+
+    mask_shape_hw = [H_mask, W_mask]
+    image_shape_hw = [H_image, W_image]
+    shape_aligned_with_image = (H_mask == H_image and W_mask == W_image)
+
+Coordinate contract:
+
+    image_uv origin = top-left
+    u axis = right, v axis = down
+    transform_to_image_uv = identity_3x3
+
+The segmentation mask is never interpreted semantically here. Class policy,
+safe-corridor priors, and prompt validation live in ``brain.fpv_segmentation``;
+this module only guarantees that the artifact paths and coordinate metadata are
+present, timed, and error-coded.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -30,6 +55,8 @@ CONTRACT_SCHEMA_VERSION = 1
 
 
 class SegmentationServiceError(RuntimeError):
+    """Typed service error returned as a structured API payload."""
+
     def __init__(self, *, code: str, message: str, retryable: bool = False) -> None:
         super().__init__(str(message))
         self.code = str(code)
@@ -69,6 +96,7 @@ def _artifact_contract(
     frame_name: str,
     image_path: Optional[str],
 ) -> Dict[str, Any]:
+    """Build the image/mask alignment contract consumed by prompt validation."""
     mask = np.load(segmentation_npy, mmap_mode="r")
     if mask.ndim != 2:
         raise SegmentationServiceError(
@@ -172,6 +200,7 @@ def _build_sam3_command(
     max_frames: Optional[int],
     overwrite_frames: bool,
 ) -> list[str]:
+    """Serialize a SAM3 provider request into a reproducible subprocess command."""
     command = [
         "conda",
         "run",
@@ -413,6 +442,12 @@ async def segment_fpv_frame(
     provider: str = "sam3",
     request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
+    """Resolve or generate segmentation artifacts for one FPV frame.
+
+    The returned payload is stable across success and failure: both branches
+    include request echo, timing fields, provider identity, and structured error
+    metadata. This makes batch pipeline failures easy to aggregate by code.
+    """
     started_at = perf_counter()
     provider_name = str(provider or "sam3").strip().lower() or "sam3"
     resolved_request_id = str(request_id or uuid4())

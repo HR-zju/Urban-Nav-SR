@@ -141,6 +141,7 @@ class FPVCorridorThetaOutput:
 class FPVMainRegionSelectionInput:
     candidate_regions: list[dict[str, Any]]
     fpv_segmentation_summary: dict[str, Any] | None
+    som_summary: dict[str, Any] | None
 
 
 @dataclass
@@ -160,6 +161,7 @@ class FPVMainRegionSelectionOutput:
 @dataclass
 class FPVSceneStageInput:
     fpv_segmentation_summary: dict[str, Any] | None
+    som_summary: dict[str, Any] | None
     image_width: int
     image_height: int
 
@@ -180,6 +182,7 @@ class FPVSceneStageOutput:
 @dataclass
 class FPVRejectAllInput:
     fpv_segmentation_summary: dict[str, Any] | None
+    som_summary: dict[str, Any] | None
     rendered_prompt: dict[str, Any] | None
     segmentation_validation: dict[str, Any] | None
 
@@ -244,6 +247,7 @@ class CrossViewPromptRankingOutput:
 class CrossViewRejectAllInput:
     candidate_bundle: dict[str, Any]
     fpv_segmentation_summary: dict[str, Any] | None
+    som_summary: dict[str, Any] | None
 
 
 @dataclass

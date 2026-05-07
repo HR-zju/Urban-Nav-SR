@@ -1,3 +1,19 @@
+"""LVLM prompt contracts and output coercion for visual navigation prompts.
+
+This module defines the language-level A/V contract:
+
+    A(generator): produce one conservative image-plane prompt from FPV images,
+                  route intent, segmentation summaries, SoM anchors, and
+                  safe-corridor teacher priors.
+
+    V(verifier): inspect and optionally refine a proposed prompt before the
+                 deterministic mask validator accepts or rejects it.
+
+The module does not perform segmentation math itself. It makes the contract
+explicit, compact, and replayable so production runs can audit exactly what the
+LVLM saw and why a prompt was accepted, repaired, or rejected.
+"""
+
 from __future__ import annotations
 
 import json
@@ -12,6 +28,11 @@ def _clamp(value: float, lower: float, upper: float) -> float:
 
 
 def _compact_route_context(route_context: dict[str, Any]) -> dict[str, Any]:
+    """Reduce RouteContext to the intent fields the LVLM needs.
+
+    Route context is intent only. It should influence which visible support to
+    choose, but it must never override image-visible safety constraints.
+    """
     pose_match = route_context.get("pose_match", {}) or {}
     progress = route_context.get("progress", {}) or {}
     local = route_context.get("local_semantics", {}) or {}
@@ -67,44 +88,59 @@ def _candidate_compact(candidate: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_direct_prompt_system_prompt() -> str:
+    """Build the A-stage system prompt for direct visual-prompt regression."""
     return (
         "Role: first-person navigation visual prompt generator.\n"
-        "Goal: produce ONE conservative image-plane prompt for the next 1–3 seconds.\n"
-        "Inputs: image (primary), route_context (intent only), fpv_segmentation_summary (soft prior), optional segmentation overlay image.\n"
+        "Goal: directly regress ONE conservative image-plane prompt for the next visible navigation action.\n"
+        "Inputs: image (primary), numbered SoM overlay image when present, route_context (intent only), fpv_segmentation_summary, and som_summary.\n"
         "Output: JSON ONLY with keys: selected_prompt_type, instruction, confidence, reason, reject_all, rendered_prompt.\n"
         "\n"
         "Keywords: traversable, forbidden, bottom_openings, corridor_centerline, clearance, occlusion, reject_all.\n"
         "\n"
         "Rules:\n"
         "- Image-first: never ignore visible safety to satisfy route intent.\n"
+        "- Direct regression: choose your own image-plane path from the images and structured context; do not copy or expect a precomputed geometry corridor.\n"
         "- Prefer selected_prompt_type=path_corridor.\n"
-        "- The prompt must start near the lower image region.\n"
-        "- For path_corridor: provide 3–6 path_samples; each sample has center_uv, left_edge_uv, right_edge_uv, support_label.\n"
-        "- Corridor width must be realistic: do not span the whole image unless the traversable corridor truly spans it.\n"
+        "- The first path sample must start from the bottom-center of the image, close to the viewer's current position, not from a distant mid-image region.\n"
+        "- For path_corridor: provide 3–6 smooth, forward-extending path_samples; each sample has center_uv, left_edge_uv, right_edge_uv, support_label.\n"
+        "- Corridor width must be realistic and compact: do not outline the whole free-space mask; boundaries should show the safe walking channel with obstacle clearance.\n"
         "- Avoid people, vehicles, poles, walls, fences, stairs, planters, trees, and any obvious obstacles.\n"
         "\n"
         "Foot-mode semantics:\n"
         "- Prefer sidewalk / pedestrian paving / curb-cuts / marked crossings.\n"
         "- Treat grass/natural/landscaping as non-traversable.\n"
-        "- Do not guide into motor lanes unless a legal crossing is visually obvious.\n"
+        "- Road/curb/gutter may be used as conditional connector surfaces when needed, but prefer pedestrian surfaces and never compromise obstacle clearance.\n"
         "\n"
         "If fpv_segmentation_summary is present:\n"
-        "- Keep the CENTER path inside traversable classes.\n"
+        "- Keep the CENTER path inside allowed_traversable classes; prefer traversable classes over conditional_traversable classes.\n"
+        "- Place the CENTER path near the middle of the visible preferred traversable band, not along either edge.\n"
         "- Keep LEFT/RIGHT boundaries inside boundary support classes and away from forbidden.\n"
+        "- Keep LEFT/RIGHT boundaries inset from the traversable/free-space edge; do not trace the exact sidewalk edge, road edge, grass edge, curb, or obstacle boundary.\n"
         "- Use bottom_openings: start from the widest opening and keep the center path near its middle (maximize clearance).\n"
+        "- If safe_corridor_prior is present, treat it as a deterministic teacher guardrail for centered path_samples and inset boundaries.\n"
         "- If traversable becomes ambiguous ahead, shorten the corridor and set termination_semantics=stop_before_occlusion.\n"
+        "\n"
+        "If som_summary is present:\n"
+        "- Treat region_id and numeric label as stable visual anchors over the same image plane.\n"
+        "- If som_overlay_legend is present, the next image after the original FPV frame is a numbered SoM overlay.\n"
+        "- Green/blue SoM labels are preferred pedestrian support; yellow/orange labels are conditional connector surfaces; red labels are forbidden obstacle/non-traversable regions.\n"
+        "- Prefer path centerlines that remain inside top-ranked preferred traversable regions; use conditional labels only to connect safely, and avoid red forbidden labels.\n"
+        "- Mention the chosen SoM label/region_id in reason when it helps explain the prompt.\n"
+        "- If prompt and region anchors disagree, trust visible safety and explain why in reason.\n"
         "\n"
         "If you cannot draw a corridor that stays on visible traversable support, set reject_all=true."
     )
 
 
 def build_direct_prompt_verifier_system_prompt() -> str:
+    """Build the V-stage LVLM verifier prompt."""
     return (
         "You are a first-person navigation visual prompt verifier and refiner. "
         "You receive a proposed prompt and must verify whether its center path and support corridor are truly grounded on visible traversable surface for the current navigation mode. "
         "You must inspect the image, not trust the proposal text. "
-        "For pedestrian mode, visible paved sidewalk, pedestrian path, curb cut, crosswalk, and plaza surfaces are valid support. "
-        "Grass, shrubs, decorative green belts, planters, tree bases, exposed soil, walls, fences, and motor lanes are not valid support. "
+        "For pedestrian mode, visible paved sidewalk, pedestrian path, curb cut, crosswalk, and plaza surfaces are preferred support. "
+        "Road, curb, and gutter pixels may be conditional connector support when needed, but should not dominate the prompt if pedestrian support is visible. "
+        "Grass, shrubs, decorative green belts, planters, tree bases, exposed soil, walls, and fences are not valid support. "
         "If fpv_segmentation_summary is provided, use it as an explicit traversability prior and reject prompts that leave those traversable classes. "
         "If the center path is reasonable but the support corridor is too wide, tighten the left/right support boundaries while preserving the path. "
         "If the path itself enters non-traversable support, revise the path and boundary samples together. "
@@ -124,10 +160,25 @@ def build_direct_prompt_question(
     navigation_mode: str = "foot",
     pov_prompt_candidates: list[dict[str, Any]] | None = None,
     fpv_segmentation_summary: dict[str, Any] | None = None,
+    som_summary: dict[str, Any] | None = None,
+    som_candidate_hints: list[dict[str, Any]] | None = None,
+    som_overlay_legend: dict[str, Any] | None = None,
+    som_spatial_constraints: dict[str, Any] | None = None,
     alignment_report: dict[str, Any] | None = None,
     overlay_legend: dict[str, Any] | None = None,
     summary_source: str | None = None,
 ) -> str:
+    """Serialize the A-stage user question as auditable JSON.
+
+    Key contract fields:
+        route_context: high-level navigation intent
+        fpv_segmentation_summary: semantic traversability prior
+        som_summary / som_candidate_hints: numbered visual anchors
+        som_spatial_constraints: hard spatial rules and safe_corridor_prior
+
+    The LVLM returns prompt geometry in the coordinate space described by
+    image_size. The service later maps that geometry back to source pixels.
+    """
     compact_route = _compact_route_context(route_context)
     top_prior = None
     if prompt_proposals:
@@ -158,7 +209,7 @@ def build_direct_prompt_question(
             "task": (
                 "Generate ONE conservative image-plane navigation prompt (prefer path_corridor). "
                 "Use the image first. route_context is intent only. "
-                "If segmentation is provided, use it to stay inside traversable and maximize clearance."
+                "Directly regress smooth image coordinates using the numbered SoM mask as visual grounding when present."
             ),
             "navigation_mode": str(navigation_mode or "foot"),
             "navigation_constraints": _navigation_mode_note(navigation_mode),
@@ -168,19 +219,33 @@ def build_direct_prompt_question(
             "visual_regions_hint": compact_regions,
             "optional_candidate_hints": compact_candidates,
             "fpv_segmentation_summary": fpv_segmentation_summary,
+            "som_summary": som_summary,
+            "som_candidate_hints": som_candidate_hints,
+            "som_overlay_legend": som_overlay_legend,
+            "som_spatial_constraints": som_spatial_constraints,
             "alignment_report": alignment_report,
             "overlay_legend": overlay_legend,
             "summary_source": str(summary_source or "from_same_mask_entity"),
             "hard_rules": [
                 "Return JSON only (no prose).",
                 "Prefer selected_prompt_type=path_corridor.",
-                "Start near the lower image region.",
-                "Provide 3–6 path_samples (center/left/right) with realistic corridor width.",
+                "The first path sample must satisfy som_spatial_constraints.start_constraint: bottom-center image band, with center_uv.v at or below the required bottom-band threshold and center_uv.u inside the narrow center range.",
+                "Provide 3–6 smooth, forward-extending path_samples (center/left/right) with realistic compact corridor width.",
                 "Avoid obstacles and people; do not place center or boundaries on them.",
-                "If segmentation summary is present: keep center inside traversable and keep boundaries away from forbidden.",
+                "If segmentation summary is present: keep center inside allowed_traversable; prefer traversable over conditional_traversable; keep boundaries away from forbidden.",
+                "If som_overlay_legend is present: use the numbered SoM overlay image to align region labels with visible pixels.",
+                "If som_summary is present: use preferred/conditional/forbidden SoM labels as grounding context, not as fixed candidate paths.",
+                "Favor top-ranked preferred traversable SoM region anchors, use conditional/yellow connectors only when needed, and avoid forbidden/red labels.",
+                "If som_spatial_constraints is present: obey corridor_width_constraint; do not place center or left/right boundary points inside forbidden_regions; road/curb/gutter regions may only be connector support.",
+                "If som_spatial_constraints has centerline_constraint: keep each center_uv near the midpoint of the preferred traversable same-row band, similar to the old geometric fallback.",
+                "If som_spatial_constraints has edge_margin_constraint: keep left_edge_uv/right_edge_uv inset from the traversable-region edges with the requested clearance.",
+                "If som_spatial_constraints has safe_corridor_prior: use its path_samples as concrete teacher coordinates for the centered safe walking lane; adjust only for visible obstacle/occlusion or route intent.",
+                "Left/right edges must avoid obstacles as strictly as the center path and should stay near the usable walking lane, not the far outer edge of every traversable pixel.",
+                "When using a SoM anchor, include its numeric label and region_id in reason.",
+                "If bottom_openings is empty: do not invent a wide bottom-starting corridor; draw a short grounded prompt or reject.",
                 "If bottom_openings is present: start from the widest opening and keep center near opening midline (maximize clearance).",
                 "If traversable becomes ambiguous: shorten corridor and use stop_before_occlusion.",
-                "If you cannot stay on traversable support: set reject_all=true.",
+                "If you cannot stay on allowed support without hitting forbidden obstacle classes: set reject_all=true.",
             ],
             "output_requirements": {
                 "selected_prompt_type": "path_corridor|arrow_path|arrow|sector|region",
@@ -220,10 +285,16 @@ def build_direct_prompt_verifier_question(
     image_height: int,
     navigation_mode: str = "foot",
     fpv_segmentation_summary: dict[str, Any] | None = None,
+    som_summary: dict[str, Any] | None = None,
+    som_candidate_hints: list[dict[str, Any]] | None = None,
+    som_overlay_legend: dict[str, Any] | None = None,
+    som_spatial_constraints: dict[str, Any] | None = None,
+    segmentation_validation: dict[str, Any] | None = None,
     alignment_report: dict[str, Any] | None = None,
     overlay_legend: dict[str, Any] | None = None,
     summary_source: str | None = None,
 ) -> str:
+    """Serialize the V-stage verifier/refiner task as auditable JSON."""
     compact_route = _compact_route_context(route_context)
     return json.dumps(
         {
@@ -236,14 +307,26 @@ def build_direct_prompt_verifier_question(
             "route_context": compact_route,
             "proposed_prompt": rendered_prompt,
             "fpv_segmentation_summary": fpv_segmentation_summary,
+            "som_summary": som_summary,
+            "som_candidate_hints": som_candidate_hints,
+            "som_overlay_legend": som_overlay_legend,
+            "som_spatial_constraints": som_spatial_constraints,
+            "segmentation_validation": segmentation_validation,
             "alignment_report": alignment_report,
             "overlay_legend": overlay_legend,
             "summary_source": str(summary_source or "from_same_mask_entity"),
             "verification_objectives": [
                 "Check whether the path centerline stays on visible mode-valid traversable surface.",
-                "Check whether the left and right support boundaries tightly match the visible support of the path rather than spilling into road, grass, shrubs, or obstacles.",
+                "Check whether the left and right support boundaries tightly match visible support; road/curb may be connector support, but grass, shrubs, vehicles, trees, people, and occlusion are hard failures.",
+                "Check whether corridor width is compact and obstacle-aware; overly wide corridors that span most of the image must be narrowed or rejected.",
                 "Check whether the termination semantic matches the actual visible corridor depth or turn entry.",
-                "If fpv_segmentation_summary is present, verify that the path stays inside its traversable classes and does not cross its forbidden classes.",
+                "If fpv_segmentation_summary is present, verify that the path stays inside allowed_traversable classes, prefers traversable classes, and does not cross forbidden classes.",
+                "If segmentation_validation is present, explicitly repair the listed forbidden hit points or reject if repair is impossible.",
+                "If som_overlay_legend is present, use the numbered SoM overlay image to verify the path against the labeled region pixels and avoid red forbidden labels.",
+                "If som_summary is present, verify that the selected path remains geometrically consistent with its top-ranked region anchors.",
+                "If som_spatial_constraints is present, enforce its bottom-center start constraint, corridor_width_constraint, and forbidden/conditional region rules.",
+                "If centerline_constraint or edge_margin_constraint is present, repair prompts whose centerline hugs a traversable edge or whose boundaries trace the free-space/sidewalk edge.",
+                "If safe_corridor_prior is present, compare the proposal to that teacher corridor and prefer a centered/inset revision unless the image visibly contradicts it.",
                 "If the proposal is partially wrong, revise it instead of only commenting on it.",
                 "If the proposal cannot be grounded in visible support, reject it."
             ],

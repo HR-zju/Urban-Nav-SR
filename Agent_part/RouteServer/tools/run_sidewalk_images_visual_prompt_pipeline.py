@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import json
 import math
 import os
@@ -163,6 +164,24 @@ def _ensure_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
+def _write_data_url_image(data_url: str, output_path_without_suffix: Path) -> Path | None:
+    raw = str(data_url or "").strip()
+    if not raw.startswith("data:image/") or "," not in raw:
+        return None
+    header, encoded = raw.split(",", 1)
+    mime = header.split(";", 1)[0].replace("data:", "")
+    ext = ".jpg" if mime in {"image/jpeg", "image/jpg"} else ".png" if mime == "image/png" else ".img"
+    output_path = Path(str(output_path_without_suffix) + ext)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(base64.b64decode(encoded))
+    return output_path
+
+
+def _safe_artifact_name(value: str) -> str:
+    cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in str(value or "").strip())
+    return cleaned or "image"
+
+
 def _symlink_or_copy_tree(src: Path, dst: Path) -> None:
     if dst.exists():
         return
@@ -308,6 +327,7 @@ async def _run_frame(
     enable_segmentation_overlay_input: bool,
     enforce_alignment: bool,
     emit_qa_bundle: bool,
+    emit_llm_input_images: bool,
     fpv_segmentation: dict[str, Any] | None,
 ) -> dict[str, Any]:
     from mcp_server.services.visual_prompt_service import run_zero_shot_visual_prompt_pipeline
@@ -343,6 +363,7 @@ async def _run_frame(
         enable_segmentation_overlay_input=bool(enable_segmentation_overlay_input),
         enforce_alignment=bool(enforce_alignment),
         emit_qa_bundle=bool(emit_qa_bundle),
+        emit_llm_input_images=bool(emit_llm_input_images),
     )
 
 
@@ -451,11 +472,14 @@ async def main_async() -> None:
     _ensure_dir(output_dir)
     overlays_dir = output_dir / "overlay"
     json_dir = output_dir / "json"
+    generator_json_dir = output_dir / "generator_json"
     logs_dir = output_dir / "logs"
     seg_vis_dir = output_dir / "seg_vis"
-    for d in [overlays_dir, json_dir, logs_dir]:
+    llm_inputs_dir = output_dir / "llm_inputs"
+    for d in [overlays_dir, json_dir, generator_json_dir, logs_dir]:
         _ensure_dir(d)
     _ensure_dir(seg_vis_dir)
+    _ensure_dir(llm_inputs_dir)
 
     frames_by_name = _load_trajectory_frames(trajectory_path=trajectory_path, images_dir=images_dir)
     selected = _iter_selected_frame_names(
@@ -527,6 +551,7 @@ async def main_async() -> None:
             continue
 
         out_json = json_dir / f"{frame_name}.json"
+        out_generator_json = generator_json_dir / f"{frame_name}.generator.json"
         out_svg = overlays_dir / f"{frame_name}.svg"
         out_generator_svg = overlays_dir / f"{frame_name}.generator.svg"
         out_rejected_svg = overlays_dir / f"{frame_name}.rejected.svg"
@@ -566,8 +591,23 @@ async def main_async() -> None:
                 enable_segmentation_overlay_input=bool(args.enable_segmentation_overlay_input),
                 enforce_alignment=bool(args.enforce_alignment),
                 emit_qa_bundle=bool(args.emit_qa_bundle),
+                emit_llm_input_images=True,
                 fpv_segmentation=fpv_seg,
             )
+            llm_input_artifacts: list[str] = []
+            for item in list(payload.get("llm_input_images") or []):
+                if not isinstance(item, dict):
+                    continue
+                role = _safe_artifact_name(str(item.get("role") or item.get("image_role") or "llm_input"))
+                output_path = _write_data_url_image(
+                    str(item.get("data_url") or ""),
+                    llm_inputs_dir / f"{frame_name}.{role}",
+                )
+                if output_path is not None:
+                    llm_input_artifacts.append(str(output_path))
+                    item["saved_path"] = str(output_path)
+            if llm_input_artifacts:
+                frame_item["llm_input_images"] = llm_input_artifacts
             out_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             overlay_svg = payload.get("overlay_svg")
             if isinstance(overlay_svg, str) and overlay_svg.strip():
@@ -578,6 +618,7 @@ async def main_async() -> None:
             generator_overlay_svg = payload.get("generator_overlay_svg")
             if isinstance(generator_overlay_svg, str) and generator_overlay_svg.strip():
                 out_generator_svg.write_text(generator_overlay_svg, encoding="utf-8")
+                frame_item["generator_overlay_path"] = str(out_generator_svg)
             else:
                 # Keep directory tidy; only write when available.
                 if out_generator_svg.exists():
@@ -587,6 +628,27 @@ async def main_async() -> None:
             # so that the user can inspect what the LVLM generated before constraints.
             arb = payload.get("arbiter_decision") or {}
             debug = arb.get("debug") or {}
+            generator_payload = {
+                "frame_name": str(frame_name),
+                "image_path": str(frame.image_path),
+                "generator_raw": debug.get("generator_raw"),
+                "generator_decision": debug.get("generator_decision"),
+                "generator_rejected_decision": debug.get("generator_rejected_decision"),
+                "generator_overlay_path": str(out_generator_svg) if out_generator_svg.exists() else None,
+            }
+            has_generator_payload = any(
+                generator_payload.get(key)
+                for key in ("generator_raw", "generator_decision", "generator_rejected_decision", "generator_overlay_path")
+            )
+            if has_generator_payload:
+                out_generator_json.write_text(
+                    json.dumps(generator_payload, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                frame_item["generator_json_path"] = str(out_generator_json)
+            elif out_generator_json.exists():
+                out_generator_json.unlink()
+
             rejected_prompt = debug.get("rejected_rendered_prompt")
             if isinstance(rejected_prompt, dict) and rejected_prompt:
                 try:
