@@ -1,3 +1,24 @@
+"""Deterministic teachers for visual-prompt QA samples.
+
+The QA bundle records small, inspectable supervision targets next to each
+visual-prompt run. These teachers are not learned models; they distill route,
+BEV, segmentation, and rendered-prompt artifacts into labels that can be used
+for regression tests, dataset auditing, and model-evaluation dashboards.
+
+Core angular formulas:
+
+    theta_bev = atan2(x_m, y_m)
+
+    theta_fpv = ((u / image_width) - 0.5) * 2 * theta_max
+
+    confidence_prompt =
+        mean(route_confidence, prompt_present, segmentation_score, candidate_score)
+
+The teachers prefer explicit artifact-derived labels. Fallback labels are
+marked through their ``source`` field so downstream analysis can separate strong
+geometric supervision from weak priors.
+"""
+
 from __future__ import annotations
 
 import math
@@ -9,6 +30,7 @@ from .schema import PointUV, RangeM, ThetaLabel
 
 
 def make_theta_label(theta_deg: float, *, confidence: float, source: str) -> ThetaLabel:
+    """Normalize one angle into the common QA theta-label schema."""
     bin_index, residual = theta_bin_residual(theta_deg)
     clamped = max(-90.0, min(90.0, float(theta_deg)))
     return ThetaLabel(
@@ -64,6 +86,7 @@ def _path_points(rendered_prompt: dict[str, Any] | None) -> list[PointUV]:
 
 
 def teacher_bev_route_theta(local_bev_context: dict[str, Any]) -> dict[str, Any]:
+    """Estimate the route lookahead direction in BEV degrees."""
     local_points = _bev_points(local_bev_context.get("local_segment_bev"))
     route_points = _bev_points(local_bev_context.get("route_polyline_local"))
     points = local_points or route_points
@@ -250,6 +273,7 @@ def teacher_prompt_confidence(
     segmentation_validation: dict[str, Any] | None,
     candidate_bundle: dict[str, Any] | None,
 ) -> dict[str, Any]:
+    """Aggregate independent reliability signals into a scalar prompt score."""
     pose = route_context.get("pose_match") or {}
     route_confidence = float(pose.get("route_confidence", 0.0) or 0.0)
     prompt_present = 1.0 if isinstance(rendered_prompt, dict) else 0.0

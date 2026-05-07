@@ -1,3 +1,29 @@
+"""Shared route-geometry primitives for GPS-to-route grounding.
+
+This module is intentionally small and deterministic: it converts provider
+route polylines into typed points, projects noisy GPS poses onto the route, and
+computes bearing/distance features used by the visual-prompt pipeline.
+
+Core formulas:
+
+    Haversine distance:
+        a = sin(d_lat / 2)^2 + cos(lat_1) * cos(lat_2) * sin(d_lon / 2)^2
+        d = 2R * asin(sqrt(a))
+
+    Bearing:
+        theta = atan2(sin(d_lon) * cos(lat_2),
+                      cos(lat_1) * sin(lat_2)
+                      - sin(lat_1) * cos(lat_2) * cos(d_lon))
+
+    Segment projection in local meters:
+        t = clamp(dot(P - A, B - A) / ||B - A||^2, 0, 1)
+        P_proj = A + t * (B - A)
+
+All public helpers keep coordinates explicit: route points are latitude /
+longitude, while projection internals use a local tangent-plane approximation in
+meters around the query point.
+"""
+
 from __future__ import annotations
 
 import math
@@ -7,6 +33,7 @@ from .schema import RoutePoint
 
 
 def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Return great-circle distance in meters between two WGS84 points."""
     radius_m = 6371000.0
     d_lat = math.radians(lat2 - lat1)
     d_lon = math.radians(lon2 - lon1)
@@ -20,6 +47,7 @@ def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 
 def bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Return clockwise bearing in degrees, where 0 is north and 90 is east."""
     y = math.sin(math.radians(lon2 - lon1)) * math.cos(math.radians(lat2))
     x = (
         math.cos(math.radians(lat1)) * math.sin(math.radians(lat2))
@@ -105,6 +133,16 @@ def _to_local_xy_m(point: RoutePoint, reference: RoutePoint) -> tuple[float, flo
 
 
 def project_point_to_segment(point: RoutePoint, start: RoutePoint, end: RoutePoint) -> tuple[RoutePoint, float, float]:
+    """Project a GPS point onto one route segment.
+
+    The computation uses a local tangent plane centered at ``point`` so the
+    projection is stable for short urban-navigation segments:
+
+        t = clamp(-dot(A_local, V) / ||V||^2, 0, 1)
+
+    where A_local is the segment start relative to the query point and V is the
+    segment vector. The returned error is the cross-track distance in meters.
+    """
     sx, sy = _to_local_xy_m(start, point)
     ex, ey = _to_local_xy_m(end, point)
     vx = ex - sx
@@ -144,6 +182,7 @@ def project_point_to_polyline(
     point: RoutePoint,
     route_polyline: list[RoutePoint],
 ) -> dict[str, Any]:
+    """Find the nearest route-polyline segment projection for a GPS point."""
     if not route_polyline:
         raise ValueError("route_polyline is empty")
     if len(route_polyline) == 1:

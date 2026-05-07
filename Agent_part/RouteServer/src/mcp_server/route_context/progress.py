@@ -15,6 +15,13 @@ def get_route_progress(
     route_polyline: list[dict] | list[list[float]],
     coarse_waypoints: list[dict],
 ) -> RouteProgress:
+    """Compute scalar route progress used as navigation intent for visual prompts.
+
+    This module does not inspect the FPV image. It converts pose-on-route and
+    coarse waypoint metadata into progress fields such as remaining distance,
+    next turn distance, and next action, which later become intent-only context
+    for the LVLM visual prompt generator.
+    """
     route_points = normalize_route_polyline(route_polyline)
     if not route_points:
         raise ValueError("route_polyline is empty")
