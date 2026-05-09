@@ -14,7 +14,7 @@ TimeoutStopSec=15
 KillMode=mixed
 
 StandardOutput=append:/root/record_data/log/bag.log
-StandardError=appedn:/root/record_data/log/bag.log
+StandardError=append:/root/record_data/log/bag.log
 
 [Install]
 WantedBy=multi-user.target

@@ -8,6 +8,37 @@ source /root/viobot_ctrl/install/local_setup.bash --extend
 eval $ros_domain_id_line
 export LD_LIBRARY_PATH=/root/Baton/install/baton/lib/baton/:/usr/lib/aarch64-linux-gnu/libv4l/:$LD_LIBRARY_PATH
 
+GNSS_LAUNCH_PID=""
+BAG_RECORD_PID=""
+
+cleanup()
+{
+    local exit_code=$?
+    trap - EXIT INT TERM
+
+    if [ -n "$BAG_RECORD_PID" ] && kill -0 "$BAG_RECORD_PID" 2>/dev/null; then
+        echo "[CLEANUP] 停止 ros2 bag record (PID: $BAG_RECORD_PID)..."
+        kill -INT "$BAG_RECORD_PID" 2>/dev/null || true
+        wait "$BAG_RECORD_PID" 2>/dev/null || true
+    fi
+
+    if [ -n "$GNSS_LAUNCH_PID" ] && kill -0 "$GNSS_LAUNCH_PID" 2>/dev/null; then
+        echo "[CLEANUP] 停止 GNSS launch (PID: $GNSS_LAUNCH_PID)..."
+        kill -INT "$GNSS_LAUNCH_PID" 2>/dev/null || true
+        sleep 2
+        if kill -0 "$GNSS_LAUNCH_PID" 2>/dev/null; then
+            kill -TERM "$GNSS_LAUNCH_PID" 2>/dev/null || true
+        fi
+        wait "$GNSS_LAUNCH_PID" 2>/dev/null || true
+    fi
+
+    exit "$exit_code"
+}
+
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 # 等待核心驱动节点上线
 echo "[1/3] 等待核心驱动节点上线..."
 sleep 25
@@ -17,11 +48,14 @@ echo "[2/3] 启动定位算法..."
 ros2 topic pub --once /baton/stereo3_ctrl system_ctrl/AlgoCtrl "{header: {stamp: {sec: 0, nanosec: 0}, frame_id: ''}, algo_enable: true, algo_reboot: false, algo_reset: false}" > /dev/null 2>&1
 sleep 1
 ros2 launch gnss_comm_impl gnss_spp_node.launch.py &
+GNSS_LAUNCH_PID=$!
 
 echo "[3/3] 等待算法状态反馈 (algo_status)..."
 # 设置最大超时时间为 15 秒
-# 启动一次 echo，持续监听，遇到第一个匹配项自动退出
-timeout 15 bash -c "ros2 topic echo /baton/algo_status | grep -m 1 'algo_status: stereo3_running'" > /dev/null 2>&1
+# 等到 stereo3_running 状态出现，匹配到第一条后让 ros2 topic echo 自己退出
+timeout 15 ros2 topic echo /baton/algo_status \
+    --filter "m.algo_status == 'stereo3_running'" \
+    --once > /dev/null 2>&1
 
 # 检查上一条命令（即 timeout/grep）的退出状态码
 if [ $? -eq 0 ]; then
@@ -47,9 +81,14 @@ while [ -d "$BAG_NAME" ]; do
     let SUFFIX+=1
 done
 
-exec ros2 bag record \
+ros2 bag record \
     /baton/gnss/ephem /baton/gnss/meas /baton/stereo3/odometry /baton/algo_status /camera_x001/image_raw/compressed /baton/gnss/status /baton/gnss/spp_fix_raw /baton/gnss/spp_fix /baton/gnss/heading\
     --storage mcap \
     --storage-config-file /root/viobot_ctrl/bash/mcap_config.yaml\
     --max-bag-duration 60 \
-    -o $BAG_NAME
+    -o "$BAG_NAME" &
+BAG_RECORD_PID=$!
+wait "$BAG_RECORD_PID"
+BAG_RECORD_EXIT_CODE=$?
+BAG_RECORD_PID=""
+exit "$BAG_RECORD_EXIT_CODE"
