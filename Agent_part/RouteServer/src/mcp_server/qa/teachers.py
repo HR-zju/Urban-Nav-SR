@@ -175,29 +175,44 @@ def teacher_point_prompt(rendered_prompt: dict[str, Any] | None, image_width: in
     return {"target_point_uv": asdict(target), "theta": asdict(theta), "reject_all": False, "source": "rendered_prompt"}
 
 
-def teacher_fpv_corridor_theta(rendered_prompt: dict[str, Any] | None, image_width: int) -> dict[str, Any]:
-    point = teacher_point_prompt(rendered_prompt, image_width)
-    if point["theta"] is None:
-        return {"theta": None, "reject_all": True, "source": "no_rendered_prompt"}
-    return {"theta": point["theta"], "reject_all": False, "source": point["source"]}
-
-
-def teacher_fpv_main_region_selection(candidate_regions: list[dict[str, Any]]) -> dict[str, Any]:
-    if not candidate_regions:
-        return {"selected_region_id": None, "reject_all": True, "confidence": 0.7}
-    best = max(candidate_regions, key=lambda item: float(item.get("score", 0.0) or 0.0))
-    return {
-        "selected_region_id": str(best.get("region_id") or ""),
-        "reject_all": False,
-        "confidence": round(float(best.get("score", 0.0) or 0.0), 4),
-    }
+def _present_class_names(segmentation_summary: dict[str, Any]) -> set[str]:
+    present_names: set[str] = set()
+    for row in segmentation_summary.get("present_classes") or []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            pixel_ratio = float(row.get("pixel_ratio", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            pixel_ratio = 0.0
+        if pixel_ratio > 0.0:
+            present_names.add(str(row.get("class_name") or "").strip().lower())
+    return {name for name in present_names if name}
 
 
 def teacher_fpv_scene_stage(segmentation_summary: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(segmentation_summary, dict):
         return {"scene_stage": "unknown", "confidence": 0.25, "source": "no_segmentation_summary"}
-    traversable = segmentation_summary.get("traversable_classes") or segmentation_summary.get("present_traversable_classes") or []
-    forbidden = segmentation_summary.get("forbidden_classes") or segmentation_summary.get("present_forbidden_classes") or []
+    present_names = _present_class_names(segmentation_summary)
+    traversable_names = {
+        str(name).strip().lower()
+        for name in (
+            segmentation_summary.get("traversable_classes")
+            or segmentation_summary.get("present_traversable_classes")
+            or segmentation_summary.get("traversable_class_names")
+            or []
+        )
+    }
+    forbidden_names = {
+        str(name).strip().lower()
+        for name in (
+            segmentation_summary.get("forbidden_classes")
+            or segmentation_summary.get("present_forbidden_classes")
+            or segmentation_summary.get("forbidden_class_names")
+            or []
+        )
+    }
+    traversable = sorted(present_names & traversable_names) if present_names else sorted(traversable_names)
+    forbidden = sorted(present_names & forbidden_names) if present_names else sorted(forbidden_names)
     if traversable and forbidden:
         stage = "mixed_corridor_obstacles"
     elif traversable:
@@ -205,56 +220,6 @@ def teacher_fpv_scene_stage(segmentation_summary: dict[str, Any] | None) -> dict
     else:
         stage = "uncertain"
     return {"scene_stage": stage, "confidence": 0.55, "source": "segmentation_summary"}
-
-
-def teacher_fpv_reject_all(
-    rendered_prompt: dict[str, Any] | None,
-    segmentation_validation: dict[str, Any] | None,
-) -> dict[str, Any]:
-    if not isinstance(rendered_prompt, dict):
-        return {"reject_all": True, "reason": "no_rendered_prompt", "confidence": 0.9}
-    if isinstance(segmentation_validation, dict) and not bool(segmentation_validation.get("valid")):
-        return {"reject_all": True, "reason": str(segmentation_validation.get("reason") or "segmentation_invalid"), "confidence": 0.88}
-    return {"reject_all": False, "reason": "rendered_prompt_available", "confidence": 0.72}
-
-
-def teacher_crossview_theta(candidate_bundle: dict[str, Any]) -> dict[str, Any]:
-    candidates = candidate_bundle.get("fpv_candidates") if isinstance(candidate_bundle, dict) else []
-    selected_id = candidate_bundle.get("selected_prompt_id") if isinstance(candidate_bundle, dict) else None
-    selected = next((item for item in candidates or [] if item.get("prompt_id") == selected_id), None)
-    if not selected and candidates:
-        selected = candidates[0]
-    theta = selected.get("theta_fpv_deg") if isinstance(selected, dict) else None
-    if theta is None:
-        return {"theta": None, "reject_all": True, "source": "no_candidate_theta"}
-    confidence = float(selected.get("route_alignment_score", 0.0) or 0.0)
-    return {"theta": asdict(make_theta_label(float(theta), confidence=confidence, source="pov_candidate_bundle")), "reject_all": False, "source": "pov_candidate_bundle"}
-
-
-def teacher_crossview_prompt_ranking(candidate_bundle: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(candidate_bundle, dict) or not candidate_bundle.get("fpv_candidates"):
-        return {"selected_prompt_id": None, "delta_theta_deg": None, "reject_all": True, "confidence": 0.8}
-    selected_id = candidate_bundle.get("selected_prompt_id")
-    candidates = candidate_bundle.get("fpv_candidates") or []
-    selected = next((item for item in candidates if item.get("prompt_id") == selected_id), candidates[0])
-    return {
-        "selected_prompt_id": selected.get("prompt_id"),
-        "delta_theta_deg": None,
-        "reject_all": False,
-        "confidence": round((float(selected.get("route_alignment_score", 0.0) or 0.0) + float(selected.get("fpv_support_score", 0.0) or 0.0)) * 0.5, 4),
-    }
-
-
-def teacher_crossview_reject_all(candidate_bundle: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(candidate_bundle, dict):
-        return {"reject_all": True, "reason": "missing_candidate_bundle", "confidence": 0.9}
-    reject = bool(candidate_bundle.get("reject_all"))
-    reasons = candidate_bundle.get("rejection_reasons") or []
-    return {
-        "reject_all": reject,
-        "reason": "; ".join(str(item) for item in reasons) if reasons else "candidate_bundle_ok",
-        "confidence": 0.8 if reject else 0.65,
-    }
 
 
 def teacher_step_instruction(route_context: dict[str, Any], rendered_prompt: dict[str, Any] | None) -> dict[str, Any]:
@@ -282,8 +247,10 @@ def teacher_prompt_confidence(
         segmentation_score = 1.0 if segmentation_validation.get("valid") else 0.0
     candidate_score = 0.5
     if isinstance(candidate_bundle, dict) and candidate_bundle.get("fpv_candidates"):
-        first = candidate_bundle["fpv_candidates"][0]
-        candidate_score = (float(first.get("route_alignment_score", 0.0) or 0.0) + float(first.get("fpv_support_score", 0.0) or 0.0)) * 0.5
+        selected_id = candidate_bundle.get("selected_prompt_id")
+        candidates = candidate_bundle.get("fpv_candidates") or []
+        selected = next((item for item in candidates if item.get("prompt_id") == selected_id), candidates[0])
+        candidate_score = (float(selected.get("route_alignment_score", 0.0) or 0.0) + float(selected.get("fpv_support_score", 0.0) or 0.0)) * 0.5
     factors = {
         "route_confidence": round(route_confidence, 4),
         "prompt_present": prompt_present,
@@ -294,15 +261,53 @@ def teacher_prompt_confidence(
     return {"confidence": round(confidence, 4), "factors": factors}
 
 
-def teacher_grounded_reject(
+def teacher_prompt_validity(
     rendered_prompt: dict[str, Any] | None,
     segmentation_validation: dict[str, Any] | None,
     arbiter_decision: dict[str, Any],
+    candidate_bundle: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if bool(arbiter_decision.get("reject_all")):
-        return {"reject_all": True, "reason": str(arbiter_decision.get("reason") or "arbiter_reject_all"), "confidence": 0.92}
-    if not isinstance(rendered_prompt, dict):
-        return {"reject_all": True, "reason": "no_rendered_prompt", "confidence": 0.9}
-    if isinstance(segmentation_validation, dict) and not bool(segmentation_validation.get("valid")):
-        return {"reject_all": True, "reason": str(segmentation_validation.get("reason") or "segmentation_invalid"), "confidence": 0.9}
-    return {"reject_all": False, "reason": "grounded_prompt_available", "confidence": 0.72}
+    prompt_present = isinstance(rendered_prompt, dict)
+    arbiter_reject = bool(arbiter_decision.get("reject_all")) if isinstance(arbiter_decision, dict) else False
+    segmentation_valid = None
+    if isinstance(segmentation_validation, dict):
+        segmentation_valid = bool(segmentation_validation.get("valid"))
+    candidate_reject = None
+    candidate_reasons: list[str] = []
+    if isinstance(candidate_bundle, dict):
+        candidate_reject = bool(candidate_bundle.get("reject_all"))
+        candidate_reasons = [str(item) for item in (candidate_bundle.get("rejection_reasons") or [])]
+
+    checks = {
+        "grounded": {
+            "arbiter_reject_all": arbiter_reject,
+            "prompt_present": prompt_present,
+        },
+        "fpv": {
+            "segmentation_checked": segmentation_valid is not None,
+            "segmentation_valid": segmentation_valid,
+        },
+        "crossview": {
+            "candidate_bundle_present": isinstance(candidate_bundle, dict),
+            "candidate_reject_all": candidate_reject,
+            "rejection_reasons": candidate_reasons,
+        },
+    }
+    if arbiter_reject:
+        reason = str(arbiter_decision.get("reason") or "arbiter_reject_all")
+        return {"reject_all": True, "decision": "reject", "reason": reason, "confidence": 0.92, "checks": checks}
+    if not prompt_present:
+        return {"reject_all": True, "decision": "reject", "reason": "no_rendered_prompt", "confidence": 0.9, "checks": checks}
+    if segmentation_valid is False:
+        reason = str(segmentation_validation.get("reason") or "segmentation_invalid")
+        return {"reject_all": True, "decision": "reject", "reason": reason, "confidence": 0.9, "checks": checks}
+    if candidate_reject:
+        reason = "; ".join(candidate_reasons) if candidate_reasons else "candidate_bundle_reject_all"
+        return {"reject_all": True, "decision": "reject", "reason": reason, "confidence": 0.82, "checks": checks}
+    return {
+        "reject_all": False,
+        "decision": "accept",
+        "reason": "prompt_valid",
+        "confidence": 0.74,
+        "checks": checks,
+    }

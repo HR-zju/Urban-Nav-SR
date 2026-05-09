@@ -117,48 +117,6 @@ class BEVNavigationStageOutput:
 
 
 @dataclass
-class FPVCorridorThetaInput:
-    image_width: int
-    image_height: int
-    fpv_segmentation_summary: dict[str, Any] | None
-    rendered_prompt: dict[str, Any] | None
-
-
-@dataclass
-class FPVCorridorThetaTeacher:
-    theta: ThetaLabel | None
-    reject_all: bool
-    source: str
-
-
-@dataclass
-class FPVCorridorThetaOutput:
-    theta: ThetaLabel | None
-    reject_all: bool
-
-
-@dataclass
-class FPVMainRegionSelectionInput:
-    candidate_regions: list[dict[str, Any]]
-    fpv_segmentation_summary: dict[str, Any] | None
-    som_summary: dict[str, Any] | None
-
-
-@dataclass
-class FPVMainRegionSelectionTeacher:
-    selected_region_id: str | None
-    reject_all: bool
-    confidence: float
-
-
-@dataclass
-class FPVMainRegionSelectionOutput:
-    selected_region_id: str | None
-    reject_all: bool
-    confidence: float
-
-
-@dataclass
 class FPVSceneStageInput:
     fpv_segmentation_summary: dict[str, Any] | None
     som_summary: dict[str, Any] | None
@@ -176,91 +134,6 @@ class FPVSceneStageTeacher:
 @dataclass
 class FPVSceneStageOutput:
     scene_stage: str
-    confidence: float
-
-
-@dataclass
-class FPVRejectAllInput:
-    fpv_segmentation_summary: dict[str, Any] | None
-    som_summary: dict[str, Any] | None
-    rendered_prompt: dict[str, Any] | None
-    segmentation_validation: dict[str, Any] | None
-
-
-@dataclass
-class FPVRejectAllTeacher:
-    reject_all: bool
-    reason: str
-    confidence: float
-
-
-@dataclass
-class FPVRejectAllOutput:
-    reject_all: bool
-    reason: str
-    confidence: float
-
-
-@dataclass
-class CrossViewThetaInput:
-    route_context: dict[str, Any]
-    local_bev_context: dict[str, Any]
-    candidate_bundle: dict[str, Any]
-    image_width: int
-    image_height: int
-
-
-@dataclass
-class CrossViewThetaTeacher:
-    theta: ThetaLabel | None
-    reject_all: bool
-    source: str
-
-
-@dataclass
-class CrossViewThetaOutput:
-    theta: ThetaLabel | None
-    reject_all: bool
-
-
-@dataclass
-class CrossViewPromptRankingInput:
-    candidate_bundle: dict[str, Any]
-
-
-@dataclass
-class CrossViewPromptRankingTeacher:
-    selected_prompt_id: str | None
-    delta_theta_deg: float | None
-    reject_all: bool
-    confidence: float
-
-
-@dataclass
-class CrossViewPromptRankingOutput:
-    selected_prompt_id: str | None
-    delta_theta_deg: float | None
-    reject_all: bool
-
-
-@dataclass
-class CrossViewRejectAllInput:
-    candidate_bundle: dict[str, Any]
-    fpv_segmentation_summary: dict[str, Any] | None
-    som_summary: dict[str, Any] | None
-
-
-@dataclass
-class CrossViewRejectAllTeacher:
-    reject_all: bool
-    reason: str
-    confidence: float
-
-
-@dataclass
-class CrossViewRejectAllOutput:
-    reject_all: bool
-    reason: str
     confidence: float
 
 
@@ -325,22 +198,26 @@ class PromptConfidenceOutput:
 
 
 @dataclass
-class GroundedRejectInput:
+class PromptValidityInput:
     rendered_prompt: dict[str, Any] | None
     segmentation_validation: dict[str, Any] | None
     arbiter_decision: dict[str, Any]
+    candidate_bundle: dict[str, Any] | None
 
 
 @dataclass
-class GroundedRejectTeacher:
+class PromptValidityTeacher:
     reject_all: bool
+    decision: str
     reason: str
     confidence: float
+    checks: dict[str, Any]
 
 
 @dataclass
-class GroundedRejectOutput:
+class PromptValidityOutput:
     reject_all: bool
+    decision: str
     reason: str
     confidence: float
 

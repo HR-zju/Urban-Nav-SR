@@ -46,6 +46,18 @@ class QATeachersTest(unittest.TestCase):
         self.assertEqual(teacher["target_point_uv"]["u"], 600.0)
         self.assertGreater(teacher["theta"]["theta_deg"], 0.0)
 
+    def test_fpv_scene_stage_uses_compact_segmentation_summary_fields(self) -> None:
+        summary = {
+            "present_classes": [
+                {"class_name": "sidewalk", "pixel_ratio": 0.4},
+                {"class_name": "vehicle", "pixel_ratio": 0.05},
+            ],
+            "traversable_class_names": ["sidewalk", "crosswalk"],
+            "forbidden_class_names": ["vehicle", "person"],
+        }
+        teacher = teachers.teacher_fpv_scene_stage(summary)
+        self.assertEqual(teacher["scene_stage"], "mixed_corridor_obstacles")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,8 +1,16 @@
-from . import server
+from importlib import import_module
+
 
 def main():
     """Main entry point for the package."""
+    server = import_module(".server", __name__)
     server.mcp.run()
 
-# Optionally expose other important items at package level
-__all__ = ['main', 'server']
+
+def __getattr__(name):
+    if name == "server":
+        return import_module(".server", __name__)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+__all__ = ["main", "server"]
