@@ -17,8 +17,10 @@ class MJPEGCameraNode : public rclcpp::Node
 public:
   MJPEGCameraNode() : Node("mjpeg_camera_node"), fd_(-1), is_running_(false)
   {
+    rclcpp::QoS qos_profile(10);
+    qos_profile.reliable();
     publisher_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
-      "/camera_x001/image_raw/compressed", rclcpp::SensorDataQoS());
+      "/camera_x001/image_raw/compressed", qos_profile);
 
     if (!init_camera("/dev/video0", 1920, 1080, 8)) {
       RCLCPP_ERROR(this->get_logger(), "Failed to init camera. Node will not publish.");
