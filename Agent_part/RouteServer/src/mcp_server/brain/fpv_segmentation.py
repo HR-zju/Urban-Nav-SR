@@ -379,6 +379,7 @@ def _corridor_sample_from_runs(
     clearance_row: np.ndarray | None = None,
     target_u: float | None = None,
     target_weight: float = 0.25,
+    max_lateral_step_px: float | None = None,
 ) -> dict[str, Any] | None:
     """Derive one centered, inset corridor sample from preferred/allowed runs.
 
@@ -404,6 +405,20 @@ def _corridor_sample_from_runs(
         if run_end >= run_start:
             candidate_u = np.arange(run_start, run_end + 1, dtype=np.float32)
             candidate_clearance = clearance_row[run_start : run_end + 1].astype(np.float32)
+            if target_u is not None and max_lateral_step_px is not None and max_lateral_step_px > 0:
+                # Enforce a hard curvature envelope in image space:
+                #
+                #     |u_i - u_{i-1}| <= delta_u_max
+                #
+                # The clearance objective still chooses the safest pixel inside
+                # that envelope, but a single obstacle row can no longer pull
+                # the corridor into a visually abrupt side jump.
+                lower_u = float(target_u) - float(max_lateral_step_px)
+                upper_u = float(target_u) + float(max_lateral_step_px)
+                smooth_mask = (candidate_u >= lower_u) & (candidate_u <= upper_u)
+                if bool(np.any(smooth_mask)):
+                    candidate_u = candidate_u[smooth_mask]
+                    candidate_clearance = candidate_clearance[smooth_mask]
             if candidate_clearance.size > 0:
                 smooth_target = float(target_u) if target_u is not None else center_u
                 smooth_penalty_px = np.abs(candidate_u - smooth_target)
@@ -454,6 +469,7 @@ def _corridor_sample_from_runs(
             "center_clearance_px": round(float(center_clearance_px), 2) if center_clearance_px is not None else None,
             "target_u": round(float(target_u), 2) if target_u is not None else None,
             "target_weight": round(float(target_weight), 4),
+            "max_lateral_step_px": round(float(max_lateral_step_px), 2) if max_lateral_step_px is not None else None,
             "max_width_ratio": round(float(max_width_ratio), 4),
             "preferred_width_ratio": round(float(preferred_width_ratio), 4),
         },
@@ -511,6 +527,8 @@ def build_safe_corridor_prior(
         score(u_i) = clearance(u_i, v_i)
                    - lambda_smooth * |u_i - u_{i-1}| / image_width
 
+        subject to |u_i - u_{i-1}| <= 0.20 * image_width
+
     This is a lightweight dynamic-programming approximation of a medial-axis
     path: clearance pulls samples toward the middle of obstacle-free support,
     while the smoothness term prevents unrealistic zig-zags.
@@ -531,6 +549,7 @@ def build_safe_corridor_prior(
     row_ratios = [0.92, 0.85, 0.78, 0.70, 0.62, 0.54]
     row_ratios = row_ratios[: max(2, min(int(sample_count), len(row_ratios)))]
     preferred_u = float(width) * 0.5
+    max_lateral_step_px = max(float(width) * 0.20, 1.0)
     samples: list[dict[str, Any]] = []
     rows_debug: list[dict[str, Any]] = []
     for row_index, ratio in enumerate(row_ratios):
@@ -557,6 +576,7 @@ def build_safe_corridor_prior(
             clearance_row=clearance_row,
             target_u=preferred_u,
             target_weight=1.0 if row_index == 0 else 0.40,
+            max_lateral_step_px=None if row_index == 0 else max_lateral_step_px,
         )
         if sample is None:
             rows_debug.append({"row_v": int(row_v), "status": "too_narrow", "center_run_u": list(center_run)})
@@ -592,6 +612,7 @@ def build_safe_corridor_prior(
             "sample_count": len(samples),
             "navigation_mode": navigation_mode,
             "image_size": {"width": width, "height": height},
+            "max_lateral_step_ratio": 0.20,
             "clearance_source": "distance_transform_edt" if isinstance(clearance_map, np.ndarray) else "row_run_midpoint_fallback",
         },
     }
@@ -667,6 +688,7 @@ def repair_rendered_prompt_with_safe_corridor(
             }
 
     clearance_map = _allowed_clearance_map(mask, allowed_ids)
+    max_lateral_step_px = max(float(width) * 0.20, 1.0)
     repaired_samples: list[dict[str, Any]] = []
     repairs: list[dict[str, Any]] = []
     for index, raw_sample in enumerate(raw_samples):
@@ -702,6 +724,7 @@ def repair_rendered_prompt_with_safe_corridor(
             clearance_row=clearance_row,
             target_u=target_u,
             target_weight=1.0 if index == 0 else 0.40,
+            max_lateral_step_px=None if index == 0 else max_lateral_step_px,
         )
         if repaired_sample is None:
             repairs.append({"sample_index": index, "status": "too_narrow", "row_v": int(row_v)})
@@ -1034,21 +1057,30 @@ def validate_rendered_prompt_against_segmentation(
     start_min_v_ratio = 0.82
     start_u_min_ratio = 0.40
     start_u_max_ratio = 0.60
+    start_relaxed_u_min_ratio = 0.35
+    start_relaxed_u_max_ratio = 0.75
     start_min_v = float(height) * start_min_v_ratio
     start_u_min = float(width) * start_u_min_ratio
     start_u_max = float(width) * start_u_max_ratio
+    start_relaxed_u_min = float(width) * start_relaxed_u_min_ratio
+    start_relaxed_u_max = float(width) * start_relaxed_u_max_ratio
+    start_strict_valid = False
+    start_relaxed_valid = False
     start_valid = False
+    start_relaxed_reason: str | None = None
+    start_neighbor_ids: set[int] = set()
     if isinstance(start_point_uv, list) and len(start_point_uv) == 2:
         try:
             start_u = float(start_point_uv[0])
             start_v = float(start_point_uv[1])
-            start_valid = (
+            start_strict_valid = (
                 start_v >= start_min_v
                 and start_u >= start_u_min
                 and start_u <= start_u_max
             )
+            start_neighbor_ids = _class_id_near(mask, [start_u, start_v], radius_px=5)
         except Exception:
-            start_valid = False
+            start_strict_valid = False
 
     center_total = 0
     center_valid = 0
@@ -1308,6 +1340,68 @@ def validate_rendered_prompt_against_segmentation(
     min_polygon_allowed_ratio = 0.80 if navigation_mode == "foot" else 0.80
     max_polygon_forbidden_ratio = 0.002
     max_polygon_disallowed_ratio = 0.02
+    start_relaxed_conditions: dict[str, Any] = {
+        "enabled": False,
+        "rule": "allow an off-center bottom start only when it is supported by a continuous allowed connector and reaches preferred traversable support",
+    }
+    if isinstance(start_point_uv, list) and len(start_point_uv) == 2 and not start_strict_valid:
+        try:
+            start_u = float(start_point_uv[0])
+            start_v = float(start_point_uv[1])
+            start_in_relaxed_band = (
+                start_v >= start_min_v
+                and start_u >= start_relaxed_u_min
+                and start_u <= start_relaxed_u_max
+            )
+            start_has_allowed_support = bool(start_neighbor_ids & allowed_traversable_ids)
+            connector_prefix_complete = bool(
+                first_preferred_sample_index is not None
+                and (
+                    first_preferred_sample_index == 0
+                    or len(conditional_connector_samples) >= int(first_preferred_sample_index)
+                )
+            )
+            support_is_safe = bool(
+                center_total > 0
+                and boundary_total > 0
+                and center_valid_ratio >= 0.8
+                and boundary_valid_ratio >= 0.92
+                and not center_forbidden_hits
+                and not boundary_forbidden_hits
+                and polygon_forbidden_ratio <= max_polygon_forbidden_ratio
+                and polygon_disallowed_ratio <= max_polygon_disallowed_ratio
+            )
+            start_relaxed_valid = bool(
+                start_in_relaxed_band
+                and start_has_allowed_support
+                and connector_prefix_complete
+                and support_is_safe
+            )
+            if start_relaxed_valid:
+                start_relaxed_reason = "off_center_allowed_connector_to_preferred_traversable"
+            start_relaxed_conditions = {
+                "enabled": True,
+                "rule": start_relaxed_conditions["rule"],
+                "u_range_ratio": [round(float(start_relaxed_u_min_ratio), 4), round(float(start_relaxed_u_max_ratio), 4)],
+                "u_range_px": [round(float(start_relaxed_u_min), 2), round(float(start_relaxed_u_max), 2)],
+                "start_in_relaxed_band": bool(start_in_relaxed_band),
+                "start_has_allowed_support": bool(start_has_allowed_support),
+                "connector_prefix_complete": bool(connector_prefix_complete),
+                "first_preferred_sample_index": (
+                    int(first_preferred_sample_index) if first_preferred_sample_index is not None else None
+                ),
+                "support_is_safe": bool(support_is_safe),
+                "accepted": bool(start_relaxed_valid),
+                "reason": start_relaxed_reason,
+            }
+        except Exception as exc:
+            start_relaxed_conditions = {
+                "enabled": True,
+                "rule": start_relaxed_conditions["rule"],
+                "accepted": False,
+                "error": str(exc),
+            }
+    start_valid = bool(start_strict_valid or start_relaxed_valid)
     polygon_valid = (
         not has_polygon
         or (
@@ -1380,12 +1474,15 @@ def validate_rendered_prompt_against_segmentation(
             else None
         ),
         "start_valid": bool(start_valid),
+        "start_strict_valid": bool(start_strict_valid),
+        "start_relaxed_valid": bool(start_relaxed_valid),
         "start_constraint": {
-            "rule": "first path sample must start from the bottom-center image band",
+            "rule": "first path sample must start from the bottom-center image band unless a safe off-center connector is the only visible route support",
             "v_min_ratio": round(float(start_min_v_ratio), 4),
             "u_range_ratio": [round(float(start_u_min_ratio), 4), round(float(start_u_max_ratio), 4)],
             "v_min_px": round(float(start_min_v), 2),
             "u_range_px": [round(float(start_u_min), 2), round(float(start_u_max), 2)],
+            "relaxed_connector_rule": start_relaxed_conditions,
         },
         "center_valid_ratio": round(center_valid_ratio, 4),
         "center_preferred_ratio": round(center_preferred_ratio, 4),

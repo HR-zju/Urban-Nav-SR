@@ -161,6 +161,33 @@ class FpvSegmentationValidationTest(unittest.TestCase):
         self.assertFalse(validation["start_valid"])
         self.assertIn("start_point_not_in_lower_middle_band", validation["reason"])
 
+    def test_accepts_safe_off_center_start_when_connector_reaches_sidewalk(self) -> None:
+        mask = np.full((100, 120), 38, dtype=np.int32)
+        mask[55:100, 70:116] = 1
+        mask[30:55, 70:116] = 2
+        prompt = {
+            "type": "path_corridor",
+            "path_samples": [
+                {"center_uv": [82, 92], "left_edge_uv": [74, 92], "right_edge_uv": [94, 92], "support_label": "conditional_connector"},
+                {"center_uv": [82, 74], "left_edge_uv": [74, 74], "right_edge_uv": [94, 74], "support_label": "conditional_connector"},
+                {"center_uv": [82, 52], "left_edge_uv": [74, 52], "right_edge_uv": [94, 52], "support_label": "sidewalk"},
+                {"center_uv": [82, 42], "left_edge_uv": [74, 42], "right_edge_uv": [94, 42], "support_label": "sidewalk"},
+            ],
+            "coverage_polygon_uv": [[74, 92], [74, 74], [74, 52], [74, 42], [94, 42], [94, 52], [94, 74], [94, 92], [74, 92]],
+            "termination_semantics": "continue_visible_corridor",
+        }
+
+        validation = validate_rendered_prompt_against_segmentation(prompt, _segmentation_context(mask))
+
+        self.assertIsInstance(validation, dict)
+        self.assertTrue(validation["valid"])
+        self.assertFalse(validation["start_strict_valid"])
+        self.assertTrue(validation["start_relaxed_valid"])
+        self.assertEqual(
+            validation["start_constraint"]["relaxed_connector_rule"]["reason"],
+            "off_center_allowed_connector_to_preferred_traversable",
+        )
+
     def test_rejects_overly_wide_corridor_even_on_sidewalk(self) -> None:
         mask = np.full((80, 100), 2, dtype=np.int32)
         prompt = {
@@ -218,6 +245,19 @@ class FpvSegmentationValidationTest(unittest.TestCase):
         self.assertTrue(obstacle_rows)
         self.assertTrue(any(float(sample["center_uv"][0]) < 50.0 or float(sample["center_uv"][0]) > 72.0 for sample in obstacle_rows))
         self.assertEqual(prior["debug"]["clearance_source"], "distance_transform_edt")
+
+    def test_safe_corridor_prior_caps_lateral_centerline_step(self) -> None:
+        mask = np.full((100, 120), 38, dtype=np.int32)
+        mask[:, 10:112] = 2
+        mask[45:86, 50:92] = 38
+
+        prior = build_safe_corridor_prior(_segmentation_context(mask))
+
+        self.assertIsInstance(prior, dict)
+        centers = [float(sample["center_uv"][0]) for sample in prior["path_samples"]]
+        max_step = max(abs(curr - prev) for prev, curr in zip(centers, centers[1:]))
+        self.assertLessEqual(max_step, 0.20 * 120 + 1.0)
+        self.assertEqual(prior["debug"]["max_lateral_step_ratio"], 0.20)
 
     def test_repairs_off_center_and_edge_hugging_corridor(self) -> None:
         mask = np.full((100, 120), 38, dtype=np.int32)

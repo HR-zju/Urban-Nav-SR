@@ -1473,7 +1473,7 @@ async def run_zero_shot_visual_prompt_agent(
     candidate_top_k: int = 5,
     llm_detail: str = "auto",
     navigation_mode: str = "foot",
-    enable_verifier: bool = True,
+    enable_verifier: bool = False,
     enable_segmentation_overlay_input: bool = False,
     emit_qa_bundle: bool = False,
     request_id: Optional[str] = None,

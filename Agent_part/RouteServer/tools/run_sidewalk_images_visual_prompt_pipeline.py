@@ -428,7 +428,7 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--mode", default="foot", choices=["foot", "bike", "car"], help="Navigation mode")
     parser.add_argument("--llm-detail", default="auto", choices=["auto", "low", "high"], help="Vision detail")
-    parser.add_argument("--enable-verifier", action=argparse.BooleanOptionalAction, default=True, help="Enable verifier LVLM call")
+    parser.add_argument("--enable-verifier", action=argparse.BooleanOptionalAction, default=False, help="Enable optional verifier LVLM call")
     parser.add_argument(
         "--enable-segmentation-overlay-input",
         action="store_true",

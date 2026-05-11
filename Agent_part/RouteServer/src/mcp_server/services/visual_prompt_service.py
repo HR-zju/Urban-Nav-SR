@@ -1219,7 +1219,7 @@ async def run_zero_shot_visual_prompt_pipeline(
     candidate_top_k: int = 5,
     llm_detail: str = "auto",
     navigation_mode: str = "foot",
-    enable_verifier: bool = True,
+    enable_verifier: bool = False,
     enable_segmentation_overlay_input: bool = False,
     enforce_alignment: bool = True,
     emit_qa_bundle: bool = False,
