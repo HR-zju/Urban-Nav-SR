@@ -32,3 +32,24 @@ For the current main workflows, use these RouteServer examples:
 - `examples/realtime_instruction_session_client.py`
 - `examples/itinerary_client.py`
 - `examples/macos_prompt_recommendation_client.py`
+
+## 目前的visual prompt pipeline运行指令
+
+```bash
+python tools/run_sidewalk_images_visual_prompt_pipeline.py \
+  --images-dir "$WORK_DIR/images" \
+  --trajectory-json "$WORK_DIR/trajectory.json" \
+  --output-dir "$WORK_DIR/output_all" \
+  --sequence-name pics_gps_batch_all \
+  --camera-view camera_front \
+  --sam3-output-base-dir "$WORK_DIR/sam3" \
+  --run-sam3 \
+  --sam3-env-name sam3 \
+  --sam3-inference-script /home/ubuntu/WorkSpace/project/SR/Code/sam3/scripts/batch_sam3_demo_260124.py \
+  --checkpoint-path /media/ubuntu/data1/checkpoints/checkpoint_35_merged.pt \
+  --gpus 0 \
+  --min-score 0.3 \
+  --enable-segmentation-overlay-input \
+  --enforce-alignment \
+  --mode foot
+  ```
