@@ -27,7 +27,7 @@ This project contains the **Viobot Control** (`viobot_ctrl`) and **GNSS SPP Node
 - **RAIM Gross Error Rejection**: Implements Receiver Autonomous Integrity Monitoring to effectively detect and reject anomalous observations.
 - **Elevation Angle and SNR Weighting**: Enhances positioning accuracy by establishing a weighted observation model.
 - **Multi-sensor Fusion**: Fuses high-frequency relative displacement from Stereo3 odometry with GNSS SPP outputs.
-- **GNSS Status Export**: Publishes GNSS fusion state on `/baton/gnss/status` for external consumers (`gnss_idle`, `gnss_waiting_origin`, `gnss_fusing`).
+- **GNSS Status Export**: Publishes GNSS fusion state on `/baton/gnss/status` for external consumers (`gnss_idle`, `gnss_waiting_origin`, `gnss_aligning`, `gnss_fusing`).
 - **Ephemeris Management**: Periodically cleans up satellite ephemeris data to prevent the accumulation of outdated or incorrect data.
 - **Trajectory Export**: Saves latitude and longitude parameters during operation to generate paths compatible with Google Earth visualization.
 
@@ -38,7 +38,7 @@ This project contains the **Viobot Control** (`viobot_ctrl`) and **GNSS SPP Node
   - `gnss_comm::msg::GnssEphemMsg` : Satellite ephemeris data.
   - `gnss_comm::msg::GnssMeasMsg` : GNSS observation and measurement epochs.
 - **Publications:**
-  - `/baton/gnss/status` (`system_ctrl::msg::AlgoStatus`) : Publishes the state machine of the GNSS fusion (`gnss_idle`, `gnss_waiting_origin`, `gnss_fusing`).
+  - `/baton/gnss/status` (`system_ctrl::msg::AlgoStatus`) : Publishes the state machine of the GNSS fusion (`gnss_idle`, `gnss_waiting_origin`, `gnss_aligning`, `gnss_fusing`).
   - `/baton/gnss/spp_fix` (`sensor_msgs::msg::NavSatFix`) : Publishes the SPP position fix.
   - `/baton/gnss/spp_fix_raw` (`sensor_msgs::msg::NavSatFix`) : Publishes the raw SPP position fix without stereo3 fusion.
   - `/baton/gnss/heading` (`std_msgs::msg::Float64`) : Publishes the heading estimation derived from stereo3 and GNSS SPP fusion.

@@ -18,6 +18,8 @@ const char *GnssSppNode::gnss_status_to_string(GnssStatusState state)
             return "gnss_idle";
         case GnssStatusState::WaitingOrigin:
             return "gnss_waiting_origin";
+        case GnssStatusState::Aligning:
+            return "gnss_aligning";
         case GnssStatusState::Fusing:
             return "gnss_fusing";
     }
@@ -293,7 +295,7 @@ void GnssSppNode::meas_callback(const gnss_comm::msg::GnssMeasMsg::ConstSharedPt
                 origin_lla_  = gnss_comm::ecef2geo(origin_ecef_);
                 R_enu2ecef_  = gnss_comm::geo2rotation(origin_lla_);
                 is_origin_set_ = true;
-                transition_gnss_status(GnssStatusState::Fusing);
+                transition_gnss_status(GnssStatusState::Aligning);
 
                 init_ecef_buffer_.clear();
                 
@@ -314,7 +316,11 @@ void GnssSppNode::algo_status_callback(const system_ctrl::msg::AlgoStatus::Const
 {
     if (msg->algo_status == "stereo3_running" || msg->algo_status == "stereo4_running") {
         is_algo_running_ = true;
-        transition_gnss_status(is_origin_set_ ? GnssStatusState::Fusing : GnssStatusState::WaitingOrigin);
+        if (!is_origin_set_) {
+            transition_gnss_status(GnssStatusState::WaitingOrigin);
+        } else if (current_gnss_status_ != GnssStatusState::Fusing) {
+            transition_gnss_status(GnssStatusState::Aligning);
+        }
     } else {
         is_algo_running_ = false;
         // reset all states
@@ -341,11 +347,15 @@ void GnssSppNode::odom_callback(const nav_msgs::msg::Odometry::ConstSharedPtr ms
     has_latest_odom_ = true;
 
     if (!is_algo_running_) return;
-    if (!is_origin_set_) return;
+    if (!is_origin_set_) {
+        transition_gnss_status(GnssStatusState::WaitingOrigin);
+        return;
+    }
 
     auto align_res = dynamic_aligner_.align();
 
     if (!align_res.success) {
+        transition_gnss_status(GnssStatusState::Aligning);
         RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 3000,
             "Dynamic aligner waiting for enough inliers. Buffer size: %zu",
             dynamic_aligner_.getBufferSize());
@@ -393,6 +403,7 @@ void GnssSppNode::odom_callback(const nav_msgs::msg::Odometry::ConstSharedPtr ms
     fix_msg.position_covariance_type = sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_UNKNOWN;
     
     pub_spp_fix_->publish(fix_msg);
+    transition_gnss_status(GnssStatusState::Fusing);
 
     if (kml_exporter_) {
         kml_exporter_->add_point(cur_lla[0], cur_lla[1], cur_lla[2]);
