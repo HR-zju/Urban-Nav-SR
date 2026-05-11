@@ -253,26 +253,32 @@ python examples/yuquan_visual_prompt_agent_client.py \
 如果想把 “运行 SAM3” 和 “运行 visual prompt demo” 合并成一个命令，可用：
 
 ```bash
+WORK_DIR=/home/ubuntu/WorkSpace/dataset/sidewalk_he4_adapter
+OUT_DIR=/home/ubuntu/WorkSpace/dataset/sidewalk_visual_prompt_55_200_rerun
+SAM3_DIR=/home/ubuntu/WorkSpace/dataset/sidewalk_he4_adapter_sam3
+
 cd /home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer
-python tools/run_sam3_visual_prompt_pipeline.py \
-  --provider sam3 \
-  --repo-root /home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer \
-  --client yuquan \
+
+python tools/run_sidewalk_images_visual_prompt_pipeline.py \
+  --images-dir "$WORK_DIR/images" \
+  --trajectory-json "$WORK_DIR/trajectory.json" \
+  --output-dir "$OUT_DIR" \
+  --sequence-name sidewalk_he4_adapter \
+  --camera-view camera_front \
+  --sam3-output-base-dir "$SAM3_DIR" \
   --run-sam3 \
   --sam3-env-name sam3 \
-  --sam3-script /home/ubuntu/WorkSpace/project/SR/Code/sam3/scripts/prepare_frames_and_run_batch_sam3.py \
-  --rides-base-dir /home/ubuntu/WorkSpace/dataset/output_rides_0 \
-  --frames-base-dir /home/ubuntu/WorkSpace/dataset/output_rides_0_frames \
-  --sam3-output-base-dir /home/ubuntu/WorkSpace/dataset/output_rides_0_sam3_frame_results \
-  --sequence-name ride_16446_20240115041752 \
-  --camera-view camera_front \
-  --fps 1.0 \
+  --sam3-inference-script /home/ubuntu/WorkSpace/project/SR/Code/sam3/scripts/batch_sam3_demo_260124.py \
+  --checkpoint-path /media/ubuntu/data1/checkpoints/checkpoint_35_merged.pt \
   --gpus 0 \
   --min-score 0.3 \
-  --checkpoint-path /media/ubuntu/data1/checkpoints/checkpoint_35_merged.pt \
-  --frame-name 000005 \
-  --client-args --image-path /home/ubuntu/WorkSpace/project/SR/test4.jpg --gps-source image --enable-segmentation-overlay-input --enforce-alignment --save-overlay /tmp/yuquan_visual_prompt_overlay.svg --save-json /tmp/yuquan_visual_prompt_result.json \
-  2>&1 | tee sam3_pipeline.log
+  --frame-start 55 \
+  --frame-end 200 \
+  --frame-step 5 \
+  --enable-segmentation-overlay-input \
+  --enforce-alignment \
+  --mode foot
+
 ```
 
 按下面这一版参数也可以直接运行（与上面同用途，保留你当前使用的参数写法）：
