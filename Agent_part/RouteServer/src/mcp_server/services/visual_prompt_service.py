@@ -80,6 +80,7 @@ from mcp_server.route_context import (
     route_context_to_dict,
     visual_prompt_decision_to_dict,
 )
+from mcp_server.route_context.bev_map_provider import BEVMapProviderSession
 from mcp_server.route_context.schema import VisualPromptDecision
 from mcp_server.som import (
     build_numbered_som_overlay_payload,
@@ -1221,6 +1222,8 @@ async def run_zero_shot_visual_prompt_pipeline(
     navigation_mode: str = "foot",
     enable_verifier: bool = False,
     enable_segmentation_overlay_input: bool = False,
+    enable_bev_map_provider: bool = False,
+    bev_map_provider_session: Any | None = None,
     enforce_alignment: bool = True,
     emit_qa_bundle: bool = False,
     emit_llm_input_images: bool = False,
@@ -1280,6 +1283,38 @@ async def run_zero_shot_visual_prompt_pipeline(
     _mark_stage("route_context", route_stage_started_at, status="ok")
     route_context_dict = route_context_to_dict(state.route_context)
     local_bev_dict = local_bev_context_to_dict(state.local_bev_context)
+    bev_map_error: str | None = None
+    if enable_bev_map_provider:
+        bev_map_stage_started_at = perf_counter()
+        owned_bev_map_session = False
+        bev_map_session = bev_map_provider_session
+        try:
+            if bev_map_session is None:
+                bev_map_session = BEVMapProviderSession.from_env()
+                await bev_map_session.connect()
+                owned_bev_map_session = True
+            semantic_layers = await bev_map_session.build_semantic_layers(
+                gps=gps,
+                heading_deg=heading_deg,
+                local_bev_context=local_bev_dict,
+            )
+            local_bev_dict = dict(local_bev_dict)
+            local_bev_dict["semantic_bev_layers"] = {
+                **dict(local_bev_dict.get("semantic_bev_layers") or {}),
+                **semantic_layers,
+            }
+            _mark_stage("bev_map_provider", bev_map_stage_started_at, status="ok")
+        except Exception as exc:
+            bev_map_error = str(exc)
+            _mark_stage("bev_map_provider", bev_map_stage_started_at, status="error", error_code="BEV_MAP_PROVIDER_FAILED")
+        finally:
+            if owned_bev_map_session and bev_map_session is not None:
+                try:
+                    await bev_map_session.disconnect()
+                except Exception:
+                    pass
+    else:
+        _mark_stage("bev_map_provider", route_stage_started_at, status="skipped")
     prompt_image = _load_prompt_image(image_path=image_path, image_url=image_url)
     image_width, image_height = int(prompt_image.size[0]), int(prompt_image.size[1])
     llm_max_side, llm_max_bytes, llm_jpeg_quality = _llm_image_limits()
@@ -1764,6 +1799,8 @@ async def run_zero_shot_visual_prompt_pipeline(
         decision_dict["debug"]["fpv_segmentation_error_code"] = segmentation_error_code
     if segmentation_summary:
         decision_dict["debug"]["fpv_segmentation_summary"] = segmentation_summary
+    if bev_map_error:
+        decision_dict["debug"]["bev_map_provider_error"] = bev_map_error
     if som_summary:
         decision_dict["debug"]["som_summary"] = som_summary
     if som_candidate_hints:
@@ -1829,6 +1866,7 @@ async def run_zero_shot_visual_prompt_pipeline(
             arbiter_decision=decision_dict,
             candidate_bundle=candidate_bundle,
             som_summary=som_summary,
+            safe_corridor_prior=safe_corridor_prior,
         )
         decision_dict["debug"]["qa_bundle_summary"] = {
             "schema_version": qa_bundle.get("schema_version"),
