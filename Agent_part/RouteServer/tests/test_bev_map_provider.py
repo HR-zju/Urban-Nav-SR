@@ -134,6 +134,11 @@ class BEVMapProviderTest(unittest.IsolatedAsyncioTestCase):
                 local_bev_context={
                     "_origin_gps": {"lat": 30.0, "lng": 120.0},
                     "bev_rotation_deg": 15.0,
+                    "navigation_path_source": "offline_trajectory",
+                    "navigation_path_gps": [
+                        {"lat": 30.0, "lng": 120.0},
+                        {"lat": 30.0001, "lng": 120.0},
+                    ],
                 },
                 llm_max_bytes=1_000_000,
                 llm_jpeg_quality=80,
@@ -147,6 +152,9 @@ class BEVMapProviderTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["alignment_order"], "rotate_mosaic_then_center_crop")
         self.assertIn("rotation_center_px", payload)
         self.assertGreater(payload["crop_side_px"], 0.0)
+        self.assertEqual(payload["navigation_path_overlay"]["source"], "offline_trajectory")
+        self.assertEqual(payload["navigation_path_overlay"]["path_points_drawn"], 2)
+        self.assertEqual(payload["legend"]["ego_marker"], "orange circle; short white tick points forward/up")
 
     async def test_bev_tile_heading_convention_and_offset_are_configurable(self) -> None:
         with patch.dict(

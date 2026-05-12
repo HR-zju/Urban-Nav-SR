@@ -116,6 +116,21 @@ def build_straight_coarse_waypoints(
     ]
 
 
+def build_navigation_path_gps(
+    *,
+    selected_frame_names: list[str],
+    frames_by_name: dict[str, TrajectoryFrame],
+) -> list[dict[str, float]]:
+    """Collect the offline dataset trajectory for BEV map visualization."""
+    path: list[dict[str, float]] = []
+    for frame_name in selected_frame_names:
+        frame = frames_by_name.get(frame_name)
+        if frame is None:
+            continue
+        path.append({"lat": float(frame.lat), "lng": float(frame.lng)})
+    return path
+
+
 def _load_trajectory_frames(*, trajectory_path: Path, images_dir: Path) -> dict[str, TrajectoryFrame]:
     raw = json.loads(trajectory_path.read_text(encoding="utf-8"))
     if not isinstance(raw, list):
@@ -350,6 +365,7 @@ async def _run_frame(
     emit_qa_bundle: bool,
     emit_llm_input_images: bool,
     fpv_segmentation: dict[str, Any] | None,
+    navigation_path_gps: list[dict[str, float]] | None,
 ) -> dict[str, Any]:
     from mcp_server.services.visual_prompt_service import run_zero_shot_visual_prompt_pipeline
 
@@ -373,6 +389,8 @@ async def _run_frame(
         image_path=str(frame.image_path),
         fpv_segmentation=fpv_segmentation,
         heading_deg=float(heading),
+        navigation_path_gps=navigation_path_gps,
+        navigation_path_source="offline_trajectory" if navigation_path_gps else None,
         lookahead_m=float(lookahead_m),
         off_route_threshold_m=float(off_route_threshold_m),
         front_extent_m=float(front_extent_m),
@@ -488,6 +506,7 @@ async def _process_frame_job(
     enforce_alignment: bool,
     emit_qa_bundle: bool,
     emit_llm_input_images: bool,
+    navigation_path_gps: list[dict[str, float]] | None,
     seg_vis_dir: Path,
     llm_inputs_dir: Path,
     json_dir: Path,
@@ -540,6 +559,7 @@ async def _process_frame_job(
             enforce_alignment=bool(enforce_alignment),
             emit_qa_bundle=bool(emit_qa_bundle),
             emit_llm_input_images=bool(emit_llm_input_images),
+            navigation_path_gps=navigation_path_gps,
             fpv_segmentation=job.fpv_segmentation,
         )
 
@@ -810,6 +830,11 @@ async def main_async() -> None:
         overlays_dir=overlays_dir,
         allow_missing_segmentation=bool(args.allow_missing_segmentation),
     )
+    navigation_path_gps = build_navigation_path_gps(
+        selected_frame_names=selected,
+        frames_by_name=frames_by_name,
+    )
+    manifest["navigation_path_gps_points"] = len(navigation_path_gps)
     llm_concurrency = max(1, int(args.llm_concurrency or 1))
     manifest["llm_concurrency"] = int(llm_concurrency)
     try:
@@ -834,6 +859,7 @@ async def main_async() -> None:
                 enforce_alignment=bool(args.enforce_alignment),
                 emit_qa_bundle=bool(args.emit_qa_bundle),
                 emit_llm_input_images=bool(args.emit_llm_input_images),
+                navigation_path_gps=navigation_path_gps,
                 seg_vis_dir=seg_vis_dir,
                 llm_inputs_dir=llm_inputs_dir,
                 json_dir=json_dir,

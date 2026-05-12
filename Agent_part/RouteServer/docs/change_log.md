@@ -4,6 +4,33 @@
 
 ## 2026-05-12
 
+### BEV 输入增加当前位置与导航路径
+
+- OSM BEV screenshot 现在会绘制导航参考路径：
+  - 蓝色折线表示完整导航/轨迹路径。
+  - 橙色圆点表示当前 GNSS 位置。
+  - 白色短线表示当前朝向，即 BEV 图像上方方向。
+  - 绿色圆点表示路径起点，红色方块表示路径终点。
+- 离线 batch runner 会从 `trajectory.json` 的选中帧构造 `navigation_path_gps`，并传入 visual prompt service。
+- 在线模式后续可以直接传入 `planner_path_gps` 或 `navigation_path_gps`，复用同一 BEV 视觉输入协议。
+- `bev_map_overlay_legend` 和 payload debug 中新增 `navigation_path_overlay`，用于确认路径点数量和来源。
+
+### 更新 Visual Prompt 调试视频脚本
+
+- `tools/make_visual_prompt_seg_video.py` 改为适配当前 pipeline 产物。
+- 输出视频从原来的双栏/四宫格视图调整为 3x1 横向布局：
+  - FPV SoM / SAM numbered overlay
+  - 最终 visual prompt overlay
+  - OSM BEV map screenshot
+- 脚本优先读取 `manifest.json` 中记录的 `llm_input_images`，保证视频展示的是实际送入 LVLM 的多图证据。
+- visual prompt 面板现在直接读取 runner 产出的 `overlay_path` SVG，而不是在视频脚本里二次绘制 prompt。
+- 原始 FPV 面板被移除，避免与 SoM/最终 overlay 重复占用版面。
+- 中间面板语义明确为 `Visual Prompt on FPV`：优先使用 runner 产出的 FPV+prompt overlay SVG；若 overlay 缺失或解析失败，则回退到 raw FPV 并根据 JSON 中的 `arbiter_decision.rendered_prompt` 现场绘制。
+- 修复 overlay SVG 栅格化缺少 `polygon`、`polyline`、`circle` 支持的问题，确保 corridor 填充、边界线、中心线和目标点能正常出现在视频中。
+- 修复半透明 SVG 蒙层在 Pillow 中直接写 alpha 导致 FPV 底图被压黑的问题，改为在透明 layer 上绘制后再做 alpha composite。
+- 修复移动/复制产物目录后的路径解析问题：当 manifest 中仍保存旧绝对路径时，脚本会优先读取当前 `--run-dir` 下的同名 `json/`、`overlay/`、`llm_inputs/` 文件，以及 `--run-dir/../images/` 中的原始帧。
+- 增加固定 tile 尺寸和 letterbox 逻辑，避免 BEV、SoM、overlay 图像比例不同导致视频尺寸跳变。
+
 ### 拆分 SoM 与 SAM Visualization 输入
 
 - 在 visual prompt service 中新增显式开关：

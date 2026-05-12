@@ -42,7 +42,7 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageDraw, ImageOps
 
 from mcp_server.brain import (
     build_direct_prompt_question,
@@ -324,6 +324,113 @@ def _bev_map_heading_rotation_deg(raw_heading_deg: float) -> tuple[float, dict[s
     }
 
 
+def _gps_path_from_context(local_bev_context: dict[str, Any], key: str) -> list[tuple[float, float]]:
+    raw_points = local_bev_context.get(key)
+    if not isinstance(raw_points, list):
+        return []
+    points: list[tuple[float, float]] = []
+    for item in raw_points:
+        gps = _lat_lng_from_gps(item)
+        if gps is not None:
+            points.append(gps)
+    return points
+
+
+def _rotate_point_about_center(
+    *,
+    x: float,
+    y: float,
+    center_x: float,
+    center_y: float,
+    angle_deg: float,
+) -> tuple[float, float]:
+    theta = math.radians(float(angle_deg))
+    dx = float(x) - float(center_x)
+    dy = float(y) - float(center_y)
+    cos_t = math.cos(theta)
+    sin_t = math.sin(theta)
+    return (
+        float(center_x) + dx * cos_t - dy * sin_t,
+        float(center_y) + dx * sin_t + dy * cos_t,
+    )
+
+
+def _draw_bev_navigation_path(
+    *,
+    image: Image.Image,
+    path_gps: list[tuple[float, float]],
+    path_source: str,
+    current_gps: tuple[float, float],
+    zoom: int,
+    tile_size: int,
+    mosaic_origin_tile_x: int,
+    mosaic_origin_tile_y: int,
+    rotation_center_px: tuple[float, float],
+    heading_rotation_deg: float,
+    crop_box: tuple[int, int, int, int],
+) -> dict[str, Any]:
+    """Draw the route/reference path and ego pose into the BEV screenshot.
+
+    Offline datasets can provide the full recorded GNSS trajectory, while
+    online navigation can pass the active planner path through the same
+    ``navigation_path_gps`` contract. The geometry pipeline is:
+
+        WGS84 -> Web-Mercator mosaic pixels
+              -> heading-aligned rotation around ego
+              -> ego-centered crop
+              -> resized BEV image coordinates
+    """
+    if not path_gps:
+        return {"path_points_drawn": 0, "source": "none"}
+
+    crop_w = max(float(crop_box[2] - crop_box[0]), 1.0)
+    crop_h = max(float(crop_box[3] - crop_box[1]), 1.0)
+    scale_x = float(image.size[0]) / crop_w
+    scale_y = float(image.size[1]) / crop_h
+
+    def _gps_to_image_xy(lat: float, lng: float) -> tuple[float, float]:
+        tx, ty = _osm_tile_xy_float(lat=float(lat), lng=float(lng), zoom=int(zoom))
+        mosaic_x = tx * float(tile_size) - float(mosaic_origin_tile_x) * float(tile_size)
+        mosaic_y = ty * float(tile_size) - float(mosaic_origin_tile_y) * float(tile_size)
+        rotated_x, rotated_y = _rotate_point_about_center(
+            x=mosaic_x,
+            y=mosaic_y,
+            center_x=float(rotation_center_px[0]),
+            center_y=float(rotation_center_px[1]),
+            angle_deg=float(heading_rotation_deg),
+        )
+        return (
+            (rotated_x - float(crop_box[0])) * scale_x,
+            (rotated_y - float(crop_box[1])) * scale_y,
+        )
+
+    projected = [_gps_to_image_xy(lat, lng) for lat, lng in path_gps]
+    current_xy = _gps_to_image_xy(current_gps[0], current_gps[1])
+    draw = ImageDraw.Draw(image, "RGBA")
+    if len(projected) >= 2:
+        draw.line(projected, fill=(37, 99, 235, 235), width=max(int(round(image.size[0] * 0.012)), 4), joint="curve")
+        draw.line(projected, fill=(219, 234, 254, 220), width=max(int(round(image.size[0] * 0.004)), 2), joint="curve")
+    marker_r = max(int(round(image.size[0] * 0.018)), 7)
+    start_r = max(int(round(image.size[0] * 0.012)), 5)
+    if projected:
+        sx, sy = projected[0]
+        ex, ey = projected[-1]
+        draw.ellipse([sx - start_r, sy - start_r, sx + start_r, sy + start_r], fill=(34, 197, 94, 245), outline=(255, 255, 255, 245), width=2)
+        draw.rectangle([ex - start_r, ey - start_r, ex + start_r, ey + start_r], fill=(239, 68, 68, 245), outline=(255, 255, 255, 245), width=2)
+    cx, cy = current_xy
+    draw.ellipse([cx - marker_r, cy - marker_r, cx + marker_r, cy + marker_r], fill=(249, 115, 22, 250), outline=(255, 255, 255, 255), width=3)
+    heading_len = marker_r * 2.2
+    draw.line([(cx, cy), (cx, cy - heading_len)], fill=(255, 255, 255, 255), width=3)
+    return {
+        "path_points_drawn": int(len(projected)),
+        "source": str(path_source or "navigation_path_gps"),
+        "current_marker": "orange_circle",
+        "start_marker": "green_circle",
+        "end_marker": "red_square",
+        "route_style": "blue_polyline",
+    }
+
+
 def _build_bev_map_overlay_payload(
     *,
     local_bev_context: dict[str, Any],
@@ -407,6 +514,28 @@ def _build_bev_map_overlay_payload(
         )
     )
     image = ego_aligned.resize((output_size, output_size), Image.Resampling.LANCZOS).convert("RGB")
+    navigation_path_gps = (
+        _gps_path_from_context(local_bev_context, "planner_path_gps")
+        or _gps_path_from_context(local_bev_context, "navigation_path_gps")
+    )
+    navigation_path_source = (
+        "planner_path_gps"
+        if _gps_path_from_context(local_bev_context, "planner_path_gps")
+        else str(local_bev_context.get("navigation_path_source") or "navigation_path_gps")
+    )
+    navigation_path_debug = _draw_bev_navigation_path(
+        image=image,
+        path_gps=navigation_path_gps,
+        path_source=navigation_path_source,
+        current_gps=(float(lat), float(lng)),
+        zoom=int(zoom),
+        tile_size=int(tile_size),
+        mosaic_origin_tile_x=int(center_tile_x - half_tiles),
+        mosaic_origin_tile_y=int(center_tile_y - half_tiles),
+        rotation_center_px=(float(local_center_px), float(local_center_py)),
+        heading_rotation_deg=float(heading_rotation_deg),
+        crop_box=crop_box,
+    )
 
     data_url, byte_count, used_quality = _jpeg_data_url_under_limit(
         image,
@@ -425,6 +554,7 @@ def _build_bev_map_overlay_payload(
         "alignment_order": "rotate_mosaic_then_center_crop",
         "rotation_center_px": [round(float(local_center_px), 3), round(float(local_center_py), 3)],
         "crop_side_px": round(float(crop_side), 3),
+        "navigation_path_overlay": navigation_path_debug,
         "fetched_tiles": int(fetched_tiles),
         "tile_errors": tile_errors[:6],
         **heading_debug,
@@ -435,6 +565,8 @@ def _build_bev_map_overlay_payload(
             "source": "real_openstreetmap_raster_screenshot",
             "coordinate_frame": "ego_aligned_bev",
             "forward_axis": "image_up_after_heading_rotation",
+            "ego_marker": "orange circle; short white tick points forward/up",
+            "route_overlay": "blue polyline; green circle=start; red square=end",
             "usage": "Real OSM screenshot for cross-view topology only; place final prompt on the FPV image, not in BEV coordinates.",
         },
     }
@@ -1422,6 +1554,8 @@ async def run_zero_shot_visual_prompt_pipeline(
     candidate_top_k: int = 5,
     llm_detail: str = "auto",
     navigation_mode: str = "foot",
+    navigation_path_gps: Optional[List[Dict[str, float]]] = None,
+    navigation_path_source: Optional[str] = None,
     enable_verifier: bool = False,
     enable_segmentation_overlay_input: bool = False,
     enable_som_overlay_input: bool | None = None,
@@ -1493,6 +1627,21 @@ async def run_zero_shot_visual_prompt_pipeline(
     route_context_dict = route_context_to_dict(state.route_context)
     local_bev_dict = local_bev_context_to_dict(state.local_bev_context)
     local_bev_dict["_origin_gps"] = {"lat": float(gps["lat"]), "lng": float(gps["lng"])}
+    if isinstance(navigation_path_gps, list) and navigation_path_gps:
+        local_bev_dict["navigation_path_gps"] = [
+            {"lat": float(item["lat"]), "lng": float(item["lng"])}
+            for item in navigation_path_gps
+            if isinstance(item, dict) and "lat" in item and "lng" in item
+        ]
+        if navigation_path_source:
+            local_bev_dict["navigation_path_source"] = str(navigation_path_source)
+    elif isinstance(route_polyline, list) and route_polyline:
+        local_bev_dict["navigation_path_gps"] = [
+            {"lat": float(item.get("latitude")), "lng": float(item.get("longitude"))}
+            for item in route_polyline
+            if isinstance(item, dict) and "latitude" in item and "longitude" in item
+        ]
+        local_bev_dict["navigation_path_source"] = "route_polyline"
     bev_map_error: str | None = None
     if enable_bev_map_provider:
         bev_map_stage_started_at = perf_counter()
