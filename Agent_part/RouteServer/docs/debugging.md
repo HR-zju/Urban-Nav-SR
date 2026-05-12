@@ -169,7 +169,46 @@ export AMAP_ITINERARY_STATIC_MAX_POINTS=120
 - `markers_only_image_url`
 - `leg_overlay_image_url`
 
-## 5. Route Session Store
+## 5. Visual Prompt Multi-Image Inputs
+
+默认建议：
+
+- 保留 `primary_fpv`：原始 FPV 负责真实纹理和细节判断。
+- 开启 `--enable-som-overlay-input`：编号 SoM overlay 负责可通行/障碍 grounding。
+- 开启 `--enable-bev-map-provider`：真实 OpenStreetMap raster screenshot 负责跨视角拓扑参考。
+- 仅在 debug/ablation 时开启 `--enable-sam-visualization-input`：SAM visualization 容易和 SoM 重复，也会增加 LVLM 输入成本。
+
+兼容参数：
+
+```bash
+--enable-segmentation-overlay-input
+```
+
+目前等价于 `--enable-som-overlay-input`，不会自动附加 SAM visualization。
+
+BEV 方向校准：
+
+```bash
+export BEV_MAP_HEADING_CONVENTION=compass   # 0=N, 90=E, clockwise-positive
+export BEV_MAP_HEADING_OFFSET_DEG=0
+```
+
+如果 MCAP heading topic 是 ROS/ENU yaw，使用：
+
+```bash
+export BEV_MAP_HEADING_CONVENTION=enu_yaw  # 0=E, 90=N, counter-clockwise-positive
+export BEV_MAP_HEADING_OFFSET_DEG=0
+```
+
+如果相机前向与车体/IMU heading 存在外参偏移，调 `BEV_MAP_HEADING_OFFSET_DEG`。输出 JSON 的 `llm_input_images[].metadata` 会记录：
+
+- `raw_heading_deg`
+- `heading_convention`
+- `heading_offset_deg`
+- `compass_heading_deg`
+- `heading_rotation_deg`
+
+## 6. Route Session Store
 
 默认文件持久化：
 
@@ -196,7 +235,7 @@ QPS 防护：
 - `get_route_session` 默认返回缓存
 - 只有 `force_replan=true` 才重新请求地图 API
 
-## 6. Timeout Tuning
+## 7. Timeout Tuning
 
 地图 HTTP：
 
