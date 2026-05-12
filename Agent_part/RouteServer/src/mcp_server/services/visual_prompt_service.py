@@ -1556,6 +1556,7 @@ async def run_zero_shot_visual_prompt_pipeline(
     navigation_mode: str = "foot",
     navigation_path_gps: Optional[List[Dict[str, float]]] = None,
     navigation_path_source: Optional[str] = None,
+    camera_attitude: Optional[Dict[str, Any]] = None,
     enable_verifier: bool = False,
     enable_segmentation_overlay_input: bool = False,
     enable_som_overlay_input: bool | None = None,
@@ -1627,6 +1628,25 @@ async def run_zero_shot_visual_prompt_pipeline(
     route_context_dict = route_context_to_dict(state.route_context)
     local_bev_dict = local_bev_context_to_dict(state.local_bev_context)
     local_bev_dict["_origin_gps"] = {"lat": float(gps["lat"]), "lng": float(gps["lng"])}
+    normalized_camera_attitude: Dict[str, Any] | None = None
+    if isinstance(camera_attitude, dict):
+        try:
+            normalized_camera_attitude = {
+                "roll_deg": (
+                    float(camera_attitude["roll_deg"])
+                    if camera_attitude.get("roll_deg") is not None
+                    else None
+                ),
+                "pitch_deg": (
+                    float(camera_attitude["pitch_deg"])
+                    if camera_attitude.get("pitch_deg") is not None
+                    else None
+                ),
+                "source": str(camera_attitude.get("source") or "unknown"),
+            }
+            local_bev_dict["camera_attitude"] = normalized_camera_attitude
+        except Exception:
+            normalized_camera_attitude = None
     if isinstance(navigation_path_gps, list) and navigation_path_gps:
         local_bev_dict["navigation_path_gps"] = [
             {"lat": float(item["lat"]), "lng": float(item["lng"])}
@@ -1779,6 +1799,12 @@ async def run_zero_shot_visual_prompt_pipeline(
                 image_width=image_width,
                 image_height=image_height,
             )
+            if normalized_camera_attitude is not None:
+                segmentation_context = dict(segmentation_context)
+                segmentation_context["camera_attitude"] = normalized_camera_attitude
+                summary_dict = dict(segmentation_context.get("summary") or {})
+                summary_dict["camera_attitude"] = normalized_camera_attitude
+                segmentation_context["summary"] = summary_dict
             segmentation_summary = segmentation_summary_for_llm(segmentation_context)
             if isinstance(segmentation_summary, dict):
                 llm_segmentation_summary = _scale_context_to_llm(

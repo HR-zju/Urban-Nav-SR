@@ -41,6 +41,7 @@ def build_visual_prompt_qa_bundle(
     arbiter_decision: dict[str, Any],
     candidate_bundle: PoVPromptCandidateBundle | dict[str, Any] | None,
     som_summary: dict[str, Any] | None = None,
+    safe_corridor_prior: dict[str, Any] | None = None,
     sample_id: str = "visual_prompt",
 ) -> dict[str, Any]:
     candidate_bundle_dict = (
@@ -112,6 +113,27 @@ def build_visual_prompt_qa_bundle(
                 "image_height": image_height,
             },
             teacher_answer=teachers.teacher_fpv_scene_stage(fpv_segmentation_summary),
+        )
+    )
+
+    crossview_inputs = {
+        "route_context": route_context,
+        "local_bev_context": local_bev_context,
+        "rendered_prompt": rendered_prompt,
+        "fpv_segmentation_summary": fpv_segmentation_summary,
+        "segmentation_validation": segmentation_validation,
+        "som_summary": som_summary,
+        "safe_corridor_prior": safe_corridor_prior,
+        "candidate_bundle": candidate_bundle_dict,
+        "image_width": image_width,
+        "image_height": image_height,
+    }
+    samples.append(
+        _sample(
+            sample_id=sample_id,
+            task_type="crossview_topology_grounding",
+            inputs=crossview_inputs,
+            teacher_answer=teachers.teacher_crossview_topology_grounding(**crossview_inputs),
         )
     )
 

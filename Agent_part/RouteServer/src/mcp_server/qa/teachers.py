@@ -25,7 +25,7 @@ import math
 from dataclasses import asdict
 from typing import Any
 
-from .angles import bev_theta_deg, coarse_bin_from_theta, fpv_theta_from_u, theta_bin_residual
+from .angles import bev_theta_deg, coarse_bin_from_theta, fpv_theta_from_u, theta_bin_residual, wrap_angle_deg
 from .schema import PointUV, RangeM, ThetaLabel
 
 
@@ -114,9 +114,11 @@ def teacher_bev_component_exists(local_bev_context: dict[str, Any], component_ty
         source = "connector_bev"
         confidence = 0.85 if exists else 0.75
     elif component_type == "crossing":
-        exists = bool(semantic_layers.get("crossing_mask"))
+        exists = bool(semantic_layers.get("crossing_mask") or semantic_layers.get("crossing_points_bev"))
+        confidence = 0.82 if exists else 0.55
     elif component_type == "entrance":
         exists = bool(semantic_layers.get("entrance_candidates_bev"))
+        confidence = 0.82 if exists else 0.55
     return {"exists": exists, "confidence": confidence, "source": source}
 
 
@@ -127,6 +129,12 @@ def teacher_bev_component_theta_range(local_bev_context: dict[str, Any], compone
     if component_type == "connector":
         raw_points = local_bev_context.get("connector_bev")
         source = "connector_bev"
+    elif component_type == "crossing":
+        raw_points = semantic_layers.get("crossing_points_bev")
+        source = "osm_crossing_points_bev"
+    elif component_type in {"sidewalk", "footway"}:
+        raw_points = semantic_layers.get("sidewalk_points_bev")
+        source = "osm_sidewalk_points_bev"
     elif component_type == "entrance":
         raw_points = semantic_layers.get("entrance_candidates_bev")
     points = _bev_points(raw_points)
@@ -220,6 +228,221 @@ def teacher_fpv_scene_stage(segmentation_summary: dict[str, Any] | None) -> dict
     else:
         stage = "uncertain"
     return {"scene_stage": stage, "confidence": 0.55, "source": "segmentation_summary"}
+
+
+def _route_intention_label(route_context: dict[str, Any], local_bev_context: dict[str, Any]) -> str:
+    local_semantics = route_context.get("local_semantics") or {}
+    turn_type = str(local_semantics.get("turn_type") or local_bev_context.get("turn_type") or "go_straight")
+    turn_semantics = str(local_semantics.get("turn_semantics") or local_bev_context.get("turn_semantics") or "")
+    if "left" in turn_type or "left" in turn_semantics:
+        return "turn_left"
+    if "right" in turn_type or "right" in turn_semantics:
+        return "turn_right"
+    if "stop" in turn_type or "arrive" in turn_type or "arrive" in turn_semantics:
+        return "stop_or_arrive"
+    return "go_straight"
+
+
+def _last_path_u(raw_prompt: dict[str, Any] | None) -> float | None:
+    points = _path_points(raw_prompt)
+    return float(points[-1].u) if points else None
+
+
+def _selected_candidate(candidate_bundle: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(candidate_bundle, dict):
+        return None
+    candidates = candidate_bundle.get("fpv_candidates")
+    if not isinstance(candidates, list) or not candidates:
+        return None
+    selected_id = candidate_bundle.get("selected_prompt_id")
+    if selected_id:
+        selected = next((item for item in candidates if isinstance(item, dict) and item.get("prompt_id") == selected_id), None)
+        if selected is not None:
+            return selected
+    return next((item for item in candidates if isinstance(item, dict)), None)
+
+
+def _fpv_theta_from_artifacts(
+    *,
+    rendered_prompt: dict[str, Any] | None,
+    safe_corridor_prior: dict[str, Any] | None,
+    candidate_bundle: dict[str, Any] | None,
+    image_width: int,
+) -> tuple[ThetaLabel | None, str | None]:
+    prompt_u = _last_path_u(rendered_prompt)
+    if prompt_u is not None:
+        return (
+            make_theta_label(fpv_theta_from_u(prompt_u, image_width), confidence=0.86, source="rendered_prompt_target"),
+            "rendered_prompt",
+        )
+    prior_u = _last_path_u(safe_corridor_prior)
+    if prior_u is not None:
+        return (
+            make_theta_label(fpv_theta_from_u(prior_u, image_width), confidence=0.78, source="safe_corridor_prior_target"),
+            "safe_corridor_prior",
+        )
+    selected = _selected_candidate(candidate_bundle)
+    if selected is not None and selected.get("theta_fpv_deg") is not None:
+        try:
+            return (
+                make_theta_label(float(selected.get("theta_fpv_deg")), confidence=0.72, source="pov_candidate_bundle"),
+                "pov_candidate_bundle",
+            )
+        except (TypeError, ValueError):
+            return None, None
+    return None, None
+
+
+def _evidence_masks(
+    som_summary: dict[str, Any] | None,
+    rendered_prompt: dict[str, Any] | None,
+    *,
+    limit: int = 4,
+) -> list[dict[str, Any]]:
+    if not isinstance(som_summary, dict):
+        return []
+    prompt_points = _path_points(rendered_prompt)
+    target_u = prompt_points[-1].u if prompt_points else None
+    regions = []
+    for role_key in ("regions", "conditional_regions"):
+        for region in som_summary.get(role_key) or []:
+            if isinstance(region, dict):
+                enriched = dict(region)
+                enriched["evidence_role"] = "preferred" if role_key == "regions" else "conditional_connector"
+                regions.append(enriched)
+    if target_u is not None:
+        def _distance(region: dict[str, Any]) -> float:
+            center = region.get("center_uv")
+            try:
+                return abs(float(center[0]) - float(target_u)) if isinstance(center, (list, tuple)) else 1e9
+            except (TypeError, ValueError):
+                return 1e9
+
+        regions.sort(key=lambda item: (_distance(item), -float(item.get("route_intent_score") or 0.0)))
+    else:
+        regions.sort(key=lambda item: -float(item.get("route_intent_score") or 0.0))
+    compact: list[dict[str, Any]] = []
+    for region in regions[: max(int(limit), 1)]:
+        compact.append(
+            {
+                "region_id": region.get("region_id"),
+                "label": region.get("label"),
+                "region_role": region.get("region_role"),
+                "evidence_role": region.get("evidence_role"),
+                "dominant_class_name": region.get("dominant_class_name"),
+                "center_uv": region.get("center_uv"),
+                "bbox_uv": region.get("bbox_uv"),
+                "route_intent_score": region.get("route_intent_score"),
+            }
+        )
+    return compact
+
+
+def teacher_crossview_topology_grounding(
+    *,
+    route_context: dict[str, Any],
+    local_bev_context: dict[str, Any],
+    rendered_prompt: dict[str, Any] | None,
+    fpv_segmentation_summary: dict[str, Any] | None,
+    segmentation_validation: dict[str, Any] | None,
+    som_summary: dict[str, Any] | None,
+    safe_corridor_prior: dict[str, Any] | None,
+    candidate_bundle: dict[str, Any] | None,
+    image_width: int,
+    image_height: int,
+) -> dict[str, Any]:
+    """Ground BEV intent to FPV evidence for the Stage-1 cross-view QA task.
+
+    The teacher answers the core anchoring question:
+
+        Does the FPV prompt/mask evidence point in the same topological
+        direction as the BEV route intent?
+
+    Let theta_b be the BEV route angle and theta_f the FPV target angle:
+
+        delta = |wrap(theta_f - theta_b)|
+
+    The status bins are intentionally coarse for zero-shot evaluation:
+    ``aligned`` <= 25 deg, ``weakly_aligned`` <= 45 deg, otherwise
+    ``unaligned``. Hard missing/invalid evidence produces ``reject``.
+    """
+    del fpv_segmentation_summary, image_height
+    bev_theta_payload = teacher_bev_route_theta(local_bev_context).get("theta")
+    bev_theta = (
+        make_theta_label(
+            float(bev_theta_payload.get("theta_deg", 0.0)),
+            confidence=float(bev_theta_payload.get("confidence", 0.0) or 0.0),
+            source=str(bev_theta_payload.get("source") or "bev_route_theta"),
+        )
+        if isinstance(bev_theta_payload, dict)
+        else None
+    )
+    fpv_theta, fpv_source = _fpv_theta_from_artifacts(
+        rendered_prompt=rendered_prompt,
+        safe_corridor_prior=safe_corridor_prior,
+        candidate_bundle=candidate_bundle,
+        image_width=image_width,
+    )
+    evidence_sources = ["local_bev_context"]
+    if fpv_source:
+        evidence_sources.append(fpv_source)
+    if isinstance(som_summary, dict):
+        evidence_sources.append("som_summary")
+    if isinstance(segmentation_validation, dict):
+        evidence_sources.append("segmentation_validation")
+
+    theta_delta = None
+    if bev_theta is not None and fpv_theta is not None:
+        theta_delta = abs(wrap_angle_deg(float(fpv_theta.theta_deg) - float(bev_theta.theta_deg)))
+
+    segmentation_invalid = isinstance(segmentation_validation, dict) and segmentation_validation.get("valid") is False
+    candidate_reject = isinstance(candidate_bundle, dict) and bool(candidate_bundle.get("reject_all"))
+    failure_mode = None
+    if fpv_theta is None:
+        alignment_status = "reject"
+        failure_mode = "missing_fpv_grounding"
+    elif segmentation_invalid:
+        alignment_status = "reject"
+        failure_mode = str(segmentation_validation.get("reason") or "segmentation_invalid")
+    elif candidate_reject:
+        alignment_status = "reject"
+        reasons = candidate_bundle.get("rejection_reasons") or []
+        failure_mode = "; ".join(str(item) for item in reasons) or "candidate_bundle_reject_all"
+    elif theta_delta is None:
+        alignment_status = "reject"
+        failure_mode = "missing_bev_or_fpv_theta"
+    elif theta_delta <= 25.0:
+        alignment_status = "aligned"
+    elif theta_delta <= 45.0:
+        alignment_status = "weakly_aligned"
+        failure_mode = "large_but_tolerable_crossview_angle_delta"
+    else:
+        alignment_status = "unaligned"
+        failure_mode = "crossview_angle_delta_too_large"
+
+    confidence = 0.2
+    if alignment_status == "aligned":
+        confidence = 0.88
+    elif alignment_status == "weakly_aligned":
+        confidence = 0.68
+    elif alignment_status == "unaligned":
+        confidence = 0.56
+    elif segmentation_invalid or candidate_reject:
+        confidence = 0.82
+    if not _evidence_masks(som_summary, rendered_prompt):
+        confidence = min(confidence, 0.72)
+
+    return {
+        "bev_intention": _route_intention_label(route_context, local_bev_context),
+        "alignment_status": alignment_status,
+        "bev_theta": asdict(bev_theta) if bev_theta is not None else None,
+        "fpv_theta": asdict(fpv_theta) if fpv_theta is not None else None,
+        "theta_delta_deg": round(float(theta_delta), 3) if theta_delta is not None else None,
+        "anchored_fpv_masks": _evidence_masks(som_summary, rendered_prompt),
+        "evidence_sources": evidence_sources,
+        "failure_mode": failure_mode,
+        "confidence": round(float(confidence), 4),
+    }
 
 
 def teacher_step_instruction(route_context: dict[str, Any], rendered_prompt: dict[str, Any] | None) -> dict[str, Any]:

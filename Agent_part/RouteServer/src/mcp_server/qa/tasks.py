@@ -68,6 +68,15 @@ TASK_REGISTRY: dict[str, QATaskSpec] = {
         output_dataclass=schema.FPVSceneStageOutput,
         teacher_fn=teachers.teacher_fpv_scene_stage,
     ),
+    "crossview_topology_grounding": QATaskSpec(
+        task_family="X_crossview",
+        task_type="crossview_topology_grounding",
+        answer_type="grounding_json",
+        input_dataclass=schema.CrossViewTopologyGroundingInput,
+        teacher_dataclass=schema.CrossViewTopologyGroundingTeacher,
+        output_dataclass=schema.CrossViewTopologyGroundingOutput,
+        teacher_fn=teachers.teacher_crossview_topology_grounding,
+    ),
     "point_prompt": QATaskSpec(
         task_family="C_grounded",
         task_type="point_prompt",

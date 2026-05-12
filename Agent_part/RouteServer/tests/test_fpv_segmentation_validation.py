@@ -259,6 +259,29 @@ class FpvSegmentationValidationTest(unittest.TestCase):
         self.assertLessEqual(max_step, 0.20 * 120 + 1.0)
         self.assertEqual(prior["debug"]["max_lateral_step_ratio"], 0.20)
 
+    def test_safe_corridor_prior_uses_optional_roll_rectification(self) -> None:
+        mask = np.full((100, 120), 2, dtype=np.int32)
+        context = {
+            **_segmentation_context(mask),
+            "camera_attitude": {"roll_deg": 6.0, "pitch_deg": 1.5, "source": "imu"},
+        }
+
+        with patch.dict(
+            "os.environ",
+            {
+                "VISUAL_PROMPT_ATTITUDE_RECTIFY": "1",
+                "VISUAL_PROMPT_ATTITUDE_RECTIFY_MIN_ROLL_DEG": "0.1",
+            },
+        ):
+            prior = build_safe_corridor_prior(context)
+
+        self.assertIsInstance(prior, dict)
+        self.assertEqual(prior["source"], "segmentation_safe_corridor_prior_roll_rectified_v1")
+        rectification = prior["debug"]["camera_attitude_rectification"]
+        self.assertTrue(rectification["applied"])
+        self.assertEqual(rectification["model"], "gravity_aligned_roll_rectification_v1")
+        self.assertAlmostEqual(rectification["roll_deg"], 6.0)
+
     def test_repairs_off_center_and_edge_hugging_corridor(self) -> None:
         mask = np.full((100, 120), 38, dtype=np.int32)
         mask[:, 30:90] = 2

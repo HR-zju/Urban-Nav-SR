@@ -138,6 +138,42 @@ class FPVSceneStageOutput:
 
 
 @dataclass
+class CrossViewTopologyGroundingInput:
+    route_context: dict[str, Any]
+    local_bev_context: dict[str, Any]
+    rendered_prompt: dict[str, Any] | None
+    fpv_segmentation_summary: dict[str, Any] | None
+    segmentation_validation: dict[str, Any] | None
+    som_summary: dict[str, Any] | None
+    safe_corridor_prior: dict[str, Any] | None
+    candidate_bundle: dict[str, Any] | None
+    image_width: int
+    image_height: int
+
+
+@dataclass
+class CrossViewTopologyGroundingTeacher:
+    bev_intention: str
+    alignment_status: str
+    bev_theta: ThetaLabel | None
+    fpv_theta: ThetaLabel | None
+    theta_delta_deg: float | None
+    anchored_fpv_masks: list[dict[str, Any]]
+    evidence_sources: list[str]
+    failure_mode: str | None
+    confidence: float
+
+
+@dataclass
+class CrossViewTopologyGroundingOutput:
+    alignment_status: str
+    theta_delta_deg: float | None
+    anchored_fpv_masks: list[dict[str, Any]]
+    failure_mode: str | None
+    confidence: float
+
+
+@dataclass
 class PointPromptInput:
     rendered_prompt: dict[str, Any] | None
     image_width: int
