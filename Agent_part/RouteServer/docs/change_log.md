@@ -21,6 +21,29 @@
   - 真实 OSM BEV screenshot
 - 原始 SAM visualization 只建议在 debug 或 ablation 时开启；SAM mask 本身仍然用于 deterministic validation、repair 和 safe corridor 生成。
 
+### 增加 Pipeline 耗时统计
+
+- 新增 `mcp_server.utils.timing`，集中维护耗时记录、telemetry flatten、manifest summary 和单帧日志格式化逻辑。
+- 批处理主流程只调用 timing 工具函数，不再在 orchestration 代码里内联实现统计细节。
+- 在 visual prompt service 的 telemetry 中补充关键阶段耗时：
+  - `image_preprocess`
+  - `multi_image_inputs`
+  - `bev_map_overlay`
+- 批处理脚本现在会在每帧结束后打印 `[TIME]` 摘要，包含：
+  - 单帧 runner 总耗时
+  - service 内部耗时
+  - generator LLM 耗时
+  - segmentation/SOM 耗时
+  - BEV tile overlay 耗时
+  - 输出产物写入耗时
+- `manifest.json` 中新增：
+  - `sam3_inference_elapsed_ms`
+  - `pipeline_elapsed_ms`
+  - 每帧 `timing_ms`
+  - 聚合 `timing_summary`
+- 批处理 CLI 新增 `--no-emit-llm-input-images`，用于速度测试时关闭 LVLM 输入图落盘，减少 debug artifact 写入开销。
+- 该统计用于判断慢点来自 LVLM 请求、SAM3、OSM tile/BEV、segmentation geometry，还是大量 debug artifact 写入。
+
 ### 增加 BEV Heading 校准
 
 - 为 BEV tile 截图增加 heading convention 和 offset 配置：

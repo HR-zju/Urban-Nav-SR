@@ -1525,6 +1525,7 @@ async def run_zero_shot_visual_prompt_pipeline(
                     pass
     else:
         _mark_stage("bev_map_provider", route_stage_started_at, status="skipped")
+    image_stage_started_at = perf_counter()
     prompt_image = _load_prompt_image(image_path=image_path, image_url=image_url)
     image_width, image_height = int(prompt_image.size[0]), int(prompt_image.size[1])
     llm_max_side, llm_max_bytes, llm_jpeg_quality = _llm_image_limits()
@@ -1534,6 +1535,7 @@ async def run_zero_shot_visual_prompt_pipeline(
         max_bytes=llm_max_bytes,
         jpeg_quality=llm_jpeg_quality,
     )
+    _mark_stage("image_preprocess", image_stage_started_at, status="ok")
     llm_image_url = str(llm_image_payload["image_data_url"])
     llm_image_width, llm_image_height = [int(value) for value in llm_image_payload["llm_image_size"]]
     source_to_llm_scale = llm_image_payload["source_to_llm_scale"]
@@ -1723,6 +1725,7 @@ async def run_zero_shot_visual_prompt_pipeline(
     else:
         _mark_stage("segmentation", segmentation_stage_started_at, status="skipped")
 
+    multi_image_stage_started_at = perf_counter()
     segmentation_extra_image_urls, multi_image_debug = _arbiter_extra_image_urls(
         fpv_segmentation=fpv_segmentation,
         enable_sam_visualization_input=enable_sam_visualization_input,
@@ -1768,10 +1771,16 @@ async def run_zero_shot_visual_prompt_pipeline(
             multi_image_debug["som_overlay_legend"] = som_overlay_legend
 
     if enable_bev_map_provider:
+        bev_overlay_stage_started_at = perf_counter()
         bev_map_overlay_payload = _build_bev_map_overlay_payload(
             local_bev_context=local_bev_dict,
             llm_max_bytes=llm_max_bytes,
             llm_jpeg_quality=llm_jpeg_quality,
+        )
+        _mark_stage(
+            "bev_map_overlay",
+            bev_overlay_stage_started_at,
+            status="ok" if isinstance(bev_map_overlay_payload, dict) else "skipped",
         )
         if isinstance(bev_map_overlay_payload, dict):
             bev_map_overlay_url = str(bev_map_overlay_payload.get("bev_map_overlay_image_data_url") or "").strip()
@@ -1797,6 +1806,8 @@ async def run_zero_shot_visual_prompt_pipeline(
                 multi_image_debug["used"] = True
                 multi_image_debug["bev_map_overlay_used"] = True
                 multi_image_debug["bev_map_overlay_legend"] = bev_map_overlay_legend
+    else:
+        _mark_stage("bev_map_overlay", multi_image_stage_started_at, status="skipped")
 
     for index, url in enumerate(segmentation_extra_image_urls):
         role = "segmentation_visualization" if index == 0 else f"extra_image_{index}"
@@ -1824,6 +1835,7 @@ async def run_zero_shot_visual_prompt_pipeline(
             }
         )
         llm_input_images.extend(extra_image_records)
+    _mark_stage("multi_image_inputs", multi_image_stage_started_at, status="ok")
 
     llm_raw: Dict[str, Any] | None = None
     verifier_raw: Dict[str, Any] | None = None

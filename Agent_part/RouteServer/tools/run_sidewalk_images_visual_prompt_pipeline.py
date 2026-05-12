@@ -22,6 +22,14 @@ _SRC_DIR = _repo_root() / "src"
 if str(_SRC_DIR) not in os.sys.path:
     os.sys.path.insert(0, str(_SRC_DIR))
 
+from mcp_server.utils.timing import (  # noqa: E402
+    compact_visual_prompt_frame_timing,
+    elapsed_ms,
+    format_visual_prompt_frame_timing,
+    summarize_visual_prompt_manifest_timings,
+    timer_start,
+)
+
 
 @dataclass(frozen=True)
 class TrajectoryFrame:
@@ -471,6 +479,12 @@ def parse_args() -> argparse.Namespace:
         help="Allow proceeding when segmentation alignment validation fails",
     )
     parser.add_argument("--emit-qa-bundle", action="store_true", help="Emit structured QA bundle in output json")
+    parser.add_argument(
+        "--emit-llm-input-images",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Save exact LVLM input images for audit/debug (default: true)",
+    )
 
     parser.add_argument(
         "--allow-missing-segmentation",
@@ -481,6 +495,7 @@ def parse_args() -> argparse.Namespace:
 
 
 async def main_async() -> None:
+    pipeline_started_at = timer_start()
     args = parse_args()
     images_dir = Path(args.images_dir).expanduser().resolve()
     trajectory_path = Path(args.trajectory_json).expanduser().resolve()
@@ -517,7 +532,9 @@ async def main_async() -> None:
     work_dir = output_dir / "_work"
     _ensure_dir(work_dir)
 
+    sam3_inference_elapsed_ms: int | None = None
     if args.run_sam3:
+        sam3_started_at = timer_start()
         _run_sam3_inference_on_images(
             images_dir=images_dir,
             selected_frame_names=selected,
@@ -532,6 +549,8 @@ async def main_async() -> None:
             checkpoint_path=Path(args.checkpoint_path).expanduser().resolve() if args.checkpoint_path else None,
             work_dir=work_dir,
         )
+        sam3_inference_elapsed_ms = elapsed_ms(sam3_started_at)
+        print(f"[TIME] sam3_inference={sam3_inference_elapsed_ms}ms frames={len(selected)}")
 
     manifest: dict[str, Any] = {
         "images_dir": str(images_dir),
@@ -541,6 +560,7 @@ async def main_async() -> None:
         "camera_view": str(args.camera_view),
         "frames_total": len(selected),
         "frames_failed": 0,
+        "sam3_inference_elapsed_ms": sam3_inference_elapsed_ms,
         "frames": [],
     }
 
@@ -597,6 +617,8 @@ async def main_async() -> None:
             }
 
             try:
+                frame_started_at = timer_start()
+                payload: dict[str, Any] | None = None
                 # Keep segmentation visualization close to outputs for quick review.
                 if fpv_seg and isinstance(fpv_seg.get("visualization_path"), str):
                     src_vis = Path(str(fpv_seg.get("visualization_path"))).expanduser()
@@ -617,18 +639,19 @@ async def main_async() -> None:
                     back_extent_m=float(args.back_extent_m),
                     side_extent_m=float(args.side_extent_m),
                     navigation_mode=str(args.mode),
-                llm_detail=str(args.llm_detail),
-                enable_verifier=bool(args.enable_verifier),
-                enable_segmentation_overlay_input=bool(args.enable_segmentation_overlay_input),
-                enable_som_overlay_input=bool(args.enable_som_overlay_input or args.enable_segmentation_overlay_input),
-                enable_sam_visualization_input=bool(args.enable_sam_visualization_input),
-                enable_bev_map_provider=bool(args.enable_bev_map_provider),
+                    llm_detail=str(args.llm_detail),
+                    enable_verifier=bool(args.enable_verifier),
+                    enable_segmentation_overlay_input=bool(args.enable_segmentation_overlay_input),
+                    enable_som_overlay_input=bool(args.enable_som_overlay_input or args.enable_segmentation_overlay_input),
+                    enable_sam_visualization_input=bool(args.enable_sam_visualization_input),
+                    enable_bev_map_provider=bool(args.enable_bev_map_provider),
                     bev_map_provider_session=bev_map_provider_session,
                     enforce_alignment=bool(args.enforce_alignment),
                     emit_qa_bundle=bool(args.emit_qa_bundle),
-                    emit_llm_input_images=True,
+                    emit_llm_input_images=bool(args.emit_llm_input_images),
                     fpv_segmentation=fpv_seg,
                 )
+                artifact_started_at = timer_start()
                 llm_input_artifacts: list[str] = []
                 for item in list(payload.get("llm_input_images") or []):
                     if not isinstance(item, dict):
@@ -699,10 +722,25 @@ async def main_async() -> None:
                 else:
                     if out_rejected_svg.exists():
                         out_rejected_svg.unlink()
+                timing = compact_visual_prompt_frame_timing(
+                    payload=payload,
+                    runner_elapsed_ms=elapsed_ms(frame_started_at),
+                    artifact_elapsed_ms=elapsed_ms(artifact_started_at),
+                )
+                frame_item["timing_ms"] = timing
+                print(format_visual_prompt_frame_timing(str(frame_name), timing, status=str(frame_item.get("status") or "ok")))
             except Exception as exc:
                 frame_item["status"] = "error"
                 frame_item["error"] = str(exc)
                 failures += 1
+                if "frame_started_at" in locals():
+                    timing = compact_visual_prompt_frame_timing(
+                        payload=payload if isinstance(payload, dict) else None,
+                        runner_elapsed_ms=elapsed_ms(frame_started_at),
+                        artifact_elapsed_ms=0,
+                    )
+                    frame_item["timing_ms"] = timing
+                    print(format_visual_prompt_frame_timing(str(frame_name), timing, status="error"))
 
             manifest["frames"].append(frame_item)
     finally:
@@ -712,8 +750,31 @@ async def main_async() -> None:
 
     manifest["frames_failed"] = failures
     manifest["frames_succeeded"] = max(len(manifest["frames"]) - failures, 0)
+    manifest["pipeline_elapsed_ms"] = elapsed_ms(pipeline_started_at)
+    manifest["timing_summary"] = summarize_visual_prompt_manifest_timings(manifest["frames"])
     manifest_path = output_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    summary = manifest.get("timing_summary") or {}
+    runner_summary = summary.get("runner_elapsed_ms") if isinstance(summary, dict) else {}
+    stages_summary = summary.get("stages") if isinstance(summary, dict) else {}
+    if isinstance(runner_summary, dict):
+        print(
+            "[TIME] summary "
+            f"frames={summary.get('frames_profiled')} "
+            f"runner_avg={runner_summary.get('avg_ms')}ms "
+            f"runner_p95={runner_summary.get('p95_ms')}ms "
+            f"pipeline={manifest['pipeline_elapsed_ms']}ms"
+        )
+    if isinstance(stages_summary, dict):
+        for stage_name in ("generator_llm_ms", "segmentation_ms", "bev_map_overlay_ms", "artifact_write_ms"):
+            stage = stages_summary.get(stage_name)
+            if isinstance(stage, dict):
+                print(
+                    "[TIME] stage "
+                    f"{stage_name} avg={stage.get('avg_ms')}ms "
+                    f"p95={stage.get('p95_ms')}ms "
+                    f"max={stage.get('max_ms')}ms"
+                )
     print(f"[OK] Sequence done. Manifest: {manifest_path}")
 
 
