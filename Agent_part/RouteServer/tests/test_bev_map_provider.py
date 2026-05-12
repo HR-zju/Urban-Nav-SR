@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
+
+from PIL import Image
 
 from mcp_server.route_context.bev_map_provider import BEVMapProviderSession, build_osm_bev_semantic_layers
+from mcp_server.services.visual_prompt_service import _bev_map_heading_rotation_deg, _build_bev_map_overlay_payload
 
 
 class FakeMapClient:
@@ -119,6 +123,42 @@ class BEVMapProviderTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(second["cache"]["hit"])
         self.assertEqual(session.query_count, 1)
         self.assertEqual(session.cache_hits, 1)
+
+    async def test_bev_visual_input_uses_real_osm_tile_screenshot_path(self) -> None:
+        def fake_tile(*, x: int, y: int, zoom: int) -> Image.Image:
+            del x, y, zoom
+            return Image.new("RGB", (256, 256), (210, 220, 210))
+
+        with patch("mcp_server.services.visual_prompt_service._fetch_osm_tile_image", side_effect=fake_tile):
+            payload = _build_bev_map_overlay_payload(
+                local_bev_context={
+                    "_origin_gps": {"lat": 30.0, "lng": 120.0},
+                    "bev_rotation_deg": 15.0,
+                },
+                llm_max_bytes=1_000_000,
+                llm_jpeg_quality=80,
+            )
+
+        self.assertIsInstance(payload, dict)
+        self.assertEqual(payload["source"], "openstreetmap_raster_tiles")
+        self.assertEqual(payload["legend"]["source"], "real_openstreetmap_raster_screenshot")
+        self.assertTrue(str(payload["bev_map_overlay_image_data_url"]).startswith("data:image/jpeg;base64,"))
+        self.assertEqual(payload["llm_image_size"], [640, 640])
+        self.assertEqual(payload["alignment_order"], "rotate_mosaic_then_center_crop")
+        self.assertIn("rotation_center_px", payload)
+        self.assertGreater(payload["crop_side_px"], 0.0)
+
+    async def test_bev_tile_heading_convention_and_offset_are_configurable(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {"BEV_MAP_HEADING_CONVENTION": "enu_yaw", "BEV_MAP_HEADING_OFFSET_DEG": "15"},
+        ):
+            rotation, debug = _bev_map_heading_rotation_deg(0.0)
+
+        self.assertEqual(rotation, 105.0)
+        self.assertEqual(debug["heading_convention"], "enu_yaw")
+        self.assertEqual(debug["compass_heading_deg"], 90.0)
+        self.assertEqual(debug["heading_offset_deg"], 15.0)
 
 
 if __name__ == "__main__":

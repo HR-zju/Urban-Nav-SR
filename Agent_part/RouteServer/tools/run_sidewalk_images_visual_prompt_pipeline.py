@@ -325,6 +325,10 @@ async def _run_frame(
     llm_detail: str,
     enable_verifier: bool,
     enable_segmentation_overlay_input: bool,
+    enable_som_overlay_input: bool | None,
+    enable_sam_visualization_input: bool,
+    enable_bev_map_provider: bool,
+    bev_map_provider_session: Any | None,
     enforce_alignment: bool,
     emit_qa_bundle: bool,
     emit_llm_input_images: bool,
@@ -361,6 +365,10 @@ async def _run_frame(
         llm_detail=str(llm_detail),
         enable_verifier=bool(enable_verifier),
         enable_segmentation_overlay_input=bool(enable_segmentation_overlay_input),
+        enable_som_overlay_input=enable_som_overlay_input,
+        enable_sam_visualization_input=bool(enable_sam_visualization_input),
+        enable_bev_map_provider=bool(enable_bev_map_provider),
+        bev_map_provider_session=bev_map_provider_session,
         enforce_alignment=bool(enforce_alignment),
         emit_qa_bundle=bool(emit_qa_bundle),
         emit_llm_input_images=bool(emit_llm_input_images),
@@ -432,7 +440,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--enable-segmentation-overlay-input",
         action="store_true",
-        help="Append segmentation visualization as extra image input to the arbiter when available",
+        help="Compatibility alias for --enable-som-overlay-input; does not enable raw SAM visualization",
+    )
+    parser.add_argument(
+        "--enable-som-overlay-input",
+        action="store_true",
+        help="Append numbered SoM overlay as an extra LVLM image input",
+    )
+    parser.add_argument(
+        "--enable-sam-visualization-input",
+        action="store_true",
+        help="Append raw SAM visualization as an extra LVLM image input for debugging/ablation",
+    )
+    parser.add_argument(
+        "--enable-bev-map-provider",
+        action="store_true",
+        help="Query the configured map provider for OSM-style semantic BEV anchors around each GNSS frame",
     )
     parser.add_argument(
         "--enforce-alignment",
@@ -521,155 +544,171 @@ async def main_async() -> None:
         "frames": [],
     }
 
+    bev_map_provider_session = None
+    if args.enable_bev_map_provider:
+        from mcp_server.route_context.bev_map_provider import BEVMapProviderSession
+
+        bev_map_provider_session = BEVMapProviderSession.from_env()
+        await bev_map_provider_session.connect()
+
     failures = 0
-    for frame_name in selected:
-        frame = frames_by_name.get(frame_name)
-        if frame is None:
-            failures += 1
-            manifest["frames"].append(
-                {"frame_name": frame_name, "status": "error", "error": "frame_missing_in_trajectory"}
+    try:
+        for frame_name in selected:
+            frame = frames_by_name.get(frame_name)
+            if frame is None:
+                failures += 1
+                manifest["frames"].append(
+                    {"frame_name": frame_name, "status": "error", "error": "frame_missing_in_trajectory"}
+                )
+                continue
+            if not frame.image_path.exists():
+                failures += 1
+                manifest["frames"].append(
+                    {"frame_name": frame_name, "status": "error", "error": f"image_missing:{frame.image_path}"}
+                )
+                continue
+
+            fpv_seg = _segmentation_artifacts_for_frame(
+                sam3_output_base_dir=sam3_output_base_dir,
+                sequence_name=str(args.sequence_name),
+                camera_view=str(args.camera_view),
+                frame_name=str(frame_name),
             )
-            continue
-        if not frame.image_path.exists():
-            failures += 1
-            manifest["frames"].append(
-                {"frame_name": frame_name, "status": "error", "error": f"image_missing:{frame.image_path}"}
-            )
-            continue
+            if fpv_seg is None and not args.allow_missing_segmentation:
+                failures += 1
+                manifest["frames"].append(
+                    {"frame_name": frame_name, "status": "error", "error": "missing_segmentation_artifacts"}
+                )
+                continue
 
-        fpv_seg = _segmentation_artifacts_for_frame(
-            sam3_output_base_dir=sam3_output_base_dir,
-            sequence_name=str(args.sequence_name),
-            camera_view=str(args.camera_view),
-            frame_name=str(frame_name),
-        )
-        if fpv_seg is None and not args.allow_missing_segmentation:
-            failures += 1
-            manifest["frames"].append(
-                {"frame_name": frame_name, "status": "error", "error": "missing_segmentation_artifacts"}
-            )
-            continue
+            out_json = json_dir / f"{frame_name}.json"
+            out_generator_json = generator_json_dir / f"{frame_name}.generator.json"
+            out_svg = overlays_dir / f"{frame_name}.svg"
+            out_generator_svg = overlays_dir / f"{frame_name}.generator.svg"
+            out_rejected_svg = overlays_dir / f"{frame_name}.rejected.svg"
+            out_seg_vis = seg_vis_dir / f"{frame_name}_visualization.jpg"
 
-        out_json = json_dir / f"{frame_name}.json"
-        out_generator_json = generator_json_dir / f"{frame_name}.generator.json"
-        out_svg = overlays_dir / f"{frame_name}.svg"
-        out_generator_svg = overlays_dir / f"{frame_name}.generator.svg"
-        out_rejected_svg = overlays_dir / f"{frame_name}.rejected.svg"
-        out_seg_vis = seg_vis_dir / f"{frame_name}_visualization.jpg"
+            frame_item: dict[str, Any] = {
+                "frame_name": str(frame_name),
+                "image_path": str(frame.image_path),
+                "json_path": str(out_json),
+                "overlay_path": str(out_svg),
+                "status": "ok",
+            }
 
-        frame_item: dict[str, Any] = {
-            "frame_name": str(frame_name),
-            "image_path": str(frame.image_path),
-            "json_path": str(out_json),
-            "overlay_path": str(out_svg),
-            "status": "ok",
-        }
-
-        try:
-            # Keep segmentation visualization close to outputs for quick review.
-            if fpv_seg and isinstance(fpv_seg.get("visualization_path"), str):
-                src_vis = Path(str(fpv_seg.get("visualization_path"))).expanduser()
-                if src_vis.exists():
-                    if out_seg_vis.exists() or out_seg_vis.is_symlink():
-                        out_seg_vis.unlink()
-                    try:
-                        out_seg_vis.symlink_to(src_vis)
-                    except Exception:
-                        out_seg_vis.write_bytes(src_vis.read_bytes())
-            payload = await _run_frame(
-                frame=frame,
-                route_length_m=float(args.route_length_m),
-                route_step_m=float(args.route_step_m),
-                lookahead_m=float(args.lookahead_m),
-                off_route_threshold_m=float(args.off_route_threshold_m),
-                front_extent_m=float(args.front_extent_m),
-                back_extent_m=float(args.back_extent_m),
-                side_extent_m=float(args.side_extent_m),
-                navigation_mode=str(args.mode),
+            try:
+                # Keep segmentation visualization close to outputs for quick review.
+                if fpv_seg and isinstance(fpv_seg.get("visualization_path"), str):
+                    src_vis = Path(str(fpv_seg.get("visualization_path"))).expanduser()
+                    if src_vis.exists():
+                        if out_seg_vis.exists() or out_seg_vis.is_symlink():
+                            out_seg_vis.unlink()
+                        try:
+                            out_seg_vis.symlink_to(src_vis)
+                        except Exception:
+                            out_seg_vis.write_bytes(src_vis.read_bytes())
+                payload = await _run_frame(
+                    frame=frame,
+                    route_length_m=float(args.route_length_m),
+                    route_step_m=float(args.route_step_m),
+                    lookahead_m=float(args.lookahead_m),
+                    off_route_threshold_m=float(args.off_route_threshold_m),
+                    front_extent_m=float(args.front_extent_m),
+                    back_extent_m=float(args.back_extent_m),
+                    side_extent_m=float(args.side_extent_m),
+                    navigation_mode=str(args.mode),
                 llm_detail=str(args.llm_detail),
                 enable_verifier=bool(args.enable_verifier),
                 enable_segmentation_overlay_input=bool(args.enable_segmentation_overlay_input),
-                enforce_alignment=bool(args.enforce_alignment),
-                emit_qa_bundle=bool(args.emit_qa_bundle),
-                emit_llm_input_images=True,
-                fpv_segmentation=fpv_seg,
-            )
-            llm_input_artifacts: list[str] = []
-            for item in list(payload.get("llm_input_images") or []):
-                if not isinstance(item, dict):
-                    continue
-                role = _safe_artifact_name(str(item.get("role") or item.get("image_role") or "llm_input"))
-                output_path = _write_data_url_image(
-                    str(item.get("data_url") or ""),
-                    llm_inputs_dir / f"{frame_name}.{role}",
+                enable_som_overlay_input=bool(args.enable_som_overlay_input or args.enable_segmentation_overlay_input),
+                enable_sam_visualization_input=bool(args.enable_sam_visualization_input),
+                enable_bev_map_provider=bool(args.enable_bev_map_provider),
+                    bev_map_provider_session=bev_map_provider_session,
+                    enforce_alignment=bool(args.enforce_alignment),
+                    emit_qa_bundle=bool(args.emit_qa_bundle),
+                    emit_llm_input_images=True,
+                    fpv_segmentation=fpv_seg,
                 )
-                if output_path is not None:
-                    llm_input_artifacts.append(str(output_path))
-                    item["saved_path"] = str(output_path)
-            if llm_input_artifacts:
-                frame_item["llm_input_images"] = llm_input_artifacts
-            out_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-            overlay_svg = payload.get("overlay_svg")
-            if isinstance(overlay_svg, str) and overlay_svg.strip():
-                out_svg.write_text(overlay_svg, encoding="utf-8")
-            else:
-                out_svg.write_text("", encoding="utf-8")
-
-            generator_overlay_svg = payload.get("generator_overlay_svg")
-            if isinstance(generator_overlay_svg, str) and generator_overlay_svg.strip():
-                out_generator_svg.write_text(generator_overlay_svg, encoding="utf-8")
-                frame_item["generator_overlay_path"] = str(out_generator_svg)
-            else:
-                # Keep directory tidy; only write when available.
-                if out_generator_svg.exists():
-                    out_generator_svg.unlink()
-
-            # If the final decision is a segmentation reject, also export the rejected prompt overlay
-            # so that the user can inspect what the LVLM generated before constraints.
-            arb = payload.get("arbiter_decision") or {}
-            debug = arb.get("debug") or {}
-            generator_payload = {
-                "frame_name": str(frame_name),
-                "image_path": str(frame.image_path),
-                "generator_raw": debug.get("generator_raw"),
-                "generator_decision": debug.get("generator_decision"),
-                "generator_rejected_decision": debug.get("generator_rejected_decision"),
-                "generator_overlay_path": str(out_generator_svg) if out_generator_svg.exists() else None,
-            }
-            has_generator_payload = any(
-                generator_payload.get(key)
-                for key in ("generator_raw", "generator_decision", "generator_rejected_decision", "generator_overlay_path")
-            )
-            if has_generator_payload:
-                out_generator_json.write_text(
-                    json.dumps(generator_payload, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-                frame_item["generator_json_path"] = str(out_generator_json)
-            elif out_generator_json.exists():
-                out_generator_json.unlink()
-
-            rejected_prompt = debug.get("rejected_rendered_prompt")
-            if isinstance(rejected_prompt, dict) and rejected_prompt:
-                try:
-                    rejected_svg = _render_overlay_from_prompt(
-                        image_path=frame.image_path,
-                        rendered_prompt=rejected_prompt,
-                        title="Rejected Visual Prompt (Pre-Constraint)",
+                llm_input_artifacts: list[str] = []
+                for item in list(payload.get("llm_input_images") or []):
+                    if not isinstance(item, dict):
+                        continue
+                    role = _safe_artifact_name(str(item.get("role") or item.get("image_role") or "llm_input"))
+                    output_path = _write_data_url_image(
+                        str(item.get("data_url") or ""),
+                        llm_inputs_dir / f"{frame_name}.{role}",
                     )
-                    out_rejected_svg.write_text(rejected_svg, encoding="utf-8")
-                except Exception:
+                    if output_path is not None:
+                        llm_input_artifacts.append(str(output_path))
+                        item["saved_path"] = str(output_path)
+                if llm_input_artifacts:
+                    frame_item["llm_input_images"] = llm_input_artifacts
+                out_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+                overlay_svg = payload.get("overlay_svg")
+                if isinstance(overlay_svg, str) and overlay_svg.strip():
+                    out_svg.write_text(overlay_svg, encoding="utf-8")
+                else:
+                    out_svg.write_text("", encoding="utf-8")
+
+                generator_overlay_svg = payload.get("generator_overlay_svg")
+                if isinstance(generator_overlay_svg, str) and generator_overlay_svg.strip():
+                    out_generator_svg.write_text(generator_overlay_svg, encoding="utf-8")
+                    frame_item["generator_overlay_path"] = str(out_generator_svg)
+                else:
+                    # Keep directory tidy; only write when available.
+                    if out_generator_svg.exists():
+                        out_generator_svg.unlink()
+
+                # If the final decision is a segmentation reject, also export the rejected prompt overlay
+                # so that the user can inspect what the LVLM generated before constraints.
+                arb = payload.get("arbiter_decision") or {}
+                debug = arb.get("debug") or {}
+                generator_payload = {
+                    "frame_name": str(frame_name),
+                    "image_path": str(frame.image_path),
+                    "generator_raw": debug.get("generator_raw"),
+                    "generator_decision": debug.get("generator_decision"),
+                    "generator_rejected_decision": debug.get("generator_rejected_decision"),
+                    "generator_overlay_path": str(out_generator_svg) if out_generator_svg.exists() else None,
+                }
+                has_generator_payload = any(
+                    generator_payload.get(key)
+                    for key in ("generator_raw", "generator_decision", "generator_rejected_decision", "generator_overlay_path")
+                )
+                if has_generator_payload:
+                    out_generator_json.write_text(
+                        json.dumps(generator_payload, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                    frame_item["generator_json_path"] = str(out_generator_json)
+                elif out_generator_json.exists():
+                    out_generator_json.unlink()
+
+                rejected_prompt = debug.get("rejected_rendered_prompt")
+                if isinstance(rejected_prompt, dict) and rejected_prompt:
+                    try:
+                        rejected_svg = _render_overlay_from_prompt(
+                            image_path=frame.image_path,
+                            rendered_prompt=rejected_prompt,
+                            title="Rejected Visual Prompt (Pre-Constraint)",
+                        )
+                        out_rejected_svg.write_text(rejected_svg, encoding="utf-8")
+                    except Exception:
+                        if out_rejected_svg.exists():
+                            out_rejected_svg.unlink()
+                else:
                     if out_rejected_svg.exists():
                         out_rejected_svg.unlink()
-            else:
-                if out_rejected_svg.exists():
-                    out_rejected_svg.unlink()
-        except Exception as exc:
-            frame_item["status"] = "error"
-            frame_item["error"] = str(exc)
-            failures += 1
+            except Exception as exc:
+                frame_item["status"] = "error"
+                frame_item["error"] = str(exc)
+                failures += 1
 
-        manifest["frames"].append(frame_item)
+            manifest["frames"].append(frame_item)
+    finally:
+        if bev_map_provider_session is not None:
+            manifest["bev_map_provider_cache"] = bev_map_provider_session.cache_stats()
+            await bev_map_provider_session.disconnect()
 
     manifest["frames_failed"] = failures
     manifest["frames_succeeded"] = max(len(manifest["frames"]) - failures, 0)

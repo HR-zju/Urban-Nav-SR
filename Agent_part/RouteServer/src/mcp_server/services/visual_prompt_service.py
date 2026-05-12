@@ -32,12 +32,14 @@ import base64
 from copy import deepcopy
 import io
 import json
+import math
 import os
 from html import escape
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
+from urllib.request import Request, urlopen
 from uuid import uuid4
 
 from PIL import Image, ImageOps
@@ -240,6 +242,202 @@ def _local_image_path_to_llm_data_url(
             jpeg_quality=jpeg_quality,
         )["image_data_url"]
     )
+
+
+def _lat_lng_from_gps(gps: Any) -> tuple[float, float] | None:
+    if not isinstance(gps, dict):
+        return None
+    try:
+        lat = float(gps.get("lat", gps.get("latitude")))
+        lng = float(gps.get("lng", gps.get("lon", gps.get("longitude"))))
+    except Exception:
+        return None
+    if not (-85.0 <= lat <= 85.0 and -180.0 <= lng <= 180.0):
+        return None
+    return lat, lng
+
+
+def _osm_tile_xy_float(*, lat: float, lng: float, zoom: int) -> tuple[float, float]:
+    """Project WGS84 into Web-Mercator slippy tile coordinates."""
+    lat_rad = math.radians(max(-85.05112878, min(85.05112878, float(lat))))
+    n = float(2**int(zoom))
+    x = (float(lng) + 180.0) / 360.0 * n
+    y = (1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n
+    return x, y
+
+
+def _fetch_osm_tile_image(*, x: int, y: int, zoom: int) -> Image.Image:
+    """Fetch one real OSM raster tile with a small on-disk cache."""
+    n = 2**int(zoom)
+    x_wrapped = int(x) % n
+    y_clamped = max(0, min(n - 1, int(y)))
+    cache_dir = Path(os.getenv("BEV_MAP_TILE_CACHE_DIR", "/tmp/urban_nav_osm_tiles")).expanduser()
+    tile_path = cache_dir / str(int(zoom)) / str(x_wrapped) / f"{y_clamped}.png"
+    if tile_path.exists():
+        return Image.open(tile_path).convert("RGB")
+    tile_path.parent.mkdir(parents=True, exist_ok=True)
+    template = os.getenv("BEV_MAP_TILE_URL_TEMPLATE", "https://tile.openstreetmap.org/{z}/{x}/{y}.png").strip()
+    url = template.format(z=int(zoom), x=x_wrapped, y=y_clamped)
+    timeout_s = float(os.getenv("BEV_MAP_TILE_TIMEOUT_S", "8") or 8)
+    request = Request(
+        url,
+        headers={
+            "User-Agent": os.getenv(
+                "BEV_MAP_TILE_USER_AGENT",
+                "UrbanNavRouteServer/0.1 (+https://openstreetmap.org)",
+            )
+        },
+    )
+    with urlopen(request, timeout=timeout_s) as response:
+        raw = response.read()
+    tile_path.write_bytes(raw)
+    return Image.open(io.BytesIO(raw)).convert("RGB")
+
+
+def _bev_map_heading_rotation_deg(raw_heading_deg: float) -> tuple[float, dict[str, Any]]:
+    """Resolve map screenshot rotation from raw heading convention and offset.
+
+    Supported conventions:
+        compass: 0 deg = north, 90 deg = east, clockwise-positive.
+        enu_yaw: 0 deg = east, 90 deg = north, counter-clockwise-positive.
+
+    PIL rotates images counter-clockwise for positive angles. For a north-up
+    slippy map, rotating by the compass heading puts the current forward
+    direction at the top of the BEV screenshot.
+    """
+    convention = os.getenv("BEV_MAP_HEADING_CONVENTION", "compass").strip().lower() or "compass"
+    offset_deg = float(os.getenv("BEV_MAP_HEADING_OFFSET_DEG", "0") or 0.0)
+    raw = float(raw_heading_deg)
+    if convention in {"enu", "enu_yaw", "ros_enu", "ros"}:
+        compass_heading = (90.0 - raw) % 360.0
+        resolved_convention = "enu_yaw"
+    else:
+        compass_heading = raw % 360.0
+        resolved_convention = "compass"
+    rotation_deg = (compass_heading + offset_deg) % 360.0
+    return rotation_deg, {
+        "raw_heading_deg": round(raw % 360.0, 3),
+        "heading_convention": resolved_convention,
+        "heading_offset_deg": round(float(offset_deg), 3),
+        "compass_heading_deg": round(float(compass_heading), 3),
+        "heading_rotation_deg": round(float(rotation_deg), 3),
+    }
+
+
+def _build_bev_map_overlay_payload(
+    *,
+    local_bev_context: dict[str, Any],
+    llm_max_bytes: int,
+    llm_jpeg_quality: int,
+) -> dict[str, Any] | None:
+    """Build a real OpenStreetMap screenshot as an ego-aligned BEV input.
+
+    Unlike the earlier semantic sketch, this path uses actual OSM raster tiles:
+
+        GNSS -> Web-Mercator tile mosaic -> heading rotation -> center crop
+
+    The resulting image is a true map screenshot. It is intentionally not a
+    structured semantic prompt; LVLM receives it as an image only.
+    """
+    if not isinstance(local_bev_context, dict):
+        return None
+    gps = _lat_lng_from_gps(
+        local_bev_context.get("_origin_gps")
+        or local_bev_context.get("origin_gps")
+        or local_bev_context.get("gps")
+    )
+    if gps is None:
+        return None
+    lat, lng = gps
+    output_size = int(os.getenv("BEV_MAP_TILE_OUTPUT_SIZE_PX", "640") or 640)
+    tile_size = 256
+    zoom = int(os.getenv("BEV_MAP_TILE_ZOOM", "19") or 19)
+    mosaic_tiles = max(3, min(7, int(os.getenv("BEV_MAP_TILE_MOSAIC_TILES", "5") or 5)))
+    if mosaic_tiles % 2 == 0:
+        mosaic_tiles += 1
+    raw_heading_deg = float(local_bev_context.get("bev_rotation_deg", 0.0) or 0.0)
+    heading_rotation_deg, heading_debug = _bev_map_heading_rotation_deg(raw_heading_deg)
+    center_x, center_y = _osm_tile_xy_float(lat=lat, lng=lng, zoom=zoom)
+    center_px = center_x * tile_size
+    center_py = center_y * tile_size
+    center_tile_x = int(math.floor(center_x))
+    center_tile_y = int(math.floor(center_y))
+    half_tiles = mosaic_tiles // 2
+    mosaic = Image.new("RGB", (mosaic_tiles * tile_size, mosaic_tiles * tile_size), (242, 239, 233))
+    tile_errors: list[str] = []
+    fetched_tiles = 0
+    for dx in range(-half_tiles, half_tiles + 1):
+        for dy in range(-half_tiles, half_tiles + 1):
+            tx = center_tile_x + dx
+            ty = center_tile_y + dy
+            try:
+                tile = _fetch_osm_tile_image(x=tx, y=ty, zoom=zoom)
+                fetched_tiles += 1
+            except Exception as exc:
+                tile_errors.append(f"{zoom}/{tx}/{ty}:{exc}")
+                tile = Image.new("RGB", (tile_size, tile_size), (242, 239, 233))
+            paste_x = (dx + half_tiles) * tile_size
+            paste_y = (dy + half_tiles) * tile_size
+            mosaic.paste(tile.resize((tile_size, tile_size)), (paste_x, paste_y))
+
+    local_center_px = center_px - (center_tile_x - half_tiles) * tile_size
+    local_center_py = center_py - (center_tile_y - half_tiles) * tile_size
+    crop_side = min(mosaic.size) * 0.70
+    crop_box = (
+        int(round(local_center_px - crop_side / 2.0)),
+        int(round(local_center_py - crop_side / 2.0)),
+        int(round(local_center_px + crop_side / 2.0)),
+        int(round(local_center_py + crop_side / 2.0)),
+    )
+    # Rotate the full tile mosaic around ego before cropping. Cropping first would
+    # rotate a bounded square and expose irregular edge artifacts in the final BEV.
+    rotated_mosaic = mosaic.rotate(
+        float(heading_rotation_deg),
+        resample=Image.Resampling.BICUBIC,
+        expand=False,
+        center=(float(local_center_px), float(local_center_py)),
+        fillcolor=(242, 239, 233),
+    )
+    ego_aligned = rotated_mosaic.crop(
+        (
+            crop_box[0],
+            crop_box[1],
+            crop_box[2],
+            crop_box[3],
+        )
+    )
+    image = ego_aligned.resize((output_size, output_size), Image.Resampling.LANCZOS).convert("RGB")
+
+    data_url, byte_count, used_quality = _jpeg_data_url_under_limit(
+        image,
+        max_bytes=llm_max_bytes,
+        jpeg_quality=llm_jpeg_quality,
+    )
+    return {
+        "bev_map_overlay_image_data_url": data_url,
+        "image_role": "bev_map_overlay",
+        "source": "openstreetmap_raster_tiles",
+        "llm_image_size": [output_size, output_size],
+        "tile_provider": os.getenv("BEV_MAP_TILE_URL_TEMPLATE", "https://tile.openstreetmap.org/{z}/{x}/{y}.png"),
+        "tile_zoom": int(zoom),
+        "tile_mosaic": [int(mosaic_tiles), int(mosaic_tiles)],
+        "tile_center_float": [round(float(center_x), 6), round(float(center_y), 6)],
+        "alignment_order": "rotate_mosaic_then_center_crop",
+        "rotation_center_px": [round(float(local_center_px), 3), round(float(local_center_py), 3)],
+        "crop_side_px": round(float(crop_side), 3),
+        "fetched_tiles": int(fetched_tiles),
+        "tile_errors": tile_errors[:6],
+        **heading_debug,
+        "encoded_bytes": int(byte_count),
+        "jpeg_quality": int(used_quality),
+        "legend": {
+            "image_role": "bev_map_overlay",
+            "source": "real_openstreetmap_raster_screenshot",
+            "coordinate_frame": "ego_aligned_bev",
+            "forward_axis": "image_up_after_heading_rotation",
+            "usage": "Real OSM screenshot for cross-view topology only; place final prompt on the FPV image, not in BEV coordinates.",
+        },
+    }
 
 
 def _scale_point_uv(value: Any, *, scale_x: float, scale_y: float) -> list[float] | None:
@@ -795,18 +993,18 @@ def _apply_segmentation_constraint(
 def _arbiter_extra_image_urls(
     *,
     fpv_segmentation: Dict[str, Any] | None,
-    enable_segmentation_overlay_input: bool,
+    enable_sam_visualization_input: bool,
     llm_max_side: int,
     llm_max_bytes: int,
     llm_jpeg_quality: int,
 ) -> tuple[list[str], dict[str, Any]]:
     debug: dict[str, Any] = {
-        "enabled": bool(enable_segmentation_overlay_input),
+        "enabled": bool(enable_sam_visualization_input),
         "used": False,
         "source": None,
         "error": None,
     }
-    if not enable_segmentation_overlay_input or not isinstance(fpv_segmentation, dict):
+    if not enable_sam_visualization_input or not isinstance(fpv_segmentation, dict):
         return [], debug
 
     visualization_url = str(
@@ -1038,6 +1236,7 @@ def _build_inputs_for_A(
     som_summary: Dict[str, Any] | None,
     som_candidate_hints: list[dict[str, Any]],
     som_overlay_legend: Dict[str, Any] | None,
+    bev_map_overlay_legend: Dict[str, Any] | None,
     som_spatial_constraints: Dict[str, Any] | None,
 ) -> Dict[str, Any]:
     """Assemble the A-stage LVLM contract from route intent and visual priors.
@@ -1066,6 +1265,7 @@ def _build_inputs_for_A(
             som_summary=som_summary,
             som_candidate_hints=som_candidate_hints,
             som_overlay_legend=som_overlay_legend,
+            bev_map_overlay_legend=bev_map_overlay_legend,
             som_spatial_constraints=som_spatial_constraints,
             alignment_report=teacher_alignment_report,
             overlay_legend=overlay_legend,
@@ -1150,6 +1350,7 @@ async def _run_V_verifier(
     som_summary: Dict[str, Any] | None,
     som_candidate_hints: list[dict[str, Any]],
     som_overlay_legend: Dict[str, Any] | None,
+    bev_map_overlay_legend: Dict[str, Any] | None,
     som_spatial_constraints: Dict[str, Any] | None,
     segmentation_validation: Dict[str, Any] | None,
     alignment_report: Dict[str, Any] | None,
@@ -1169,6 +1370,7 @@ async def _run_V_verifier(
         som_summary=som_summary,
         som_candidate_hints=som_candidate_hints,
         som_overlay_legend=som_overlay_legend,
+        bev_map_overlay_legend=bev_map_overlay_legend,
         som_spatial_constraints=som_spatial_constraints,
         segmentation_validation=segmentation_validation,
         alignment_report=alignment_report,
@@ -1222,6 +1424,8 @@ async def run_zero_shot_visual_prompt_pipeline(
     navigation_mode: str = "foot",
     enable_verifier: bool = False,
     enable_segmentation_overlay_input: bool = False,
+    enable_som_overlay_input: bool | None = None,
+    enable_sam_visualization_input: bool = False,
     enable_bev_map_provider: bool = False,
     bev_map_provider_session: Any | None = None,
     enforce_alignment: bool = True,
@@ -1241,6 +1445,11 @@ async def run_zero_shot_visual_prompt_pipeline(
     7. Return the decision, overlays, debug context, and optional QA bundle.
     """
     del visual_top_k, candidate_top_k
+    resolved_enable_som_overlay_input = (
+        bool(enable_segmentation_overlay_input)
+        if enable_som_overlay_input is None
+        else bool(enable_som_overlay_input)
+    )
     started_at = perf_counter()
     resolved_request_id = str(request_id or uuid4())
     telemetry: Dict[str, Any] = {
@@ -1283,6 +1492,7 @@ async def run_zero_shot_visual_prompt_pipeline(
     _mark_stage("route_context", route_stage_started_at, status="ok")
     route_context_dict = route_context_to_dict(state.route_context)
     local_bev_dict = local_bev_context_to_dict(state.local_bev_context)
+    local_bev_dict["_origin_gps"] = {"lat": float(gps["lat"]), "lng": float(gps["lng"])}
     bev_map_error: str | None = None
     if enable_bev_map_provider:
         bev_map_stage_started_at = perf_counter()
@@ -1345,12 +1555,20 @@ async def run_zero_shot_visual_prompt_pipeline(
     llm_safe_corridor_prior: Dict[str, Any] | None = None
     som_overlay_payload: Dict[str, Any] | None = None
     som_overlay_legend: Dict[str, Any] | None = None
+    bev_map_overlay_payload: Dict[str, Any] | None = None
+    bev_map_overlay_legend: Dict[str, Any] | None = None
     segmentation_error: str | None = None
     segmentation_error_code: str | None = None
     segmentation_teacher_bundle: Dict[str, Any] | None = None
     extra_image_urls: list[str] = []
     multi_image_debug: dict[str, Any] = {
-        "enabled": bool(enable_segmentation_overlay_input),
+        "enabled": bool(
+            resolved_enable_som_overlay_input
+            or enable_sam_visualization_input
+            or enable_bev_map_provider
+        ),
+        "som_overlay_enabled": bool(resolved_enable_som_overlay_input),
+        "sam_visualization_enabled": bool(enable_sam_visualization_input),
         "used": False,
     }
     llm_input_images: list[dict[str, Any]] = []
@@ -1456,7 +1674,7 @@ async def run_zero_shot_visual_prompt_pipeline(
             scale_x=float(source_to_llm_scale["x"]),
             scale_y=float(source_to_llm_scale["y"]),
         )
-        if enable_segmentation_overlay_input:
+        if resolved_enable_som_overlay_input:
             som_overlay_payload = build_numbered_som_overlay_payload(
                 image=prompt_image,
                 som_context=som_context,
@@ -1505,28 +1723,92 @@ async def run_zero_shot_visual_prompt_pipeline(
     else:
         _mark_stage("segmentation", segmentation_stage_started_at, status="skipped")
 
-    extra_image_urls, multi_image_debug = _arbiter_extra_image_urls(
+    segmentation_extra_image_urls, multi_image_debug = _arbiter_extra_image_urls(
         fpv_segmentation=fpv_segmentation,
-        enable_segmentation_overlay_input=enable_segmentation_overlay_input,
+        enable_sam_visualization_input=enable_sam_visualization_input,
         llm_max_side=llm_max_side,
         llm_max_bytes=llm_max_bytes,
         llm_jpeg_quality=llm_jpeg_quality,
+    )
+    multi_image_debug["som_overlay_enabled"] = bool(resolved_enable_som_overlay_input)
+    multi_image_debug["sam_visualization_enabled"] = bool(enable_sam_visualization_input)
+    multi_image_debug["enabled"] = bool(
+        resolved_enable_som_overlay_input
+        or enable_sam_visualization_input
+        or enable_bev_map_provider
     )
     multi_image_debug["llm_primary_image"] = {
         key: value
         for key, value in llm_image_payload.items()
         if key != "image_data_url"
     }
+    extra_image_urls = []
+    extra_image_records: list[dict[str, Any]] = []
     som_overlay_url = ""
-    if enable_segmentation_overlay_input and isinstance(som_overlay_payload, dict):
+    if resolved_enable_som_overlay_input and isinstance(som_overlay_payload, dict):
         som_overlay_url = str(som_overlay_payload.get("som_overlay_image_data_url") or "").strip()
         if som_overlay_url:
-            extra_image_urls.insert(0, som_overlay_url)
+            extra_image_urls.append(som_overlay_url)
+            extra_image_records.append(
+                {
+                    "role": "numbered_som_overlay",
+                    "image_role": "numbered_som_overlay",
+                    "data_url": som_overlay_url,
+                    "metadata": {
+                        "som_overlay_legend": som_overlay_legend,
+                        "llm_image_size": (som_overlay_payload or {}).get("llm_image_size") if isinstance(som_overlay_payload, dict) else None,
+                        "source_image_size": (som_overlay_payload or {}).get("source_image_size") if isinstance(som_overlay_payload, dict) else None,
+                    },
+                }
+            )
             multi_image_debug["used"] = True
             multi_image_debug["primary_extra_image_role"] = "numbered_som_overlay"
             multi_image_debug["som_overlay_used"] = True
             multi_image_debug["som_overlay_source"] = "generated_numbered_som_overlay"
             multi_image_debug["som_overlay_legend"] = som_overlay_legend
+
+    if enable_bev_map_provider:
+        bev_map_overlay_payload = _build_bev_map_overlay_payload(
+            local_bev_context=local_bev_dict,
+            llm_max_bytes=llm_max_bytes,
+            llm_jpeg_quality=llm_jpeg_quality,
+        )
+        if isinstance(bev_map_overlay_payload, dict):
+            bev_map_overlay_url = str(bev_map_overlay_payload.get("bev_map_overlay_image_data_url") or "").strip()
+            bev_map_overlay_legend = (
+                bev_map_overlay_payload.get("legend")
+                if isinstance(bev_map_overlay_payload.get("legend"), dict)
+                else None
+            )
+            if bev_map_overlay_url:
+                extra_image_urls.append(bev_map_overlay_url)
+                extra_image_records.append(
+                    {
+                        "role": "bev_map_overlay",
+                        "image_role": "bev_map_overlay",
+                        "data_url": bev_map_overlay_url,
+                        "metadata": {
+                            key: value
+                            for key, value in bev_map_overlay_payload.items()
+                            if key != "bev_map_overlay_image_data_url"
+                        },
+                    }
+                )
+                multi_image_debug["used"] = True
+                multi_image_debug["bev_map_overlay_used"] = True
+                multi_image_debug["bev_map_overlay_legend"] = bev_map_overlay_legend
+
+    for index, url in enumerate(segmentation_extra_image_urls):
+        role = "segmentation_visualization" if index == 0 else f"extra_image_{index}"
+        extra_image_urls.append(url)
+        extra_image_records.append(
+            {
+                "role": role,
+                "image_role": role,
+                "data_url": url,
+                "metadata": {"source": multi_image_debug.get("source")},
+            }
+        )
 
     if emit_llm_input_images:
         llm_input_images.append(
@@ -1541,31 +1823,7 @@ async def run_zero_shot_visual_prompt_pipeline(
                 },
             }
         )
-        if som_overlay_url:
-            llm_input_images.append(
-                {
-                    "role": "numbered_som_overlay",
-                    "image_role": "numbered_som_overlay",
-                    "data_url": som_overlay_url,
-                    "metadata": {
-                        "som_overlay_legend": som_overlay_legend,
-                        "llm_image_size": (som_overlay_payload or {}).get("llm_image_size") if isinstance(som_overlay_payload, dict) else None,
-                        "source_image_size": (som_overlay_payload or {}).get("source_image_size") if isinstance(som_overlay_payload, dict) else None,
-                    },
-                }
-            )
-        for index, url in enumerate(extra_image_urls):
-            if som_overlay_url and url == som_overlay_url:
-                continue
-            role = "segmentation_visualization" if index <= 1 else f"extra_image_{index}"
-            llm_input_images.append(
-                {
-                    "role": role,
-                    "image_role": role,
-                    "data_url": url,
-                    "metadata": {"source": multi_image_debug.get("source")},
-                }
-            )
+        llm_input_images.extend(extra_image_records)
 
     llm_raw: Dict[str, Any] | None = None
     verifier_raw: Dict[str, Any] | None = None
@@ -1606,6 +1864,7 @@ async def run_zero_shot_visual_prompt_pipeline(
                 som_summary=llm_som_summary,
                 som_candidate_hints=llm_som_candidate_hints,
                 som_overlay_legend=som_overlay_legend,
+                bev_map_overlay_legend=bev_map_overlay_legend,
                 som_spatial_constraints=llm_som_spatial_constraints,
             )
             question = str(av_inputs.get("question") or "")
@@ -1682,6 +1941,7 @@ async def run_zero_shot_visual_prompt_pipeline(
                         som_summary=llm_som_summary,
                         som_candidate_hints=llm_som_candidate_hints,
                         som_overlay_legend=som_overlay_legend,
+                        bev_map_overlay_legend=bev_map_overlay_legend,
                         som_spatial_constraints=llm_som_spatial_constraints,
                         segmentation_validation=llm_segmentation_validation,
                         alignment_report=av_inputs.get("alignment_report") if isinstance(av_inputs.get("alignment_report"), dict) else None,
@@ -1807,6 +2067,8 @@ async def run_zero_shot_visual_prompt_pipeline(
         decision_dict["debug"]["som_candidate_hints"] = som_candidate_hints
     if som_overlay_legend:
         decision_dict["debug"]["som_overlay_legend"] = som_overlay_legend
+    if bev_map_overlay_legend:
+        decision_dict["debug"]["bev_map_overlay_legend"] = bev_map_overlay_legend
     if som_spatial_constraints:
         decision_dict["debug"]["som_spatial_constraints"] = som_spatial_constraints
     if safe_corridor_prior:
@@ -1925,6 +2187,12 @@ async def run_zero_shot_visual_prompt_pipeline(
             som_overlay_payload.get("som_collage_image_data_url") if isinstance(som_overlay_payload, dict) else None
         ),
         "som_overlay_legend": som_overlay_legend,
+        "bev_map_overlay_image_data_url": (
+            bev_map_overlay_payload.get("bev_map_overlay_image_data_url")
+            if isinstance(bev_map_overlay_payload, dict)
+            else None
+        ),
+        "bev_map_overlay_legend": bev_map_overlay_legend,
         "llm_image": {
             key: value
             for key, value in llm_image_payload.items()

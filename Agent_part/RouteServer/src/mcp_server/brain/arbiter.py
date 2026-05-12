@@ -128,6 +128,11 @@ def build_direct_prompt_system_prompt() -> str:
         "- Mention the chosen SoM label/region_id in reason when it helps explain the prompt.\n"
         "- If prompt and region anchors disagree, trust visible safety and explain why in reason.\n"
         "\n"
+        "If bev_map_overlay_legend is present:\n"
+        "- One extra image is a real OpenStreetMap raster screenshot rotated into an ego-aligned BEV view where forward is up.\n"
+        "- Use it only as cross-view route/topology context; final prompt coordinates must still be placed on the FPV image plane.\n"
+        "- Do not copy BEV geometry into image pixels; use it to disambiguate sidewalk, crossing, entrance, and route intent.\n"
+        "\n"
         "If you cannot draw a corridor that stays on visible traversable support, set reject_all=true."
     )
 
@@ -163,6 +168,7 @@ def build_direct_prompt_question(
     som_summary: dict[str, Any] | None = None,
     som_candidate_hints: list[dict[str, Any]] | None = None,
     som_overlay_legend: dict[str, Any] | None = None,
+    bev_map_overlay_legend: dict[str, Any] | None = None,
     som_spatial_constraints: dict[str, Any] | None = None,
     alignment_report: dict[str, Any] | None = None,
     overlay_legend: dict[str, Any] | None = None,
@@ -222,6 +228,7 @@ def build_direct_prompt_question(
             "som_summary": som_summary,
             "som_candidate_hints": som_candidate_hints,
             "som_overlay_legend": som_overlay_legend,
+            "bev_map_overlay_legend": bev_map_overlay_legend,
             "som_spatial_constraints": som_spatial_constraints,
             "alignment_report": alignment_report,
             "overlay_legend": overlay_legend,
@@ -234,6 +241,7 @@ def build_direct_prompt_question(
                 "Avoid obstacles and people; do not place center or boundaries on them.",
                 "If segmentation summary is present: keep center inside allowed_traversable; prefer traversable over conditional_traversable; keep boundaries away from forbidden.",
                 "If som_overlay_legend is present: use the numbered SoM overlay image to align region labels with visible pixels.",
+                "If bev_map_overlay_legend is present: use the real OSM screenshot as cross-view topology context only; final prompt coordinates are still FPV image coordinates.",
                 "If som_summary is present: use preferred/conditional/forbidden SoM labels as grounding context, not as fixed candidate paths.",
                 "Favor top-ranked preferred traversable SoM region anchors, use conditional/yellow connectors only when needed, and avoid forbidden/red labels.",
                 "If som_spatial_constraints is present: obey corridor_width_constraint; do not place center or left/right boundary points inside forbidden_regions; road/curb/gutter regions may only be connector support.",
@@ -288,6 +296,7 @@ def build_direct_prompt_verifier_question(
     som_summary: dict[str, Any] | None = None,
     som_candidate_hints: list[dict[str, Any]] | None = None,
     som_overlay_legend: dict[str, Any] | None = None,
+    bev_map_overlay_legend: dict[str, Any] | None = None,
     som_spatial_constraints: dict[str, Any] | None = None,
     segmentation_validation: dict[str, Any] | None = None,
     alignment_report: dict[str, Any] | None = None,
@@ -310,6 +319,7 @@ def build_direct_prompt_verifier_question(
             "som_summary": som_summary,
             "som_candidate_hints": som_candidate_hints,
             "som_overlay_legend": som_overlay_legend,
+            "bev_map_overlay_legend": bev_map_overlay_legend,
             "som_spatial_constraints": som_spatial_constraints,
             "segmentation_validation": segmentation_validation,
             "alignment_report": alignment_report,
@@ -323,6 +333,7 @@ def build_direct_prompt_verifier_question(
                 "If fpv_segmentation_summary is present, verify that the path stays inside allowed_traversable classes, prefers traversable classes, and does not cross forbidden classes.",
                 "If segmentation_validation is present, explicitly repair the listed forbidden hit points or reject if repair is impossible.",
                 "If som_overlay_legend is present, use the numbered SoM overlay image to verify the path against the labeled region pixels and avoid red forbidden labels.",
+                "If bev_map_overlay_legend is present, use the real OSM screenshot only for cross-view route/topology consistency; keep all revised prompt coordinates in FPV image space.",
                 "If som_summary is present, verify that the selected path remains geometrically consistent with its top-ranked region anchors.",
                 "If som_spatial_constraints is present, enforce its bottom-center start constraint, corridor_width_constraint, and forbidden/conditional region rules.",
                 "If centerline_constraint or edge_margin_constraint is present, repair prompts whose centerline hugs a traversable edge or whose boundaries trace the free-space/sidewalk edge.",
