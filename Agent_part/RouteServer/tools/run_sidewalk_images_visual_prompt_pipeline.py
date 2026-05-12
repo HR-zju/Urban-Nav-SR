@@ -39,6 +39,9 @@ class TrajectoryFrame:
     lng: float
     heading_deg: float | None
     image_path: Path
+    roll_deg: float | None = None
+    pitch_deg: float | None = None
+    attitude_source: str | None = None
 
 
 @dataclass(frozen=True)
@@ -131,6 +134,17 @@ def build_navigation_path_gps(
     return path
 
 
+def _camera_attitude_for_frame(frame: TrajectoryFrame) -> dict[str, Any] | None:
+    """Return optional frame attitude for FPV ground-geometry normalization."""
+    if frame.roll_deg is None and frame.pitch_deg is None:
+        return None
+    return {
+        "roll_deg": float(frame.roll_deg) if frame.roll_deg is not None else None,
+        "pitch_deg": float(frame.pitch_deg) if frame.pitch_deg is not None else None,
+        "source": str(frame.attitude_source or "trajectory_json"),
+    }
+
+
 def _load_trajectory_frames(*, trajectory_path: Path, images_dir: Path) -> dict[str, TrajectoryFrame]:
     raw = json.loads(trajectory_path.read_text(encoding="utf-8"))
     if not isinstance(raw, list):
@@ -150,6 +164,9 @@ def _load_trajectory_frames(*, trajectory_path: Path, images_dir: Path) -> dict[
         lng = float(item.get("lng"))
         heading = item.get("heading_deg")
         heading_deg = float(heading) if heading is not None else None
+        roll = item.get("roll_deg")
+        pitch = item.get("pitch_deg")
+        attitude_source = item.get("attitude_source")
         resolved_image = images_dir / f"{frame_name}.jpg"
         if not resolved_image.exists():
             # Try original extension if it's not jpg.
@@ -160,6 +177,9 @@ def _load_trajectory_frames(*, trajectory_path: Path, images_dir: Path) -> dict[
             lng=lng,
             heading_deg=heading_deg,
             image_path=resolved_image,
+            roll_deg=float(roll) if roll is not None else None,
+            pitch_deg=float(pitch) if pitch is not None else None,
+            attitude_source=str(attitude_source) if attitude_source else None,
         )
     if not frames:
         raise RuntimeError(f"No usable frames found in trajectory: {trajectory_path}")
@@ -391,6 +411,7 @@ async def _run_frame(
         heading_deg=float(heading),
         navigation_path_gps=navigation_path_gps,
         navigation_path_source="offline_trajectory" if navigation_path_gps else None,
+        camera_attitude=_camera_attitude_for_frame(frame),
         lookahead_m=float(lookahead_m),
         off_route_threshold_m=float(off_route_threshold_m),
         front_extent_m=float(front_extent_m),
@@ -438,10 +459,13 @@ def _build_frame_jobs(
     camera_view: str,
     json_dir: Path,
     overlays_dir: Path,
-    allow_missing_segmentation: bool,
+    segmentation_policy: str,
 ) -> tuple[list[FrameJob], int]:
     jobs: list[FrameJob] = []
     preflight_failures = 0
+    segmentation_policy = str(segmentation_policy or "optional").strip().lower()
+    if segmentation_policy not in {"required", "optional", "disabled"}:
+        raise RuntimeError(f"Unsupported segmentation policy: {segmentation_policy!r}")
     for frame_name in selected:
         frame = frames_by_name.get(frame_name)
         frame_item: dict[str, Any]
@@ -471,13 +495,15 @@ def _build_frame_jobs(
             frame_item["error"] = f"image_missing:{frame.image_path}"
             jobs.append(FrameJob(frame_name=str(frame_name), frame=frame, fpv_segmentation=None, frame_item=frame_item))
             continue
-        fpv_seg = _segmentation_artifacts_for_frame(
-            sam3_output_base_dir=sam3_output_base_dir,
-            sequence_name=str(sequence_name),
-            camera_view=str(camera_view),
-            frame_name=str(frame_name),
-        )
-        if fpv_seg is None and not allow_missing_segmentation:
+        fpv_seg = None
+        if segmentation_policy != "disabled":
+            fpv_seg = _segmentation_artifacts_for_frame(
+                sam3_output_base_dir=sam3_output_base_dir,
+                sequence_name=str(sequence_name),
+                camera_view=str(camera_view),
+                frame_name=str(frame_name),
+            )
+        if fpv_seg is None and segmentation_policy == "required":
             preflight_failures += 1
             frame_item["status"] = "error"
             frame_item["error"] = "missing_segmentation_artifacts"
@@ -715,6 +741,15 @@ def parse_args() -> argparse.Namespace:
         help="Query the configured map provider for OSM-style semantic BEV anchors around each GNSS frame",
     )
     parser.add_argument(
+        "--segmentation-policy",
+        default="optional",
+        choices=["required", "optional", "disabled"],
+        help=(
+            "How to treat SAM/SAM3 artifacts. required fails frames without masks; "
+            "optional uses masks when present; disabled ignores segmentation artifacts."
+        ),
+    )
+    parser.add_argument(
         "--enforce-alignment",
         dest="enforce_alignment",
         action="store_true",
@@ -738,7 +773,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--allow-missing-segmentation",
         action="store_true",
-        help="If SAM3 artifacts for a frame are missing, proceed without segmentation instead of failing",
+        help="Compatibility alias for --segmentation-policy optional.",
     )
     return parser.parse_args()
 
@@ -755,6 +790,9 @@ async def main_async() -> None:
         raise RuntimeError(f"images-dir not found: {images_dir}")
     if not trajectory_path.exists():
         raise RuntimeError(f"trajectory-json not found: {trajectory_path}")
+    segmentation_policy = str(args.segmentation_policy or "optional").strip().lower()
+    if bool(args.allow_missing_segmentation) and segmentation_policy == "required":
+        segmentation_policy = "optional"
 
     _ensure_dir(output_dir)
     overlays_dir = output_dir / "overlay"
@@ -810,6 +848,7 @@ async def main_async() -> None:
         "frames_total": len(selected),
         "frames_failed": 0,
         "sam3_inference_elapsed_ms": sam3_inference_elapsed_ms,
+        "segmentation_policy": segmentation_policy,
         "frames": [],
     }
 
@@ -828,7 +867,7 @@ async def main_async() -> None:
         camera_view=str(args.camera_view),
         json_dir=json_dir,
         overlays_dir=overlays_dir,
-        allow_missing_segmentation=bool(args.allow_missing_segmentation),
+        segmentation_policy=segmentation_policy,
     )
     navigation_path_gps = build_navigation_path_gps(
         selected_frame_names=selected,

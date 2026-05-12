@@ -4,6 +4,37 @@
 
 ## 2026-05-12
 
+### 增加缺省 Segmentation 策略与可选 IMU 姿态接入
+
+- 批处理主流程新增 `--segmentation-policy required|optional|disabled`：
+  - `required`：缺少 SAM/SAM3 mask 的帧直接失败。
+  - `optional`：有 mask 时启用 SoM、safe corridor、validation/repair；没有 mask 时仍允许 LVLM+BEV 生成 visual prompt。
+  - `disabled`：完全忽略 segmentation artifacts，便于纯 FPV/BEV baseline 或消融实验。
+- `--allow-missing-segmentation` 保留为兼容参数，等价于 optional 模式。
+- MCAP 输入抽取工具新增可选姿态同步：
+  - `--imu-topic auto|none|<topic>`
+  - `--pose-topic auto|none|<topic>`
+  - `--attitude-policy optional|required|disabled`
+- 当 MCAP 中存在 `sensor_msgs/Imu` 或 `geometry_msgs/PoseStamped` 四元数时，`trajectory.json` 每帧会写入：
+  - `roll_deg`
+  - `pitch_deg`
+  - `attitude_yaw_deg`
+  - `attitude_source`
+  - `attitude_sync_delta_s`
+- 四元数转换公式：
+  - `roll = atan2(2(wx + yz), 1 - 2(x^2 + y^2))`
+  - `pitch = asin(clamp(2(wy - zx), -1, 1))`
+  - `yaw = atan2(2(wz + xy), 1 - 2(y^2 + z^2))`
+- visual prompt service 会把 frame attitude 传入 `segmentation_context.camera_attitude`。
+- safe corridor prior 新增 roll-aware gravity alignment：
+  - 先按 `-roll_deg` 将 semantic mask 旋转到近似重力对齐空间。
+  - 在对齐后的 mask 中运行原有 obstacle-aware corridor planning。
+  - 再按 `+roll_deg` 把 path、boundary 和 polygon 映射回源图像坐标。
+- 新增环境变量：
+  - `VISUAL_PROMPT_ATTITUDE_RECTIFY=1|0`
+  - `VISUAL_PROMPT_ATTITUDE_RECTIFY_MIN_ROLL_DEG=<degrees>`
+- 没有 IMU/Pose 或 roll 小于阈值时，自动回退到原水平 scanline prior，不影响现有数据集。
+
 ### BEV 输入增加当前位置与导航路径
 
 - OSM BEV screenshot 现在会绘制导航参考路径：

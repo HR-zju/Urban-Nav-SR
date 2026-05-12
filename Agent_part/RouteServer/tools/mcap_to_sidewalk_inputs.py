@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import bisect
 import json
+import math
 import struct
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -85,6 +86,16 @@ class HeadingSample:
     timestamp_ns: int
     heading_deg: float
     source_topic: str
+
+
+@dataclass(frozen=True)
+class AttitudeSample:
+    timestamp_ns: int
+    roll_deg: float
+    pitch_deg: float
+    yaw_deg: float
+    source_topic: str
+    source_schema: str
 
 
 def _read_u16(buffer: bytes, offset: int) -> tuple[int, int]:
@@ -302,6 +313,68 @@ def _parse_float64(payload: bytes, *, timestamp_ns: int, source_topic: str) -> H
     return HeadingSample(timestamp_ns=int(timestamp_ns), heading_deg=float(heading) % 360.0, source_topic=source_topic)
 
 
+def _quaternion_to_euler_deg(*, x: float, y: float, z: float, w: float) -> tuple[float, float, float]:
+    """Convert ROS quaternion xyzw into roll/pitch/yaw degrees.
+
+    Formula:
+        roll  = atan2(2(wx + yz), 1 - 2(x^2 + y^2))
+        pitch = asin(clamp(2(wy - zx), -1, 1))
+        yaw   = atan2(2(wz + xy), 1 - 2(y^2 + z^2))
+    """
+    sinr_cosp = 2.0 * (float(w) * float(x) + float(y) * float(z))
+    cosr_cosp = 1.0 - 2.0 * (float(x) * float(x) + float(y) * float(y))
+    roll = math.atan2(sinr_cosp, cosr_cosp)
+    sinp = max(-1.0, min(1.0, 2.0 * (float(w) * float(y) - float(z) * float(x))))
+    pitch = math.asin(sinp)
+    siny_cosp = 2.0 * (float(w) * float(z) + float(x) * float(y))
+    cosy_cosp = 1.0 - 2.0 * (float(y) * float(y) + float(z) * float(z))
+    yaw = math.atan2(siny_cosp, cosy_cosp)
+    return math.degrees(roll), math.degrees(pitch), math.degrees(yaw)
+
+
+def _parse_imu_attitude(payload: bytes, *, timestamp_ns: int, source_topic: str, source_schema: str) -> AttitudeSample:
+    reader = CdrReader(payload)
+    _ = reader.int32()  # header.stamp.sec
+    _ = reader.uint32()  # header.stamp.nanosec
+    _ = reader.string()  # header.frame_id
+    qx = reader.float64()
+    qy = reader.float64()
+    qz = reader.float64()
+    qw = reader.float64()
+    roll_deg, pitch_deg, yaw_deg = _quaternion_to_euler_deg(x=qx, y=qy, z=qz, w=qw)
+    return AttitudeSample(
+        timestamp_ns=int(timestamp_ns),
+        roll_deg=float(roll_deg),
+        pitch_deg=float(pitch_deg),
+        yaw_deg=float(yaw_deg),
+        source_topic=source_topic,
+        source_schema=source_schema,
+    )
+
+
+def _parse_posestamped_attitude(payload: bytes, *, timestamp_ns: int, source_topic: str, source_schema: str) -> AttitudeSample:
+    reader = CdrReader(payload)
+    _ = reader.int32()  # header.stamp.sec
+    _ = reader.uint32()  # header.stamp.nanosec
+    _ = reader.string()  # header.frame_id
+    _ = reader.float64()  # pose.position.x
+    _ = reader.float64()  # pose.position.y
+    _ = reader.float64()  # pose.position.z
+    qx = reader.float64()
+    qy = reader.float64()
+    qz = reader.float64()
+    qw = reader.float64()
+    roll_deg, pitch_deg, yaw_deg = _quaternion_to_euler_deg(x=qx, y=qy, z=qz, w=qw)
+    return AttitudeSample(
+        timestamp_ns=int(timestamp_ns),
+        roll_deg=float(roll_deg),
+        pitch_deg=float(pitch_deg),
+        yaw_deg=float(yaw_deg),
+        source_topic=source_topic,
+        source_schema=source_schema,
+    )
+
+
 def _extract_jpeg_bytes(payload: bytes) -> bytes:
     # sensor_msgs/CompressedImage stores format + uint8[] data, but direct JPEG
     # marker extraction is more tolerant of custom encoders and still validates
@@ -355,6 +428,31 @@ def _choose_channel(
     return sorted(candidates, key=lambda item: item.topic)[0]
 
 
+def _choose_optional_channel(
+    channels: dict[int, ChannelInfo],
+    *,
+    requested_topic: str,
+    schema_substrings: list[str],
+    role: str,
+) -> ChannelInfo | None:
+    requested = str(requested_topic or "").strip()
+    if requested and requested.lower() not in {"auto", "none", "disabled"}:
+        for channel in channels.values():
+            if channel.topic == requested:
+                return channel
+        raise RuntimeError(f"Requested {role} topic not found: {requested}")
+    if requested.lower() in {"none", "disabled"}:
+        return None
+    candidates = [
+        channel
+        for channel in channels.values()
+        if any(schema.lower() in channel.schema_name.lower() for schema in schema_substrings)
+    ]
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda item: item.topic)[0]
+
+
 def extract_mcap_inputs(
     *,
     mcap_path: Path,
@@ -362,6 +460,9 @@ def extract_mcap_inputs(
     image_topic: str,
     gps_topic: str,
     heading_topic: str,
+    imu_topic: str,
+    pose_topic: str,
+    attitude_policy: str,
     sample_fps: float,
     max_sync_delta_s: float,
     image_start_index: int,
@@ -371,6 +472,7 @@ def extract_mcap_inputs(
     images: list[ImageSample] = []
     gps_samples: list[GpsSample] = []
     heading_samples: list[HeadingSample] = []
+    attitude_samples: list[AttitudeSample] = []
     message_counts: dict[str, int] = {}
 
     # MCAP files commonly store schemas/channels in the summary section after
@@ -388,6 +490,26 @@ def extract_mcap_inputs(
     image_channel = _choose_channel(channels, requested_topic=image_topic, schema_substring="CompressedImage", role="image")
     gps_channel = _choose_channel(channels, requested_topic=gps_topic, schema_substring="NavSatFix", role="gps")
     heading_channel = _choose_channel(channels, requested_topic=heading_topic, schema_substring="Float64", role="heading")
+    attitude_policy = str(attitude_policy or "optional").strip().lower()
+    if attitude_policy not in {"optional", "required", "disabled"}:
+        raise RuntimeError(f"Unsupported attitude policy: {attitude_policy!r}")
+    imu_channel = None
+    pose_channel = None
+    if attitude_policy != "disabled":
+        imu_channel = _choose_optional_channel(
+            channels,
+            requested_topic=imu_topic,
+            schema_substrings=["Imu"],
+            role="imu",
+        )
+        pose_channel = _choose_optional_channel(
+            channels,
+            requested_topic=pose_topic,
+            schema_substrings=["PoseStamped"],
+            role="pose",
+        )
+        if attitude_policy == "required" and imu_channel is None and pose_channel is None:
+            raise RuntimeError("Attitude policy is required, but no IMU/Pose attitude channel was found")
 
     for opcode, payload in _iter_mcap_records(mcap_path):
         if opcode != 6:  # chunk
@@ -419,6 +541,30 @@ def extract_mcap_inputs(
                     heading_samples.append(_parse_float64(message_payload, timestamp_ns=timestamp_ns, source_topic=channel.topic))
                 except Exception:
                     continue
+            elif imu_channel is not None and channel_id == imu_channel.channel_id:
+                try:
+                    attitude_samples.append(
+                        _parse_imu_attitude(
+                            message_payload,
+                            timestamp_ns=timestamp_ns,
+                            source_topic=channel.topic,
+                            source_schema=channel.schema_name,
+                        )
+                    )
+                except Exception:
+                    continue
+            elif pose_channel is not None and channel_id == pose_channel.channel_id:
+                try:
+                    attitude_samples.append(
+                        _parse_posestamped_attitude(
+                            message_payload,
+                            timestamp_ns=timestamp_ns,
+                            source_topic=channel.topic,
+                            source_schema=channel.schema_name,
+                        )
+                    )
+                except Exception:
+                    continue
 
     if not images:
         raise RuntimeError(f"No images extracted from topic: {image_channel.topic}")
@@ -426,12 +572,16 @@ def extract_mcap_inputs(
         raise RuntimeError(f"No GPS samples extracted from topic: {gps_channel.topic}")
     if not heading_samples:
         raise RuntimeError(f"No heading samples extracted from topic: {heading_channel.topic}")
+    if attitude_policy == "required" and not attitude_samples:
+        raise RuntimeError("Attitude policy is required, but no valid IMU/Pose attitude samples were extracted")
 
     images = sorted(images, key=lambda item: item.timestamp_ns)
     gps_samples = sorted(gps_samples, key=lambda item: item.timestamp_ns)
     heading_samples = sorted(heading_samples, key=lambda item: item.timestamp_ns)
+    attitude_samples = sorted(attitude_samples, key=lambda item: item.timestamp_ns)
     gps_timestamps = [sample.timestamp_ns for sample in gps_samples]
     heading_timestamps = [sample.timestamp_ns for sample in heading_samples]
+    attitude_timestamps = [sample.timestamp_ns for sample in attitude_samples]
 
     output_dir.mkdir(parents=True, exist_ok=True)
     images_dir = output_dir / "images"
@@ -453,6 +603,7 @@ def extract_mcap_inputs(
 
         gps, gps_delta_ns = _nearest_sample(gps_samples, gps_timestamps, image.timestamp_ns)
         heading, heading_delta_ns = _nearest_sample(heading_samples, heading_timestamps, image.timestamp_ns)
+        attitude, attitude_delta_ns = _nearest_sample(attitude_samples, attitude_timestamps, image.timestamp_ns)
         if gps is None or heading is None or gps_delta_ns is None or heading_delta_ns is None:
             skipped_records.append({"timestamp": image.timestamp_ns, "reason": "missing_nearest_pose"})
             continue
@@ -466,18 +617,32 @@ def extract_mcap_inputs(
                 }
             )
             continue
+        attitude_payload: dict[str, Any] = {"attitude_source": "missing"}
+        if attitude is not None and attitude_delta_ns is not None and attitude_delta_ns <= max_delta_ns:
+            attitude_payload = {
+                "roll_deg": float(attitude.roll_deg),
+                "pitch_deg": float(attitude.pitch_deg),
+                "attitude_yaw_deg": float(attitude.yaw_deg),
+                "attitude_source": "imu" if "Imu" in attitude.source_schema else "pose",
+                "attitude_topic": attitude.source_topic,
+                "attitude_schema": attitude.source_schema,
+                "attitude_sync_delta_s": round(float(attitude_delta_ns) / 1e9, 6),
+            }
+        elif attitude_policy == "required":
+            skipped_records.append({"timestamp": image.timestamp_ns, "reason": "missing_nearest_attitude"})
+            continue
 
         image_path = images_dir / f"{frame_index:06d}.jpg"
         image_path.write_bytes(image.data)
-        trajectory.append(
-            {
-                "timestamp": int(image.timestamp_ns),
-                "lat": float(gps.lat),
-                "lng": float(gps.lng),
-                "heading_deg": float(heading.heading_deg),
-                "image_path": str(image_path),
-            }
-        )
+        trajectory_row = {
+            "timestamp": int(image.timestamp_ns),
+            "lat": float(gps.lat),
+            "lng": float(gps.lng),
+            "heading_deg": float(heading.heading_deg),
+            "image_path": str(image_path),
+            **attitude_payload,
+        }
+        trajectory.append(trajectory_row)
         frame_records.append(
             {
                 "frame_index": int(frame_index),
@@ -496,6 +661,7 @@ def extract_mcap_inputs(
                     "heading_deg": float(heading.heading_deg),
                     "sync_delta_s": round(float(heading_delta_ns) / 1e9, 6),
                 },
+                "attitude": attitude_payload,
             }
         )
         frame_index += 1
@@ -518,6 +684,9 @@ def extract_mcap_inputs(
         "image_topic": image_channel.topic,
         "gps_topic": gps_channel.topic,
         "heading_topic": heading_channel.topic,
+        "imu_topic": imu_channel.topic if imu_channel is not None else None,
+        "pose_topic": pose_channel.topic if pose_channel is not None else None,
+        "attitude_policy": attitude_policy,
         "sample_fps": float(sample_fps),
         "max_sync_delta_s": float(max_sync_delta_s),
         "image_start_index": int(image_start_index),
@@ -525,6 +694,7 @@ def extract_mcap_inputs(
             "images": len(images),
             "gps_samples": len(gps_samples),
             "heading_samples": len(heading_samples),
+            "attitude_samples": len(attitude_samples),
         },
         "written_frames": len(trajectory),
         "skipped_frames": len(skipped_records),
@@ -549,6 +719,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--image-topic", default="/camera_x001/image_raw/compressed", help="CompressedImage topic, or auto")
     parser.add_argument("--gps-topic", default="/baton/gnss/spp_fix", help="NavSatFix topic, or auto")
     parser.add_argument("--heading-topic", default="/baton/gnss/heading", help="Float64 heading topic, or auto")
+    parser.add_argument(
+        "--imu-topic",
+        default="auto",
+        help="Optional sensor_msgs/Imu attitude topic. Use auto, none, or an exact topic name.",
+    )
+    parser.add_argument(
+        "--pose-topic",
+        default="auto",
+        help="Optional geometry_msgs/PoseStamped attitude topic. Use auto, none, or an exact topic name.",
+    )
+    parser.add_argument(
+        "--attitude-policy",
+        default="optional",
+        choices=["optional", "required", "disabled"],
+        help="Whether roll/pitch extraction is optional, required, or disabled.",
+    )
     parser.add_argument("--sample-fps", type=float, default=1.0, help="Target image sampling rate; <=0 keeps all images")
     parser.add_argument("--max-sync-delta-s", type=float, default=0.5, help="Max nearest GPS/heading sync delta per frame")
     parser.add_argument("--image-start-index", type=int, default=1, help="First output frame index")
@@ -563,6 +749,9 @@ def main() -> None:
         image_topic=str(args.image_topic),
         gps_topic=str(args.gps_topic),
         heading_topic=str(args.heading_topic),
+        imu_topic=str(args.imu_topic),
+        pose_topic=str(args.pose_topic),
+        attitude_policy=str(args.attitude_policy),
         sample_fps=float(args.sample_fps),
         max_sync_delta_s=float(args.max_sync_delta_s),
         image_start_index=int(args.image_start_index),

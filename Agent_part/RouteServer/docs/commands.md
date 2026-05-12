@@ -44,6 +44,9 @@ python tools/mcap_to_sidewalk_inputs.py \
   --image-topic /camera_x001/image_raw/compressed \
   --gps-topic /baton/gnss/spp_fix \
   --heading-topic /baton/gnss/heading \
+  --imu-topic auto \
+  --pose-topic auto \
+  --attitude-policy optional \
   --sample-fps 1.0 \
   --max-sync-delta-s 0.5 \
   --image-start-index 1
@@ -56,6 +59,9 @@ python tools/mcap_to_sidewalk_inputs.py \
 - `--image-topic`：`sensor_msgs/msg/CompressedImage` 图像 topic。
 - `--gps-topic`：`sensor_msgs/msg/NavSatFix` GNSS topic。
 - `--heading-topic`：`std_msgs/msg/Float64` heading topic。
+- `--imu-topic`：可选 `sensor_msgs/msg/Imu` 姿态 topic；`auto` 表示按 schema 自动选择，`none` 表示禁用。
+- `--pose-topic`：可选 `geometry_msgs/msg/PoseStamped` 姿态 topic；`auto` 表示按 schema 自动选择，`none` 表示禁用。
+- `--attitude-policy`：姿态抽取策略；`optional` 表示有则同步 roll/pitch、无则继续，`required` 表示缺姿态时跳过帧，`disabled` 表示完全关闭。
 - `--sample-fps 1.0`：按 1 FPS 抽帧；设为 `0` 或负数表示保留全部图像帧。
 - `--max-sync-delta-s 0.5`：图像帧与最近 GNSS/heading 样本的最大允许时间差。
 - `--image-start-index 1`：输出图像从 `000001.jpg` 开始编号。
@@ -97,6 +103,7 @@ python tools/run_sidewalk_images_visual_prompt_pipeline.py \
   --sequence-name viobot_sidewalk_zju_081025_15 \
   --camera-view camera_front \
   --sam3-output-base-dir "$WORK_DIR/sam3" \
+  --segmentation-policy optional \
   --enable-segmentation-overlay-input \
   --no-emit-llm-input-images \
   --enforce-alignment \
@@ -109,6 +116,7 @@ python tools/run_sidewalk_images_visual_prompt_pipeline.py \
   --sequence-name viobot_sidewalk_zju_081025_16 \
   --camera-view camera_front \
   --sam3-output-base-dir "$WORK_DIR/sam3" \
+  --segmentation-policy optional \
   --sam3-env-name sam3 \
   --sam3-inference-script /home/ubuntu/WorkSpace/project/SR/Code/sam3/scripts/batch_sam3_demo_260124.py \
   --checkpoint-path /media/ubuntu/data1/checkpoints/checkpoint_35_merged.pt \
@@ -144,5 +152,8 @@ python tools/run_sidewalk_images_visual_prompt_pipeline.py \
 - `--llm-concurrency 2`：推荐首选加速设置。
 - `--llm-concurrency 4`：只有在模型 API 额度、QPS 和稳定性允许时再使用。
 - 输出 `manifest.json` 会记录 `llm_concurrency`，并保持 `frames` 按输入帧顺序回填。
+- `--segmentation-policy optional`：推荐缺省模式；有 SAM/SAM3 时启用 SoM、safe corridor 和 validation，没有 mask 时仍允许 FPV+BEV zero-shot baseline 输出。
+- `--segmentation-policy required`：严格实验模式，缺少 segmentation artifacts 的帧直接失败。
+- `--segmentation-policy disabled`：纯 FPV/BEV 消融模式，完全忽略 segmentation artifacts。
 
 如果需要同时运行 SAM3，则追加 `--run-sam3`、`--sam3-env-name`、`--sam3-inference-script` 和 `--checkpoint-path` 等参数。

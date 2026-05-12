@@ -52,6 +52,8 @@ DEFAULT_NON_FOOT_CORRIDOR_WIDTH_RATIO = 0.75
 CORRIDOR_WIDTH_RATIO_ENV = "VISUAL_PROMPT_CORRIDOR_WIDTH_RATIO"
 CENTERLINE_OFFSET_RATIO_ENV = "VISUAL_PROMPT_CENTERLINE_OFFSET_RATIO"
 EDGE_MARGIN_RATIO_ENV = "VISUAL_PROMPT_EDGE_MARGIN_RATIO"
+ATTITUDE_RECTIFY_ENV = "VISUAL_PROMPT_ATTITUDE_RECTIFY"
+ATTITUDE_RECTIFY_MIN_ROLL_DEG_ENV = "VISUAL_PROMPT_ATTITUDE_RECTIFY_MIN_ROLL_DEG"
 
 
 def _clamp_int(value: int, lower: int, upper: int) -> int:
@@ -508,10 +510,102 @@ def _direction_from_path(path_uv: list[list[float]]) -> list[float] | None:
     return [round(dx / norm, 4), round(dy / norm, 4)]
 
 
+def _roll_rectification_enabled() -> bool:
+    raw = os.getenv(ATTITUDE_RECTIFY_ENV, "1").strip().lower()
+    return raw not in {"0", "false", "no", "off", "disabled"}
+
+
+def _attitude_roll_deg(segmentation_context: dict[str, Any]) -> float | None:
+    attitude = segmentation_context.get("camera_attitude")
+    if not isinstance(attitude, dict):
+        summary = segmentation_context.get("summary")
+        if isinstance(summary, dict):
+            attitude = summary.get("camera_attitude")
+    if not isinstance(attitude, dict) or attitude.get("roll_deg") is None:
+        return None
+    try:
+        return float(attitude["roll_deg"])
+    except Exception:
+        return None
+
+
+def _rotate_mask_nearest(mask: np.ndarray, *, angle_deg: float, fill_value: int) -> np.ndarray:
+    """Rotate a label mask around image center while preserving integer ids."""
+    if _ndimage is not None:
+        rotated = _ndimage.rotate(
+            mask,
+            float(angle_deg),
+            reshape=False,
+            order=0,
+            mode="constant",
+            cval=int(fill_value),
+            prefilter=False,
+        )
+        return np.asarray(rotated, dtype=mask.dtype)
+    image = Image.fromarray(mask.astype(np.int32), mode="I")
+    resampling = getattr(Image, "Resampling", Image).NEAREST
+    rotated = image.rotate(
+        float(angle_deg),
+        resample=resampling,
+        expand=False,
+        center=((mask.shape[1] - 1) * 0.5, (mask.shape[0] - 1) * 0.5),
+        fillcolor=int(fill_value),
+    )
+    return np.asarray(rotated, dtype=mask.dtype)
+
+
+def _rotate_uv(point: list[float], *, width: int, height: int, angle_deg: float) -> list[float]:
+    """Rotate an image-space point around the image center."""
+    cx = (float(width) - 1.0) * 0.5
+    cy = (float(height) - 1.0) * 0.5
+    theta = math.radians(float(angle_deg))
+    cos_t = math.cos(theta)
+    sin_t = math.sin(theta)
+    dx = float(point[0]) - cx
+    dy = float(point[1]) - cy
+    u = cx + dx * cos_t - dy * sin_t
+    v = cy + dx * sin_t + dy * cos_t
+    return [round(_clamp_float(u, 0.0, float(width - 1)), 2), round(_clamp_float(v, 0.0, float(height - 1)), 2)]
+
+
+def _map_prior_points_with_rotation(
+    prior: dict[str, Any],
+    *,
+    width: int,
+    height: int,
+    angle_deg: float,
+) -> dict[str, Any]:
+    """Map a prior generated in rectified mask space back to source pixels."""
+    mapped = dict(prior)
+    for key in ("path_uv", "coverage_polygon_uv"):
+        value = mapped.get(key)
+        if isinstance(value, list):
+            mapped[key] = [
+                _rotate_uv(point, width=width, height=height, angle_deg=angle_deg)
+                for point in value
+                if isinstance(point, list) and len(point) >= 2
+            ]
+    mapped_samples: list[dict[str, Any]] = []
+    for sample in list(mapped.get("path_samples") or []):
+        if not isinstance(sample, dict):
+            continue
+        sample_copy = dict(sample)
+        for key in ("center_uv", "left_edge_uv", "right_edge_uv"):
+            point = sample_copy.get(key)
+            if isinstance(point, list) and len(point) >= 2:
+                sample_copy[key] = _rotate_uv(point, width=width, height=height, angle_deg=angle_deg)
+        mapped_samples.append(sample_copy)
+    mapped["path_samples"] = mapped_samples
+    if isinstance(mapped.get("path_uv"), list):
+        mapped["direction_vec"] = _direction_from_path(mapped["path_uv"])
+    return mapped
+
+
 def build_safe_corridor_prior(
     segmentation_context: dict[str, Any] | None,
     *,
     sample_count: int = 5,
+    _roll_rectified: bool = False,
 ) -> dict[str, Any] | None:
     """Build a deterministic, obstacle-aware corridor prior from the mask.
 
@@ -538,6 +632,39 @@ def build_safe_corridor_prior(
     mask = segmentation_context.get("mask")
     if not isinstance(mask, np.ndarray) or mask.ndim != 2:
         return None
+    if not _roll_rectified and _roll_rectification_enabled():
+        roll_deg = _attitude_roll_deg(segmentation_context)
+        min_roll_deg = abs(float(os.getenv(ATTITUDE_RECTIFY_MIN_ROLL_DEG_ENV, "2.0") or 2.0))
+        if roll_deg is not None and abs(float(roll_deg)) >= min_roll_deg:
+            fill_value = int(np.bincount(mask.reshape(-1).astype(np.int64)).argmax()) if mask.size else 0
+            rectified_mask = _rotate_mask_nearest(mask, angle_deg=-float(roll_deg), fill_value=fill_value)
+            rectified_context = dict(segmentation_context)
+            rectified_context["mask"] = rectified_mask
+            rectified_context["camera_attitude_rectification"] = {
+                "applied": True,
+                "roll_deg": float(roll_deg),
+                "rectified_angle_deg": -float(roll_deg),
+                "inverse_angle_deg": float(roll_deg),
+                "model": "gravity_aligned_roll_rectification_v1",
+            }
+            rectified_prior = build_safe_corridor_prior(
+                rectified_context,
+                sample_count=sample_count,
+                _roll_rectified=True,
+            )
+            if isinstance(rectified_prior, dict):
+                mapped = _map_prior_points_with_rotation(
+                    rectified_prior,
+                    width=int(mask.shape[1]),
+                    height=int(mask.shape[0]),
+                    angle_deg=float(roll_deg),
+                )
+                mapped["source"] = "segmentation_safe_corridor_prior_roll_rectified_v1"
+                mapped["debug"] = {
+                    **dict(mapped.get("debug") or {}),
+                    "camera_attitude_rectification": rectified_context["camera_attitude_rectification"],
+                }
+                return mapped
     traversable_ids = set(segmentation_context.get("traversable_ids") or [])
     conditional_ids = set(segmentation_context.get("conditional_traversable_ids") or [])
     allowed_ids = set(segmentation_context.get("allowed_traversable_ids") or (traversable_ids | conditional_ids))
