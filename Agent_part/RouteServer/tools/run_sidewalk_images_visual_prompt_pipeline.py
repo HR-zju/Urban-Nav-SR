@@ -29,6 +29,7 @@ from mcp_server.utils.timing import (  # noqa: E402
     summarize_visual_prompt_manifest_timings,
     timer_start,
 )
+from mcp_server.utils.async_batch import run_ordered_bounded  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,14 @@ class TrajectoryFrame:
     lng: float
     heading_deg: float | None
     image_path: Path
+
+
+@dataclass(frozen=True)
+class FrameJob:
+    frame_name: str
+    frame: TrajectoryFrame | None
+    fpv_segmentation: dict[str, Any] | None
+    frame_item: dict[str, Any]
 
 
 def _wrap_180(deg: float) -> float:
@@ -402,6 +411,220 @@ def _render_overlay_from_prompt(*, image_path: Path, rendered_prompt: dict[str, 
     )
 
 
+def _build_frame_jobs(
+    *,
+    selected: list[str],
+    frames_by_name: dict[str, TrajectoryFrame],
+    sam3_output_base_dir: Path,
+    sequence_name: str,
+    camera_view: str,
+    json_dir: Path,
+    overlays_dir: Path,
+    allow_missing_segmentation: bool,
+) -> tuple[list[FrameJob], int]:
+    jobs: list[FrameJob] = []
+    preflight_failures = 0
+    for frame_name in selected:
+        frame = frames_by_name.get(frame_name)
+        frame_item: dict[str, Any]
+        if frame is None:
+            preflight_failures += 1
+            jobs.append(
+                FrameJob(
+                    frame_name=str(frame_name),
+                    frame=None,
+                    fpv_segmentation=None,
+                    frame_item={"frame_name": frame_name, "status": "error", "error": "frame_missing_in_trajectory"},
+                )
+            )
+            continue
+        out_json = json_dir / f"{frame_name}.json"
+        out_svg = overlays_dir / f"{frame_name}.svg"
+        frame_item = {
+            "frame_name": str(frame_name),
+            "image_path": str(frame.image_path),
+            "json_path": str(out_json),
+            "overlay_path": str(out_svg),
+            "status": "ok",
+        }
+        if not frame.image_path.exists():
+            preflight_failures += 1
+            frame_item["status"] = "error"
+            frame_item["error"] = f"image_missing:{frame.image_path}"
+            jobs.append(FrameJob(frame_name=str(frame_name), frame=frame, fpv_segmentation=None, frame_item=frame_item))
+            continue
+        fpv_seg = _segmentation_artifacts_for_frame(
+            sam3_output_base_dir=sam3_output_base_dir,
+            sequence_name=str(sequence_name),
+            camera_view=str(camera_view),
+            frame_name=str(frame_name),
+        )
+        if fpv_seg is None and not allow_missing_segmentation:
+            preflight_failures += 1
+            frame_item["status"] = "error"
+            frame_item["error"] = "missing_segmentation_artifacts"
+        jobs.append(FrameJob(frame_name=str(frame_name), frame=frame, fpv_segmentation=fpv_seg, frame_item=frame_item))
+    return jobs, preflight_failures
+
+
+async def _process_frame_job(
+    *,
+    job: FrameJob,
+    route_length_m: float,
+    route_step_m: float,
+    lookahead_m: float,
+    off_route_threshold_m: float,
+    front_extent_m: float,
+    back_extent_m: float,
+    side_extent_m: float,
+    navigation_mode: str,
+    llm_detail: str,
+    enable_verifier: bool,
+    enable_segmentation_overlay_input: bool,
+    enable_som_overlay_input: bool | None,
+    enable_sam_visualization_input: bool,
+    enable_bev_map_provider: bool,
+    bev_map_provider_session: Any | None,
+    enforce_alignment: bool,
+    emit_qa_bundle: bool,
+    emit_llm_input_images: bool,
+    seg_vis_dir: Path,
+    llm_inputs_dir: Path,
+    json_dir: Path,
+    generator_json_dir: Path,
+    overlays_dir: Path,
+) -> dict[str, Any]:
+    frame_item = dict(job.frame_item)
+    frame_name = str(job.frame_name)
+    frame = job.frame
+    if frame is None or frame_item.get("status") == "error":
+        return frame_item
+
+    out_json = json_dir / f"{frame_name}.json"
+    out_generator_json = generator_json_dir / f"{frame_name}.generator.json"
+    out_svg = overlays_dir / f"{frame_name}.svg"
+    out_generator_svg = overlays_dir / f"{frame_name}.generator.svg"
+    out_rejected_svg = overlays_dir / f"{frame_name}.rejected.svg"
+    out_seg_vis = seg_vis_dir / f"{frame_name}_visualization.jpg"
+
+    frame_started_at = timer_start()
+    payload: dict[str, Any] | None = None
+    try:
+        if job.fpv_segmentation and isinstance(job.fpv_segmentation.get("visualization_path"), str):
+            src_vis = Path(str(job.fpv_segmentation.get("visualization_path"))).expanduser()
+            if src_vis.exists():
+                if out_seg_vis.exists() or out_seg_vis.is_symlink():
+                    out_seg_vis.unlink()
+                try:
+                    out_seg_vis.symlink_to(src_vis)
+                except Exception:
+                    out_seg_vis.write_bytes(src_vis.read_bytes())
+
+        payload = await _run_frame(
+            frame=frame,
+            route_length_m=float(route_length_m),
+            route_step_m=float(route_step_m),
+            lookahead_m=float(lookahead_m),
+            off_route_threshold_m=float(off_route_threshold_m),
+            front_extent_m=float(front_extent_m),
+            back_extent_m=float(back_extent_m),
+            side_extent_m=float(side_extent_m),
+            navigation_mode=str(navigation_mode),
+            llm_detail=str(llm_detail),
+            enable_verifier=bool(enable_verifier),
+            enable_segmentation_overlay_input=bool(enable_segmentation_overlay_input),
+            enable_som_overlay_input=enable_som_overlay_input,
+            enable_sam_visualization_input=bool(enable_sam_visualization_input),
+            enable_bev_map_provider=bool(enable_bev_map_provider),
+            bev_map_provider_session=bev_map_provider_session,
+            enforce_alignment=bool(enforce_alignment),
+            emit_qa_bundle=bool(emit_qa_bundle),
+            emit_llm_input_images=bool(emit_llm_input_images),
+            fpv_segmentation=job.fpv_segmentation,
+        )
+
+        artifact_started_at = timer_start()
+        llm_input_artifacts: list[str] = []
+        for item in list(payload.get("llm_input_images") or []):
+            if not isinstance(item, dict):
+                continue
+            role = _safe_artifact_name(str(item.get("role") or item.get("image_role") or "llm_input"))
+            output_path = _write_data_url_image(
+                str(item.get("data_url") or ""),
+                llm_inputs_dir / f"{frame_name}.{role}",
+            )
+            if output_path is not None:
+                llm_input_artifacts.append(str(output_path))
+                item["saved_path"] = str(output_path)
+        if llm_input_artifacts:
+            frame_item["llm_input_images"] = llm_input_artifacts
+        out_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        overlay_svg = payload.get("overlay_svg")
+        out_svg.write_text(overlay_svg if isinstance(overlay_svg, str) and overlay_svg.strip() else "", encoding="utf-8")
+
+        generator_overlay_svg = payload.get("generator_overlay_svg")
+        if isinstance(generator_overlay_svg, str) and generator_overlay_svg.strip():
+            out_generator_svg.write_text(generator_overlay_svg, encoding="utf-8")
+            frame_item["generator_overlay_path"] = str(out_generator_svg)
+        elif out_generator_svg.exists():
+            out_generator_svg.unlink()
+
+        arb = payload.get("arbiter_decision") or {}
+        debug = arb.get("debug") or {}
+        generator_payload = {
+            "frame_name": str(frame_name),
+            "image_path": str(frame.image_path),
+            "generator_raw": debug.get("generator_raw"),
+            "generator_decision": debug.get("generator_decision"),
+            "generator_rejected_decision": debug.get("generator_rejected_decision"),
+            "generator_overlay_path": str(out_generator_svg) if out_generator_svg.exists() else None,
+        }
+        has_generator_payload = any(
+            generator_payload.get(key)
+            for key in ("generator_raw", "generator_decision", "generator_rejected_decision", "generator_overlay_path")
+        )
+        if has_generator_payload:
+            out_generator_json.write_text(json.dumps(generator_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            frame_item["generator_json_path"] = str(out_generator_json)
+        elif out_generator_json.exists():
+            out_generator_json.unlink()
+
+        rejected_prompt = debug.get("rejected_rendered_prompt")
+        if isinstance(rejected_prompt, dict) and rejected_prompt:
+            try:
+                rejected_svg = _render_overlay_from_prompt(
+                    image_path=frame.image_path,
+                    rendered_prompt=rejected_prompt,
+                    title="Rejected Visual Prompt (Pre-Constraint)",
+                )
+                out_rejected_svg.write_text(rejected_svg, encoding="utf-8")
+            except Exception:
+                if out_rejected_svg.exists():
+                    out_rejected_svg.unlink()
+        elif out_rejected_svg.exists():
+            out_rejected_svg.unlink()
+
+        timing = compact_visual_prompt_frame_timing(
+            payload=payload,
+            runner_elapsed_ms=elapsed_ms(frame_started_at),
+            artifact_elapsed_ms=elapsed_ms(artifact_started_at),
+        )
+        frame_item["timing_ms"] = timing
+        print(format_visual_prompt_frame_timing(str(frame_name), timing, status=str(frame_item.get("status") or "ok")))
+    except Exception as exc:
+        frame_item["status"] = "error"
+        frame_item["error"] = str(exc)
+        timing = compact_visual_prompt_frame_timing(
+            payload=payload if isinstance(payload, dict) else None,
+            runner_elapsed_ms=elapsed_ms(frame_started_at),
+            artifact_elapsed_ms=0,
+        )
+        frame_item["timing_ms"] = timing
+        print(format_visual_prompt_frame_timing(str(frame_name), timing, status="error"))
+    return frame_item
+
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -444,6 +667,12 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--mode", default="foot", choices=["foot", "bike", "car"], help="Navigation mode")
     parser.add_argument("--llm-detail", default="auto", choices=["auto", "low", "high"], help="Vision detail")
+    parser.add_argument(
+        "--llm-concurrency",
+        type=int,
+        default=1,
+        help="Max number of frames that may call the LVLM pipeline concurrently",
+    )
     parser.add_argument("--enable-verifier", action=argparse.BooleanOptionalAction, default=False, help="Enable optional verifier LVLM call")
     parser.add_argument(
         "--enable-segmentation-overlay-input",
@@ -571,183 +800,66 @@ async def main_async() -> None:
         bev_map_provider_session = BEVMapProviderSession.from_env()
         await bev_map_provider_session.connect()
 
-    failures = 0
+    frame_jobs, preflight_failures = _build_frame_jobs(
+        selected=selected,
+        frames_by_name=frames_by_name,
+        sam3_output_base_dir=sam3_output_base_dir,
+        sequence_name=str(args.sequence_name),
+        camera_view=str(args.camera_view),
+        json_dir=json_dir,
+        overlays_dir=overlays_dir,
+        allow_missing_segmentation=bool(args.allow_missing_segmentation),
+    )
+    llm_concurrency = max(1, int(args.llm_concurrency or 1))
+    manifest["llm_concurrency"] = int(llm_concurrency)
     try:
-        for frame_name in selected:
-            frame = frames_by_name.get(frame_name)
-            if frame is None:
-                failures += 1
-                manifest["frames"].append(
-                    {"frame_name": frame_name, "status": "error", "error": "frame_missing_in_trajectory"}
-                )
-                continue
-            if not frame.image_path.exists():
-                failures += 1
-                manifest["frames"].append(
-                    {"frame_name": frame_name, "status": "error", "error": f"image_missing:{frame.image_path}"}
-                )
-                continue
-
-            fpv_seg = _segmentation_artifacts_for_frame(
-                sam3_output_base_dir=sam3_output_base_dir,
-                sequence_name=str(args.sequence_name),
-                camera_view=str(args.camera_view),
-                frame_name=str(frame_name),
+        async def _worker(_index: int, job: FrameJob) -> dict[str, Any]:
+            return await _process_frame_job(
+                job=job,
+                route_length_m=float(args.route_length_m),
+                route_step_m=float(args.route_step_m),
+                lookahead_m=float(args.lookahead_m),
+                off_route_threshold_m=float(args.off_route_threshold_m),
+                front_extent_m=float(args.front_extent_m),
+                back_extent_m=float(args.back_extent_m),
+                side_extent_m=float(args.side_extent_m),
+                navigation_mode=str(args.mode),
+                llm_detail=str(args.llm_detail),
+                enable_verifier=bool(args.enable_verifier),
+                enable_segmentation_overlay_input=bool(args.enable_segmentation_overlay_input),
+                enable_som_overlay_input=bool(args.enable_som_overlay_input or args.enable_segmentation_overlay_input),
+                enable_sam_visualization_input=bool(args.enable_sam_visualization_input),
+                enable_bev_map_provider=bool(args.enable_bev_map_provider),
+                bev_map_provider_session=bev_map_provider_session,
+                enforce_alignment=bool(args.enforce_alignment),
+                emit_qa_bundle=bool(args.emit_qa_bundle),
+                emit_llm_input_images=bool(args.emit_llm_input_images),
+                seg_vis_dir=seg_vis_dir,
+                llm_inputs_dir=llm_inputs_dir,
+                json_dir=json_dir,
+                generator_json_dir=generator_json_dir,
+                overlays_dir=overlays_dir,
             )
-            if fpv_seg is None and not args.allow_missing_segmentation:
-                failures += 1
+
+        results = await run_ordered_bounded(frame_jobs, _worker, concurrency=llm_concurrency)
+        for result in results:
+            if result.ok and isinstance(result.value, dict):
+                manifest["frames"].append(result.value)
+            else:
                 manifest["frames"].append(
-                    {"frame_name": frame_name, "status": "error", "error": "missing_segmentation_artifacts"}
+                    {
+                        "frame_name": getattr(result.item, "frame_name", str(result.item)),
+                        "status": "error",
+                        "error": result.error or "frame_worker_failed",
+                    }
                 )
-                continue
-
-            out_json = json_dir / f"{frame_name}.json"
-            out_generator_json = generator_json_dir / f"{frame_name}.generator.json"
-            out_svg = overlays_dir / f"{frame_name}.svg"
-            out_generator_svg = overlays_dir / f"{frame_name}.generator.svg"
-            out_rejected_svg = overlays_dir / f"{frame_name}.rejected.svg"
-            out_seg_vis = seg_vis_dir / f"{frame_name}_visualization.jpg"
-
-            frame_item: dict[str, Any] = {
-                "frame_name": str(frame_name),
-                "image_path": str(frame.image_path),
-                "json_path": str(out_json),
-                "overlay_path": str(out_svg),
-                "status": "ok",
-            }
-
-            try:
-                frame_started_at = timer_start()
-                payload: dict[str, Any] | None = None
-                # Keep segmentation visualization close to outputs for quick review.
-                if fpv_seg and isinstance(fpv_seg.get("visualization_path"), str):
-                    src_vis = Path(str(fpv_seg.get("visualization_path"))).expanduser()
-                    if src_vis.exists():
-                        if out_seg_vis.exists() or out_seg_vis.is_symlink():
-                            out_seg_vis.unlink()
-                        try:
-                            out_seg_vis.symlink_to(src_vis)
-                        except Exception:
-                            out_seg_vis.write_bytes(src_vis.read_bytes())
-                payload = await _run_frame(
-                    frame=frame,
-                    route_length_m=float(args.route_length_m),
-                    route_step_m=float(args.route_step_m),
-                    lookahead_m=float(args.lookahead_m),
-                    off_route_threshold_m=float(args.off_route_threshold_m),
-                    front_extent_m=float(args.front_extent_m),
-                    back_extent_m=float(args.back_extent_m),
-                    side_extent_m=float(args.side_extent_m),
-                    navigation_mode=str(args.mode),
-                    llm_detail=str(args.llm_detail),
-                    enable_verifier=bool(args.enable_verifier),
-                    enable_segmentation_overlay_input=bool(args.enable_segmentation_overlay_input),
-                    enable_som_overlay_input=bool(args.enable_som_overlay_input or args.enable_segmentation_overlay_input),
-                    enable_sam_visualization_input=bool(args.enable_sam_visualization_input),
-                    enable_bev_map_provider=bool(args.enable_bev_map_provider),
-                    bev_map_provider_session=bev_map_provider_session,
-                    enforce_alignment=bool(args.enforce_alignment),
-                    emit_qa_bundle=bool(args.emit_qa_bundle),
-                    emit_llm_input_images=bool(args.emit_llm_input_images),
-                    fpv_segmentation=fpv_seg,
-                )
-                artifact_started_at = timer_start()
-                llm_input_artifacts: list[str] = []
-                for item in list(payload.get("llm_input_images") or []):
-                    if not isinstance(item, dict):
-                        continue
-                    role = _safe_artifact_name(str(item.get("role") or item.get("image_role") or "llm_input"))
-                    output_path = _write_data_url_image(
-                        str(item.get("data_url") or ""),
-                        llm_inputs_dir / f"{frame_name}.{role}",
-                    )
-                    if output_path is not None:
-                        llm_input_artifacts.append(str(output_path))
-                        item["saved_path"] = str(output_path)
-                if llm_input_artifacts:
-                    frame_item["llm_input_images"] = llm_input_artifacts
-                out_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-                overlay_svg = payload.get("overlay_svg")
-                if isinstance(overlay_svg, str) and overlay_svg.strip():
-                    out_svg.write_text(overlay_svg, encoding="utf-8")
-                else:
-                    out_svg.write_text("", encoding="utf-8")
-
-                generator_overlay_svg = payload.get("generator_overlay_svg")
-                if isinstance(generator_overlay_svg, str) and generator_overlay_svg.strip():
-                    out_generator_svg.write_text(generator_overlay_svg, encoding="utf-8")
-                    frame_item["generator_overlay_path"] = str(out_generator_svg)
-                else:
-                    # Keep directory tidy; only write when available.
-                    if out_generator_svg.exists():
-                        out_generator_svg.unlink()
-
-                # If the final decision is a segmentation reject, also export the rejected prompt overlay
-                # so that the user can inspect what the LVLM generated before constraints.
-                arb = payload.get("arbiter_decision") or {}
-                debug = arb.get("debug") or {}
-                generator_payload = {
-                    "frame_name": str(frame_name),
-                    "image_path": str(frame.image_path),
-                    "generator_raw": debug.get("generator_raw"),
-                    "generator_decision": debug.get("generator_decision"),
-                    "generator_rejected_decision": debug.get("generator_rejected_decision"),
-                    "generator_overlay_path": str(out_generator_svg) if out_generator_svg.exists() else None,
-                }
-                has_generator_payload = any(
-                    generator_payload.get(key)
-                    for key in ("generator_raw", "generator_decision", "generator_rejected_decision", "generator_overlay_path")
-                )
-                if has_generator_payload:
-                    out_generator_json.write_text(
-                        json.dumps(generator_payload, ensure_ascii=False, indent=2),
-                        encoding="utf-8",
-                    )
-                    frame_item["generator_json_path"] = str(out_generator_json)
-                elif out_generator_json.exists():
-                    out_generator_json.unlink()
-
-                rejected_prompt = debug.get("rejected_rendered_prompt")
-                if isinstance(rejected_prompt, dict) and rejected_prompt:
-                    try:
-                        rejected_svg = _render_overlay_from_prompt(
-                            image_path=frame.image_path,
-                            rendered_prompt=rejected_prompt,
-                            title="Rejected Visual Prompt (Pre-Constraint)",
-                        )
-                        out_rejected_svg.write_text(rejected_svg, encoding="utf-8")
-                    except Exception:
-                        if out_rejected_svg.exists():
-                            out_rejected_svg.unlink()
-                else:
-                    if out_rejected_svg.exists():
-                        out_rejected_svg.unlink()
-                timing = compact_visual_prompt_frame_timing(
-                    payload=payload,
-                    runner_elapsed_ms=elapsed_ms(frame_started_at),
-                    artifact_elapsed_ms=elapsed_ms(artifact_started_at),
-                )
-                frame_item["timing_ms"] = timing
-                print(format_visual_prompt_frame_timing(str(frame_name), timing, status=str(frame_item.get("status") or "ok")))
-            except Exception as exc:
-                frame_item["status"] = "error"
-                frame_item["error"] = str(exc)
-                failures += 1
-                if "frame_started_at" in locals():
-                    timing = compact_visual_prompt_frame_timing(
-                        payload=payload if isinstance(payload, dict) else None,
-                        runner_elapsed_ms=elapsed_ms(frame_started_at),
-                        artifact_elapsed_ms=0,
-                    )
-                    frame_item["timing_ms"] = timing
-                    print(format_visual_prompt_frame_timing(str(frame_name), timing, status="error"))
-
-            manifest["frames"].append(frame_item)
     finally:
         if bev_map_provider_session is not None:
             manifest["bev_map_provider_cache"] = bev_map_provider_session.cache_stats()
             await bev_map_provider_session.disconnect()
 
+    failures = sum(1 for frame_item in manifest["frames"] if frame_item.get("status") != "ok")
+    manifest["preflight_frames_failed"] = int(preflight_failures)
     manifest["frames_failed"] = failures
     manifest["frames_succeeded"] = max(len(manifest["frames"]) - failures, 0)
     manifest["pipeline_elapsed_ms"] = elapsed_ms(pipeline_started_at)

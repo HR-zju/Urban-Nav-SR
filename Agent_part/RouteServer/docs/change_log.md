@@ -25,6 +25,9 @@
 
 - 新增 `mcp_server.utils.timing`，集中维护耗时记录、telemetry flatten、manifest summary 和单帧日志格式化逻辑。
 - 批处理主流程只调用 timing 工具函数，不再在 orchestration 代码里内联实现统计细节。
+- 新增 `mcp_server.utils.async_batch`，提供有界并发执行和稳定顺序回填能力。
+- `run_sidewalk_images_visual_prompt_pipeline.py` 新增 `--llm-concurrency`，用于并发处理多帧 LVLM visual prompt 生成。
+- 单帧处理被封装为 frame job，manifest 仍按输入帧顺序写入，避免并发完成顺序影响产物审计。
 - 在 visual prompt service 的 telemetry 中补充关键阶段耗时：
   - `image_preprocess`
   - `multi_image_inputs`
@@ -43,6 +46,17 @@
   - 聚合 `timing_summary`
 - 批处理 CLI 新增 `--no-emit-llm-input-images`，用于速度测试时关闭 LVLM 输入图落盘，减少 debug artifact 写入开销。
 - 该统计用于判断慢点来自 LVLM 请求、SAM3、OSM tile/BEV、segmentation geometry，还是大量 debug artifact 写入。
+
+### 增加常用运行指令文档
+
+- 新增 `docs/commands.md`。
+- 记录从 MCAP 抽取 sidewalk pipeline 输入的完整命令，包含：
+  - `mcap_to_sidewalk_inputs.py` 1 FPS smoke 抽取命令
+  - 图像、GNSS、heading topic 参数
+  - 输出目录结构
+  - 接续 visual prompt pipeline 的运行示例
+- 补充 MCAP lz4 压缩依赖说明，并将 `lz4` 加入项目依赖。
+- `mcap_to_sidewalk_inputs.py` 改为 lazy import `lz4`，只有遇到 lz4 压缩 chunk 且环境缺依赖时才给出明确安装提示。
 
 ### 增加 BEV Heading 校准
 

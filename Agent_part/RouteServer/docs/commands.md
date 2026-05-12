@@ -1,0 +1,148 @@
+# RouteServer 常用运行指令
+
+本文档记录 RouteServer 侧数据抽取、批处理和调试常用命令。所有命令默认在以下目录执行：
+
+```bash
+cd /home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer
+```
+
+## 从 MCAP 抽取 Sidewalk Pipeline 输入
+
+用途：把单个 ROS2 MCAP 数据包转换成 `tools/run_sidewalk_images_visual_prompt_pipeline.py` 可直接消费的最小输入格式：
+
+```text
+<WORK_DIR>/
+  images/
+    000001.jpg
+    000002.jpg
+    ...
+  trajectory.json
+  frames_manifest.json
+  mcap_extract_meta.json
+```
+
+依赖说明：很多 MCAP chunk 使用 `lz4` 压缩。如果当前 Python 环境缺少 `lz4`，会出现 `ModuleNotFoundError: No module named 'lz4'` 或脚本提示安装 `lz4`。在当前环境中安装即可：
+
+```bash
+python -m pip install lz4
+```
+
+如果使用 conda，也可以：
+
+```bash
+conda install -c conda-forge lz4
+```
+
+当时针对 `/home/ubuntu/Downloads/viobot_sidewalk_zju_bag_20260510_081025_15.mcap` 的 1 FPS smoke 抽取命令如下：
+
+```bash
+WORK_DIR=/tmp/viobot_sidewalk_zju_081025_15_1fps
+
+python tools/mcap_to_sidewalk_inputs.py \
+  --mcap-path /home/ubuntu/Downloads/viobot_sidewalk_zju_bag_20260510_081025_15.mcap \
+  --output-dir "$WORK_DIR" \
+  --image-topic /camera_x001/image_raw/compressed \
+  --gps-topic /baton/gnss/spp_fix \
+  --heading-topic /baton/gnss/heading \
+  --sample-fps 1.0 \
+  --max-sync-delta-s 0.5 \
+  --image-start-index 1
+```
+
+参数说明：
+
+- `--mcap-path`：输入 MCAP 文件。
+- `--output-dir`：输出目录，后续 pipeline 的 `WORK_DIR`。
+- `--image-topic`：`sensor_msgs/msg/CompressedImage` 图像 topic。
+- `--gps-topic`：`sensor_msgs/msg/NavSatFix` GNSS topic。
+- `--heading-topic`：`std_msgs/msg/Float64` heading topic。
+- `--sample-fps 1.0`：按 1 FPS 抽帧；设为 `0` 或负数表示保留全部图像帧。
+- `--max-sync-delta-s 0.5`：图像帧与最近 GNSS/heading 样本的最大允许时间差。
+- `--image-start-index 1`：输出图像从 `000001.jpg` 开始编号。
+
+如果不确定 topic 名称，可以先使用 `auto` 让脚本按消息 schema 自动选择：
+
+```bash
+python tools/mcap_to_sidewalk_inputs.py \
+  --mcap-path /path/to/input.mcap \
+  --output-dir /tmp/sidewalk_inputs_auto \
+  --image-topic auto \
+  --gps-topic auto \
+  --heading-topic auto \
+  --sample-fps 1.0
+```
+
+抽取完成后，终端会打印：
+
+```text
+Done.
+trajectory_json=<WORK_DIR>/trajectory.json
+images_dir=<WORK_DIR>/images
+meta_json=<WORK_DIR>/mcap_extract_meta.json
+```
+
+其中 `mcap_extract_meta.json` 会记录实际选中的 topic、原始消息数量、写出的帧数、跳过帧原因预览，以及后续 pipeline 的输入路径提示。
+
+## 接 Visual Prompt Pipeline
+
+抽取完成后，可以继续用同一个 `WORK_DIR` 跑 visual prompt pipeline。若 SAM3 产物已经存在，可以不加 `--run-sam3`：
+
+```bash
+WORK_DIR=/tmp/viobot_sidewalk_zju_081025_15_1fps
+
+python tools/run_sidewalk_images_visual_prompt_pipeline.py \
+  --images-dir "$WORK_DIR/images" \
+  --trajectory-json "$WORK_DIR/trajectory.json" \
+  --output-dir "$WORK_DIR/output_all" \
+  --sequence-name viobot_sidewalk_zju_081025_15 \
+  --camera-view camera_front \
+  --sam3-output-base-dir "$WORK_DIR/sam3" \
+  --enable-segmentation-overlay-input \
+  --no-emit-llm-input-images \
+  --enforce-alignment \
+  --mode foot
+
+python tools/run_sidewalk_images_visual_prompt_pipeline.py \
+  --images-dir "$WORK_DIR/images" \
+  --trajectory-json "$WORK_DIR/trajectory.json" \
+  --output-dir "$WORK_DIR/output_all" \
+  --sequence-name viobot_sidewalk_zju_081025_16 \
+  --camera-view camera_front \
+  --sam3-output-base-dir "$WORK_DIR/sam3" \
+  --sam3-env-name sam3 \
+  --sam3-inference-script /home/ubuntu/WorkSpace/project/SR/Code/sam3/scripts/batch_sam3_demo_260124.py \
+  --checkpoint-path /media/ubuntu/data1/checkpoints/checkpoint_35_merged.pt \
+  --gpus 0 \
+  --min-score 0.3 \
+  --enable-segmentation-overlay-input \
+  --enable-bev-map-provider \
+  --enforce-alignment \
+  --llm-concurrency 2 \
+  --mode foot
+```
+
+如果 API rate limit 允许，可以打开 LVLM 并发。推荐先从 `2` 开始，观察失败率、限流和平均耗时：
+
+```bash
+python tools/run_sidewalk_images_visual_prompt_pipeline.py \
+  --images-dir "$WORK_DIR/images" \
+  --trajectory-json "$WORK_DIR/trajectory.json" \
+  --output-dir "$WORK_DIR/output_all_concurrency2" \
+  --sequence-name viobot_sidewalk_zju_081025_15 \
+  --camera-view camera_front \
+  --sam3-output-base-dir "$WORK_DIR/sam3" \
+  --enable-segmentation-overlay-input \
+  --no-emit-llm-input-images \
+  --llm-concurrency 2 \
+  --enforce-alignment \
+  --mode foot
+```
+
+说明：
+
+- `--llm-concurrency 1`：默认串行，最稳。
+- `--llm-concurrency 2`：推荐首选加速设置。
+- `--llm-concurrency 4`：只有在模型 API 额度、QPS 和稳定性允许时再使用。
+- 输出 `manifest.json` 会记录 `llm_concurrency`，并保持 `frames` 按输入帧顺序回填。
+
+如果需要同时运行 SAM3，则追加 `--run-sam3`、`--sam3-env-name`、`--sam3-inference-script` 和 `--checkpoint-path` 等参数。

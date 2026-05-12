@@ -38,7 +38,10 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-import lz4.frame
+try:
+    import lz4.frame as lz4_frame
+except ModuleNotFoundError:
+    lz4_frame = None
 
 
 MCAP_MAGIC = b"\x89MCAP0\r\n"
@@ -170,7 +173,13 @@ def _decode_chunk(record_payload: bytes) -> bytes:
     if compression in {"", "none"}:
         return compressed_data
     if compression == "lz4":
-        return lz4.frame.decompress(compressed_data)
+        if lz4_frame is None:
+            raise RuntimeError(
+                "This MCAP uses lz4-compressed chunks, but the Python package 'lz4' is not installed. "
+                "Install it in the active environment with `python -m pip install lz4` "
+                "or `conda install -c conda-forge lz4`."
+            )
+        return lz4_frame.decompress(compressed_data)
     raise RuntimeError(f"Unsupported MCAP chunk compression: {compression!r}")
 
 
