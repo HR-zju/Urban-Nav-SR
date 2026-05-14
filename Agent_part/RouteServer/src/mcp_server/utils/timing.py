@@ -116,6 +116,18 @@ def compact_visual_prompt_frame_timing(
             usage.get("total_tokens")
             or usage.get("total_token_count")
         )
+        stream_timing = (
+            generator_call.get("stream_timing")
+            if isinstance(generator_call.get("stream_timing"), dict)
+            else {}
+        )
+        if stream_timing:
+            timing["generator_llm_stream_enabled"] = bool(stream_timing.get("enabled"))
+            timing["generator_llm_time_to_first_chunk_ms"] = stream_timing.get("time_to_first_chunk_ms")
+            timing["generator_llm_time_to_first_token_ms"] = stream_timing.get("time_to_first_token_ms")
+            timing["generator_llm_stream_decode_ms"] = stream_timing.get("stream_decode_ms")
+            timing["generator_llm_stream_chunks"] = stream_timing.get("chunks")
+            timing["generator_llm_stream_content_chunks"] = stream_timing.get("content_chunks")
     timing["known_stage_ms"] = sum(
         int(timing.get(key) or 0)
         for key in (
@@ -170,6 +182,11 @@ def summarize_visual_prompt_manifest_timings(frames: list[dict[str, Any]]) -> di
         "generator_llm_prompt_tokens",
         "generator_llm_completion_tokens",
         "generator_llm_total_tokens",
+        "generator_llm_time_to_first_token_ms",
+        "generator_llm_time_to_first_chunk_ms",
+        "generator_llm_stream_decode_ms",
+        "generator_llm_stream_chunks",
+        "generator_llm_stream_content_chunks",
     ]
     stage_summary: dict[str, Any] = {}
     for key in stage_keys:

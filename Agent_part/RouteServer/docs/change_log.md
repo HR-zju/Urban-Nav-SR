@@ -4,6 +4,64 @@
 
 ## 2026-05-12
 
+### 增加 streaming 首 token 耗时拆分
+
+- `VisionAnalyzer` 新增可选 streaming timing：
+  - `LLM_VISION_STREAM_TIMING=1`
+  - `LLM_STREAM_TIMING=1`
+- 当开启后，chat-completions 调用会记录：
+  - `time_to_first_chunk_ms`
+  - `time_to_first_token_ms`
+  - `stream_decode_ms`
+  - `stream_chunks`
+  - `stream_content_chunks`
+- 这样可以把黑盒 roundtrip 再拆成两段：
+  - 首 token 前：上传、排队、视觉编码、prefill
+  - 首 token 后：流式解码与返回
+- `LLM_STREAM_INCLUDE_USAGE=1` 默认开启；如果 provider 拒绝该参数，会自动回退到纯 streaming。
+
+### 新增 LLM 延时拆分估算脚本
+
+- 新增 `tools/analyze_visual_prompt_llm_latency.py`。
+- 支持直接读取 `manifest.json`，离线估算：
+  - `network_est_ms`
+  - `service_est_ms`
+  - `payload_bytes`
+  - `prompt_tokens`
+  - `completion_tokens`
+- 支持可选 `--probe-url`，用于粗粒度 HTTP 探测。
+- 该脚本不改主流程，适合对历史产物做延时分析和回归比较。
+
+### LLM 请求统计继续细化
+
+- 当前 telemetry 已记录：
+  - `generator_llm_roundtrip_ms`
+  - `generator_llm_request_payload_chars`
+  - `generator_llm_request_text_chars`
+  - `generator_llm_response_text_chars`
+  - `generator_llm_image_count`
+  - `generator_llm_approx_image_bytes`
+  - `generator_llm_prompt_tokens`
+  - `generator_llm_completion_tokens`
+  - `generator_llm_total_tokens`
+- `reasoning_effort=minimal` 仍然生效，便于压缩 Ark/Doubao 的推理开销。
+
+### 降低 LVLM 推理负担与 Prompt 体积
+
+- `LLMSettings` 新增 `reasoning_effort`，默认对 Ark/Doubao 取 `minimal`，优先让模型直接回答，减少深度 thinking 带来的长尾。
+- 视觉 prompt 请求会把 `reasoning_effort` 透传给 Ark 兼容接口。
+- A/V prompt builder 改为 compact JSON 序列化：
+  - `json.dumps(..., separators=(",", ":"))`
+  - 去除 `None` / 空字段
+  - 把长列表规则压缩成 DSL 风格字符串
+- `som_spatial_constraints` 新增紧凑 DSL 视图，例如：
+  - `start(...)`
+  - `corridor(...)`
+  - `center(...)`
+  - `edge(...)`
+  - `support(...)`
+- VLM 输入现在既保留可审计的结构化上下文，也减少了冗余 token 开销，便于对比不同 `reasoning_effort` 设置下的响应时延。
+
 ### 增加 LLM 调用细粒度耗时与请求体统计
 
 - `VisionAnalyzer` 现在会把每次 LVLM 调用的详细 telemetry 回传到 pipeline：

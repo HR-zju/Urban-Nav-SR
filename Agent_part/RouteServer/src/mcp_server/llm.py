@@ -79,6 +79,7 @@ class LLMSettings:
     max_retries: int = 5
     allow_api_style_fallback: bool = False
     response_format: bool = True
+    reasoning_effort: str | None = None
 
     @classmethod
     def from_env(cls) -> "LLMSettings":
@@ -112,6 +113,14 @@ class LLMSettings:
         )
         default_timeout_s = 45.0 if provider == "ark" else 20.0
         default_max_retries = 5 if provider == "ark" else 2
+        reasoning_effort = (
+            os.getenv("LLM_REASONING_EFFORT", "").strip().lower()
+            or os.getenv("ARK_REASONING_EFFORT", "").strip().lower()
+        )
+        if not reasoning_effort and provider == "ark":
+            reasoning_effort = "minimal"
+        if reasoning_effort not in {"minimal", "low", "medium", "high"}:
+            reasoning_effort = None
         fallback_env = os.getenv("LLM_API_STYLE_FALLBACK", "").strip().lower()
         if fallback_env:
             allow_api_style_fallback = fallback_env in {"1", "true", "yes"}
@@ -128,6 +137,7 @@ class LLMSettings:
             max_retries=max(0, int(os.getenv("LLM_MAX_RETRIES", str(default_max_retries)) or default_max_retries)),
             allow_api_style_fallback=allow_api_style_fallback,
             response_format=os.getenv("LLM_RESPONSE_FORMAT_JSON", "true").strip().lower() not in {"0", "false", "no"},
+            reasoning_effort=reasoning_effort,
         )
 
 
@@ -252,6 +262,63 @@ def _responses_metadata(response: Any) -> dict[str, Any]:
         "created": getattr(response, "created_at", None) or getattr(response, "created", None),
         "status": getattr(response, "status", None),
         "usage": _response_usage_dict(response),
+    }
+
+
+def _apply_reasoning_effort(payload: dict[str, Any], settings: LLMSettings) -> dict[str, Any]:
+    """Request minimal reasoning when the provider supports it."""
+    effort = str(settings.reasoning_effort or "").strip().lower()
+    if settings.provider == "ark" and effort in {"minimal", "low", "medium", "high"}:
+        payload["reasoning_effort"] = effort
+    return payload
+
+
+def _truthy_env(name: str, default: bool = False) -> bool:
+    value = os.getenv(name, "").strip().lower()
+    if not value:
+        return bool(default)
+    return value in {"1", "true", "yes", "on"}
+
+
+def _extract_chat_stream_delta_text(chunk: Any) -> str:
+    """Extract text from one chat-completions streaming chunk."""
+
+    choices = getattr(chunk, "choices", None) or []
+    if not choices:
+        return ""
+    delta = getattr(choices[0], "delta", None)
+    content = getattr(delta, "content", None)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            text = getattr(item, "text", None)
+            if isinstance(text, str):
+                parts.append(text)
+                continue
+            value = getattr(text, "value", None)
+            if isinstance(value, str):
+                parts.append(value)
+        return "".join(parts)
+    return ""
+
+
+def _chat_stream_finish_reason(chunk: Any) -> str | None:
+    choices = getattr(chunk, "choices", None) or []
+    if not choices:
+        return None
+    finish_reason = getattr(choices[0], "finish_reason", None)
+    return str(finish_reason) if finish_reason else None
+
+
+def _chat_stream_metadata(*, chunks: int, response_id: str | None, created: Any, finish_reason: str | None, usage: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "response_id": response_id,
+        "created": created,
+        "finish_reason": finish_reason,
+        "chunks": int(chunks),
+        "usage": usage,
     }
 
 
@@ -1748,6 +1815,9 @@ class VisionAnalyzer(BaseLLMService):
                 pass
         return max(90.0, self.settings.timeout_s)
 
+    def _stream_timing_enabled(self) -> bool:
+        return _truthy_env("LLM_VISION_STREAM_TIMING") or _truthy_env("LLM_STREAM_TIMING")
+
     def build_messages(
         self,
         image_url: str,
@@ -1790,6 +1860,85 @@ class VisionAnalyzer(BaseLLMService):
             },
         ]
 
+    async def _stream_chat_completions(self, client: Any, payload: dict[str, Any]) -> dict[str, Any]:
+        """Run chat-completions streaming and expose first-token timing.
+
+        Without provider-side Server-Timing headers, the best client-side split is:
+
+            time_to_first_token ~= upload + provider queue + image encode + prefill
+            stream_decode_ms    ~= output decoding + streamed network return
+        """
+
+        started_at = perf_counter()
+        stream_payload = dict(payload)
+        stream_payload["stream"] = True
+        if _truthy_env("LLM_STREAM_INCLUDE_USAGE", default=True):
+            stream_payload["stream_options"] = {"include_usage": True}
+
+        try:
+            stream = await client.chat.completions.create(**stream_payload)
+        except Exception:
+            if "stream_options" not in stream_payload:
+                raise
+            # Some OpenAI-compatible providers support streaming but reject
+            # stream_options. Keep first-token timing and lose usage details.
+            stream_payload.pop("stream_options", None)
+            stream = await client.chat.completions.create(**stream_payload)
+        chunks = 0
+        content_chunks = 0
+        first_chunk_ms: int | None = None
+        first_content_ms: int | None = None
+        last_content_ms: int | None = None
+        response_id: str | None = None
+        created: Any = None
+        finish_reason: str | None = None
+        usage: dict[str, Any] = {}
+        parts: list[str] = []
+
+        async for chunk in stream:
+            now_ms = int(round((perf_counter() - started_at) * 1000.0))
+            chunks += 1
+            if first_chunk_ms is None:
+                first_chunk_ms = now_ms
+            response_id = response_id or getattr(chunk, "id", None)
+            created = created or getattr(chunk, "created", None)
+            finish_reason = _chat_stream_finish_reason(chunk) or finish_reason
+            chunk_usage = _response_usage_dict(chunk)
+            if chunk_usage:
+                usage = chunk_usage
+            text = _extract_chat_stream_delta_text(chunk)
+            if text:
+                parts.append(text)
+                content_chunks += 1
+                if first_content_ms is None:
+                    first_content_ms = now_ms
+                last_content_ms = now_ms
+
+        roundtrip_ms = int(round((perf_counter() - started_at) * 1000.0))
+        if first_content_ms is None:
+            first_content_ms = first_chunk_ms
+        stream_decode_ms = max(0, roundtrip_ms - int(first_content_ms)) if first_content_ms is not None else None
+        return {
+            "answer": "".join(parts),
+            "roundtrip_ms": roundtrip_ms,
+            "stream_timing": {
+                "enabled": True,
+                "time_to_first_chunk_ms": first_chunk_ms,
+                "time_to_first_token_ms": first_content_ms,
+                "stream_decode_ms": stream_decode_ms,
+                "last_content_chunk_ms": last_content_ms,
+                "chunks": chunks,
+                "content_chunks": content_chunks,
+            },
+            "response": _chat_stream_metadata(
+                chunks=chunks,
+                response_id=response_id,
+                created=created,
+                finish_reason=finish_reason,
+                usage=usage,
+            ),
+        }
+
     async def _call_chat_completions(
         self,
         client: Any,
@@ -1808,13 +1957,26 @@ class VisionAnalyzer(BaseLLMService):
         )
         image_urls = [str(image_url).strip(), *[str(item).strip() for item in list(extra_image_urls or []) if str(item or "").strip()]]
         started_at = perf_counter()
-        response = await client.chat.completions.create(
-            model=self.settings.model,
-            temperature=self.settings.temperature,
-            messages=messages,
+        payload = _apply_reasoning_effort(
+            {
+                "model": self.settings.model,
+                "temperature": self.settings.temperature,
+                "messages": messages,
+            },
+            self.settings,
         )
-        roundtrip_ms = int(round((perf_counter() - started_at) * 1000.0))
-        answer = _extract_text_from_chat_response(response)
+        if self._stream_timing_enabled():
+            streamed = await self._stream_chat_completions(client, payload)
+            roundtrip_ms = int(streamed.get("roundtrip_ms") or 0)
+            answer = str(streamed.get("answer") or "")
+            response_metadata = streamed.get("response") if isinstance(streamed.get("response"), dict) else {}
+            stream_timing = streamed.get("stream_timing") if isinstance(streamed.get("stream_timing"), dict) else {}
+        else:
+            response = await client.chat.completions.create(**payload)
+            roundtrip_ms = int(round((perf_counter() - started_at) * 1000.0))
+            answer = _extract_text_from_chat_response(response)
+            response_metadata = _chat_response_metadata(response)
+            stream_timing = {"enabled": False}
         request_json = json.dumps(messages, ensure_ascii=False, separators=(",", ":"))
         return {
             "answer": answer,
@@ -1827,10 +1989,12 @@ class VisionAnalyzer(BaseLLMService):
                 "request_payload_chars": len(request_json),
                 "response_text_chars": len(answer),
                 "temperature": self.settings.temperature,
+                "reasoning_effort": self.settings.reasoning_effort,
                 "timeout_s": self._vision_timeout_s(),
                 "max_retries": self.settings.max_retries,
                 "image_payload": _vision_url_payload_stats(image_urls),
-                "response": _chat_response_metadata(response),
+                "response": response_metadata,
+                "stream_timing": stream_timing,
                 "server_timing_available": False,
             },
         }
@@ -1863,10 +2027,14 @@ class VisionAnalyzer(BaseLLMService):
             }
         ]
         started_at = perf_counter()
-        response = await client.responses.create(
-            model=self.settings.model,
-            input=request_input,
+        payload = _apply_reasoning_effort(
+            {
+                "model": self.settings.model,
+                "input": request_input,
+            },
+            self.settings,
         )
+        response = await client.responses.create(**payload)
         roundtrip_ms = int(round((perf_counter() - started_at) * 1000.0))
         answer = _extract_text_from_responses_response(response)
         request_json = json.dumps(request_input, ensure_ascii=False, separators=(",", ":"))
@@ -1881,6 +2049,7 @@ class VisionAnalyzer(BaseLLMService):
                 "request_payload_chars": len(request_json),
                 "response_text_chars": len(answer),
                 "temperature": self.settings.temperature,
+                "reasoning_effort": self.settings.reasoning_effort,
                 "timeout_s": self._vision_timeout_s(),
                 "max_retries": self.settings.max_retries,
                 "image_payload": _vision_url_payload_stats(images),

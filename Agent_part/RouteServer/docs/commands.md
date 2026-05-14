@@ -93,6 +93,29 @@ meta_json=<WORK_DIR>/mcap_extract_meta.json
 
 抽取完成后，可以继续用同一个 `WORK_DIR` 跑 visual prompt pipeline。若 SAM3 产物已经存在，可以不加 `--run-sam3`：
 
+推荐先设置低 reasoning / 小图输入，减少 LVLM 长尾：
+
+```bash
+export LLM_REASONING_EFFORT=minimal
+export VISUAL_PROMPT_LLM_IMAGE_MAX_SIDE=960
+export VISUAL_PROMPT_LLM_IMAGE_JPEG_QUALITY=70
+export LLM_MAX_RETRIES=1
+export LLM_VISION_TIMEOUT_S=60
+```
+
+如果要拆分 LVLM 首 token 前耗时和流式解码耗时，可以额外开启 streaming timing：
+
+```bash
+export LLM_VISION_STREAM_TIMING=1
+```
+
+开启后 `manifest.json` 会记录：
+
+- `generator_llm_time_to_first_chunk_ms`
+- `generator_llm_time_to_first_token_ms`
+- `generator_llm_stream_decode_ms`
+- `generator_llm_stream_chunks`
+
 ```bash
 WORK_DIR=/tmp/viobot_sidewalk_zju_081025_15_1fps
 
@@ -157,3 +180,36 @@ python tools/run_sidewalk_images_visual_prompt_pipeline.py \
 - `--segmentation-policy disabled`：纯 FPV/BEV 消融模式，完全忽略 segmentation artifacts。
 
 如果需要同时运行 SAM3，则追加 `--run-sam3`、`--sam3-env-name`、`--sam3-inference-script` 和 `--checkpoint-path` 等参数。
+
+## 估算 LLM 延时拆分
+
+如果你已经有一次 pipeline 的 `manifest.json`，可以直接做离线估算，不需要重新跑 API：
+
+```bash
+python tools/analyze_visual_prompt_llm_latency.py \
+  --manifest /tmp/viobot_sidewalk_zju_081025_16_1fps/output_one/manifest.json \
+  --upload-mbps 20 \
+  --download-mbps 100 \
+  --rtt-ms 80 \
+  --top-n 5
+```
+
+常用参数说明：
+
+- `--upload-mbps`：本地到 API 区域的假设上行带宽。
+- `--download-mbps`：返回文本的假设下行带宽。
+- `--rtt-ms`：假设的网络 RTT。
+- `--probe-url`：可选，做一个粗粒度 HTTP 探测。
+- `--json`：输出机器可读 JSON，便于后续自动化分析。
+
+该脚本会基于现有 telemetry 估算：
+
+- `network_est_ms`
+- `service_est_ms`
+- `time_to_first_token_ms`
+- `stream_decode_ms`
+- `payload_bytes`
+- `prompt_tokens`
+- `completion_tokens`
+
+其中 `service_est_ms` 仍然包含 Ark 网关排队、视觉编码、模型 prefill 和解码。

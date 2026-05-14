@@ -87,6 +87,105 @@ def _candidate_compact(candidate: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _strip_empty(value: Any) -> Any:
+    """Remove None/empty fields before serializing prompt context for the LVLM."""
+    if isinstance(value, dict):
+        cleaned = {
+            key: _strip_empty(child)
+            for key, child in value.items()
+            if child is not None
+        }
+        return {
+            key: child
+            for key, child in cleaned.items()
+            if child is not None and child != {} and child != []
+        }
+    if isinstance(value, list):
+        cleaned_items = [_strip_empty(item) for item in value]
+        return [item for item in cleaned_items if item is not None and item != {} and item != []]
+    return value
+
+
+def _compact_json_dumps(payload: dict[str, Any]) -> str:
+    """Serialize prompt payloads with minimal whitespace and no null clutter."""
+    return json.dumps(_strip_empty(payload), ensure_ascii=False, separators=(",", ":"))
+
+
+def _join_dsl_clauses(clauses: list[str]) -> str:
+    """Encode repeated natural-language rules as compact semicolon DSL."""
+    return ";".join(str(item).strip().rstrip(".") for item in clauses if str(item or "").strip())
+
+
+def _compact_spatial_constraints_for_llm(constraints: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Compress verbose SoM/segmentation guardrails into a compact DSL payload.
+
+    The deterministic validator still receives the full source-space structure.
+    This compact view is only for reducing LVLM prompt tokens.
+    """
+    if not isinstance(constraints, dict):
+        return None
+    start = constraints.get("start_constraint") if isinstance(constraints.get("start_constraint"), dict) else {}
+    width = constraints.get("corridor_width_constraint") if isinstance(constraints.get("corridor_width_constraint"), dict) else {}
+    center = constraints.get("centerline_constraint") if isinstance(constraints.get("centerline_constraint"), dict) else {}
+    edge = constraints.get("edge_margin_constraint") if isinstance(constraints.get("edge_margin_constraint"), dict) else {}
+    def _pair(value: Any, default: tuple[float, float]) -> tuple[float, float]:
+        if isinstance(value, (list, tuple)) and len(value) >= 2:
+            try:
+                return float(value[0]), float(value[1])
+            except Exception:
+                return default
+        return default
+    dsl_parts = [
+        (
+            "start(bottom,v>={:.2f},u={:.2f}..{:.2f},pref_u={:.2f}..{:.2f})".format(
+                float(start.get("required_v_min_ratio", 0.82) or 0.82),
+                _pair(start.get("required_u_range_ratio"), (0.4, 0.6))[0],
+                _pair(start.get("required_u_range_ratio"), (0.4, 0.6))[1],
+                _pair(start.get("preferred_u_range_ratio"), (0.45, 0.55))[0],
+                _pair(start.get("preferred_u_range_ratio"), (0.45, 0.55))[1],
+            )
+        ),
+        "corridor(width<={:.2f},pref<={:.2f})".format(
+            float(width.get("max_width_ratio", 0.40) or 0.40),
+            float(width.get("preferred_width_ratio", 0.30) or 0.30),
+        ),
+        "center(mid_run,off<={:.2f})".format(float(center.get("max_offset_ratio", 0.25) or 0.25)),
+        "edge(inset>={:.3f}W)".format(float(edge.get("min_margin_ratio", 0.025) or 0.025)),
+        "support(pref>cond,forbid=red/obstacle)",
+    ]
+    safe_prior = constraints.get("safe_corridor_prior")
+    compact_prior = None
+    if isinstance(safe_prior, dict):
+        compact_prior = {
+            "src": safe_prior.get("source"),
+            "path": safe_prior.get("path_uv"),
+            "samples": [
+                {
+                    "c": sample.get("center_uv"),
+                    "l": sample.get("left_edge_uv"),
+                    "r": sample.get("right_edge_uv"),
+                    "s": sample.get("support_label"),
+                }
+                for sample in list(safe_prior.get("path_samples") or [])[:6]
+                if isinstance(sample, dict)
+            ],
+            "poly": safe_prior.get("coverage_polygon_uv"),
+            "term": safe_prior.get("termination_semantics"),
+        }
+    return {
+        "schema": constraints.get("schema_version"),
+        "space": constraints.get("coordinate_space"),
+        "img": constraints.get("image_size"),
+        "dsl": "|".join(dsl_parts),
+        "bottom_openings": start.get("bottom_openings"),
+        "preferred_regions": constraints.get("preferred_regions"),
+        "conditional_regions": constraints.get("conditional_connector_regions"),
+        "forbidden_regions": constraints.get("forbidden_regions"),
+        "label_mapping": constraints.get("label_mapping"),
+        "safe_prior": compact_prior,
+    }
+
+
 def build_direct_prompt_system_prompt() -> str:
     """Build the A-stage system prompt for direct visual-prompt regression."""
     return (
@@ -210,8 +309,9 @@ def build_direct_prompt_question(
         for item in ((visual_regions or {}).get("candidate_regions", []) or [])[:4]
     ]
     compact_candidates = [_candidate_compact(item) for item in (pov_prompt_candidates or [])[:5]]
-    return json.dumps(
+    return _compact_json_dumps(
         {
+            "prompt_encoding": "compact_json_with_constraint_dsl",
             "task": (
                 "Generate ONE conservative image-plane navigation prompt (prefer path_corridor). "
                 "Use the image first. route_context is intent only. "
@@ -229,11 +329,11 @@ def build_direct_prompt_question(
             "som_candidate_hints": som_candidate_hints,
             "som_overlay_legend": som_overlay_legend,
             "bev_map_overlay_legend": bev_map_overlay_legend,
-            "som_spatial_constraints": som_spatial_constraints,
+            "som_spatial_constraints": _compact_spatial_constraints_for_llm(som_spatial_constraints),
             "alignment_report": alignment_report,
             "overlay_legend": overlay_legend,
             "summary_source": str(summary_source or "from_same_mask_entity"),
-            "hard_rules": [
+            "hard_rules_dsl": _join_dsl_clauses([
                 "Return JSON only (no prose).",
                 "Prefer selected_prompt_type=path_corridor.",
                 "The first path sample must satisfy som_spatial_constraints.start_constraint: bottom-center image band, with center_uv.v at or below the required bottom-band threshold and center_uv.u inside the narrow center range.",
@@ -254,34 +354,9 @@ def build_direct_prompt_question(
                 "If bottom_openings is present: start from the widest opening and keep center near opening midline (maximize clearance).",
                 "If traversable becomes ambiguous: shorten corridor and use stop_before_occlusion.",
                 "If you cannot stay on allowed support without hitting forbidden obstacle classes: set reject_all=true.",
-            ],
-            "output_requirements": {
-                "selected_prompt_type": "path_corridor|arrow_path|arrow|sector|region",
-                "instruction": "short English instruction",
-                "confidence": "number in [0,1]",
-                "reason": "one short sentence",
-                "reject_all": "boolean",
-                "rendered_prompt": {
-                    "type": "path_corridor|arrow_path|arrow|sector|region",
-                    "center_uv": "optional for path_corridor; otherwise [u, v] inside image bounds",
-                    "direction_vec": "optional [dx, dy] unit-like vector or null",
-                    "span_px": "optional positive number",
-                    "path_uv": "optional for path_corridor if path_samples are provided; required for arrow_path",
-                    "path_samples": [
-                        {
-                            "center_uv": "[u, v] on visible mode-valid traversable surface",
-                            "left_edge_uv": "[u, v] left traversable boundary corresponding to this center point",
-                            "right_edge_uv": "[u, v] right traversable boundary corresponding to this center point",
-                            "support_label": "sidewalk|pedestrian_path|crosswalk|plaza|bike_lane|road_lane"
-                        }
-                    ],
-                    "coverage_polygon_uv": "optional for path_corridor; if omitted it will be derived from path_samples",
-                    "termination_semantics": "required for path_corridor; continue_visible_corridor | reach_turn_entry | stop_before_occlusion",
-                    "mask": "optional polygon list or null",
-                },
-            },
-        },
-        ensure_ascii=False,
+            ]),
+            "output_dsl": "json_only selected_prompt_type,instruction,confidence,reason,reject_all,rendered_prompt; path_corridor samples=[{center_uv,left_edge_uv,right_edge_uv,support_label}] term=continue_visible_corridor|reach_turn_entry|stop_before_occlusion",
+        }
     )
 
 
@@ -305,8 +380,9 @@ def build_direct_prompt_verifier_question(
 ) -> str:
     """Serialize the V-stage verifier/refiner task as auditable JSON."""
     compact_route = _compact_route_context(route_context)
-    return json.dumps(
+    return _compact_json_dumps(
         {
+            "prompt_encoding": "compact_json_with_constraint_dsl",
             "task": (
                 "Verify and, if needed, refine the proposed visual prompt so that its center path and left/right support boundaries are fully supported by visible traversable surface."
             ),
@@ -320,12 +396,12 @@ def build_direct_prompt_verifier_question(
             "som_candidate_hints": som_candidate_hints,
             "som_overlay_legend": som_overlay_legend,
             "bev_map_overlay_legend": bev_map_overlay_legend,
-            "som_spatial_constraints": som_spatial_constraints,
+            "som_spatial_constraints": _compact_spatial_constraints_for_llm(som_spatial_constraints),
             "segmentation_validation": segmentation_validation,
             "alignment_report": alignment_report,
             "overlay_legend": overlay_legend,
             "summary_source": str(summary_source or "from_same_mask_entity"),
-            "verification_objectives": [
+            "verification_objectives_dsl": _join_dsl_clauses([
                 "Check whether the path centerline stays on visible mode-valid traversable surface.",
                 "Check whether the left and right support boundaries tightly match visible support; road/curb may be connector support, but grass, shrubs, vehicles, trees, people, and occlusion are hard failures.",
                 "Check whether corridor width is compact and obstacle-aware; overly wide corridors that span most of the image must be narrowed or rejected.",
@@ -340,35 +416,9 @@ def build_direct_prompt_verifier_question(
                 "If safe_corridor_prior is present, compare the proposal to that teacher corridor and prefer a centered/inset revision unless the image visibly contradicts it.",
                 "If the proposal is partially wrong, revise it instead of only commenting on it.",
                 "If the proposal cannot be grounded in visible support, reject it."
-            ],
-            "output_requirements": {
-                "selected_prompt_type": "path_corridor|arrow_path|arrow|sector|region",
-                "instruction": "short English instruction",
-                "confidence": "number in [0,1]",
-                "reason": "one short sentence explaining verification or correction",
-                "reject_all": "boolean",
-                "rendered_prompt": {
-                    "type": "path_corridor|arrow_path|arrow|sector|region",
-                    "center_uv": "optional for path_corridor; otherwise [u, v] inside image bounds",
-                    "direction_vec": "optional [dx, dy] unit-like vector or null",
-                    "span_px": "optional positive number",
-                    "path_uv": "optional for path_corridor if path_samples are provided; required for arrow_path",
-                    "path_samples": [
-                        {
-                            "center_uv": "[u, v] on visible mode-valid traversable surface",
-                            "left_edge_uv": "[u, v] left traversable boundary corresponding to this center point",
-                            "right_edge_uv": "[u, v] right traversable boundary corresponding to this center point",
-                            "support_label": "sidewalk|pedestrian_path|crosswalk|plaza|bike_lane|road_lane"
-                        }
-                    ],
-                    "coverage_polygon_uv": "optional for path_corridor; if omitted it will be derived from path_samples",
-                    "termination_semantics": "required for path_corridor; continue_visible_corridor | reach_turn_entry | stop_before_occlusion",
-                    "support_confidence": "required for path_corridor; number in [0,1]",
-                    "mask": "optional polygon list or null"
-                }
-            },
-        },
-        ensure_ascii=False,
+            ]),
+            "output_dsl": "json_only selected_prompt_type,instruction,confidence,reason,reject_all,rendered_prompt; path_corridor samples=[{center_uv,left_edge_uv,right_edge_uv,support_label}] term=continue_visible_corridor|reach_turn_entry|stop_before_occlusion support_confidence=0..1",
+        }
     )
 
 
