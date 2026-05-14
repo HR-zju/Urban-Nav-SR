@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from typing import Any
 
 from mcp_server.route_context.schema import VisualPromptDecision
@@ -111,9 +112,23 @@ def _compact_json_dumps(payload: dict[str, Any]) -> str:
     return json.dumps(_strip_empty(payload), ensure_ascii=False, separators=(",", ":"))
 
 
+def _compact_ascii_json_dumps(payload: dict[str, Any]) -> str:
+    """Serialize provider-facing minimal prompts without non-ASCII transport risk."""
+    return json.dumps(_strip_empty(payload), ensure_ascii=True, separators=(",", ":"))
+
+
 def _join_dsl_clauses(clauses: list[str]) -> str:
     """Encode repeated natural-language rules as compact semicolon DSL."""
     return ";".join(str(item).strip().rstrip(".") for item in clauses if str(item or "").strip())
+
+
+def minimal_output_enabled() -> bool:
+    """Return whether LVLM should emit the compact navigation-only schema."""
+    value = (
+        os.getenv("LVLM_MINIMAL_OUTPUT", "").strip().lower()
+        or os.getenv("VISUAL_PROMPT_MINIMAL_OUTPUT", "").strip().lower()
+    )
+    return value in {"1", "true", "yes", "on"}
 
 
 def _compact_spatial_constraints_for_llm(constraints: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -188,6 +203,22 @@ def _compact_spatial_constraints_for_llm(constraints: dict[str, Any] | None) -> 
 
 def build_direct_prompt_system_prompt() -> str:
     """Build the A-stage system prompt for direct visual-prompt regression."""
+    if minimal_output_enabled():
+        return (
+            "Role: first-person navigation visual prompt generator.\n"
+            "Goal: directly regress ONE safe FPV image-plane walking corridor from the images and context.\n"
+            "Output JSON ONLY, no prose, no markdown, no comments.\n"
+            "Use this exact compact schema: {\"r\":0|1,\"t\":\"c|u|o\",\"p\":[[[cu,cv],[lu,lv],[ru,rv]],...],\"c\":0..1}\n"
+            "Meaning: r=reject_all; t=c continue_visible_corridor, u reach_turn_entry, o stop_before_occlusion; "
+            "p has 3-6 samples, each sample is [center_uv,left_edge_uv,right_edge_uv] in FPV image pixels; c=confidence.\n"
+            "Do not output instruction, reason, selected_prompt_type, rendered_prompt, path_uv, polygon, or support labels.\n"
+            "Quality rules: use FPV and numbered SoM overlay first; use BEV only for topology/route context; "
+            "center must stay on visible allowed traversable support; left/right edges must remain inset inside the usable walking lane; "
+            "avoid people, vehicles, trees, grass, walls, curbs as hard obstacles except conditional connector surfaces when necessary; "
+            "start near the bottom-center opening; keep samples smooth, compact, and forward-extending; "
+            "follow safe_corridor_prior as a teacher guardrail unless a visible obstacle/occlusion requires shortening. "
+            "If no safe visible corridor exists, output {\"r\":1,\"t\":\"o\",\"p\":[],\"c\":0}."
+        )
     return (
         "Role: first-person navigation visual prompt generator.\n"
         "Goal: directly regress ONE conservative image-plane prompt for the next visible navigation action.\n"
@@ -238,6 +269,14 @@ def build_direct_prompt_system_prompt() -> str:
 
 def build_direct_prompt_verifier_system_prompt() -> str:
     """Build the V-stage LVLM verifier prompt."""
+    if minimal_output_enabled():
+        return (
+            "You are a first-person navigation visual prompt verifier/refiner. "
+            "Inspect the image and proposed prompt. Return JSON ONLY with the compact schema: "
+            "{\"r\":0|1,\"t\":\"c|u|o\",\"p\":[[[cu,cv],[lu,lv],[ru,rv]],...],\"c\":0..1}. "
+            "Revise p when the proposal is unsafe or too wide. Reject with r=1,t=o,p=[] only if no safe visible corridor exists. "
+            "Use FPV/SoM pixels for all coordinates and BEV only for topology."
+        )
     return (
         "You are a first-person navigation visual prompt verifier and refiner. "
         "You receive a proposed prompt and must verify whether its center path and support corridor are truly grounded on visible traversable surface for the current navigation mode. "
@@ -272,6 +311,7 @@ def build_direct_prompt_question(
     alignment_report: dict[str, Any] | None = None,
     overlay_legend: dict[str, Any] | None = None,
     summary_source: str | None = None,
+    image_input_contract: dict[str, Any] | None = None,
 ) -> str:
     """Serialize the A-stage user question as auditable JSON.
 
@@ -309,6 +349,44 @@ def build_direct_prompt_question(
         for item in ((visual_regions or {}).get("candidate_regions", []) or [])[:4]
     ]
     compact_candidates = [_candidate_compact(item) for item in (pov_prompt_candidates or [])[:5]]
+    if minimal_output_enabled():
+        return _compact_ascii_json_dumps(
+            {
+                "prompt_encoding": "minimal_nav_corridor_v1",
+                "task": "Return compact FPV walking corridor JSON only.",
+                "schema": {
+                    "r": "0 safe prompt, 1 reject_all",
+                    "t": "c=continue_visible_corridor,u=reach_turn_entry,o=stop_before_occlusion",
+                    "p": "3-6 samples; each sample [[center_u,center_v],[left_u,left_v],[right_u,right_v]]",
+                    "c": "confidence 0..1",
+                },
+                "image_size": {"w": image_width, "h": image_height},
+                "image_input_contract": image_input_contract,
+                "mode": str(navigation_mode or "foot"),
+                "route": compact_route,
+                "regions": compact_regions,
+                "candidates": compact_candidates,
+                "som": som_summary,
+                "som_hints": som_candidate_hints,
+                "som_legend": som_overlay_legend,
+                "bev_legend": bev_map_overlay_legend,
+                "constraints": _compact_spatial_constraints_for_llm(som_spatial_constraints),
+                "seg": fpv_segmentation_summary,
+                "rules": _join_dsl_clauses([
+                    "json_only_short_keys",
+                    "no_instruction_no_reason_no_markdown",
+                    "FPV_pixels_only",
+                    "start_bottom_center",
+                    "3_to_6_smooth_samples",
+                    "center_on_allowed_prefer_sidewalk",
+                    "edges_inset_not_mask_outline",
+                    "avoid_red_forbidden_people_vehicle_tree_grass_wall",
+                    "use_safe_prior_as_teacher",
+                    "BEV_topology_only",
+                    "reject_if_no_visible_safe_corridor",
+                ]),
+            }
+        )
     return _compact_json_dumps(
         {
             "prompt_encoding": "compact_json_with_constraint_dsl",
@@ -320,6 +398,7 @@ def build_direct_prompt_question(
             "navigation_mode": str(navigation_mode or "foot"),
             "navigation_constraints": _navigation_mode_note(navigation_mode),
             "image_size": {"width": image_width, "height": image_height},
+            "image_input_contract": image_input_contract,
             "route_context": compact_route,
             "top_route_prior": top_prior,
             "visual_regions_hint": compact_regions,
@@ -380,6 +459,39 @@ def build_direct_prompt_verifier_question(
 ) -> str:
     """Serialize the V-stage verifier/refiner task as auditable JSON."""
     compact_route = _compact_route_context(route_context)
+    if minimal_output_enabled():
+        return _compact_ascii_json_dumps(
+            {
+                "prompt_encoding": "minimal_nav_corridor_v1",
+                "task": "Verify/refine proposed FPV corridor. Return compact JSON only.",
+                "schema": {
+                    "r": "0 safe prompt, 1 reject_all",
+                    "t": "c=continue_visible_corridor,u=reach_turn_entry,o=stop_before_occlusion",
+                    "p": "3-6 samples; each sample [[center_u,center_v],[left_u,left_v],[right_u,right_v]]",
+                    "c": "confidence 0..1",
+                },
+                "image_size": {"w": image_width, "h": image_height},
+                "mode": str(navigation_mode or "foot"),
+                "route": compact_route,
+                "proposed_prompt": _full_decision_to_minimal_payload(rendered_prompt),
+                "seg_validation": segmentation_validation,
+                "seg": fpv_segmentation_summary,
+                "som": som_summary,
+                "som_hints": som_candidate_hints,
+                "som_legend": som_overlay_legend,
+                "bev_legend": bev_map_overlay_legend,
+                "constraints": _compact_spatial_constraints_for_llm(som_spatial_constraints),
+                "rules": _join_dsl_clauses([
+                    "json_only_short_keys",
+                    "revise_unsafe_or_too_wide_prompt",
+                    "center_on_allowed_prefer_sidewalk",
+                    "edges_inset_not_mask_outline",
+                    "avoid_red_forbidden",
+                    "use_safe_prior_as_teacher",
+                    "reject_only_if_no_visible_safe_corridor",
+                ]),
+            }
+        )
     return _compact_json_dumps(
         {
             "prompt_encoding": "compact_json_with_constraint_dsl",
@@ -483,6 +595,131 @@ def _coerce_path(
     if len(parsed_path) < 2:
         return None
     return parsed_path
+
+
+_MINIMAL_TERMINATION_TO_FULL = {
+    "c": "continue_visible_corridor",
+    "continue": "continue_visible_corridor",
+    "continue_visible_corridor": "continue_visible_corridor",
+    "u": "reach_turn_entry",
+    "turn": "reach_turn_entry",
+    "reach_turn_entry": "reach_turn_entry",
+    "o": "stop_before_occlusion",
+    "occlusion": "stop_before_occlusion",
+    "stop": "stop_before_occlusion",
+    "stop_before_occlusion": "stop_before_occlusion",
+}
+
+_FULL_TERMINATION_TO_MINIMAL = {
+    "continue_visible_corridor": "c",
+    "reach_turn_entry": "u",
+    "stop_before_occlusion": "o",
+}
+
+
+def _minimal_path_samples_to_full(
+    raw_samples: Any,
+    *,
+    image_width: int,
+    image_height: int,
+) -> list[dict[str, Any]] | None:
+    """Convert compact samples [[[c],[l],[r]], ...] into full sample dicts."""
+
+    if not isinstance(raw_samples, list):
+        return None
+    parsed: list[dict[str, Any]] = []
+    for raw_sample in raw_samples:
+        if not (isinstance(raw_sample, list) and len(raw_sample) >= 3):
+            continue
+        center = _coerce_point(raw_sample[0], image_width=image_width, image_height=image_height)
+        left = _coerce_point(raw_sample[1], image_width=image_width, image_height=image_height)
+        right = _coerce_point(raw_sample[2], image_width=image_width, image_height=image_height)
+        if center is None or left is None or right is None:
+            continue
+        parsed.append(
+            {
+                "center_uv": center,
+                "left_edge_uv": left,
+                "right_edge_uv": right,
+                "support_label": "preferred_traversable",
+            }
+        )
+    if len(parsed) < 2:
+        return None
+    return parsed
+
+
+def _minimal_output_to_full_payload(
+    raw: dict[str, Any],
+    *,
+    image_width: int,
+    image_height: int,
+) -> dict[str, Any]:
+    """Expand compact LVLM navigation output into the canonical prompt schema."""
+
+    if not isinstance(raw, dict) or not any(key in raw for key in ("r", "t", "p", "c")):
+        return raw
+    reject_all = bool(raw.get("r"))
+    path_samples = _minimal_path_samples_to_full(
+        raw.get("p"),
+        image_width=image_width,
+        image_height=image_height,
+    )
+    termination = _MINIMAL_TERMINATION_TO_FULL.get(str(raw.get("t") or "c").strip().lower())
+    try:
+        confidence = _clamp(float(raw.get("c", 0.0) or 0.0), 0.0, 1.0)
+    except Exception:
+        confidence = 0.0
+    rendered_prompt = None
+    if path_samples is not None and termination is not None:
+        rendered_prompt = {
+            "type": "path_corridor",
+            "path_samples": path_samples,
+            "termination_semantics": termination,
+            "support_confidence": round(confidence, 4),
+        }
+    return {
+        "selected_prompt_type": "path_corridor",
+        "instruction": "",
+        "confidence": round(confidence, 4),
+        "reason": "LVLM minimal navigation output.",
+        "reject_all": reject_all,
+        "rendered_prompt": rendered_prompt,
+        "_minimal_output": raw,
+    }
+
+
+def _full_decision_to_minimal_payload(rendered_prompt: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Compress a canonical rendered prompt for the minimal verifier prompt."""
+
+    if not isinstance(rendered_prompt, dict):
+        return None
+    samples = rendered_prompt.get("path_samples")
+    minimal_samples: list[list[list[float]]] = []
+    if isinstance(samples, list):
+        for sample in samples[:6]:
+            if not isinstance(sample, dict):
+                continue
+            center = sample.get("center_uv")
+            left = sample.get("left_edge_uv")
+            right = sample.get("right_edge_uv")
+            if isinstance(center, list) and isinstance(left, list) and isinstance(right, list):
+                minimal_samples.append([center, left, right])
+    term = _FULL_TERMINATION_TO_MINIMAL.get(
+        str(rendered_prompt.get("termination_semantics") or "continue_visible_corridor").strip().lower(),
+        "c",
+    )
+    confidence = rendered_prompt.get("support_confidence")
+    try:
+        confidence = round(_clamp(float(confidence), 0.0, 1.0), 4)
+    except Exception:
+        confidence = None
+    return {
+        "r": 0,
+        "t": term,
+        "p": minimal_samples,
+        "c": confidence,
+    }
 
 
 def _coerce_path_samples(
@@ -660,6 +897,11 @@ def coerce_direct_prompt_decision(
 ) -> VisualPromptDecision | None:
     if not isinstance(raw, dict):
         return None
+    raw = _minimal_output_to_full_payload(
+        raw,
+        image_width=image_width,
+        image_height=image_height,
+    )
     reject_all = bool(raw.get("reject_all"))
     rendered_prompt = _coerce_rendered_prompt(
         raw.get("rendered_prompt"),

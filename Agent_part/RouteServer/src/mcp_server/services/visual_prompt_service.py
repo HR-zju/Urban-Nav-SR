@@ -34,6 +34,7 @@ import io
 import json
 import math
 import os
+import traceback
 from html import escape
 from pathlib import Path
 from time import perf_counter
@@ -90,6 +91,31 @@ from mcp_server.som import (
     rank_som_regions_for_route,
     som_summary_for_llm,
 )
+
+
+def _debug_traceback_enabled() -> bool:
+    """Return whether per-frame LVLM exception traces should be persisted."""
+    value = (
+        os.getenv("VISUAL_PROMPT_DEBUG_TRACEBACK", "").strip().lower()
+        or os.getenv("LLM_DEBUG_TRACEBACK", "").strip().lower()
+        or os.getenv("LLM_VISION_DEBUG_TRACEBACK", "").strip().lower()
+    )
+    return value in {"1", "true", "yes", "on"}
+
+
+def _exception_debug_payload(exc: Exception) -> Dict[str, Any]:
+    """Build a compact, artifact-safe exception payload for offline debugging."""
+    payload: Dict[str, Any] = {
+        "type": type(exc).__name__,
+        "message": str(exc),
+    }
+    vision_debug = getattr(exc, "vision_debug", None)
+    if isinstance(vision_debug, dict):
+        payload["vision_debug"] = vision_debug
+    traceback_text = getattr(exc, "traceback", None) or traceback.format_exc()
+    if traceback_text:
+        payload["traceback"] = traceback_text
+    return payload
 
 
 def _image_href_for_overlay(*, image_path: Optional[str], image_url: Optional[str]) -> str:
@@ -1370,6 +1396,7 @@ def _build_inputs_for_A(
     som_overlay_legend: Dict[str, Any] | None,
     bev_map_overlay_legend: Dict[str, Any] | None,
     som_spatial_constraints: Dict[str, Any] | None,
+    image_input_contract: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Assemble the A-stage LVLM contract from route intent and visual priors.
 
@@ -1401,6 +1428,7 @@ def _build_inputs_for_A(
             som_spatial_constraints=som_spatial_constraints,
             alignment_report=teacher_alignment_report,
             overlay_legend=overlay_legend,
+            image_input_contract=image_input_contract,
             summary_source=(
                 "from_same_mask_entity" if isinstance(fpv_segmentation_summary, dict) else "not_available"
             ),
@@ -1563,6 +1591,7 @@ async def run_zero_shot_visual_prompt_pipeline(
     enable_sam_visualization_input: bool = False,
     enable_bev_map_provider: bool = False,
     bev_map_provider_session: Any | None = None,
+    llm_primary_image_role: str = "primary_fpv",
     enforce_alignment: bool = True,
     emit_qa_bundle: bool = False,
     emit_llm_input_images: bool = False,
@@ -1585,6 +1614,15 @@ async def run_zero_shot_visual_prompt_pipeline(
         if enable_som_overlay_input is None
         else bool(enable_som_overlay_input)
     )
+    resolved_llm_primary_image_role = str(llm_primary_image_role or "primary_fpv").strip().lower()
+    if resolved_llm_primary_image_role in {"fpv", "raw_fpv", "primary"}:
+        resolved_llm_primary_image_role = "primary_fpv"
+    elif resolved_llm_primary_image_role in {"som", "som_overlay", "numbered_som"}:
+        resolved_llm_primary_image_role = "numbered_som_overlay"
+    if resolved_llm_primary_image_role not in {"primary_fpv", "numbered_som_overlay"}:
+        raise RuntimeError(f"Unsupported llm_primary_image_role: {llm_primary_image_role!r}")
+    if resolved_llm_primary_image_role == "numbered_som_overlay":
+        resolved_enable_som_overlay_input = True
     started_at = perf_counter()
     resolved_request_id = str(request_id or uuid4())
     telemetry: Dict[str, Any] = {
@@ -1937,27 +1975,47 @@ async def run_zero_shot_visual_prompt_pipeline(
     extra_image_urls = []
     extra_image_records: list[dict[str, Any]] = []
     som_overlay_url = ""
+    llm_generator_image_url = llm_image_url
+    llm_generator_primary_record = {
+        "role": "primary_fpv",
+        "image_role": "primary_fpv",
+        "data_url": llm_image_url,
+        "metadata": {
+            key: value
+            for key, value in llm_image_payload.items()
+            if key != "image_data_url"
+        },
+    }
     if resolved_enable_som_overlay_input and isinstance(som_overlay_payload, dict):
         som_overlay_url = str(som_overlay_payload.get("som_overlay_image_data_url") or "").strip()
         if som_overlay_url:
-            extra_image_urls.append(som_overlay_url)
-            extra_image_records.append(
-                {
-                    "role": "numbered_som_overlay",
-                    "image_role": "numbered_som_overlay",
-                    "data_url": som_overlay_url,
-                    "metadata": {
-                        "som_overlay_legend": som_overlay_legend,
-                        "llm_image_size": (som_overlay_payload or {}).get("llm_image_size") if isinstance(som_overlay_payload, dict) else None,
-                        "source_image_size": (som_overlay_payload or {}).get("source_image_size") if isinstance(som_overlay_payload, dict) else None,
-                    },
+            som_record = {
+                "role": "numbered_som_overlay",
+                "image_role": "numbered_som_overlay",
+                "data_url": som_overlay_url,
+                "metadata": {
+                    "som_overlay_legend": som_overlay_legend,
+                    "llm_image_size": (som_overlay_payload or {}).get("llm_image_size") if isinstance(som_overlay_payload, dict) else None,
+                    "source_image_size": (som_overlay_payload or {}).get("source_image_size") if isinstance(som_overlay_payload, dict) else None,
+                },
+            }
+            if resolved_llm_primary_image_role == "numbered_som_overlay":
+                llm_generator_image_url = som_overlay_url
+                llm_generator_primary_record = {
+                    **som_record,
+                    "role": "primary_numbered_som_overlay",
+                    "image_role": "primary_numbered_som_overlay",
                 }
-            )
+            else:
+                extra_image_urls.append(som_overlay_url)
+                extra_image_records.append(som_record)
             multi_image_debug["used"] = True
             multi_image_debug["primary_extra_image_role"] = "numbered_som_overlay"
             multi_image_debug["som_overlay_used"] = True
             multi_image_debug["som_overlay_source"] = "generated_numbered_som_overlay"
             multi_image_debug["som_overlay_legend"] = som_overlay_legend
+    if resolved_llm_primary_image_role == "numbered_som_overlay" and not som_overlay_url:
+        raise RuntimeError("llm_primary_image_role=numbered_som_overlay requires a generated SoM overlay; check segmentation artifacts and --enable-som-overlay-input")
 
     if enable_bev_map_provider:
         bev_overlay_stage_started_at = perf_counter()
@@ -2010,19 +2068,10 @@ async def run_zero_shot_visual_prompt_pipeline(
             }
         )
 
+    multi_image_debug["llm_primary_image_role"] = resolved_llm_primary_image_role
+
     if emit_llm_input_images:
-        llm_input_images.append(
-            {
-                "role": "primary_fpv",
-                "image_role": "primary_fpv",
-                "data_url": llm_image_url,
-                "metadata": {
-                    key: value
-                    for key, value in llm_image_payload.items()
-                    if key != "image_data_url"
-                },
-            }
-        )
+        llm_input_images.append(llm_generator_primary_record)
         llm_input_images.extend(extra_image_records)
     _mark_stage("multi_image_inputs", multi_image_stage_started_at, status="ok")
 
@@ -2030,6 +2079,8 @@ async def run_zero_shot_visual_prompt_pipeline(
     verifier_raw: Dict[str, Any] | None = None
     llm_error: str | None = None
     verifier_error: str | None = None
+    llm_error_debug: Dict[str, Any] | None = None
+    verifier_error_debug: Dict[str, Any] | None = None
     decision = None
     llm_decision = None
     generator_decision = None
@@ -2067,13 +2118,23 @@ async def run_zero_shot_visual_prompt_pipeline(
                 som_overlay_legend=som_overlay_legend,
                 bev_map_overlay_legend=bev_map_overlay_legend,
                 som_spatial_constraints=llm_som_spatial_constraints,
+                image_input_contract={
+                    "primary_image_role": resolved_llm_primary_image_role,
+                    "extra_image_roles": [str(item.get("role") or item.get("image_role")) for item in extra_image_records],
+                    "coordinate_space": "primary_image_uv",
+                    "note": (
+                        "Primary image is the numbered SoM overlay; coordinates still match the FPV image plane."
+                        if resolved_llm_primary_image_role == "numbered_som_overlay"
+                        else "Primary image is the raw FPV frame."
+                    ),
+                },
             )
             question = str(av_inputs.get("question") or "")
             system_prompt = str(av_inputs.get("system_prompt") or "")
             _mark_stage("A_build_inputs", av_input_stage_started_at, status="ok")
             llm_raw, llm_decision = await _run_A_generator(
                 image_path=None,
-                image_url=llm_image_url,
+                image_url=llm_generator_image_url,
                 question=question,
                 system_prompt=system_prompt,
                 llm_detail=llm_detail,
@@ -2133,7 +2194,7 @@ async def run_zero_shot_visual_prompt_pipeline(
                     )
                     verifier_raw, verifier_question, verified_decision = await _run_V_verifier(
                         image_path=None,
-                        image_url=llm_image_url,
+                        image_url=llm_generator_image_url,
                         route_context=route_context_dict,
                         rendered_prompt=verifier_rendered_prompt,
                         image_width=llm_image_width,
@@ -2198,6 +2259,8 @@ async def run_zero_shot_visual_prompt_pipeline(
                         decision = verified_decision
                 except Exception as exc:
                     verifier_error = str(exc)
+                    if _debug_traceback_enabled():
+                        verifier_error_debug = _exception_debug_payload(exc)
                     _mark_stage("V_verifier", verifier_stage_started_at, status="error", error_code="LLM_VERIFIER_FAILED")
                     _mark_stage(
                         "V_constraint_verifier",
@@ -2216,6 +2279,8 @@ async def run_zero_shot_visual_prompt_pipeline(
                 _mark_stage("verifier_llm", verifier_stage_started_at, status="skipped")
         except Exception as exc:
             llm_error = str(exc)
+            if _debug_traceback_enabled():
+                llm_error_debug = _exception_debug_payload(exc)
             _mark_stage("A_build_inputs", av_input_stage_started_at, status="error", error_code="LLM_GENERATOR_FAILED")
             _mark_stage("A_generator", generator_stage_started_at, status="error", error_code="LLM_GENERATOR_FAILED")
             _mark_stage("V_constraint_generator", v_constraint_generator_started_at, status="skipped")
@@ -2254,8 +2319,12 @@ async def run_zero_shot_visual_prompt_pipeline(
     decision_dict.setdefault("debug", {})
     if llm_error:
         decision_dict["debug"]["llm_error"] = llm_error
+    if llm_error_debug:
+        decision_dict["debug"]["llm_error_debug"] = llm_error_debug
     if verifier_error:
         decision_dict["debug"]["verifier_error"] = verifier_error
+    if verifier_error_debug:
+        decision_dict["debug"]["verifier_error_debug"] = verifier_error_debug
     if segmentation_error:
         decision_dict["debug"]["fpv_segmentation_error"] = segmentation_error
     if segmentation_error_code:

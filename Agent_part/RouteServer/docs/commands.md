@@ -116,6 +116,27 @@ export LLM_VISION_STREAM_TIMING=1
 - `generator_llm_stream_decode_ms`
 - `generator_llm_stream_chunks`
 
+如果要让 LVLM 只输出导航必需字段，并由本地恢复完整 `VisualPromptDecision`，可以开启极简输出协议：
+
+```bash
+export LVLM_MINIMAL_OUTPUT=1
+```
+
+极简输出协议要求模型只返回：
+
+```json
+{"r":0,"t":"c","p":[[[800,827],[631,827],[969,827]]],"c":0.91}
+```
+
+字段含义：
+
+- `r`：是否 reject，`0|1`。
+- `t`：终止语义，`c=continue_visible_corridor`，`u=reach_turn_entry`，`o=stop_before_occlusion`。
+- `p`：3-6 个 corridor samples，每个 sample 是 `[center,left,right]` 三个 FPV 像素点。
+- `c`：置信度。
+
+后处理会把极简输出恢复成完整的 `path_corridor` 结构，并继续执行 segmentation validation / repair。
+
 ```bash
 WORK_DIR=/tmp/viobot_sidewalk_zju_081025_15_1fps
 
@@ -167,6 +188,24 @@ python tools/run_sidewalk_images_visual_prompt_pipeline.py \
   --llm-concurrency 2 \
   --enforce-alignment \
   --mode foot
+
+python tools/run_sidewalk_images_visual_prompt_pipeline.py \
+  --images-dir "$WORK_DIR/images" \
+  --trajectory-json "$WORK_DIR/trajectory.json" \
+  --output-dir "$WORK_DIR/output_debug_one" \
+  --sequence-name viobot_sidewalk_zju_081025_16 \
+  --camera-view camera_front \
+  --sam3-output-base-dir "$WORK_DIR/sam3" \
+  --enable-segmentation-overlay-input \
+  --enable-bev-map-provider \
+  --enforce-alignment \
+  --llm-concurrency 1 \
+  --llm-image-max-side 1024 \
+  --bev-map-output-size-px 512 \
+  --frame-start 1 \
+  --frame-end 60 \
+  --frame-step 1 \
+  --mode foot
 ```
 
 说明：
@@ -175,6 +214,10 @@ python tools/run_sidewalk_images_visual_prompt_pipeline.py \
 - `--llm-concurrency 2`：推荐首选加速设置。
 - `--llm-concurrency 4`：只有在模型 API 额度、QPS 和稳定性允许时再使用。
 - 输出 `manifest.json` 会记录 `llm_concurrency`，并保持 `frames` 按输入帧顺序回填。
+- 如果想只上传两张 LVLM 图片（numbered SoM 主图 + BEV extra），使用：
+  `--llm-primary-image-role numbered_som_overlay --enable-bev-map-provider`。
+  该模式会自动生成 SoM overlay 作为主图，不再把 raw FPV 作为单独图片上传；坐标仍对应 FPV/SoM 同一图像平面。
+- 可用 `--llm-image-max-side` / `--llm-image-max-bytes` / `--llm-image-jpeg-quality` 调整 FPV、SoM、SAM visualization 的 LVLM 输入压缩；可用 `--bev-map-output-size-px` 调整 BEV 截图分辨率。
 - `--segmentation-policy optional`：推荐缺省模式；有 SAM/SAM3 时启用 SoM、safe corridor 和 validation，没有 mask 时仍允许 FPV+BEV zero-shot baseline 输出。
 - `--segmentation-policy required`：严格实验模式，缺少 segmentation artifacts 的帧直接失败。
 - `--segmentation-policy disabled`：纯 FPV/BEV 消融模式，完全忽略 segmentation artifacts。

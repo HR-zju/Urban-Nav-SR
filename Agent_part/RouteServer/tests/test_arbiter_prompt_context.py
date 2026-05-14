@@ -1,12 +1,69 @@
 from __future__ import annotations
 
 import ast
+import importlib.util
+import os
 from pathlib import Path
+import sys
+import types
 import unittest
 
 
 _MODULE_PATH = Path(__file__).resolve().parents[1] / "src" / "mcp_server" / "brain" / "arbiter.py"
 _SERVICE_PATH = Path(__file__).resolve().parents[1] / "src" / "mcp_server" / "services" / "visual_prompt_service.py"
+
+
+def _load_arbiter_module():
+    class VisualPromptDecision:
+        def __init__(
+            self,
+            *,
+            selected_candidate_id=None,
+            selected_prompt_type=None,
+            instruction="",
+            confidence=0.0,
+            reason="",
+            reject_all=False,
+            fallback_used=False,
+            arbiter_source=None,
+            rendered_prompt=None,
+            debug=None,
+        ):
+            self.selected_candidate_id = selected_candidate_id
+            self.selected_prompt_type = selected_prompt_type
+            self.instruction = instruction
+            self.confidence = confidence
+            self.reason = reason
+            self.reject_all = reject_all
+            self.fallback_used = fallback_used
+            self.arbiter_source = arbiter_source
+            self.rendered_prompt = rendered_prompt
+            self.debug = debug or {}
+
+    package = types.ModuleType("mcp_server")
+    route_context = types.ModuleType("mcp_server.route_context")
+    schema = types.ModuleType("mcp_server.route_context.schema")
+    schema.VisualPromptDecision = VisualPromptDecision
+    previous = {
+        "mcp_server": sys.modules.get("mcp_server"),
+        "mcp_server.route_context": sys.modules.get("mcp_server.route_context"),
+        "mcp_server.route_context.schema": sys.modules.get("mcp_server.route_context.schema"),
+    }
+    sys.modules["mcp_server"] = package
+    sys.modules["mcp_server.route_context"] = route_context
+    sys.modules["mcp_server.route_context.schema"] = schema
+    spec = importlib.util.spec_from_file_location("mcp_server.brain.arbiter", _MODULE_PATH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                sys.modules.pop(key, None)
+            else:
+                sys.modules[key] = value
+    return module
 
 
 def _function_arg_names(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:
@@ -51,6 +108,58 @@ class ArbiterPromptContextTest(unittest.TestCase):
         self.assertNotIn("segmentation_safe_corridor_hints", text)
         self.assertIn("Direct regression", text)
         self.assertIn('"segmentation_validation": segmentation_validation', text)
+
+    def test_minimal_output_coerces_to_full_path_corridor(self) -> None:
+        arbiter = _load_arbiter_module()
+        decision = arbiter.coerce_direct_prompt_decision(
+            raw={
+                "r": 0,
+                "t": "c",
+                "p": [
+                    [[800, 827], [631, 827], [969, 827]],
+                    [[777, 764], [629, 764], [924, 764]],
+                    [[777, 702], [688, 702], [865, 702]],
+                ],
+                "c": 0.91,
+            },
+            route_context={"local_semantics": {"short_action_summary": "Continue forward."}},
+            image_width=1600,
+            image_height=900,
+        )
+        self.assertIsNotNone(decision)
+        self.assertFalse(decision.reject_all)
+        self.assertEqual(decision.selected_prompt_type, "path_corridor")
+        self.assertEqual(decision.rendered_prompt["termination_semantics"], "continue_visible_corridor")
+        self.assertEqual(len(decision.rendered_prompt["path_samples"]), 3)
+        self.assertEqual(decision.rendered_prompt["path_samples"][0]["support_label"], "preferred_traversable")
+        self.assertEqual(decision.rendered_prompt["path_uv"][0], [800.0, 827.0])
+        self.assertIn("_minimal_output", decision.debug["raw"])
+
+    def test_minimal_prompt_payload_is_ascii_safe(self) -> None:
+        arbiter = _load_arbiter_module()
+        old_value = os.environ.get("LVLM_MINIMAL_OUTPUT")
+        os.environ["LVLM_MINIMAL_OUTPUT"] = "1"
+        try:
+            system_prompt = arbiter.build_direct_prompt_system_prompt()
+            question = arbiter.build_direct_prompt_question(
+                route_context={"local_semantics": {"short_action_summary": "继续直行"}},
+                visual_regions={},
+                prompt_proposals=[],
+                pov_prompt_candidates=[],
+                image_width=1600,
+                image_height=900,
+                navigation_mode="foot",
+                fpv_segmentation_summary={"note": "人行道与绿化带"},
+                som_summary={"labels": ["可通行", "障碍物"]},
+            )
+        finally:
+            if old_value is None:
+                os.environ.pop("LVLM_MINIMAL_OUTPUT", None)
+            else:
+                os.environ["LVLM_MINIMAL_OUTPUT"] = old_value
+        system_prompt.encode("ascii")
+        question.encode("ascii")
+        self.assertIn("\\u7ee7\\u7eed\\u76f4\\u884c", question)
 
     def test_visual_prompt_service_does_not_promote_segmentation_geometry_to_final(self) -> None:
         text = _SERVICE_PATH.read_text(encoding="utf-8")

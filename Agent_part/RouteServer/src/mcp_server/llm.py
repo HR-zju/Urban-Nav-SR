@@ -12,6 +12,7 @@ import mimetypes
 import os
 import io
 import re
+import traceback
 from time import perf_counter
 from pathlib import Path
 
@@ -278,6 +279,68 @@ def _truthy_env(name: str, default: bool = False) -> bool:
     if not value:
         return bool(default)
     return value in {"1", "true", "yes", "on"}
+
+
+def _ascii_probe(value: Any) -> dict[str, Any]:
+    """Return a compact encoding probe without storing large request text."""
+    text = str(value or "")
+    first_non_ascii: dict[str, Any] | None = None
+    for index, char in enumerate(text):
+        if ord(char) > 127:
+            first_non_ascii = {
+                "index": int(index),
+                "char_repr": repr(char),
+                "codepoint": ord(char),
+                "context": text[max(0, index - 20): index + 20],
+            }
+            break
+    return {
+        "chars": len(text),
+        "ascii": first_non_ascii is None,
+        "first_non_ascii": first_non_ascii,
+    }
+
+
+def _vision_request_debug_summary(
+    *,
+    api_style: str,
+    settings: LLMSettings,
+    image_urls: list[str],
+    question: str,
+    system_prompt: str | None,
+    detail: str,
+) -> dict[str, Any]:
+    """Summarize a vision request for failure debugging without image payloads."""
+    payload_stats = _vision_url_payload_stats(image_urls)
+    return {
+        "api_style": api_style,
+        "provider": settings.provider,
+        "model": settings.model,
+        "base_url_host": settings.base_url.split("//")[-1].split("/")[0],
+        "reasoning_effort": settings.reasoning_effort,
+        "temperature": settings.temperature,
+        "detail": detail,
+        "timeout_s": None,
+        "image_payload": payload_stats,
+        "system_prompt_probe": _ascii_probe(system_prompt or ""),
+        "question_probe": _ascii_probe(question),
+        "extra_image_count": max(0, len(image_urls) - 1),
+    }
+
+
+def _vision_call_debug_enabled() -> bool:
+    return _truthy_env("LLM_DEBUG_TRACEBACK") or _truthy_env("LLM_VISION_DEBUG_TRACEBACK")
+
+
+def _require_ascii_header_value(name: str, value: str) -> None:
+    """Fail fast when a header value cannot be encoded safely for httpx."""
+    try:
+        value.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise ValueError(
+            f"{name} must be ASCII-safe for HTTP headers; found non-ASCII characters. "
+            f"prefix={repr(str(value)[:12])}"
+        ) from exc
 
 
 def _extract_chat_stream_delta_text(chunk: Any) -> str:
@@ -612,6 +675,8 @@ def _heuristic_parse_confidence(
 def _create_async_client(settings: LLMSettings) -> Any:
     if AsyncOpenAI is None:
         return None
+    _require_ascii_header_value("LLM_API_KEY", settings.api_key)
+    _require_ascii_header_value("LLM_API_BASE_URL", settings.base_url)
     return AsyncOpenAI(
         base_url=settings.base_url,
         api_key=settings.api_key,
@@ -623,6 +688,8 @@ def _create_async_client(settings: LLMSettings) -> Any:
 def _create_async_client_with_timeout(settings: LLMSettings, timeout_s: float) -> Any:
     if AsyncOpenAI is None:
         return None
+    _require_ascii_header_value("LLM_API_KEY", settings.api_key)
+    _require_ascii_header_value("LLM_API_BASE_URL", settings.base_url)
     return AsyncOpenAI(
         base_url=settings.base_url,
         api_key=settings.api_key,
@@ -1965,18 +2032,33 @@ class VisionAnalyzer(BaseLLMService):
             },
             self.settings,
         )
-        if self._stream_timing_enabled():
-            streamed = await self._stream_chat_completions(client, payload)
-            roundtrip_ms = int(streamed.get("roundtrip_ms") or 0)
-            answer = str(streamed.get("answer") or "")
-            response_metadata = streamed.get("response") if isinstance(streamed.get("response"), dict) else {}
-            stream_timing = streamed.get("stream_timing") if isinstance(streamed.get("stream_timing"), dict) else {}
-        else:
-            response = await client.chat.completions.create(**payload)
-            roundtrip_ms = int(round((perf_counter() - started_at) * 1000.0))
-            answer = _extract_text_from_chat_response(response)
-            response_metadata = _chat_response_metadata(response)
-            stream_timing = {"enabled": False}
+        try:
+            if self._stream_timing_enabled():
+                streamed = await self._stream_chat_completions(client, payload)
+                roundtrip_ms = int(streamed.get("roundtrip_ms") or 0)
+                answer = str(streamed.get("answer") or "")
+                response_metadata = streamed.get("response") if isinstance(streamed.get("response"), dict) else {}
+                stream_timing = streamed.get("stream_timing") if isinstance(streamed.get("stream_timing"), dict) else {}
+            else:
+                response = await client.chat.completions.create(**payload)
+                roundtrip_ms = int(round((perf_counter() - started_at) * 1000.0))
+                answer = _extract_text_from_chat_response(response)
+                response_metadata = _chat_response_metadata(response)
+                stream_timing = {"enabled": False}
+        except Exception as exc:
+            if _vision_call_debug_enabled():
+                debug_summary = _vision_request_debug_summary(
+                    api_style="chat_completions",
+                    settings=self.settings,
+                    image_urls=image_urls,
+                    question=question,
+                    system_prompt=system_prompt,
+                    detail=detail,
+                )
+                debug_summary["timeout_s"] = self._vision_timeout_s()
+                setattr(exc, "vision_debug", debug_summary)
+                setattr(exc, "traceback", traceback.format_exc())
+            raise
         request_json = json.dumps(messages, ensure_ascii=False, separators=(",", ":"))
         return {
             "answer": answer,
@@ -2034,9 +2116,24 @@ class VisionAnalyzer(BaseLLMService):
             },
             self.settings,
         )
-        response = await client.responses.create(**payload)
-        roundtrip_ms = int(round((perf_counter() - started_at) * 1000.0))
-        answer = _extract_text_from_responses_response(response)
+        try:
+            response = await client.responses.create(**payload)
+            roundtrip_ms = int(round((perf_counter() - started_at) * 1000.0))
+            answer = _extract_text_from_responses_response(response)
+        except Exception as exc:
+            if _vision_call_debug_enabled():
+                debug_summary = _vision_request_debug_summary(
+                    api_style="responses",
+                    settings=self.settings,
+                    image_urls=images,
+                    question=question,
+                    system_prompt=prompt,
+                    detail=detail,
+                )
+                debug_summary["timeout_s"] = self._vision_timeout_s()
+                setattr(exc, "vision_debug", debug_summary)
+                setattr(exc, "traceback", traceback.format_exc())
+            raise
         request_json = json.dumps(request_input, ensure_ascii=False, separators=(",", ":"))
         return {
             "answer": answer,
@@ -2079,24 +2176,40 @@ class VisionAnalyzer(BaseLLMService):
 
         client = _create_async_client_with_timeout(self.settings, self._vision_timeout_s())
         try:
-            if self.settings.api_style == "responses":
-                call = await self._call_responses_api(
-                    client,
-                    image_url,
-                    question,
-                    detail,
-                    system_prompt,
-                    extra_image_urls=resolved_extra_image_urls,
-                )
-            else:
-                call = await self._call_chat_completions(
-                    client,
-                    image_url,
-                    question,
-                    detail,
-                    system_prompt,
-                    extra_image_urls=resolved_extra_image_urls,
-                )
+            try:
+                if self.settings.api_style == "responses":
+                    call = await self._call_responses_api(
+                        client,
+                        image_url,
+                        question,
+                        detail,
+                        system_prompt,
+                        extra_image_urls=resolved_extra_image_urls,
+                    )
+                else:
+                    call = await self._call_chat_completions(
+                        client,
+                        image_url,
+                        question,
+                        detail,
+                        system_prompt,
+                        extra_image_urls=resolved_extra_image_urls,
+                    )
+            except Exception as exc:
+                if _vision_call_debug_enabled() and not isinstance(getattr(exc, "vision_debug", None), dict):
+                    image_urls = [str(image_url).strip(), *resolved_extra_image_urls]
+                    debug_summary = _vision_request_debug_summary(
+                        api_style=self.settings.api_style,
+                        settings=self.settings,
+                        image_urls=image_urls,
+                        question=question,
+                        system_prompt=system_prompt,
+                        detail=detail,
+                    )
+                    debug_summary["timeout_s"] = self._vision_timeout_s()
+                    setattr(exc, "vision_debug", debug_summary)
+                    setattr(exc, "traceback", traceback.format_exc())
+                raise
             answer = str(call.get("answer") or "")
 
             return {

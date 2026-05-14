@@ -234,6 +234,12 @@ def _safe_artifact_name(value: str) -> str:
     return cleaned or "image"
 
 
+def _set_env_if_value(name: str, value: Any | None) -> None:
+    if value is None:
+        return
+    os.environ[str(name)] = str(value)
+
+
 def _symlink_or_copy_tree(src: Path, dst: Path) -> None:
     if dst.exists():
         return
@@ -381,6 +387,7 @@ async def _run_frame(
     enable_sam_visualization_input: bool,
     enable_bev_map_provider: bool,
     bev_map_provider_session: Any | None,
+    llm_primary_image_role: str,
     enforce_alignment: bool,
     emit_qa_bundle: bool,
     emit_llm_input_images: bool,
@@ -425,6 +432,7 @@ async def _run_frame(
         enable_sam_visualization_input=bool(enable_sam_visualization_input),
         enable_bev_map_provider=bool(enable_bev_map_provider),
         bev_map_provider_session=bev_map_provider_session,
+        llm_primary_image_role=str(llm_primary_image_role),
         enforce_alignment=bool(enforce_alignment),
         emit_qa_bundle=bool(emit_qa_bundle),
         emit_llm_input_images=bool(emit_llm_input_images),
@@ -529,6 +537,7 @@ async def _process_frame_job(
     enable_sam_visualization_input: bool,
     enable_bev_map_provider: bool,
     bev_map_provider_session: Any | None,
+    llm_primary_image_role: str,
     enforce_alignment: bool,
     emit_qa_bundle: bool,
     emit_llm_input_images: bool,
@@ -582,6 +591,7 @@ async def _process_frame_job(
             enable_sam_visualization_input=bool(enable_sam_visualization_input),
             enable_bev_map_provider=bool(enable_bev_map_provider),
             bev_map_provider_session=bev_map_provider_session,
+            llm_primary_image_role=str(llm_primary_image_role),
             enforce_alignment=bool(enforce_alignment),
             emit_qa_bundle=bool(emit_qa_bundle),
             emit_llm_input_images=bool(emit_llm_input_images),
@@ -741,6 +751,39 @@ def parse_args() -> argparse.Namespace:
         help="Query the configured map provider for OSM-style semantic BEV anchors around each GNSS frame",
     )
     parser.add_argument(
+        "--llm-primary-image-role",
+        default="primary_fpv",
+        choices=["primary_fpv", "numbered_som_overlay"],
+        help=(
+            "Primary image sent to the LVLM. Use numbered_som_overlay with --enable-bev-map-provider "
+            "to upload only two images: SoM primary plus BEV extra."
+        ),
+    )
+    parser.add_argument(
+        "--llm-image-max-side",
+        type=int,
+        default=None,
+        help="Override VISUAL_PROMPT_LLM_IMAGE_MAX_SIDE for FPV/SoM/SAM LVLM images",
+    )
+    parser.add_argument(
+        "--llm-image-max-bytes",
+        type=int,
+        default=None,
+        help="Override VISUAL_PROMPT_LLM_IMAGE_MAX_BYTES for encoded LVLM images",
+    )
+    parser.add_argument(
+        "--llm-image-jpeg-quality",
+        type=int,
+        default=None,
+        help="Override VISUAL_PROMPT_LLM_IMAGE_JPEG_QUALITY for LVLM image encoding",
+    )
+    parser.add_argument(
+        "--bev-map-output-size-px",
+        type=int,
+        default=None,
+        help="Override BEV_MAP_TILE_OUTPUT_SIZE_PX for the raster BEV LVLM image",
+    )
+    parser.add_argument(
         "--segmentation-policy",
         default="optional",
         choices=["required", "optional", "disabled"],
@@ -793,6 +836,10 @@ async def main_async() -> None:
     segmentation_policy = str(args.segmentation_policy or "optional").strip().lower()
     if bool(args.allow_missing_segmentation) and segmentation_policy == "required":
         segmentation_policy = "optional"
+    _set_env_if_value("VISUAL_PROMPT_LLM_IMAGE_MAX_SIDE", args.llm_image_max_side)
+    _set_env_if_value("VISUAL_PROMPT_LLM_IMAGE_MAX_BYTES", args.llm_image_max_bytes)
+    _set_env_if_value("VISUAL_PROMPT_LLM_IMAGE_JPEG_QUALITY", args.llm_image_jpeg_quality)
+    _set_env_if_value("BEV_MAP_TILE_OUTPUT_SIZE_PX", args.bev_map_output_size_px)
 
     _ensure_dir(output_dir)
     overlays_dir = output_dir / "overlay"
@@ -849,6 +896,13 @@ async def main_async() -> None:
         "frames_failed": 0,
         "sam3_inference_elapsed_ms": sam3_inference_elapsed_ms,
         "segmentation_policy": segmentation_policy,
+        "llm_primary_image_role": str(args.llm_primary_image_role),
+        "llm_image_overrides": {
+            "max_side": args.llm_image_max_side,
+            "max_bytes": args.llm_image_max_bytes,
+            "jpeg_quality": args.llm_image_jpeg_quality,
+            "bev_map_output_size_px": args.bev_map_output_size_px,
+        },
         "frames": [],
     }
 
@@ -895,6 +949,7 @@ async def main_async() -> None:
                 enable_sam_visualization_input=bool(args.enable_sam_visualization_input),
                 enable_bev_map_provider=bool(args.enable_bev_map_provider),
                 bev_map_provider_session=bev_map_provider_session,
+                llm_primary_image_role=str(args.llm_primary_image_role),
                 enforce_alignment=bool(args.enforce_alignment),
                 emit_qa_bundle=bool(args.emit_qa_bundle),
                 emit_llm_input_images=bool(args.emit_llm_input_images),

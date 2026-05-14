@@ -4,6 +4,34 @@
 
 ## 2026-05-12
 
+### 增加 LVLM 调用异常诊断
+
+- 新增 `LLM_DEBUG_TRACEBACK=1` / `VISUAL_PROMPT_DEBUG_TRACEBACK=1` 调试开关。
+- 当视觉 LLM 调用失败时，per-frame JSON 会记录：
+  - 完整 Python traceback
+  - provider / model / api_style / reasoning_effort
+  - FPV、SoM、BEV 输入图片数量和估算 payload 大小
+  - system prompt 与 question 的 ASCII 探针结果
+- 目的：定位请求装配、编码、网关或 SDK 层异常，避免只看到 `str(exc)`。
+
+### 增加 LVLM 极简输出协议
+
+- 新增 `LVLM_MINIMAL_OUTPUT=1` / `VISUAL_PROMPT_MINIMAL_OUTPUT=1`。
+- 开启后 A/V 阶段要求 LVLM 只输出导航必需字段：
+  - `r`：是否 reject
+  - `t`：终止语义短码
+  - `p`：3-6 个 `[center,left,right]` FPV 像素采样
+  - `c`：置信度
+- 本地 `coerce_direct_prompt_decision` 会把短键输出恢复成完整 `VisualPromptDecision`：
+  - `selected_prompt_type=path_corridor`
+  - `rendered_prompt.path_samples`
+  - `path_uv`
+  - `coverage_polygon_uv`
+  - `termination_semantics`
+  - `support_confidence`
+- 后续 segmentation validation / repair / render 保持不变，确保质量护栏不被绕过。
+- 该模式的目标是减少 completion tokens 和 JSON 解析失败，同时保留 LVLM 对 FPV/SoM/BEV 的全帧判断。
+
 ### 增加 streaming 首 token 耗时拆分
 
 - `VisionAnalyzer` 新增可选 streaming timing：
