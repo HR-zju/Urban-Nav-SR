@@ -41,6 +41,22 @@ def telemetry_stage_elapsed_ms(telemetry: dict[str, Any] | None, stage: str) -> 
         return None
 
 
+def telemetry_llm_call(telemetry: dict[str, Any] | None, stage: str) -> dict[str, Any] | None:
+    """Read detailed LLM call telemetry for one stage when the provider exposes it."""
+
+    if not isinstance(telemetry, dict):
+        return None
+    calls = telemetry.get("llm_calls")
+    if isinstance(calls, dict) and isinstance(calls.get(stage), dict):
+        return calls[stage]
+    stages = telemetry.get("stages")
+    if isinstance(stages, dict):
+        stage_payload = stages.get(stage)
+        if isinstance(stage_payload, dict) and isinstance(stage_payload.get("llm_call"), dict):
+            return stage_payload["llm_call"]
+    return None
+
+
 def compact_visual_prompt_frame_timing(
     *,
     payload: dict[str, Any] | None,
@@ -69,6 +85,37 @@ def compact_visual_prompt_frame_timing(
         "qa_bundle_ms": telemetry_stage_elapsed_ms(telemetry, "qa_bundle"),
         "render_ms": telemetry_stage_elapsed_ms(telemetry, "render"),
     }
+    generator_call = telemetry_llm_call(telemetry, "generator_llm")
+    if isinstance(generator_call, dict):
+        response = generator_call.get("response") if isinstance(generator_call.get("response"), dict) else {}
+        usage = response.get("usage") if isinstance(response, dict) and isinstance(response.get("usage"), dict) else {}
+        image_payload = (
+            generator_call.get("image_payload")
+            if isinstance(generator_call.get("image_payload"), dict)
+            else {}
+        )
+        timing["generator_llm_roundtrip_ms"] = generator_call.get("roundtrip_ms")
+        timing["generator_llm_request_payload_chars"] = generator_call.get("request_payload_chars")
+        timing["generator_llm_request_text_chars"] = generator_call.get("request_text_chars")
+        timing["generator_llm_response_text_chars"] = generator_call.get("response_text_chars")
+        timing["generator_llm_image_count"] = image_payload.get("image_count") if isinstance(image_payload, dict) else None
+        timing["generator_llm_approx_image_bytes"] = (
+            image_payload.get("approx_image_bytes") if isinstance(image_payload, dict) else None
+        )
+        timing["generator_llm_prompt_tokens"] = (
+            usage.get("prompt_tokens")
+            or usage.get("input_tokens")
+            or usage.get("prompt_token_count")
+        )
+        timing["generator_llm_completion_tokens"] = (
+            usage.get("completion_tokens")
+            or usage.get("output_tokens")
+            or usage.get("completion_token_count")
+        )
+        timing["generator_llm_total_tokens"] = (
+            usage.get("total_tokens")
+            or usage.get("total_token_count")
+        )
     timing["known_stage_ms"] = sum(
         int(timing.get(key) or 0)
         for key in (
@@ -117,6 +164,12 @@ def summarize_visual_prompt_manifest_timings(frames: list[dict[str, Any]]) -> di
         "qa_bundle_ms",
         "render_ms",
         "artifact_write_ms",
+        "generator_llm_roundtrip_ms",
+        "generator_llm_request_payload_chars",
+        "generator_llm_approx_image_bytes",
+        "generator_llm_prompt_tokens",
+        "generator_llm_completion_tokens",
+        "generator_llm_total_tokens",
     ]
     stage_summary: dict[str, Any] = {}
     for key in stage_keys:

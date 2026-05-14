@@ -12,6 +12,7 @@ import mimetypes
 import os
 import io
 import re
+from time import perf_counter
 from pathlib import Path
 
 try:
@@ -176,6 +177,82 @@ def _extract_text_from_responses_response(response: Any) -> str:
     if callable(model_dump):
         return json.dumps(model_dump(), ensure_ascii=False)
     return ""
+
+
+def _model_dump_if_available(value: Any) -> dict[str, Any] | None:
+    dump = getattr(value, "model_dump", None)
+    if callable(dump):
+        try:
+            payload = dump()
+            return payload if isinstance(payload, dict) else None
+        except Exception:
+            return None
+    if isinstance(value, dict):
+        return value
+    return None
+
+
+def _response_usage_dict(response: Any) -> dict[str, Any] | None:
+    usage = getattr(response, "usage", None)
+    payload = _model_dump_if_available(usage)
+    if isinstance(payload, dict):
+        return payload
+    return None
+
+
+def _vision_url_payload_stats(image_urls: list[str]) -> dict[str, Any]:
+    """Summarize multimodal request payload size without storing image bytes."""
+    total_url_chars = 0
+    data_url_count = 0
+    approx_image_bytes = 0
+    per_image: list[dict[str, Any]] = []
+    for index, url in enumerate(image_urls):
+        raw = str(url or "")
+        total_url_chars += len(raw)
+        is_data_url = raw.startswith("data:image/") and "," in raw
+        approx_bytes = 0
+        if is_data_url:
+            data_url_count += 1
+            encoded = raw.split(",", 1)[1]
+            approx_bytes = int(round(len(encoded) * 0.75))
+            approx_image_bytes += approx_bytes
+        per_image.append(
+            {
+                "index": int(index),
+                "is_data_url": bool(is_data_url),
+                "url_chars": len(raw),
+                "approx_image_bytes": approx_bytes,
+            }
+        )
+    return {
+        "image_count": len(image_urls),
+        "data_url_count": int(data_url_count),
+        "image_url_chars": int(total_url_chars),
+        "approx_image_bytes": int(approx_image_bytes),
+        "images": per_image,
+    }
+
+
+def _chat_response_metadata(response: Any) -> dict[str, Any]:
+    choices = getattr(response, "choices", None) or []
+    finish_reason = None
+    if choices:
+        finish_reason = getattr(choices[0], "finish_reason", None)
+    return {
+        "response_id": getattr(response, "id", None),
+        "created": getattr(response, "created", None),
+        "finish_reason": finish_reason,
+        "usage": _response_usage_dict(response),
+    }
+
+
+def _responses_metadata(response: Any) -> dict[str, Any]:
+    return {
+        "response_id": getattr(response, "id", None),
+        "created": getattr(response, "created_at", None) or getattr(response, "created", None),
+        "status": getattr(response, "status", None),
+        "usage": _response_usage_dict(response),
+    }
 
 
 def _remove_trailing_commas(text: str) -> str:
@@ -1721,19 +1798,42 @@ class VisionAnalyzer(BaseLLMService):
         detail: str,
         system_prompt: str | None,
         extra_image_urls: list[str] | None = None,
-    ) -> str:
+    ) -> dict[str, Any]:
+        messages = self.build_messages(
+            image_url,
+            question,
+            detail,
+            system_prompt,
+            extra_image_urls=extra_image_urls,
+        )
+        image_urls = [str(image_url).strip(), *[str(item).strip() for item in list(extra_image_urls or []) if str(item or "").strip()]]
+        started_at = perf_counter()
         response = await client.chat.completions.create(
             model=self.settings.model,
             temperature=self.settings.temperature,
-            messages=self.build_messages(
-                image_url,
-                question,
-                detail,
-                system_prompt,
-                extra_image_urls=extra_image_urls,
-            ),
+            messages=messages,
         )
-        return _extract_text_from_chat_response(response)
+        roundtrip_ms = int(round((perf_counter() - started_at) * 1000.0))
+        answer = _extract_text_from_chat_response(response)
+        request_json = json.dumps(messages, ensure_ascii=False, separators=(",", ":"))
+        return {
+            "answer": answer,
+            "telemetry": {
+                "api_style": "chat_completions",
+                "provider": self.settings.provider,
+                "model": self.settings.model,
+                "roundtrip_ms": roundtrip_ms,
+                "request_text_chars": len(str(system_prompt or "")) + len(str(question or "")),
+                "request_payload_chars": len(request_json),
+                "response_text_chars": len(answer),
+                "temperature": self.settings.temperature,
+                "timeout_s": self._vision_timeout_s(),
+                "max_retries": self.settings.max_retries,
+                "image_payload": _vision_url_payload_stats(image_urls),
+                "response": _chat_response_metadata(response),
+                "server_timing_available": False,
+            },
+        }
 
     async def _call_responses_api(
         self,
@@ -1743,7 +1843,7 @@ class VisionAnalyzer(BaseLLMService):
         detail: str,
         system_prompt: str | None,
         extra_image_urls: list[str] | None = None,
-    ) -> str:
+    ) -> dict[str, Any]:
         prompt = system_prompt or (
             "You are a visual assistant. Answer the user's question about the image directly and concisely."
         )
@@ -1756,16 +1856,38 @@ class VisionAnalyzer(BaseLLMService):
         for url in images:
             content.append({"type": "input_image", "image_url": url, "detail": detail})
         content.append({"type": "input_text", "text": question})
+        request_input = [
+            {
+                "role": "user",
+                "content": content,
+            }
+        ]
+        started_at = perf_counter()
         response = await client.responses.create(
             model=self.settings.model,
-            input=[
-                {
-                    "role": "user",
-                    "content": content,
-                }
-            ],
+            input=request_input,
         )
-        return _extract_text_from_responses_response(response)
+        roundtrip_ms = int(round((perf_counter() - started_at) * 1000.0))
+        answer = _extract_text_from_responses_response(response)
+        request_json = json.dumps(request_input, ensure_ascii=False, separators=(",", ":"))
+        return {
+            "answer": answer,
+            "telemetry": {
+                "api_style": "responses",
+                "provider": self.settings.provider,
+                "model": self.settings.model,
+                "roundtrip_ms": roundtrip_ms,
+                "request_text_chars": len(str(prompt or "")) + len(str(question or "")),
+                "request_payload_chars": len(request_json),
+                "response_text_chars": len(answer),
+                "temperature": self.settings.temperature,
+                "timeout_s": self._vision_timeout_s(),
+                "max_retries": self.settings.max_retries,
+                "image_payload": _vision_url_payload_stats(images),
+                "response": _responses_metadata(response),
+                "server_timing_available": False,
+            },
+        }
 
     async def analyze(
         self,
@@ -1789,7 +1911,7 @@ class VisionAnalyzer(BaseLLMService):
         client = _create_async_client_with_timeout(self.settings, self._vision_timeout_s())
         try:
             if self.settings.api_style == "responses":
-                answer = await self._call_responses_api(
+                call = await self._call_responses_api(
                     client,
                     image_url,
                     question,
@@ -1798,7 +1920,7 @@ class VisionAnalyzer(BaseLLMService):
                     extra_image_urls=resolved_extra_image_urls,
                 )
             else:
-                answer = await self._call_chat_completions(
+                call = await self._call_chat_completions(
                     client,
                     image_url,
                     question,
@@ -1806,6 +1928,7 @@ class VisionAnalyzer(BaseLLMService):
                     system_prompt,
                     extra_image_urls=resolved_extra_image_urls,
                 )
+            answer = str(call.get("answer") or "")
 
             return {
                 "provider": self.settings.provider,
@@ -1816,6 +1939,7 @@ class VisionAnalyzer(BaseLLMService):
                 "question": question,
                 "detail": detail,
                 "answer": answer.strip(),
+                "llm_telemetry": call.get("telemetry") if isinstance(call, dict) else None,
             }
         finally:
             await _close_async_client(client)
@@ -2121,6 +2245,8 @@ async def arbitrate_pov_candidates_with_llm(
     parsed["_arbiter_provider"] = result.get("provider")
     parsed["_arbiter_model"] = result.get("model")
     parsed["_arbiter_api_style"] = result.get("api_style")
+    if result.get("llm_telemetry") is not None:
+        parsed["_arbiter_llm_telemetry"] = result.get("llm_telemetry")
     return parsed
 
 

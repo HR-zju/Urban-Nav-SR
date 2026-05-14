@@ -1592,6 +1592,7 @@ async def run_zero_shot_visual_prompt_pipeline(
         "elapsed_ms": 0,
         "error_code": None,
         "stages": {},
+        "llm_calls": {},
     }
 
     def _mark_stage(
@@ -1608,6 +1609,19 @@ async def run_zero_shot_visual_prompt_pipeline(
         }
         if error_code and telemetry.get("error_code") is None:
             telemetry["error_code"] = str(error_code)
+
+    def _record_llm_call(stage: str, raw: Dict[str, Any] | None) -> None:
+        if not isinstance(raw, dict):
+            return
+        llm_telemetry = raw.get("_arbiter_llm_telemetry")
+        if not isinstance(llm_telemetry, dict):
+            return
+        calls = telemetry.setdefault("llm_calls", {})
+        if isinstance(calls, dict):
+            calls[str(stage)] = llm_telemetry
+        stages = telemetry.get("stages")
+        if isinstance(stages, dict) and isinstance(stages.get(stage), dict):
+            stages[stage]["llm_call"] = llm_telemetry
 
     if not str(image_path or "").strip() and not str(image_url or "").strip():
         raise RuntimeError("run_zero_shot_visual_prompt_agent requires image_path or image_url")
@@ -2078,6 +2092,7 @@ async def run_zero_shot_visual_prompt_pipeline(
             decision = generator_source_decision
             _mark_stage("A_generator", generator_stage_started_at, status="ok")
             _mark_stage("generator_llm", generator_stage_started_at, status="ok")
+            _record_llm_call("generator_llm", llm_raw)
             decision, segmentation_validation = _run_V_constraint(
                 decision=decision,
                 route_context=route_context_dict,
@@ -2148,6 +2163,7 @@ async def run_zero_shot_visual_prompt_pipeline(
                     )
                     _mark_stage("V_verifier", verifier_stage_started_at, status="ok")
                     _mark_stage("verifier_llm", verifier_stage_started_at, status="ok")
+                    _record_llm_call("verifier_llm", verifier_raw)
                     verified_decision, verifier_segmentation_validation = _run_V_constraint(
                         decision=verified_decision,
                         route_context=route_context_dict,

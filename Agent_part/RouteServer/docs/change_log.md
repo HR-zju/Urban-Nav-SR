@@ -4,6 +4,24 @@
 
 ## 2026-05-12
 
+### 增加 LLM 调用细粒度耗时与请求体统计
+
+- `VisionAnalyzer` 现在会把每次 LVLM 调用的详细 telemetry 回传到 pipeline：
+  - `roundtrip_ms`
+  - `request_text_chars`
+  - `request_payload_chars`
+  - `response_text_chars`
+  - `image_payload.approx_image_bytes`
+  - `usage.prompt_tokens` / `completion_tokens` / `total_tokens`（provider 返回时）
+- `visual_prompt_service` 会把 generator / verifier 的 LLM telemetry 记录到每帧 `manifest.json`。
+- `mcp_server.utils.timing` 新增对 LLM call telemetry 的扁平化输出，便于快速定位：
+  - 是请求体太大
+  - 还是模型推理时间高
+  - 还是 provider roundtrip 明显偏慢
+- 说明：
+  - 端到端网络往返时间可以直接记录。
+  - provider 内部排队 / 推理 / 解码时间只有在返回头或 body 暴露时才能进一步拆分，否则只能作为 roundtrip 观测。
+
 ### 增加缺省 Segmentation 策略与可选 IMU 姿态接入
 
 - 批处理主流程新增 `--segmentation-policy required|optional|disabled`：
