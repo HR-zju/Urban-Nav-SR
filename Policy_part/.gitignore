@@ -14,6 +14,8 @@
 bags/
 test_images_frame/
 logs/
+ROS_RTK/ros2_ws/log/
+vins_fusion_ws/log/
 
 .vscode/
 __pycache__/

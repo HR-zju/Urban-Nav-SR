@@ -34,18 +34,20 @@ tmux send-keys "ros2 launch realsense2_camera rs_launch.py \
 
 # gps
 tmux select-pane -t 1
-tmux send-keys "cd /home/nuvo/SR/foundation-policy/Policy_part/ROS_RTK/catkin_ws" Enter
-tmux send-keys "source devel/setup.zsh" Enter
-tmux send-keys "rosrun gps_ntrip_py gps_ntrip_node.py" Enter
+tmux send-keys "docker exec -it ros1toros2 zsh" Enter
+sleep 1
+tmux send-keys "source /opt/ros/humble/setup.zsh" Enter
+tmux send-keys "cd /home/nuvo/SR/foundation-policy/Policy_part" Enter
+tmux send-keys "python3 tools/ros2_gps_ntrip_node.py" Enter
 
 
 # control global fusion node in pane 2
 tmux select-pane -t 2
-tmux send-keys "docker exec -it vins_fusion bash" Enter
+tmux send-keys "docker exec -it ros1toros2 zsh" Enter
 sleep 1
-tmux send-keys "cd /home/nuvo/SR/foundation-policy/Policy_part/vins_fusion_ws" Enter
-tmux send-keys "source devel/setup.bash" Enter
-tmux send-keys "rosrun global_fusion global_fusion_node" Enter
+tmux send-keys "source /opt/ros/humble/setup.zsh" Enter
+tmux send-keys "cd /home/nuvo/SR/foundation-policy/Policy_part" Enter
+tmux send-keys "python3 tools/ros2_vins_fusion_node.py" Enter
 
 # run the robot by joy teleopic in pane 3
 tmux select-pane -t 3
