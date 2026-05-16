@@ -12,8 +12,6 @@ import rclpy
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry, Path
 from rclpy.node import Node
-from scipy.optimize import least_squares
-from scipy.spatial.transform import Rotation
 from sensor_msgs.msg import NavSatFix
 from visualization_msgs.msg import Marker, MarkerArray
 
@@ -68,19 +66,81 @@ def quat_from_xyzw(q):
 
 
 def quat_to_matrix(q):
-    return Rotation.from_quat(quat_to_xyzw(q)).as_matrix()
+    w, x, y, z = quat_normalize(q)
+    xx = x * x
+    yy = y * y
+    zz = z * z
+    xy = x * y
+    xz = x * z
+    yz = y * z
+    wx = w * x
+    wy = w * y
+    wz = w * z
+    return np.array([
+        [1.0 - 2.0 * (yy + zz), 2.0 * (xy - wz), 2.0 * (xz + wy)],
+        [2.0 * (xy + wz), 1.0 - 2.0 * (xx + zz), 2.0 * (yz - wx)],
+        [2.0 * (xz - wy), 2.0 * (yz + wx), 1.0 - 2.0 * (xx + yy)],
+    ], dtype=float)
 
 
 def matrix_to_quat(matrix):
-    return quat_from_xyzw(Rotation.from_matrix(matrix).as_quat())
+    m = np.asarray(matrix, dtype=float)
+    trace = float(np.trace(m))
+    if trace > 0.0:
+        s = math.sqrt(trace + 1.0) * 2.0
+        w = 0.25 * s
+        x = (m[2, 1] - m[1, 2]) / s
+        y = (m[0, 2] - m[2, 0]) / s
+        z = (m[1, 0] - m[0, 1]) / s
+    else:
+        diag = np.diag(m)
+        idx = int(np.argmax(diag))
+        if idx == 0:
+            s = math.sqrt(max(1.0 + m[0, 0] - m[1, 1] - m[2, 2], 1e-12)) * 2.0
+            w = (m[2, 1] - m[1, 2]) / s
+            x = 0.25 * s
+            y = (m[0, 1] + m[1, 0]) / s
+            z = (m[0, 2] + m[2, 0]) / s
+        elif idx == 1:
+            s = math.sqrt(max(1.0 + m[1, 1] - m[0, 0] - m[2, 2], 1e-12)) * 2.0
+            w = (m[0, 2] - m[2, 0]) / s
+            x = (m[0, 1] + m[1, 0]) / s
+            y = 0.25 * s
+            z = (m[1, 2] + m[2, 1]) / s
+        else:
+            s = math.sqrt(max(1.0 + m[2, 2] - m[0, 0] - m[1, 1], 1e-12)) * 2.0
+            w = (m[1, 0] - m[0, 1]) / s
+            x = (m[0, 2] + m[2, 0]) / s
+            y = (m[1, 2] + m[2, 1]) / s
+            z = 0.25 * s
+    return quat_normalize([w, x, y, z])
 
 
 def rotvec_to_quat(rotvec):
-    return quat_from_xyzw(Rotation.from_rotvec(rotvec).as_quat())
+    rotvec = np.asarray(rotvec, dtype=float)
+    theta = float(np.linalg.norm(rotvec))
+    if theta < 1e-12:
+        return np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
+    axis = rotvec / theta
+    half = 0.5 * theta
+    return quat_normalize([
+        math.cos(half),
+        axis[0] * math.sin(half),
+        axis[1] * math.sin(half),
+        axis[2] * math.sin(half),
+    ])
 
 
 def quat_to_rotvec(q):
-    return Rotation.from_quat(quat_to_xyzw(q)).as_rotvec()
+    q = quat_normalize(q)
+    if q[0] < 0.0:
+        q = -q
+    vec = np.asarray(q[1:4], dtype=float)
+    sin_half = float(np.linalg.norm(vec))
+    if sin_half < 1e-12:
+        return 2.0 * vec
+    angle = 2.0 * math.atan2(sin_half, q[0])
+    return vec / sin_half * angle
 
 
 def quat_inverse(q):
@@ -104,6 +164,12 @@ def relative_pose(p_i, q_i, p_j, q_j):
     rel_p = r_i.T @ (p_j - p_i)
     rel_q = quat_multiply(quat_inverse(q_i), q_j)
     return rel_p, rel_q
+
+
+def huber_weight(norm_value, delta=1.0):
+    if norm_value <= delta or norm_value < 1e-12:
+        return 1.0
+    return math.sqrt(delta / norm_value)
 
 
 def llh_to_ecef(latitude, longitude, altitude):
@@ -248,11 +314,15 @@ class GlobalOptimization:
 
             times = sorted(self.local_pose_map.keys())
             index_by_time = {t: i for i, t in enumerate(times)}
-            initial = np.zeros(len(times) * 6, dtype=float)
-            for i, t in enumerate(times):
-                pose = self.global_pose_map[t]
-                initial[i * 6:i * 6 + 3] = pose[:3]
-                initial[i * 6 + 3:i * 6 + 6] = quat_to_rotvec(pose[3:7])
+            poses = []
+            for t in times:
+                pose = self.global_pose_map.get(t)
+                if pose is None:
+                    pose = self.local_pose_map[t]
+                poses.append([
+                    np.asarray(pose[:3], dtype=float).copy(),
+                    quat_normalize(np.asarray(pose[3:7], dtype=float)),
+                ])
 
             local_relative = []
             for t_i, t_j in zip(times[:-1], times[1:]):
@@ -271,39 +341,174 @@ class GlobalOptimization:
 
         logger.info('global optimization')
 
-        def unpack(params, i):
-            base = i * 6
-            return params[base:base + 3], rotvec_to_quat(params[base + 3:base + 6])
+        def copy_poses(src_poses):
+            return [[pose[0].copy(), pose[1].copy()] for pose in src_poses]
 
-        def residuals(params):
-            result = []
+        def poses_to_vector(src_poses):
+            vec = np.zeros(len(src_poses) * 6, dtype=float)
+            for idx, (p, q) in enumerate(src_poses):
+                base = idx * 6
+                vec[base:base + 3] = p
+                vec[base + 3:base + 6] = quat_to_rotvec(q)
+            return vec
+
+        def vector_to_poses(vec):
+            out = []
+            for idx in range(len(times)):
+                base = idx * 6
+                out.append([
+                    np.asarray(vec[base:base + 3], dtype=float).copy(),
+                    rotvec_to_quat(vec[base + 3:base + 6]),
+                ])
+            return out
+
+        def apply_delta(src_poses, delta):
+            trial = copy_poses(src_poses)
+            for idx in range(len(trial)):
+                base = idx * 6
+                trial[idx][0] += delta[base:base + 3]
+                trial[idx][1] = quat_multiply(rotvec_to_quat(delta[base + 3:base + 6]), trial[idx][1])
+            return trial
+
+        def relative_translation_residual(src_poses, i, j, measured_p):
+            p_i, q_i = src_poses[i]
+            p_j, _ = src_poses[j]
+            return (quat_to_matrix(q_i).T @ (p_j - p_i) - measured_p) / 0.1
+
+        def relative_rotation_residual(src_poses, i, j, measured_q):
+            q_i = src_poses[i][1]
+            q_j = src_poses[j][1]
+            rel_q = quat_multiply(quat_inverse(q_i), q_j)
+            q_err = quat_multiply(quat_inverse(measured_q), rel_q)
+            return (2.0 * q_err[1:4]) / 0.01
+
+        def gps_residual(src_poses, i, gps_xyz, pos_accuracy):
+            return (src_poses[i][0] - gps_xyz) / pos_accuracy
+
+        def numeric_rot_jacobian(residual_fn, src_poses, pose_idx, *args, eps=1e-6):
+            base_q = src_poses[pose_idx][1].copy()
+            base_res = residual_fn(src_poses, *args)
+            jac = np.zeros((base_res.size, 3), dtype=float)
+            for axis in range(3):
+                delta = np.zeros(3, dtype=float)
+                delta[axis] = eps
+                src_poses[pose_idx][1] = quat_multiply(rotvec_to_quat(delta), base_q)
+                perturbed_res = residual_fn(src_poses, *args)
+                jac[:, axis] = (perturbed_res - base_res) / eps
+            src_poses[pose_idx][1] = base_q
+            return jac
+
+        def huber_scale_block(residual):
+            return huber_weight(float(np.linalg.norm(residual)))
+
+        def add_measurement(hessian, gradient, residual, blocks):
+            for pose_i, jac_i in blocks:
+                slice_i = slice(pose_i * 6, pose_i * 6 + 6)
+                gradient[slice_i] += jac_i.T @ residual
+                for pose_j, jac_j in blocks:
+                    slice_j = slice(pose_j * 6, pose_j * 6 + 6)
+                    hessian[slice_i, slice_j] += jac_i.T @ jac_j
+
+        def compute_cost(src_poses):
+            total = 0.0
             for i, j, measured_p, measured_q in local_relative:
-                p_i, q_i = unpack(params, i)
-                p_j, q_j = unpack(params, j)
-                candidate_p, candidate_q = relative_pose(p_i, q_i, p_j, q_j)
-                result.extend((candidate_p - measured_p) / 0.1)
-                q_err = quat_multiply(quat_inverse(measured_q), candidate_q)
-                result.extend((2.0 * q_err[1:4]) / 0.01)
+                residual_t = relative_translation_residual(src_poses, i, j, measured_p)
+                residual_r = relative_rotation_residual(src_poses, i, j, measured_q)
+                wt = huber_scale_block(residual_t)
+                wr = huber_scale_block(residual_r)
+                total += 0.5 * float((residual_t * wt) @ (residual_t * wt))
+                total += 0.5 * float((residual_r * wr) @ (residual_r * wr))
             for i, gps_xyz, pos_accuracy in gps_constraints:
-                p_i, _ = unpack(params, i)
-                result.extend((p_i - gps_xyz) / pos_accuracy)
-            return np.asarray(result, dtype=float)
+                residual_gps = gps_residual(src_poses, i, gps_xyz, pos_accuracy)
+                wg = huber_scale_block(residual_gps)
+                total += 0.5 * float((residual_gps * wg) @ (residual_gps * wg))
+            return total
 
-        try:
-            solution = least_squares(
-                residuals,
-                initial,
-                loss='huber',
-                f_scale=1.0,
-                max_nfev=20,
-            )
-        except Exception as exc:
-            logger.error(f'Global optimization failed: {exc}')
-            return
+        current_poses = copy_poses(poses)
+        current_cost = compute_cost(current_poses)
+        lambda_damping = 1e-3
+
+        for _ in range(6):
+            dim = len(current_poses) * 6
+            hessian = np.zeros((dim, dim), dtype=float)
+            gradient = np.zeros(dim, dtype=float)
+
+            for i, j, measured_p, measured_q in local_relative:
+                residual_t = relative_translation_residual(current_poses, i, j, measured_p)
+                residual_r = relative_rotation_residual(current_poses, i, j, measured_q)
+                wt = huber_scale_block(residual_t)
+                wr = huber_scale_block(residual_r)
+
+                p_i, q_i = current_poses[i]
+                p_j, _ = current_poses[j]
+                rot_i_t = quat_to_matrix(q_i).T / 0.1
+                jac_t_i = np.hstack([
+                    -rot_i_t,
+                    numeric_rot_jacobian(relative_translation_residual, current_poses, i, i, j, measured_p),
+                ]) * wt
+                jac_t_j = np.hstack([
+                    rot_i_t,
+                    np.zeros((3, 3), dtype=float),
+                ]) * wt
+                add_measurement(
+                    hessian,
+                    gradient,
+                    residual_t * wt,
+                    [(i, jac_t_i), (j, jac_t_j)],
+                )
+
+                jac_r_i = np.hstack([
+                    np.zeros((3, 3), dtype=float),
+                    numeric_rot_jacobian(relative_rotation_residual, current_poses, i, i, j, measured_q),
+                ]) * wr
+                jac_r_j = np.hstack([
+                    np.zeros((3, 3), dtype=float),
+                    numeric_rot_jacobian(relative_rotation_residual, current_poses, j, i, j, measured_q),
+                ]) * wr
+                add_measurement(
+                    hessian,
+                    gradient,
+                    residual_r * wr,
+                    [(i, jac_r_i), (j, jac_r_j)],
+                )
+
+            for i, gps_xyz, pos_accuracy in gps_constraints:
+                residual_gps = gps_residual(current_poses, i, gps_xyz, pos_accuracy)
+                wg = huber_scale_block(residual_gps)
+                jac_gps = np.hstack([
+                    np.eye(3, dtype=float) / pos_accuracy,
+                    np.zeros((3, 3), dtype=float),
+                ]) * wg
+                add_measurement(
+                    hessian,
+                    gradient,
+                    residual_gps * wg,
+                    [(i, jac_gps)],
+                )
+
+            hessian += lambda_damping * np.eye(dim, dtype=float)
+
+            try:
+                step = np.linalg.solve(hessian, -gradient)
+            except np.linalg.LinAlgError:
+                lambda_damping *= 10.0
+                continue
+
+            if float(np.linalg.norm(step)) < 1e-6:
+                break
+
+            trial_poses = apply_delta(current_poses, step)
+            trial_cost = compute_cost(trial_poses)
+            if trial_cost < current_cost:
+                current_poses = trial_poses
+                current_cost = trial_cost
+                lambda_damping = max(lambda_damping * 0.5, 1e-6)
+            else:
+                lambda_damping *= 10.0
 
         with self.lock:
             for i, t in enumerate(times):
-                p, q = unpack(solution.x, i)
+                p, q = current_poses[i]
                 self.global_pose_map[t] = np.concatenate((p, q))
                 if i == len(times) - 1:
                     local_pose = self.local_pose_map[t]

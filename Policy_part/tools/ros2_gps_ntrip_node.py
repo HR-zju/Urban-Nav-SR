@@ -67,7 +67,9 @@ class GpsNtripNode(Node):
 
     def _open_serial(self):
         if serial is None:
-            raise RuntimeError('python3-serial is required to run gps_ntrip_node')
+            raise RuntimeError(
+                'pyserial is required to run gps_ntrip_node; install it with `pip install pyserial`.'
+            )
 
         timeout = float(self.get_parameter('serial_timeout').value)
         self.serial_port = serial.Serial(self.port, self.baudrate, timeout=timeout)
