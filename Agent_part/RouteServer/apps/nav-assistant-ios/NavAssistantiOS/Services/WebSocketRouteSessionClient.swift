@@ -9,14 +9,18 @@ final class WebSocketRouteSessionClient: ObservableObject {
 
     private var task: URLSessionWebSocketTask?
     private let session = URLSession(configuration: .default)
-    private let baseURL: URL
+    private let baseURLProvider: () -> URL
     var onSnapshot: ((MCPRouteSessionResult) -> Void)?
     var onHeartbeat: ((Date) -> Void)?
     var onConnectionStateChange: ((Bool) -> Void)?
     var onError: ((String) -> Void)?
 
     init(baseURL: URL) {
-        self.baseURL = baseURL
+        self.baseURLProvider = { baseURL }
+    }
+
+    init(baseURLProvider: @escaping () -> URL) {
+        self.baseURLProvider = baseURLProvider
     }
 
     func connect(sessionID: String) {
@@ -24,6 +28,7 @@ final class WebSocketRouteSessionClient: ObservableObject {
         lastSnapshot = nil
         lastHeartbeatAt = nil
         lastError = nil
+        let baseURL = baseURLProvider()
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
             lastError = "无法构造 WebSocket 地址。"
             onError?(lastError ?? "无法构造 WebSocket 地址。")

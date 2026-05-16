@@ -1,3 +1,22 @@
+"""Build route-aligned bird's-eye-view context for visual prompting.
+
+The BEV context is an intent prior, not a visual observation. It rotates route
+geometry into the rider/camera heading frame so downstream QA teachers and LVLM
+prompt contracts can reason about "front", "left-front", and "right-front"
+without mixing geographic and image coordinates.
+
+Coordinate transform:
+
+    east_m  ~= (lng - lng_0) * 111320 * cos(mean_lat)
+    north_m ~= (lat - lat_0) * 110540
+
+    x_bev = east_m * cos(theta) - north_m * sin(theta)
+    y_bev = east_m * sin(theta) + north_m * cos(theta)
+
+where theta is the chosen BEV rotation heading. The current pose is always
+anchored at (0, 0); positive y points toward the route/camera front.
+"""
+
 from __future__ import annotations
 
 import math
@@ -13,6 +32,7 @@ def _routepoint_to_bev(
     origin: RoutePoint,
     rotation_heading_deg: float,
 ) -> BEVPoint:
+    """Project one WGS84 point into the local route-aligned BEV frame."""
     mean_lat = (point.lat + origin.lat) / 2.0
     east_m = (point.lng - origin.lng) * 111320.0 * max(0.1, math.cos(math.radians(mean_lat)))
     north_m = (point.lat - origin.lat) * 110540.0
@@ -106,6 +126,13 @@ def build_local_bev_context(
     back_extent_m: float = 10.0,
     side_extent_m: float = 15.0,
 ) -> LocalBEVContext:
+    """Create the local BEV window consumed by cross-view QA and prompt priors.
+
+    The output deliberately keeps the geometric layers separate:
+    ``route_polyline_local`` is the cropped provider route, ``local_segment_bev``
+    is the immediate lookahead segment, and ``connector_bev`` is only populated
+    when start-grace recovery needs to guide the user back to the route start.
+    """
     route_points = normalize_route_polyline(route_polyline)
     if not route_points:
         raise ValueError("route_polyline is empty")

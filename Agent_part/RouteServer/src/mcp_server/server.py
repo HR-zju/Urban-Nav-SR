@@ -1473,8 +1473,11 @@ async def run_zero_shot_visual_prompt_agent(
     candidate_top_k: int = 5,
     llm_detail: str = "auto",
     navigation_mode: str = "foot",
-    enable_verifier: bool = True,
+    enable_verifier: bool = False,
     enable_segmentation_overlay_input: bool = False,
+    enable_som_overlay_input: Optional[bool] = None,
+    enable_sam_visualization_input: bool = False,
+    enable_bev_map_provider: bool = False,
     emit_qa_bundle: bool = False,
     request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -1496,6 +1499,9 @@ async def run_zero_shot_visual_prompt_agent(
         f"visual_top_k={visual_top_k} candidate_top_k={candidate_top_k} "
         f"enable_verifier={enable_verifier} "
         f"enable_segmentation_overlay_input={enable_segmentation_overlay_input} "
+        f"enable_som_overlay_input={enable_som_overlay_input} "
+        f"enable_sam_visualization_input={enable_sam_visualization_input} "
+        f"enable_bev_map_provider={enable_bev_map_provider} "
         f"enforce_alignment={enforce_alignment}"
     )
     resolved_fpv_segmentation = dict(fpv_segmentation or {}) if isinstance(fpv_segmentation, dict) else None
@@ -1527,6 +1533,9 @@ async def run_zero_shot_visual_prompt_agent(
         navigation_mode=navigation_mode,
         enable_verifier=enable_verifier,
         enable_segmentation_overlay_input=enable_segmentation_overlay_input,
+        enable_som_overlay_input=enable_som_overlay_input,
+        enable_sam_visualization_input=enable_sam_visualization_input,
+        enable_bev_map_provider=enable_bev_map_provider,
         enforce_alignment=enforce_alignment,
         emit_qa_bundle=emit_qa_bundle,
         request_id=resolved_request_id,

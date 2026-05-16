@@ -31,6 +31,7 @@ public:
     enum class GnssStatusState {
         Idle,
         WaitingOrigin,
+        Aligning,
         Fusing,
     };
 

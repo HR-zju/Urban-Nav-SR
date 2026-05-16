@@ -12,6 +12,8 @@ import mimetypes
 import os
 import io
 import re
+import traceback
+from time import perf_counter
 from pathlib import Path
 
 try:
@@ -78,6 +80,7 @@ class LLMSettings:
     max_retries: int = 5
     allow_api_style_fallback: bool = False
     response_format: bool = True
+    reasoning_effort: str | None = None
 
     @classmethod
     def from_env(cls) -> "LLMSettings":
@@ -111,6 +114,14 @@ class LLMSettings:
         )
         default_timeout_s = 45.0 if provider == "ark" else 20.0
         default_max_retries = 5 if provider == "ark" else 2
+        reasoning_effort = (
+            os.getenv("LLM_REASONING_EFFORT", "").strip().lower()
+            or os.getenv("ARK_REASONING_EFFORT", "").strip().lower()
+        )
+        if not reasoning_effort and provider == "ark":
+            reasoning_effort = "minimal"
+        if reasoning_effort not in {"minimal", "low", "medium", "high"}:
+            reasoning_effort = None
         fallback_env = os.getenv("LLM_API_STYLE_FALLBACK", "").strip().lower()
         if fallback_env:
             allow_api_style_fallback = fallback_env in {"1", "true", "yes"}
@@ -127,6 +138,7 @@ class LLMSettings:
             max_retries=max(0, int(os.getenv("LLM_MAX_RETRIES", str(default_max_retries)) or default_max_retries)),
             allow_api_style_fallback=allow_api_style_fallback,
             response_format=os.getenv("LLM_RESPONSE_FORMAT_JSON", "true").strip().lower() not in {"0", "false", "no"},
+            reasoning_effort=reasoning_effort,
         )
 
 
@@ -176,6 +188,201 @@ def _extract_text_from_responses_response(response: Any) -> str:
     if callable(model_dump):
         return json.dumps(model_dump(), ensure_ascii=False)
     return ""
+
+
+def _model_dump_if_available(value: Any) -> dict[str, Any] | None:
+    dump = getattr(value, "model_dump", None)
+    if callable(dump):
+        try:
+            payload = dump()
+            return payload if isinstance(payload, dict) else None
+        except Exception:
+            return None
+    if isinstance(value, dict):
+        return value
+    return None
+
+
+def _response_usage_dict(response: Any) -> dict[str, Any] | None:
+    usage = getattr(response, "usage", None)
+    payload = _model_dump_if_available(usage)
+    if isinstance(payload, dict):
+        return payload
+    return None
+
+
+def _vision_url_payload_stats(image_urls: list[str]) -> dict[str, Any]:
+    """Summarize multimodal request payload size without storing image bytes."""
+    total_url_chars = 0
+    data_url_count = 0
+    approx_image_bytes = 0
+    per_image: list[dict[str, Any]] = []
+    for index, url in enumerate(image_urls):
+        raw = str(url or "")
+        total_url_chars += len(raw)
+        is_data_url = raw.startswith("data:image/") and "," in raw
+        approx_bytes = 0
+        if is_data_url:
+            data_url_count += 1
+            encoded = raw.split(",", 1)[1]
+            approx_bytes = int(round(len(encoded) * 0.75))
+            approx_image_bytes += approx_bytes
+        per_image.append(
+            {
+                "index": int(index),
+                "is_data_url": bool(is_data_url),
+                "url_chars": len(raw),
+                "approx_image_bytes": approx_bytes,
+            }
+        )
+    return {
+        "image_count": len(image_urls),
+        "data_url_count": int(data_url_count),
+        "image_url_chars": int(total_url_chars),
+        "approx_image_bytes": int(approx_image_bytes),
+        "images": per_image,
+    }
+
+
+def _chat_response_metadata(response: Any) -> dict[str, Any]:
+    choices = getattr(response, "choices", None) or []
+    finish_reason = None
+    if choices:
+        finish_reason = getattr(choices[0], "finish_reason", None)
+    return {
+        "response_id": getattr(response, "id", None),
+        "created": getattr(response, "created", None),
+        "finish_reason": finish_reason,
+        "usage": _response_usage_dict(response),
+    }
+
+
+def _responses_metadata(response: Any) -> dict[str, Any]:
+    return {
+        "response_id": getattr(response, "id", None),
+        "created": getattr(response, "created_at", None) or getattr(response, "created", None),
+        "status": getattr(response, "status", None),
+        "usage": _response_usage_dict(response),
+    }
+
+
+def _apply_reasoning_effort(payload: dict[str, Any], settings: LLMSettings) -> dict[str, Any]:
+    """Request minimal reasoning when the provider supports it."""
+    effort = str(settings.reasoning_effort or "").strip().lower()
+    if settings.provider == "ark" and effort in {"minimal", "low", "medium", "high"}:
+        payload["reasoning_effort"] = effort
+    return payload
+
+
+def _truthy_env(name: str, default: bool = False) -> bool:
+    value = os.getenv(name, "").strip().lower()
+    if not value:
+        return bool(default)
+    return value in {"1", "true", "yes", "on"}
+
+
+def _ascii_probe(value: Any) -> dict[str, Any]:
+    """Return a compact encoding probe without storing large request text."""
+    text = str(value or "")
+    first_non_ascii: dict[str, Any] | None = None
+    for index, char in enumerate(text):
+        if ord(char) > 127:
+            first_non_ascii = {
+                "index": int(index),
+                "char_repr": repr(char),
+                "codepoint": ord(char),
+                "context": text[max(0, index - 20): index + 20],
+            }
+            break
+    return {
+        "chars": len(text),
+        "ascii": first_non_ascii is None,
+        "first_non_ascii": first_non_ascii,
+    }
+
+
+def _vision_request_debug_summary(
+    *,
+    api_style: str,
+    settings: LLMSettings,
+    image_urls: list[str],
+    question: str,
+    system_prompt: str | None,
+    detail: str,
+) -> dict[str, Any]:
+    """Summarize a vision request for failure debugging without image payloads."""
+    payload_stats = _vision_url_payload_stats(image_urls)
+    return {
+        "api_style": api_style,
+        "provider": settings.provider,
+        "model": settings.model,
+        "base_url_host": settings.base_url.split("//")[-1].split("/")[0],
+        "reasoning_effort": settings.reasoning_effort,
+        "temperature": settings.temperature,
+        "detail": detail,
+        "timeout_s": None,
+        "image_payload": payload_stats,
+        "system_prompt_probe": _ascii_probe(system_prompt or ""),
+        "question_probe": _ascii_probe(question),
+        "extra_image_count": max(0, len(image_urls) - 1),
+    }
+
+
+def _vision_call_debug_enabled() -> bool:
+    return _truthy_env("LLM_DEBUG_TRACEBACK") or _truthy_env("LLM_VISION_DEBUG_TRACEBACK")
+
+
+def _require_ascii_header_value(name: str, value: str) -> None:
+    """Fail fast when a header value cannot be encoded safely for httpx."""
+    try:
+        value.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise ValueError(
+            f"{name} must be ASCII-safe for HTTP headers; found non-ASCII characters. "
+            f"prefix={repr(str(value)[:12])}"
+        ) from exc
+
+
+def _extract_chat_stream_delta_text(chunk: Any) -> str:
+    """Extract text from one chat-completions streaming chunk."""
+
+    choices = getattr(chunk, "choices", None) or []
+    if not choices:
+        return ""
+    delta = getattr(choices[0], "delta", None)
+    content = getattr(delta, "content", None)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            text = getattr(item, "text", None)
+            if isinstance(text, str):
+                parts.append(text)
+                continue
+            value = getattr(text, "value", None)
+            if isinstance(value, str):
+                parts.append(value)
+        return "".join(parts)
+    return ""
+
+
+def _chat_stream_finish_reason(chunk: Any) -> str | None:
+    choices = getattr(chunk, "choices", None) or []
+    if not choices:
+        return None
+    finish_reason = getattr(choices[0], "finish_reason", None)
+    return str(finish_reason) if finish_reason else None
+
+
+def _chat_stream_metadata(*, chunks: int, response_id: str | None, created: Any, finish_reason: str | None, usage: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "response_id": response_id,
+        "created": created,
+        "finish_reason": finish_reason,
+        "chunks": int(chunks),
+        "usage": usage,
+    }
 
 
 def _remove_trailing_commas(text: str) -> str:
@@ -468,6 +675,8 @@ def _heuristic_parse_confidence(
 def _create_async_client(settings: LLMSettings) -> Any:
     if AsyncOpenAI is None:
         return None
+    _require_ascii_header_value("LLM_API_KEY", settings.api_key)
+    _require_ascii_header_value("LLM_API_BASE_URL", settings.base_url)
     return AsyncOpenAI(
         base_url=settings.base_url,
         api_key=settings.api_key,
@@ -479,6 +688,8 @@ def _create_async_client(settings: LLMSettings) -> Any:
 def _create_async_client_with_timeout(settings: LLMSettings, timeout_s: float) -> Any:
     if AsyncOpenAI is None:
         return None
+    _require_ascii_header_value("LLM_API_KEY", settings.api_key)
+    _require_ascii_header_value("LLM_API_BASE_URL", settings.base_url)
     return AsyncOpenAI(
         base_url=settings.base_url,
         api_key=settings.api_key,
@@ -1671,6 +1882,9 @@ class VisionAnalyzer(BaseLLMService):
                 pass
         return max(90.0, self.settings.timeout_s)
 
+    def _stream_timing_enabled(self) -> bool:
+        return _truthy_env("LLM_VISION_STREAM_TIMING") or _truthy_env("LLM_STREAM_TIMING")
+
     def build_messages(
         self,
         image_url: str,
@@ -1713,6 +1927,85 @@ class VisionAnalyzer(BaseLLMService):
             },
         ]
 
+    async def _stream_chat_completions(self, client: Any, payload: dict[str, Any]) -> dict[str, Any]:
+        """Run chat-completions streaming and expose first-token timing.
+
+        Without provider-side Server-Timing headers, the best client-side split is:
+
+            time_to_first_token ~= upload + provider queue + image encode + prefill
+            stream_decode_ms    ~= output decoding + streamed network return
+        """
+
+        started_at = perf_counter()
+        stream_payload = dict(payload)
+        stream_payload["stream"] = True
+        if _truthy_env("LLM_STREAM_INCLUDE_USAGE", default=True):
+            stream_payload["stream_options"] = {"include_usage": True}
+
+        try:
+            stream = await client.chat.completions.create(**stream_payload)
+        except Exception:
+            if "stream_options" not in stream_payload:
+                raise
+            # Some OpenAI-compatible providers support streaming but reject
+            # stream_options. Keep first-token timing and lose usage details.
+            stream_payload.pop("stream_options", None)
+            stream = await client.chat.completions.create(**stream_payload)
+        chunks = 0
+        content_chunks = 0
+        first_chunk_ms: int | None = None
+        first_content_ms: int | None = None
+        last_content_ms: int | None = None
+        response_id: str | None = None
+        created: Any = None
+        finish_reason: str | None = None
+        usage: dict[str, Any] = {}
+        parts: list[str] = []
+
+        async for chunk in stream:
+            now_ms = int(round((perf_counter() - started_at) * 1000.0))
+            chunks += 1
+            if first_chunk_ms is None:
+                first_chunk_ms = now_ms
+            response_id = response_id or getattr(chunk, "id", None)
+            created = created or getattr(chunk, "created", None)
+            finish_reason = _chat_stream_finish_reason(chunk) or finish_reason
+            chunk_usage = _response_usage_dict(chunk)
+            if chunk_usage:
+                usage = chunk_usage
+            text = _extract_chat_stream_delta_text(chunk)
+            if text:
+                parts.append(text)
+                content_chunks += 1
+                if first_content_ms is None:
+                    first_content_ms = now_ms
+                last_content_ms = now_ms
+
+        roundtrip_ms = int(round((perf_counter() - started_at) * 1000.0))
+        if first_content_ms is None:
+            first_content_ms = first_chunk_ms
+        stream_decode_ms = max(0, roundtrip_ms - int(first_content_ms)) if first_content_ms is not None else None
+        return {
+            "answer": "".join(parts),
+            "roundtrip_ms": roundtrip_ms,
+            "stream_timing": {
+                "enabled": True,
+                "time_to_first_chunk_ms": first_chunk_ms,
+                "time_to_first_token_ms": first_content_ms,
+                "stream_decode_ms": stream_decode_ms,
+                "last_content_chunk_ms": last_content_ms,
+                "chunks": chunks,
+                "content_chunks": content_chunks,
+            },
+            "response": _chat_stream_metadata(
+                chunks=chunks,
+                response_id=response_id,
+                created=created,
+                finish_reason=finish_reason,
+                usage=usage,
+            ),
+        }
+
     async def _call_chat_completions(
         self,
         client: Any,
@@ -1721,19 +2014,72 @@ class VisionAnalyzer(BaseLLMService):
         detail: str,
         system_prompt: str | None,
         extra_image_urls: list[str] | None = None,
-    ) -> str:
-        response = await client.chat.completions.create(
-            model=self.settings.model,
-            temperature=self.settings.temperature,
-            messages=self.build_messages(
-                image_url,
-                question,
-                detail,
-                system_prompt,
-                extra_image_urls=extra_image_urls,
-            ),
+    ) -> dict[str, Any]:
+        messages = self.build_messages(
+            image_url,
+            question,
+            detail,
+            system_prompt,
+            extra_image_urls=extra_image_urls,
         )
-        return _extract_text_from_chat_response(response)
+        image_urls = [str(image_url).strip(), *[str(item).strip() for item in list(extra_image_urls or []) if str(item or "").strip()]]
+        started_at = perf_counter()
+        payload = _apply_reasoning_effort(
+            {
+                "model": self.settings.model,
+                "temperature": self.settings.temperature,
+                "messages": messages,
+            },
+            self.settings,
+        )
+        try:
+            if self._stream_timing_enabled():
+                streamed = await self._stream_chat_completions(client, payload)
+                roundtrip_ms = int(streamed.get("roundtrip_ms") or 0)
+                answer = str(streamed.get("answer") or "")
+                response_metadata = streamed.get("response") if isinstance(streamed.get("response"), dict) else {}
+                stream_timing = streamed.get("stream_timing") if isinstance(streamed.get("stream_timing"), dict) else {}
+            else:
+                response = await client.chat.completions.create(**payload)
+                roundtrip_ms = int(round((perf_counter() - started_at) * 1000.0))
+                answer = _extract_text_from_chat_response(response)
+                response_metadata = _chat_response_metadata(response)
+                stream_timing = {"enabled": False}
+        except Exception as exc:
+            if _vision_call_debug_enabled():
+                debug_summary = _vision_request_debug_summary(
+                    api_style="chat_completions",
+                    settings=self.settings,
+                    image_urls=image_urls,
+                    question=question,
+                    system_prompt=system_prompt,
+                    detail=detail,
+                )
+                debug_summary["timeout_s"] = self._vision_timeout_s()
+                setattr(exc, "vision_debug", debug_summary)
+                setattr(exc, "traceback", traceback.format_exc())
+            raise
+        request_json = json.dumps(messages, ensure_ascii=False, separators=(",", ":"))
+        return {
+            "answer": answer,
+            "telemetry": {
+                "api_style": "chat_completions",
+                "provider": self.settings.provider,
+                "model": self.settings.model,
+                "roundtrip_ms": roundtrip_ms,
+                "request_text_chars": len(str(system_prompt or "")) + len(str(question or "")),
+                "request_payload_chars": len(request_json),
+                "response_text_chars": len(answer),
+                "temperature": self.settings.temperature,
+                "reasoning_effort": self.settings.reasoning_effort,
+                "timeout_s": self._vision_timeout_s(),
+                "max_retries": self.settings.max_retries,
+                "image_payload": _vision_url_payload_stats(image_urls),
+                "response": response_metadata,
+                "stream_timing": stream_timing,
+                "server_timing_available": False,
+            },
+        }
 
     async def _call_responses_api(
         self,
@@ -1743,7 +2089,7 @@ class VisionAnalyzer(BaseLLMService):
         detail: str,
         system_prompt: str | None,
         extra_image_urls: list[str] | None = None,
-    ) -> str:
+    ) -> dict[str, Any]:
         prompt = system_prompt or (
             "You are a visual assistant. Answer the user's question about the image directly and concisely."
         )
@@ -1756,16 +2102,58 @@ class VisionAnalyzer(BaseLLMService):
         for url in images:
             content.append({"type": "input_image", "image_url": url, "detail": detail})
         content.append({"type": "input_text", "text": question})
-        response = await client.responses.create(
-            model=self.settings.model,
-            input=[
-                {
-                    "role": "user",
-                    "content": content,
-                }
-            ],
+        request_input = [
+            {
+                "role": "user",
+                "content": content,
+            }
+        ]
+        started_at = perf_counter()
+        payload = _apply_reasoning_effort(
+            {
+                "model": self.settings.model,
+                "input": request_input,
+            },
+            self.settings,
         )
-        return _extract_text_from_responses_response(response)
+        try:
+            response = await client.responses.create(**payload)
+            roundtrip_ms = int(round((perf_counter() - started_at) * 1000.0))
+            answer = _extract_text_from_responses_response(response)
+        except Exception as exc:
+            if _vision_call_debug_enabled():
+                debug_summary = _vision_request_debug_summary(
+                    api_style="responses",
+                    settings=self.settings,
+                    image_urls=images,
+                    question=question,
+                    system_prompt=prompt,
+                    detail=detail,
+                )
+                debug_summary["timeout_s"] = self._vision_timeout_s()
+                setattr(exc, "vision_debug", debug_summary)
+                setattr(exc, "traceback", traceback.format_exc())
+            raise
+        request_json = json.dumps(request_input, ensure_ascii=False, separators=(",", ":"))
+        return {
+            "answer": answer,
+            "telemetry": {
+                "api_style": "responses",
+                "provider": self.settings.provider,
+                "model": self.settings.model,
+                "roundtrip_ms": roundtrip_ms,
+                "request_text_chars": len(str(prompt or "")) + len(str(question or "")),
+                "request_payload_chars": len(request_json),
+                "response_text_chars": len(answer),
+                "temperature": self.settings.temperature,
+                "reasoning_effort": self.settings.reasoning_effort,
+                "timeout_s": self._vision_timeout_s(),
+                "max_retries": self.settings.max_retries,
+                "image_payload": _vision_url_payload_stats(images),
+                "response": _responses_metadata(response),
+                "server_timing_available": False,
+            },
+        }
 
     async def analyze(
         self,
@@ -1788,24 +2176,41 @@ class VisionAnalyzer(BaseLLMService):
 
         client = _create_async_client_with_timeout(self.settings, self._vision_timeout_s())
         try:
-            if self.settings.api_style == "responses":
-                answer = await self._call_responses_api(
-                    client,
-                    image_url,
-                    question,
-                    detail,
-                    system_prompt,
-                    extra_image_urls=resolved_extra_image_urls,
-                )
-            else:
-                answer = await self._call_chat_completions(
-                    client,
-                    image_url,
-                    question,
-                    detail,
-                    system_prompt,
-                    extra_image_urls=resolved_extra_image_urls,
-                )
+            try:
+                if self.settings.api_style == "responses":
+                    call = await self._call_responses_api(
+                        client,
+                        image_url,
+                        question,
+                        detail,
+                        system_prompt,
+                        extra_image_urls=resolved_extra_image_urls,
+                    )
+                else:
+                    call = await self._call_chat_completions(
+                        client,
+                        image_url,
+                        question,
+                        detail,
+                        system_prompt,
+                        extra_image_urls=resolved_extra_image_urls,
+                    )
+            except Exception as exc:
+                if _vision_call_debug_enabled() and not isinstance(getattr(exc, "vision_debug", None), dict):
+                    image_urls = [str(image_url).strip(), *resolved_extra_image_urls]
+                    debug_summary = _vision_request_debug_summary(
+                        api_style=self.settings.api_style,
+                        settings=self.settings,
+                        image_urls=image_urls,
+                        question=question,
+                        system_prompt=system_prompt,
+                        detail=detail,
+                    )
+                    debug_summary["timeout_s"] = self._vision_timeout_s()
+                    setattr(exc, "vision_debug", debug_summary)
+                    setattr(exc, "traceback", traceback.format_exc())
+                raise
+            answer = str(call.get("answer") or "")
 
             return {
                 "provider": self.settings.provider,
@@ -1816,6 +2221,7 @@ class VisionAnalyzer(BaseLLMService):
                 "question": question,
                 "detail": detail,
                 "answer": answer.strip(),
+                "llm_telemetry": call.get("telemetry") if isinstance(call, dict) else None,
             }
         finally:
             await _close_async_client(client)
@@ -2121,6 +2527,8 @@ async def arbitrate_pov_candidates_with_llm(
     parsed["_arbiter_provider"] = result.get("provider")
     parsed["_arbiter_model"] = result.get("model")
     parsed["_arbiter_api_style"] = result.get("api_style")
+    if result.get("llm_telemetry") is not None:
+        parsed["_arbiter_llm_telemetry"] = result.get("llm_telemetry")
     return parsed
 
 

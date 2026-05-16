@@ -1,3 +1,20 @@
+"""Match the live GPS pose to the provider route polyline.
+
+The matcher provides the route-confidence prior used by navigation semantics
+and QA teachers. It is deliberately conservative: cross-track distance is the
+primary signal, heading agreement is secondary, and a route-start grace window
+prevents false off-route decisions before the rider has merged into the route.
+
+Core score:
+
+    error_score   = 1 - clamp(cross_track_error / off_route_threshold, 0, 1)
+    heading_score = 1 - clamp(abs(delta_heading) / 90 deg, 0, 1)
+    confidence    = 0.7 * error_score + 0.3 * heading_score
+
+During start grace, cross-track error is replaced by distance to the first route
+point, and guidance bearing points toward that route start.
+"""
+
 from __future__ import annotations
 
 from .common import (
@@ -21,6 +38,7 @@ def match_pose_to_route(
     start_grace_distance_m: float | None = None,
     start_progress_window_m: float | None = None,
 ) -> PoseMatch:
+    """Project the current pose onto the route and compute off-route state."""
     del coarse_waypoints  # Reserved for future matching refinements.
 
     route_points = normalize_route_polyline(route_polyline)

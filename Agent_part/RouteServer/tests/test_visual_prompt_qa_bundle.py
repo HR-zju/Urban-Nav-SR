@@ -50,9 +50,13 @@ class VisualPromptQABundleTest(unittest.TestCase):
         )
         task_types = {sample["task_type"] for sample in bundle["samples"]}
         self.assertIn("bev_route_theta", task_types)
-        self.assertIn("crossview_prompt_ranking", task_types)
         self.assertIn("point_prompt", task_types)
+        self.assertIn("prompt_validity", task_types)
+        self.assertIn("crossview_topology_grounding", task_types)
+        crossview = next(sample for sample in bundle["samples"] if sample["task_type"] == "crossview_topology_grounding")
+        self.assertEqual(crossview["teacher_answer"]["alignment_status"], "aligned")
         self.assertEqual(bundle["task_counts"]["bev_component_exists"], 3)
+        self.assertEqual(bundle["task_counts"]["bev_component_theta_range"], 2)
 
 
 if __name__ == "__main__":

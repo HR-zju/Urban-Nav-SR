@@ -5,6 +5,7 @@ struct RouteMapView: View {
     @ObservedObject var viewModel: RouteMapViewModel
     @ObservedObject var navigationViewModel: NavigationFlowViewModel
     @State private var cameraPosition: MapCameraPosition = .automatic
+    @FocusState private var focusedField: RouteInputField?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -31,17 +32,27 @@ struct RouteMapView: View {
                 ViaPointSectionView(
                     viaPoints: navigationViewModel.currentViaPoints,
                     viaPointPrompt: $navigationViewModel.viaPointPrompt,
+                    focusedField: $focusedField,
                     isLoading: navigationViewModel.isLoading,
-                    onAdd: { Task { await navigationViewModel.addViaPointFromPrompt() } }
+                    onAdd: {
+                        focusedField = nil
+                        hideKeyboard()
+                        Task { await navigationViewModel.addViaPointFromPrompt() }
+                    }
                 )
 
                 WaypointPushSectionView(
                     robotHost: $navigationViewModel.robotHost,
                     robotPortText: $navigationViewModel.robotPortText,
+                    focusedField: $focusedField,
                     isLoading: navigationViewModel.isLoading,
                     statusMessage: navigationViewModel.waypointPushStatusMessage,
                     lastResponse: navigationViewModel.lastWaypointPushResponse,
-                    onPush: { Task { await navigationViewModel.pushWaypointsForActiveSession() } }
+                    onPush: {
+                        focusedField = nil
+                        hideKeyboard()
+                        Task { await navigationViewModel.pushWaypointsForActiveSession() }
+                    }
                 )
             }
 
@@ -58,6 +69,15 @@ struct RouteMapView: View {
                 .fill(Color(uiColor: .systemBackground))
                 .shadow(color: Color.black.opacity(0.06), radius: 14, y: 6)
         )
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("完成") {
+                    focusedField = nil
+                    hideKeyboard()
+                }
+            }
+        }
     }
 
     private func refreshCamera() {
@@ -152,6 +172,12 @@ struct RouteMapView: View {
     private func coordinateKey(_ coordinate: CLLocationCoordinate2D) -> String {
         "\(coordinate.latitude),\(coordinate.longitude)"
     }
+}
+
+private enum RouteInputField: Hashable {
+    case viaPointPrompt
+    case robotHost
+    case robotPort
 }
 
 private struct RouteMapHeaderView: View {
@@ -268,6 +294,7 @@ private struct SessionActionSection: View {
 private struct ViaPointSectionView: View {
     let viaPoints: [ViaPoint]
     @Binding var viaPointPrompt: String
+    var focusedField: FocusState<RouteInputField?>.Binding
     let isLoading: Bool
     let onAdd: () -> Void
 
@@ -300,6 +327,10 @@ private struct ViaPointSectionView: View {
 
             TextField("新增途经点，例如：便利店、咖啡店、药店", text: $viaPointPrompt)
                 .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.done)
+                .focused(focusedField, equals: .viaPointPrompt)
+                .onSubmit(onAdd)
                 .padding(10)
                 .background(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -316,6 +347,7 @@ private struct ViaPointSectionView: View {
 private struct WaypointPushSectionView: View {
     @Binding var robotHost: String
     @Binding var robotPortText: String
+    var focusedField: FocusState<RouteInputField?>.Binding
     let isLoading: Bool
     let statusMessage: String?
     let lastResponse: WaypointPushResponse?
@@ -329,6 +361,12 @@ private struct WaypointPushSectionView: View {
             TextField("机器人地址", text: $robotHost)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+                .keyboardType(.URL)
+                .submitLabel(.next)
+                .focused(focusedField, equals: .robotHost)
+                .onSubmit {
+                    focusedField.wrappedValue = .robotPort
+                }
                 .padding(10)
                 .background(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -337,6 +375,7 @@ private struct WaypointPushSectionView: View {
 
             TextField("机器人端口", text: $robotPortText)
                 .keyboardType(.numberPad)
+                .focused(focusedField, equals: .robotPort)
                 .padding(10)
                 .background(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -354,7 +393,7 @@ private struct WaypointPushSectionView: View {
             }
 
             if let lastResponse {
-                Text("最近一次下发：状态 \(lastResponse.status)，数量 \(lastResponse.totalCount ?? 0)")
+                Text("最近一次下发：状态 \(lastResponse.status)，waypoint \(lastResponse.totalCount ?? 0) 个，route_polyline \(lastResponse.routePolylineCount ?? 0) 个点")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

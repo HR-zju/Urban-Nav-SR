@@ -1,3 +1,26 @@
+"""Convert route progress into local navigation semantics.
+
+This module turns low-level route matching into the compact intent fields used
+by the visual prompt generator: turn type, corridor direction, instruction
+hint, and the near-field route polyline.
+
+Core rules:
+
+    lookbehind = min(10 m, 0.5 * lookahead)
+    local_segment = route[s_match - lookbehind, s_match + lookahead]
+
+    signed_delta = wrap(local_route_bearing - current_heading)
+
+    corridor_type =
+        front              if |signed_delta| <= 20 deg
+        slight_left/right  if 20 deg < |signed_delta| <= 60 deg
+        left/right_front   otherwise
+
+The output is intentionally language-light: it carries enough semantics for the
+LVLM to choose a visible support region, while segmentation remains the hard
+safety authority.
+"""
+
 from __future__ import annotations
 
 import re
@@ -20,6 +43,7 @@ def _interpolate_point_at_distance(
     cumulative_distances: list[float],
     target_distance_m: float,
 ) -> RoutePoint:
+    """Interpolate a route point at arc-length ``target_distance_m``."""
     if not route_points:
         raise ValueError("route_polyline is empty")
     if len(route_points) == 1:
@@ -77,6 +101,7 @@ def _slice_local_segment(
     matched_distance_m: float,
     lookahead_m: float,
 ) -> list[RoutePoint]:
+    """Return a short route slice around the matched pose for local planning."""
     total_m = cumulative_distances[-1] if cumulative_distances else 0.0
     lookahead = max(float(lookahead_m), 5.0)
     lookbehind = min(10.0, lookahead * 0.5)
@@ -109,6 +134,7 @@ def _corridor_type(
     turn_type: str,
     off_route: bool,
 ) -> str:
+    """Map heading-route disagreement into a coarse visual corridor sector."""
     if off_route:
         return "uncertain"
 
@@ -226,6 +252,7 @@ def describe_local_segment(
     heading_deg: float | None,
     lookahead_m: float = 20.0,
 ) -> tuple[LocalSemantics, LocalGeometry]:
+    """Build local semantics and geometry from route progress plus pose match."""
     route_points = normalize_route_polyline(route_polyline)
     if not route_points:
         raise ValueError("route_polyline is empty")

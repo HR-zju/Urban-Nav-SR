@@ -29,24 +29,6 @@ def _sample(
     )
 
 
-def _visual_regions_from_candidate_bundle(candidate_bundle: dict[str, Any] | None) -> list[dict[str, Any]]:
-    if not isinstance(candidate_bundle, dict):
-        return []
-    regions: list[dict[str, Any]] = []
-    for item in candidate_bundle.get("fpv_candidates") or []:
-        center = item.get("center_uv")
-        if isinstance(center, dict):
-            regions.append(
-                {
-                    "region_id": item.get("prompt_id"),
-                    "region_type": item.get("prompt_type"),
-                    "score": item.get("fpv_support_score"),
-                    "center_uv": [center.get("u"), center.get("v")],
-                }
-            )
-    return regions
-
-
 def build_visual_prompt_qa_bundle(
     *,
     route_context: dict[str, Any],
@@ -58,6 +40,8 @@ def build_visual_prompt_qa_bundle(
     rendered_prompt: dict[str, Any] | None,
     arbiter_decision: dict[str, Any],
     candidate_bundle: PoVPromptCandidateBundle | dict[str, Any] | None,
+    som_summary: dict[str, Any] | None = None,
+    safe_corridor_prior: dict[str, Any] | None = None,
     sample_id: str = "visual_prompt",
 ) -> dict[str, Any]:
     candidate_bundle_dict = (
@@ -92,6 +76,7 @@ def build_visual_prompt_qa_bundle(
                 teacher_answer=teachers.teacher_bev_component_exists(local_bev_context, component_type),
             )
         )
+    for component_type in ["connector", "entrance"]:
         samples.append(
             _sample(
                 sample_id=f"{sample_id}:{component_type}",
@@ -120,84 +105,35 @@ def build_visual_prompt_qa_bundle(
     samples.append(
         _sample(
             sample_id=sample_id,
-            task_type="fpv_corridor_theta",
-            inputs={
-                "image_width": image_width,
-                "image_height": image_height,
-                "fpv_segmentation_summary": fpv_segmentation_summary,
-                "rendered_prompt": rendered_prompt,
-            },
-            teacher_answer=teachers.teacher_fpv_corridor_theta(rendered_prompt, image_width),
-        )
-    )
-    candidate_regions = _visual_regions_from_candidate_bundle(candidate_bundle_dict)
-    samples.append(
-        _sample(
-            sample_id=sample_id,
-            task_type="fpv_main_region_selection",
-            inputs={
-                "candidate_regions": candidate_regions,
-                "fpv_segmentation_summary": fpv_segmentation_summary,
-            },
-            teacher_answer=teachers.teacher_fpv_main_region_selection(candidate_regions),
-        )
-    )
-    samples.append(
-        _sample(
-            sample_id=sample_id,
             task_type="fpv_scene_stage",
             inputs={
                 "fpv_segmentation_summary": fpv_segmentation_summary,
+                "som_summary": som_summary,
                 "image_width": image_width,
                 "image_height": image_height,
             },
             teacher_answer=teachers.teacher_fpv_scene_stage(fpv_segmentation_summary),
         )
     )
-    samples.append(
-        _sample(
-            sample_id=sample_id,
-            task_type="fpv_reject_all",
-            inputs={
-                "fpv_segmentation_summary": fpv_segmentation_summary,
-                "rendered_prompt": rendered_prompt,
-                "segmentation_validation": segmentation_validation,
-            },
-            teacher_answer=teachers.teacher_fpv_reject_all(rendered_prompt, segmentation_validation),
-        )
-    )
 
+    crossview_inputs = {
+        "route_context": route_context,
+        "local_bev_context": local_bev_context,
+        "rendered_prompt": rendered_prompt,
+        "fpv_segmentation_summary": fpv_segmentation_summary,
+        "segmentation_validation": segmentation_validation,
+        "som_summary": som_summary,
+        "safe_corridor_prior": safe_corridor_prior,
+        "candidate_bundle": candidate_bundle_dict,
+        "image_width": image_width,
+        "image_height": image_height,
+    }
     samples.append(
         _sample(
             sample_id=sample_id,
-            task_type="crossview_theta_estimation",
-            inputs={
-                "route_context": route_context,
-                "local_bev_context": local_bev_context,
-                "candidate_bundle": candidate_bundle_dict or {},
-                "image_width": image_width,
-                "image_height": image_height,
-            },
-            teacher_answer=teachers.teacher_crossview_theta(candidate_bundle_dict or {}),
-        )
-    )
-    samples.append(
-        _sample(
-            sample_id=sample_id,
-            task_type="crossview_prompt_ranking",
-            inputs={"candidate_bundle": candidate_bundle_dict or {}},
-            teacher_answer=teachers.teacher_crossview_prompt_ranking(candidate_bundle_dict or {}),
-        )
-    )
-    samples.append(
-        _sample(
-            sample_id=sample_id,
-            task_type="crossview_reject_all",
-            inputs={
-                "candidate_bundle": candidate_bundle_dict or {},
-                "fpv_segmentation_summary": fpv_segmentation_summary,
-            },
-            teacher_answer=teachers.teacher_crossview_reject_all(candidate_bundle_dict or {}),
+            task_type="crossview_topology_grounding",
+            inputs=crossview_inputs,
+            teacher_answer=teachers.teacher_crossview_topology_grounding(**crossview_inputs),
         )
     )
 
@@ -242,13 +178,19 @@ def build_visual_prompt_qa_bundle(
     samples.append(
         _sample(
             sample_id=sample_id,
-            task_type="reject_all",
+            task_type="prompt_validity",
             inputs={
                 "rendered_prompt": rendered_prompt,
                 "segmentation_validation": segmentation_validation,
                 "arbiter_decision": arbiter_decision,
+                "candidate_bundle": candidate_bundle_dict,
             },
-            teacher_answer=teachers.teacher_grounded_reject(rendered_prompt, segmentation_validation, arbiter_decision),
+            teacher_answer=teachers.teacher_prompt_validity(
+                rendered_prompt,
+                segmentation_validation,
+                arbiter_decision,
+                candidate_bundle_dict,
+            ),
         )
     )
 

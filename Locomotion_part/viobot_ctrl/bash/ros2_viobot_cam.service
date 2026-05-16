@@ -13,7 +13,7 @@ TimeoutStopSec=15
 KillMode=mixed
 
 StandardOutput=append:/root/record_data/log/cam.log
-StandardError=appedn:/root/record_data/log/cam.log
+StandardError=append:/root/record_data/log/cam.log
 
 [Install]
 WantedBy=multi-user.target

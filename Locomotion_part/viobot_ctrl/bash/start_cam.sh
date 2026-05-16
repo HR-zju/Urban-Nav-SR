@@ -18,5 +18,5 @@ eval $ros_domain_id_line
 # -p image_width:=1920 \
 # -p image_height:=1080 \
 # -p framerate:=30.0
-
+sleep 15
 ros2 run cam_pub cam_pub

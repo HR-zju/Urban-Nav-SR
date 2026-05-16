@@ -7,7 +7,9 @@ protocol RecommendationService {
         currentLocation: CLLocationCoordinate2D,
         mode: String,
         maxCandidates: Int,
-        searchRadius: Int
+        searchRadius: Int,
+        resolutionScope: String?,
+        anchorLocation: String?
     ) async throws -> MCPRecommendationResponse
 }
 
@@ -23,7 +25,9 @@ struct HTTPRecommendationService: RecommendationService {
         currentLocation: CLLocationCoordinate2D,
         mode: String,
         maxCandidates: Int,
-        searchRadius: Int
+        searchRadius: Int,
+        resolutionScope: String? = nil,
+        anchorLocation: String? = nil
     ) async throws -> MCPRecommendationResponse {
         try await apiClient.post(
             "api/recommendations",
@@ -33,7 +37,9 @@ struct HTTPRecommendationService: RecommendationService {
                 currentLongitude: currentLocation.longitude,
                 maxCandidates: maxCandidates,
                 searchRadius: searchRadius,
-                mode: mode
+                mode: mode,
+                resolutionScope: resolutionScope,
+                anchorLocation: anchorLocation
             )
         )
     }
@@ -46,6 +52,8 @@ private struct RecommendationRequest: Encodable {
     let maxCandidates: Int
     let searchRadius: Int
     let mode: String
+    let resolutionScope: String?
+    let anchorLocation: String?
 
     enum CodingKeys: String, CodingKey {
         case userInstruction = "user_instruction"
@@ -54,5 +62,7 @@ private struct RecommendationRequest: Encodable {
         case maxCandidates = "max_candidates"
         case searchRadius = "search_radius"
         case mode
+        case resolutionScope = "resolution_scope"
+        case anchorLocation = "anchor_location"
     }
 }

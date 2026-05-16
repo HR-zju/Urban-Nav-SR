@@ -30,11 +30,16 @@ enum APIClientError: Error, LocalizedError {
 }
 
 struct APIClient {
-    let baseURL: URL
+    private let baseURLProvider: () -> URL
     let session: URLSession
 
     init(baseURL: URL, session: URLSession = .shared) {
-        self.baseURL = baseURL
+        self.baseURLProvider = { baseURL }
+        self.session = session
+    }
+
+    init(baseURLProvider: @escaping () -> URL, session: URLSession = .shared) {
+        self.baseURLProvider = baseURLProvider
         self.session = session
     }
 
@@ -52,12 +57,39 @@ struct APIClient {
         try await request(path: path, method: "POST", queryItems: [], body: body)
     }
 
+    func getJSONObject(
+        _ path: String,
+        queryItems: [URLQueryItem] = []
+    ) async throws -> Any {
+        let data = try await requestData(path: path, method: "GET", queryItems: queryItems, body: nil as EmptyRequest?)
+        do {
+            return try JSONSerialization.jsonObject(with: data)
+        } catch {
+            throw APIClientError.transport("响应 JSON 解析失败: \(error.localizedDescription)")
+        }
+    }
+
     private func request<Body: Encodable, Response: Decodable>(
         path: String,
         method: String,
         queryItems: [URLQueryItem],
         body: Body?
     ) async throws -> Response {
+        let data = try await requestData(path: path, method: method, queryItems: queryItems, body: body)
+        do {
+            return try JSONDecoder().decode(Response.self, from: data)
+        } catch {
+            throw APIClientError.transport("响应解析失败: \(error.localizedDescription)")
+        }
+    }
+
+    private func requestData<Body: Encodable>(
+        path: String,
+        method: String,
+        queryItems: [URLQueryItem],
+        body: Body?
+    ) async throws -> Data {
+        let baseURL = baseURLProvider()
         guard var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false) else {
             throw APIClientError.transport("无法构造请求地址。")
         }
@@ -95,11 +127,6 @@ struct APIClient {
             let message = String(data: data, encoding: .utf8) ?? "服务调用失败。"
             throw APIClientError.server(message)
         }
-
-        do {
-            return try JSONDecoder().decode(Response.self, from: data)
-        } catch {
-            throw APIClientError.transport("响应解析失败: \(error.localizedDescription)")
-        }
+        return data
     }
 }

@@ -2,13 +2,14 @@ import SwiftUI
 
 struct ContentView: View {
     @ObservedObject var viewModel: NavigationFlowViewModel
+    @ObservedObject var appConfiguration: AppConfiguration
     @State private var showingResetConfirmation = false
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    RequestView(viewModel: viewModel)
+                    RequestView(viewModel: viewModel, appConfiguration: appConfiguration)
 
                     if !viewModel.candidates.isEmpty {
                         CandidateListView(viewModel: viewModel)
@@ -21,6 +22,12 @@ struct ContentView: View {
                 }
                 .padding(20)
             }
+            .scrollDismissesKeyboard(.interactively)
+            .simultaneousGesture(
+                TapGesture().onEnded {
+                    hideKeyboard()
+                }
+            )
             .navigationTitle("Nav Assistant")
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
@@ -58,4 +65,8 @@ struct ContentView: View {
             }
         }
     }
+}
+
+func hideKeyboard() {
+    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
 }
