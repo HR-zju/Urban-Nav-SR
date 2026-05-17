@@ -38,6 +38,7 @@ tmux send-keys "docker exec -it ros1toros2 zsh" Enter
 sleep 1
 tmux send-keys "source /opt/ros/humble/setup.zsh" Enter
 tmux send-keys "cd /home/nuvo/SR/foundation-policy/Policy_part" Enter
+tmux send-keys "mamba activate foundation_policy" Enter
 tmux send-keys "python3 tools/ros2_gps_ntrip_node.py" Enter
 
 
