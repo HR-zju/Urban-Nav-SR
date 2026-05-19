@@ -22,6 +22,7 @@ class FrameLlmLatency:
     approx_image_bytes: int
     image_count: int
     prompt_tokens: int
+    cached_prompt_tokens: int
     completion_tokens: int
     total_tokens: int
     estimated_network_ms: int
@@ -120,6 +121,7 @@ def _estimate_frames(
                 approx_image_bytes=_as_int(timing.get("generator_llm_approx_image_bytes")),
                 image_count=_as_int(timing.get("generator_llm_image_count")),
                 prompt_tokens=_as_int(timing.get("generator_llm_prompt_tokens")),
+                cached_prompt_tokens=_as_int(timing.get("generator_llm_prompt_cached_tokens")),
                 completion_tokens=_as_int(timing.get("generator_llm_completion_tokens")),
                 total_tokens=_as_int(timing.get("generator_llm_total_tokens")),
                 estimated_network_ms=network_ms,
@@ -149,7 +151,7 @@ def _print_table(frames: list[FrameLlmLatency], *, top_n: int) -> None:
     rows = sorted(frames, key=lambda item: item.roundtrip_ms, reverse=True)[: max(1, int(top_n))]
     header = (
         f"{'frame':<8} {'rt_ms':>7} {'net_est':>8} {'svc_est':>8} "
-        f"{'ttft':>7} {'decode':>7} {'upload':>7} {'payload':>9} {'img':>8} {'prompt':>7} {'comp':>6}"
+        f"{'ttft':>7} {'decode':>7} {'upload':>7} {'payload':>9} {'img':>8} {'prompt':>7} {'cache':>7} {'comp':>6}"
     )
     print(header)
     print("-" * len(header))
@@ -165,6 +167,7 @@ def _print_table(frames: list[FrameLlmLatency], *, top_n: int) -> None:
             f"{_format_bytes(item.request_payload_bytes):>9} "
             f"{_format_bytes(item.approx_image_bytes):>8} "
             f"{item.prompt_tokens:>7} "
+            f"{item.cached_prompt_tokens:>7} "
             f"{item.completion_tokens:>6}"
         )
 
@@ -179,6 +182,7 @@ def _print_summary(frames: list[FrameLlmLatency], *, upload_mbps: float, downloa
     decode = [item.stream_decode_ms for item in frames if item.stream_decode_ms >= 0]
     payload = [item.request_payload_bytes for item in frames if item.request_payload_bytes > 0]
     prompt_tokens = [item.prompt_tokens for item in frames if item.prompt_tokens > 0]
+    cached_prompt_tokens = [item.cached_prompt_tokens for item in frames if item.cached_prompt_tokens > 0]
     completion_tokens = [item.completion_tokens for item in frames if item.completion_tokens > 0]
     missing_payload = sum(1 for item in frames if item.request_payload_bytes <= 0)
 
@@ -201,6 +205,7 @@ def _print_summary(frames: list[FrameLlmLatency], *, upload_mbps: float, downloa
         ("stream_decode_ms", decode),
         ("payload_bytes", payload),
         ("prompt_tokens", prompt_tokens),
+        ("cached_prompt_tokens", cached_prompt_tokens),
         ("completion_tokens", completion_tokens),
     ):
         if not values and name in {"time_to_first_token_ms", "stream_decode_ms"}:
@@ -267,6 +272,7 @@ def _to_json_summary(frames: list[FrameLlmLatency], probe: dict[str, Any] | None
             "stream_decode_ms": _summary([item.stream_decode_ms for item in frames if item.stream_decode_ms >= 0]),
             "request_payload_bytes": _summary([item.request_payload_bytes for item in frames]),
             "prompt_tokens": _summary([item.prompt_tokens for item in frames]),
+            "cached_prompt_tokens": _summary([item.cached_prompt_tokens for item in frames]),
             "completion_tokens": _summary([item.completion_tokens for item in frames]),
         },
         "probe": probe,

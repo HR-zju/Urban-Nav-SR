@@ -211,6 +211,34 @@ def _response_usage_dict(response: Any) -> dict[str, Any] | None:
     return None
 
 
+def _usage_cached_tokens(usage: dict[str, Any] | None) -> int | None:
+    """Extract prompt-cache hit tokens when the provider reports them."""
+
+    if not isinstance(usage, dict):
+        return None
+    candidates: list[Any] = [
+        usage.get("cached_tokens"),
+        usage.get("cache_read_input_tokens"),
+        usage.get("cached_input_tokens"),
+    ]
+    prompt_details = usage.get("prompt_tokens_details")
+    if isinstance(prompt_details, dict):
+        candidates.append(prompt_details.get("cached_tokens"))
+        candidates.append(prompt_details.get("cached_input_tokens"))
+    input_details = usage.get("input_tokens_details")
+    if isinstance(input_details, dict):
+        candidates.append(input_details.get("cached_tokens"))
+        candidates.append(input_details.get("cached_input_tokens"))
+    for candidate in candidates:
+        try:
+            if candidate is None:
+                continue
+            return int(round(float(candidate)))
+        except Exception:
+            continue
+    return None
+
+
 def _vision_url_payload_stats(image_urls: list[str]) -> dict[str, Any]:
     """Summarize multimodal request payload size without storing image bytes."""
     total_url_chars = 0
@@ -249,20 +277,24 @@ def _chat_response_metadata(response: Any) -> dict[str, Any]:
     finish_reason = None
     if choices:
         finish_reason = getattr(choices[0], "finish_reason", None)
+    usage = _response_usage_dict(response)
     return {
         "response_id": getattr(response, "id", None),
         "created": getattr(response, "created", None),
         "finish_reason": finish_reason,
-        "usage": _response_usage_dict(response),
+        "usage": usage,
+        "cached_tokens": _usage_cached_tokens(usage),
     }
 
 
 def _responses_metadata(response: Any) -> dict[str, Any]:
+    usage = _response_usage_dict(response)
     return {
         "response_id": getattr(response, "id", None),
         "created": getattr(response, "created_at", None) or getattr(response, "created", None),
         "status": getattr(response, "status", None),
-        "usage": _response_usage_dict(response),
+        "usage": usage,
+        "cached_tokens": _usage_cached_tokens(usage),
     }
 
 
@@ -2076,6 +2108,7 @@ class VisionAnalyzer(BaseLLMService):
                 "max_retries": self.settings.max_retries,
                 "image_payload": _vision_url_payload_stats(image_urls),
                 "response": response_metadata,
+                "prompt_cached_tokens": (response_metadata or {}).get("cached_tokens"),
                 "stream_timing": stream_timing,
                 "server_timing_available": False,
             },
@@ -2120,6 +2153,7 @@ class VisionAnalyzer(BaseLLMService):
             response = await client.responses.create(**payload)
             roundtrip_ms = int(round((perf_counter() - started_at) * 1000.0))
             answer = _extract_text_from_responses_response(response)
+            response_metadata = _responses_metadata(response)
         except Exception as exc:
             if _vision_call_debug_enabled():
                 debug_summary = _vision_request_debug_summary(
@@ -2150,7 +2184,8 @@ class VisionAnalyzer(BaseLLMService):
                 "timeout_s": self._vision_timeout_s(),
                 "max_retries": self.settings.max_retries,
                 "image_payload": _vision_url_payload_stats(images),
-                "response": _responses_metadata(response),
+                "response": response_metadata,
+                "prompt_cached_tokens": response_metadata.get("cached_tokens"),
                 "server_timing_available": False,
             },
         }

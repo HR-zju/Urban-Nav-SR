@@ -107,6 +107,9 @@ def compact_visual_prompt_frame_timing(
             or usage.get("input_tokens")
             or usage.get("prompt_token_count")
         )
+        timing["generator_llm_prompt_cached_tokens"] = (
+            response.get("cached_tokens") if isinstance(response, dict) else None
+        )
         timing["generator_llm_completion_tokens"] = (
             usage.get("completion_tokens")
             or usage.get("output_tokens")
@@ -180,6 +183,7 @@ def summarize_visual_prompt_manifest_timings(frames: list[dict[str, Any]]) -> di
         "generator_llm_request_payload_chars",
         "generator_llm_approx_image_bytes",
         "generator_llm_prompt_tokens",
+        "generator_llm_prompt_cached_tokens",
         "generator_llm_completion_tokens",
         "generator_llm_total_tokens",
         "generator_llm_time_to_first_token_ms",

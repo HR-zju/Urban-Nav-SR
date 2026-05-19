@@ -97,6 +97,7 @@ class ArbiterPromptContextTest(unittest.TestCase):
         self.assertIn('"alignment_report": alignment_report', text)
         self.assertIn('"overlay_legend": overlay_legend', text)
         self.assertIn('"summary_source": str(summary_source or "from_same_mask_entity")', text)
+        self.assertIn('"prompt_prefix": _prompt_cache_prefix(', text)
         self.assertIn('"som_summary": som_summary', text)
         self.assertIn('"som_candidate_hints": som_candidate_hints', text)
         self.assertIn('"som_overlay_legend": som_overlay_legend', text)

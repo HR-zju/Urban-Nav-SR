@@ -751,6 +751,14 @@ def parse_args() -> argparse.Namespace:
         help="Query the configured map provider for OSM-style semantic BEV anchors around each GNSS frame",
     )
     parser.add_argument(
+        "--llm-input-mode",
+        default="auto",
+        choices=["auto", "fpv_only", "fpv_som", "fpv_bev", "som_bev", "som_only"],
+        help=(
+            "Shortcut for LVLM image inputs. som_bev selects numbered SoM as the primary LVLM image and appends BEV as the extra image."
+        ),
+    )
+    parser.add_argument(
         "--llm-primary-image-role",
         default="primary_fpv",
         choices=["primary_fpv", "numbered_som_overlay"],
@@ -836,6 +844,39 @@ async def main_async() -> None:
     segmentation_policy = str(args.segmentation_policy or "optional").strip().lower()
     if bool(args.allow_missing_segmentation) and segmentation_policy == "required":
         segmentation_policy = "optional"
+    resolved_enable_som_overlay_input = bool(args.enable_som_overlay_input or args.enable_segmentation_overlay_input)
+    resolved_enable_bev_map_provider = bool(args.enable_bev_map_provider)
+    resolved_enable_sam_visualization_input = bool(args.enable_sam_visualization_input)
+    resolved_llm_primary_image_role = str(args.llm_primary_image_role)
+    llm_input_mode = str(args.llm_input_mode or "auto").strip().lower()
+    if llm_input_mode != "auto":
+        if llm_input_mode == "fpv_only":
+            resolved_enable_som_overlay_input = False
+            resolved_enable_bev_map_provider = False
+            resolved_enable_sam_visualization_input = False
+            resolved_llm_primary_image_role = "primary_fpv"
+        elif llm_input_mode == "fpv_som":
+            resolved_enable_som_overlay_input = True
+            resolved_enable_bev_map_provider = False
+            resolved_enable_sam_visualization_input = False
+            resolved_llm_primary_image_role = "primary_fpv"
+        elif llm_input_mode == "fpv_bev":
+            resolved_enable_som_overlay_input = False
+            resolved_enable_bev_map_provider = True
+            resolved_enable_sam_visualization_input = False
+            resolved_llm_primary_image_role = "primary_fpv"
+        elif llm_input_mode == "som_bev":
+            resolved_enable_som_overlay_input = True
+            resolved_enable_bev_map_provider = True
+            resolved_enable_sam_visualization_input = False
+            resolved_llm_primary_image_role = "numbered_som_overlay"
+        elif llm_input_mode == "som_only":
+            resolved_enable_som_overlay_input = True
+            resolved_enable_bev_map_provider = False
+            resolved_enable_sam_visualization_input = False
+            resolved_llm_primary_image_role = "numbered_som_overlay"
+        else:
+            raise RuntimeError(f"Unsupported llm-input-mode: {args.llm_input_mode!r}")
     _set_env_if_value("VISUAL_PROMPT_LLM_IMAGE_MAX_SIDE", args.llm_image_max_side)
     _set_env_if_value("VISUAL_PROMPT_LLM_IMAGE_MAX_BYTES", args.llm_image_max_bytes)
     _set_env_if_value("VISUAL_PROMPT_LLM_IMAGE_JPEG_QUALITY", args.llm_image_jpeg_quality)
@@ -896,7 +937,8 @@ async def main_async() -> None:
         "frames_failed": 0,
         "sam3_inference_elapsed_ms": sam3_inference_elapsed_ms,
         "segmentation_policy": segmentation_policy,
-        "llm_primary_image_role": str(args.llm_primary_image_role),
+        "llm_primary_image_role": str(resolved_llm_primary_image_role),
+        "llm_input_mode": str(llm_input_mode),
         "llm_image_overrides": {
             "max_side": args.llm_image_max_side,
             "max_bytes": args.llm_image_max_bytes,
@@ -907,7 +949,7 @@ async def main_async() -> None:
     }
 
     bev_map_provider_session = None
-    if args.enable_bev_map_provider:
+    if resolved_enable_bev_map_provider:
         from mcp_server.route_context.bev_map_provider import BEVMapProviderSession
 
         bev_map_provider_session = BEVMapProviderSession.from_env()
@@ -945,11 +987,11 @@ async def main_async() -> None:
                 llm_detail=str(args.llm_detail),
                 enable_verifier=bool(args.enable_verifier),
                 enable_segmentation_overlay_input=bool(args.enable_segmentation_overlay_input),
-                enable_som_overlay_input=bool(args.enable_som_overlay_input or args.enable_segmentation_overlay_input),
-                enable_sam_visualization_input=bool(args.enable_sam_visualization_input),
-                enable_bev_map_provider=bool(args.enable_bev_map_provider),
+                enable_som_overlay_input=bool(resolved_enable_som_overlay_input),
+                enable_sam_visualization_input=bool(resolved_enable_sam_visualization_input),
+                enable_bev_map_provider=bool(resolved_enable_bev_map_provider),
                 bev_map_provider_session=bev_map_provider_session,
-                llm_primary_image_role=str(args.llm_primary_image_role),
+                llm_primary_image_role=str(resolved_llm_primary_image_role),
                 enforce_alignment=bool(args.enforce_alignment),
                 emit_qa_bundle=bool(args.emit_qa_bundle),
                 emit_llm_input_images=bool(args.emit_llm_input_images),

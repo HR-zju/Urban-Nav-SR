@@ -131,6 +131,107 @@ def minimal_output_enabled() -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
+def _compact_prompt_context_enabled() -> bool:
+    """Return whether to prefer a shorter, cache-friendly prompt envelope."""
+
+    value = (
+        os.getenv("LVLM_COMPACT_INPUT_CONTEXT", "").strip().lower()
+        or os.getenv("VISUAL_PROMPT_COMPACT_INPUT_CONTEXT", "").strip().lower()
+    )
+    if value:
+        return value in {"1", "true", "yes", "on"}
+    return True
+
+
+def _prompt_cache_prefix(kind: str) -> dict[str, Any]:
+    """Build a stable prompt prefix that stays identical across frames."""
+
+    minimal = minimal_output_enabled()
+    base_schema = (
+        {"r": 0, "t": "c|u|o", "p": "[[[center,left,right],...]]", "c": "0..1"}
+        if minimal
+        else {
+            "selected_prompt_type": "path_corridor",
+            "instruction": "short action summary",
+            "confidence": "0..1",
+            "reason": "short explanation",
+            "reject_all": "boolean",
+            "rendered_prompt": "path_corridor geometry",
+        }
+    )
+    return {
+        "cache_prefix_version": "visual_prompt_prefix_v1",
+        "kind": str(kind),
+        "output_shape": "compact_nav_corridor" if minimal else "full_visual_prompt",
+        "contract": base_schema,
+        "stable_rules": [
+            "JSON only",
+            "image first",
+            "FPV coordinates only",
+            "SoM for visual anchors",
+            "BEV for topology only",
+            "safe visible traversable support only",
+        ],
+    }
+
+
+def _compact_list(value: Any, limit: int) -> Any:
+    if not isinstance(value, list):
+        return value
+    return value[: max(int(limit), 0)]
+
+
+def _compact_som_summary_for_llm(summary: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(summary, dict):
+        return None
+    compact = dict(summary)
+    compact["regions"] = _compact_list(compact.get("regions"), 6)
+    compact["conditional_regions"] = _compact_list(compact.get("conditional_regions"), 4)
+    compact["forbidden_regions"] = _compact_list(compact.get("forbidden_regions"), 4)
+    return _strip_empty(compact)
+
+
+def _compact_segmentation_summary_for_llm(summary: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(summary, dict):
+        return None
+    compact = dict(summary)
+    compact["present_classes"] = _compact_list(compact.get("present_classes"), 8)
+    compact["bottom_openings"] = _compact_list(compact.get("bottom_openings"), 4)
+    compact["preferred_regions"] = _compact_list(compact.get("preferred_regions"), 6)
+    compact["conditional_connector_regions"] = _compact_list(compact.get("conditional_connector_regions"), 4)
+    compact["forbidden_regions"] = _compact_list(compact.get("forbidden_regions"), 4)
+    compact["allowed_traversable_class_names"] = _compact_list(compact.get("allowed_traversable_class_names"), 8)
+    compact["traversable_class_names"] = _compact_list(compact.get("traversable_class_names"), 8)
+    compact["boundary_class_names"] = _compact_list(compact.get("boundary_class_names"), 8)
+    compact["forbidden_class_names"] = _compact_list(compact.get("forbidden_class_names"), 8)
+    return _strip_empty(compact)
+
+
+def _compact_candidates_for_llm(candidates: list[dict[str, Any]] | None, limit: int = 3) -> list[dict[str, Any]] | None:
+    if not isinstance(candidates, list):
+        return None
+    return [_strip_empty(item) for item in candidates[: max(int(limit), 0)] if isinstance(item, dict)]
+
+
+def _compact_legend_for_llm(legend: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(legend, dict):
+        return None
+    compact = {
+        key: legend.get(key)
+        for key in (
+            "image_role",
+            "source",
+            "source_label_mapping",
+            "label_mapping",
+            "coordinate_frame",
+            "forward_axis",
+            "usage",
+        )
+        if legend.get(key) is not None
+    }
+    return _strip_empty(compact)
+
+
 def _compact_spatial_constraints_for_llm(constraints: dict[str, Any] | None) -> dict[str, Any] | None:
     """Compress verbose SoM/segmentation guardrails into a compact DSL payload.
 
@@ -325,6 +426,7 @@ def build_direct_prompt_question(
     image_size. The service later maps that geometry back to source pixels.
     """
     compact_route = _compact_route_context(route_context)
+    compact_context = _compact_prompt_context_enabled()
     top_prior = None
     if prompt_proposals:
         first = prompt_proposals[0]
@@ -349,9 +451,19 @@ def build_direct_prompt_question(
         for item in ((visual_regions or {}).get("candidate_regions", []) or [])[:4]
     ]
     compact_candidates = [_candidate_compact(item) for item in (pov_prompt_candidates or [])[:5]]
+    if compact_context:
+        fpv_segmentation_summary = _compact_segmentation_summary_for_llm(fpv_segmentation_summary)
+        som_summary = _compact_som_summary_for_llm(som_summary)
+        som_candidate_hints = _compact_candidates_for_llm(som_candidate_hints, 3) or []
+        som_overlay_legend = _compact_legend_for_llm(som_overlay_legend)
+        bev_map_overlay_legend = _compact_legend_for_llm(bev_map_overlay_legend)
+        som_spatial_constraints = _compact_spatial_constraints_for_llm(som_spatial_constraints)
+        alignment_report = _strip_empty(alignment_report) if isinstance(alignment_report, dict) else alignment_report
+        overlay_legend = _compact_legend_for_llm(overlay_legend)
     if minimal_output_enabled():
         return _compact_ascii_json_dumps(
             {
+                "prompt_prefix": _prompt_cache_prefix("generator:minimal"),
                 "prompt_encoding": "minimal_nav_corridor_v1",
                 "task": "Return compact FPV walking corridor JSON only.",
                 "schema": {
@@ -389,6 +501,7 @@ def build_direct_prompt_question(
         )
     return _compact_json_dumps(
         {
+            "prompt_prefix": _prompt_cache_prefix("generator:full"),
             "prompt_encoding": "compact_json_with_constraint_dsl",
             "task": (
                 "Generate ONE conservative image-plane navigation prompt (prefer path_corridor). "
@@ -459,9 +572,21 @@ def build_direct_prompt_verifier_question(
 ) -> str:
     """Serialize the V-stage verifier/refiner task as auditable JSON."""
     compact_route = _compact_route_context(route_context)
+    compact_context = _compact_prompt_context_enabled()
+    if compact_context:
+        fpv_segmentation_summary = _compact_segmentation_summary_for_llm(fpv_segmentation_summary)
+        som_summary = _compact_som_summary_for_llm(som_summary)
+        som_candidate_hints = _compact_candidates_for_llm(som_candidate_hints, 3) or []
+        som_overlay_legend = _compact_legend_for_llm(som_overlay_legend)
+        bev_map_overlay_legend = _compact_legend_for_llm(bev_map_overlay_legend)
+        som_spatial_constraints = _compact_spatial_constraints_for_llm(som_spatial_constraints)
+        segmentation_validation = _strip_empty(segmentation_validation) if isinstance(segmentation_validation, dict) else segmentation_validation
+        alignment_report = _strip_empty(alignment_report) if isinstance(alignment_report, dict) else alignment_report
+        overlay_legend = _compact_legend_for_llm(overlay_legend)
     if minimal_output_enabled():
         return _compact_ascii_json_dumps(
             {
+                "prompt_prefix": _prompt_cache_prefix("verifier:minimal"),
                 "prompt_encoding": "minimal_nav_corridor_v1",
                 "task": "Verify/refine proposed FPV corridor. Return compact JSON only.",
                 "schema": {
@@ -494,6 +619,7 @@ def build_direct_prompt_verifier_question(
         )
     return _compact_json_dumps(
         {
+            "prompt_prefix": _prompt_cache_prefix("verifier:full"),
             "prompt_encoding": "compact_json_with_constraint_dsl",
             "task": (
                 "Verify and, if needed, refine the proposed visual prompt so that its center path and left/right support boundaries are fully supported by visible traversable surface."

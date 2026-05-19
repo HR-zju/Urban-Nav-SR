@@ -37,9 +37,21 @@ from PIL import Image, ImageDraw, ImageFont
 from mcp_server.services.visual_prompt_service import (
     _osm_tile_xy_float,
     _bev_map_heading_rotation_deg,
-    _draw_bev_navigation_path,
     _lat_lng_from_gps,
 )
+
+
+def _rotate_point_about_center(
+    x: float, y: float, center_x: float, center_y: float, angle_deg: float
+) -> tuple[float, float]:
+    angle_rad = math.radians(angle_deg)
+    cos_a = math.cos(angle_rad)
+    sin_a = math.sin(angle_rad)
+    dx = x - center_x
+    dy = y - center_y
+    rx = dx * cos_a - dy * sin_a
+    ry = dx * sin_a + dy * cos_a
+    return (rx + center_x, ry + center_y)
 
 
 # ==================== Map Provider Configurations ====================
@@ -317,35 +329,69 @@ def render_bev_map(
     )
     ego_aligned = rotated_mosaic.crop(crop_box)
     image = ego_aligned.resize((output_size, output_size), Image.Resampling.LANCZOS).convert("RGB")
+    draw = ImageDraw.Draw(image, "RGBA")
+    center = output_size // 2
 
     # Draw navigation path
     if options.draw_trajectory and navigation_path_gps:
-        _draw_bev_navigation_path(
-            image=image,
-            path_gps=navigation_path_gps,
-            path_source="frodobot_trajectory",
-            current_gps=(float(lat), float(lng)),
-            zoom=int(zoom),
-            tile_size=int(tile_size),
-            mosaic_origin_tile_x=int(center_tile_x - half_tiles),
-            mosaic_origin_tile_y=int(center_tile_y - half_tiles),
-            rotation_center_px=(float(local_center_px), float(local_center_py)),
-            heading_rotation_deg=float(heading_rotation_deg),
-            crop_box=crop_box,
-        )
-    else:
-        # Just draw ego marker
-        draw = ImageDraw.Draw(image, "RGBA")
-        center = output_size // 2
-        marker_r = max(int(round(output_size * 0.018)), 7)
-        draw.ellipse(
-            [center - marker_r, center - marker_r, center + marker_r, center + marker_r],
-            fill=(249, 115, 22, 250),
-            outline=(255, 255, 255, 255),
-            width=3,
-        )
-        heading_len = marker_r * 2.2
-        draw.line([(center, center), (center, center - heading_len)], fill=(255, 255, 255, 255), width=3)
+        try:
+            # Calculate transform
+            crop_w = max(float(crop_box[2] - crop_box[0]), 1.0)
+            crop_h = max(float(crop_box[3] - crop_box[1]), 1.0)
+            scale_x = float(image.size[0]) / crop_w
+            scale_y = float(image.size[1]) / crop_h
+
+            def _gps_to_image_xy(lat_p: float, lng_p: float) -> tuple[float, float]:
+                tx, ty = _osm_tile_xy_float(lat=float(lat_p), lng=float(lng_p), zoom=int(zoom))
+                mosaic_x = tx * float(tile_size) - float(center_tile_x - half_tiles) * float(tile_size)
+                mosaic_y = ty * float(tile_size) - float(center_tile_y - half_tiles) * float(tile_size)
+                rotated_x, rotated_y = _rotate_point_about_center(
+                    x=mosaic_x,
+                    y=mosaic_y,
+                    center_x=float(local_center_px),
+                    center_y=float(local_center_py),
+                    angle_deg=float(heading_rotation_deg),
+                )
+                return (
+                    (rotated_x - float(crop_box[0])) * scale_x,
+                    (rotated_y - float(crop_box[1])) * scale_y,
+                )
+
+            projected = [_gps_to_image_xy(lat_p, lng_p) for lat_p, lng_p in navigation_path_gps]
+            if len(projected) >= 2:
+                draw.line(
+                    projected,
+                    fill=(37, 99, 235, 235),
+                    width=max(int(round(output_size * 0.012)), 4),
+                    joint="curve"
+                )
+                draw.line(
+                    projected,
+                    fill=(219, 234, 254, 220),
+                    width=max(int(round(output_size * 0.004)), 2),
+                    joint="curve"
+                )
+                # Start and end markers
+                start_r = max(int(round(output_size * 0.012)), 5)
+                sx, sy = projected[0]
+                ex, ey = projected[-1]
+                draw.ellipse([sx - start_r, sy - start_r, sx + start_r, sy + start_r],
+                    fill=(34, 197, 94, 245), outline=(255, 255, 255, 245), width=2)
+                draw.rectangle([ex - start_r, ey - start_r, ex + start_r, ey + start_r],
+                    fill=(239, 68, 68, 245), outline=(255, 255, 255, 245), width=2)
+        except Exception as e:
+            print(f"[WARN] Failed to draw navigation path: {e}")
+
+    # Draw ego marker
+    marker_r = max(int(round(output_size * 0.018)), 7)
+    draw.ellipse(
+        [center - marker_r, center - marker_r, center + marker_r, center + marker_r],
+        fill=(249, 115, 22, 250),
+        outline=(255, 255, 255, 255),
+        width=3,
+    )
+    heading_len = marker_r * 2.2
+    draw.line([(center, center), (center, center - heading_len)], fill=(255, 255, 255, 255), width=3)
 
     # Add attribution
     if options.add_attribution and provider_config.get("attribution"):

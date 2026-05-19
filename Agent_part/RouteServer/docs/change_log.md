@@ -2,6 +2,20 @@
 
 本文档用于记录影响 FPV/BEV visual prompt 主链路、QA teachers、调试产物和批处理工具的工程变更。记录目标是方便后续审计：为什么改、改了什么、对运行行为有什么影响。
 
+## 2026-05-19
+
+### 优化 LVLM 输入缓存与两图模式
+
+- 新增 `--llm-input-mode som_bev` 快捷档位，显式固定为：
+  - 主图使用 numbered SoM overlay
+  - 额外图使用真实 OSM BEV screenshot
+- 新增 `LVLM_COMPACT_INPUT_CONTEXT=1`，默认对 LVLM 上下文进行更紧凑的压缩：
+  - 缩短 SoM/segmentation/legend/candidate 列表
+  - 把稳定 contract 前缀前置，尽量让跨帧前缀保持一致
+- 在 A/V prompt builder 中新增稳定 `prompt_prefix`，用于提升 provider 侧 prompt caching 命中概率。
+- `manifest.json` / timing telemetry 新增 `generator_llm_prompt_cached_tokens`，用于观察缓存命中情况。
+- 保留 `LLM_REASONING_EFFORT=minimal`、`LVLM_MINIMAL_OUTPUT=1`、`VISUAL_PROMPT_LLM_IMAGE_MAX_SIDE` 和 `VISUAL_PROMPT_LLM_IMAGE_JPEG_QUALITY` 作为降耗主旋钮。
+
 ## 2026-05-12
 
 ### 增加 LVLM 调用异常诊断

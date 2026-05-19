@@ -99,6 +99,8 @@ meta_json=<WORK_DIR>/mcap_extract_meta.json
 export LLM_REASONING_EFFORT=minimal
 export VISUAL_PROMPT_LLM_IMAGE_MAX_SIDE=960
 export VISUAL_PROMPT_LLM_IMAGE_JPEG_QUALITY=70
+export LVLM_COMPACT_INPUT_CONTEXT=1
+export LVLM_MINIMAL_OUTPUT=1
 export LLM_MAX_RETRIES=1
 export LLM_VISION_TIMEOUT_S=60
 ```
@@ -136,6 +138,33 @@ export LVLM_MINIMAL_OUTPUT=1
 - `c`：置信度。
 
 后处理会把极简输出恢复成完整的 `path_corridor` 结构，并继续执行 segmentation validation / repair。
+
+如果要减少 TTFT / vision prefill 压力，优先使用 SoM + BEV 两图模式，并保持 prompt 前缀稳定：
+
+```bash
+python tools/run_sidewalk_images_visual_prompt_pipeline.py \
+  --images-dir "$WORK_DIR/images" \
+  --trajectory-json "$WORK_DIR/trajectory.json" \
+  --output-dir "$WORK_DIR/output_fast_som_bev" \
+  --sequence-name viobot_sidewalk_zju_081025_16 \
+  --camera-view camera_front \
+  --sam3-output-base-dir "$WORK_DIR/sam3" \
+  --segmentation-policy optional \
+  --enable-bev-map-provider \
+  --llm-input-mode som_bev \
+  --llm-image-max-side 960 \
+  --llm-image-jpeg-quality 70 \
+  --bev-map-output-size-px 512 \
+  --enforce-alignment \
+  --mode foot
+```
+
+该模式只上传：
+
+- numbered SoM overlay：主图，坐标仍与 FPV 一致。
+- 真实 OSM BEV screenshot：额外图，只用于拓扑/路线语义。
+
+`manifest.json` 会记录 `generator_llm_prompt_cached_tokens`。如果 provider 返回 cache hit telemetry，可以用它确认稳定前缀是否命中。
 
 ```bash
 WORK_DIR=/tmp/viobot_sidewalk_zju_081025_15_1fps
@@ -215,7 +244,7 @@ python tools/run_sidewalk_images_visual_prompt_pipeline.py \
 - `--llm-concurrency 4`：只有在模型 API 额度、QPS 和稳定性允许时再使用。
 - 输出 `manifest.json` 会记录 `llm_concurrency`，并保持 `frames` 按输入帧顺序回填。
 - 如果想只上传两张 LVLM 图片（numbered SoM 主图 + BEV extra），使用：
-  `--llm-primary-image-role numbered_som_overlay --enable-bev-map-provider`。
+  `--llm-input-mode som_bev`，或等价地使用 `--llm-primary-image-role numbered_som_overlay --enable-bev-map-provider`。
   该模式会自动生成 SoM overlay 作为主图，不再把 raw FPV 作为单独图片上传；坐标仍对应 FPV/SoM 同一图像平面。
 - 可用 `--llm-image-max-side` / `--llm-image-max-bytes` / `--llm-image-jpeg-quality` 调整 FPV、SoM、SAM visualization 的 LVLM 输入压缩；可用 `--bev-map-output-size-px` 调整 BEV 截图分辨率。
 - `--segmentation-policy optional`：推荐缺省模式；有 SAM/SAM3 时启用 SoM、safe corridor 和 validation，没有 mask 时仍允许 FPV+BEV zero-shot baseline 输出。
