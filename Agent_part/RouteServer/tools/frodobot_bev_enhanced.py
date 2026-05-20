@@ -350,7 +350,7 @@ def render_bev_map(
                     y=mosaic_y,
                     center_x=float(local_center_px),
                     center_y=float(local_center_py),
-                    angle_deg=float(heading_rotation_deg),
+                    angle_deg=-float(heading_rotation_deg),  # Reverse rotation direction
                 )
                 return (
                     (rotated_x - float(crop_box[0])) * scale_x,
