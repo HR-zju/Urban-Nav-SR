@@ -4,7 +4,9 @@
 
 [![ROS2 CI](https://github.com/HR-zju/Urban-Nav-SR/actions/workflows/ros2_ci.yml/badge.svg)](https://github.com/HR-zju/Urban-Nav-SR/actions/workflows/ros2_ci.yml)
 
-A ROS 2 module for Viobot control and  GNSS Single Point Positioning (SPP) integration, as part of the Urban-Nav-SR project.
+A ROS 2 workspace for Viobot algorithm control, GNSS Single Point Positioning (SPP), Stereo3/GNSS fusion, camera publishing, and synchronized bag recording.
+
+[English README](README.md) | [中文说明](README_zh.md)
 
 </div>
 
@@ -19,43 +21,98 @@ A ROS 2 module for Viobot control and  GNSS Single Point Positioning (SPP) integ
 
 ## About The Project
 
-This project contains the **Viobot Control** (`viobot_ctrl`) and **GNSS SPP Node** (`gnss_comm_impl`) implementations. Developed within the ROS 2 framework, it is specifically designed for navigation scenarios in urban environments. The primary goal is to provide stable and reliable global positioning by integrating GNSS SPP calculations with Stereo Odometry data.
+This workspace contains the current **Viobot Control** (`viobot_ctrl`), **GNSS SPP Node** (`gnss_comm_impl`), **MJPEG camera publisher** (`cam_pub`), and ROS 2 interface packages used by Urban-Nav-SR.
+
+The current implementation provides:
+
+- `algo_ctrl_node`: an interactive terminal tool that publishes Stereo3 control commands to `/baton/stereo3_ctrl` and displays `/baton/algo_status`.
+- `stereo3_auto_start_node`: a helper that waits for the first raw GNSS SPP fix and then sends one Stereo3 enable command.
+- `gnss_spp_node`: an SPP and Stereo3/GNSS fusion node that publishes raw GNSS fixes, fused fixes, GNSS fusion status, and heading.
+- `cam_pub`: a V4L2 MJPEG publisher for `/camera_x001/image_raw/compressed`.
+- `start_bag.sh` and systemd units for deployment-time camera startup and MCAP recording.
 
 ## Features
 
-- **GNSS Single Point Positioning (SPP)**: Baseline positioning calculations.
-- **RAIM Gross Error Rejection**: Implements Receiver Autonomous Integrity Monitoring to effectively detect and reject anomalous observations.
-- **Elevation Angle and SNR Weighting**: Enhances positioning accuracy by establishing a weighted observation model.
-- **Multi-sensor Fusion**: Fuses high-frequency relative displacement from Stereo3 odometry with GNSS SPP outputs.
-- **GNSS Status Export**: Publishes GNSS fusion state on `/baton/gnss/status` for external consumers (`gnss_idle`, `gnss_waiting_origin`, `gnss_aligning`, `gnss_fusing`).
-- **Ephemeris Management**: Periodically cleans up satellite ephemeris data to prevent the accumulation of outdated or incorrect data.
-- **Trajectory Export**: Saves latitude and longitude parameters during operation to generate paths compatible with Google Earth visualization.
+- **Viobot Algorithm Control**: Sends enable, disable, reboot, and reset commands through `system_ctrl/msg/AlgoCtrl`.
+- **GNSS Single Point Positioning (SPP)**: Calculates baseline GNSS positions from `/baton/gnss/ephem` and `/baton/gnss/meas`.
+- **RAIM Gross Error Rejection**: Performs residual-based satellite exclusion in `psr_pos`.
+- **Elevation, Observation Noise, and URA Weighting**: Uses elevation angle, pseudorange standard deviation, and broadcast ephemeris accuracy in the weighted least-squares model.
+- **GNSS Data Validation**: Filters invalid ephemeris and observation messages before solving.
+- **Hatch Filtering**: Smooths L1 pseudorange with carrier phase when valid observations are available.
+- **Stereo3/GNSS Fusion**: Builds a stable GNSS origin, dynamically aligns Stereo3 odometry to GNSS ENU coordinates, and publishes fused global fixes.
+- **Heading Estimation**: Publishes heading derived from Stereo3 orientation after dynamic GNSS alignment.
+- **GNSS Status Export**: Publishes `/baton/gnss/status` as `gnss_idle`, `gnss_waiting_origin`, `gnss_aligning`, or `gnss_fusing`.
+- **KML Trajectory Export**: Optionally writes raw and fused trajectories for map visualization.
+- **MJPEG Camera Publishing**: Captures compressed frames from a V4L2 device and exits on repeated timeouts for systemd restart.
+- **MCAP Recording Support**: Records GNSS, odometry, status, heading, and compressed image topics with Zstd compression.
 
 ## Core Parameters & Topics
 
 ### Key Topics
-- **Subscriptions:**
-  - `gnss_comm::msg::GnssEphemMsg` : Satellite ephemeris data.
-  - `gnss_comm::msg::GnssMeasMsg` : GNSS observation and measurement epochs.
-- **Publications:**
-  - `/baton/gnss/status` (`system_ctrl::msg::AlgoStatus`) : Publishes the state machine of the GNSS fusion (`gnss_idle`, `gnss_waiting_origin`, `gnss_aligning`, `gnss_fusing`).
-  - `/baton/gnss/spp_fix` (`sensor_msgs::msg::NavSatFix`) : Publishes the SPP position fix.
-  - `/baton/gnss/spp_fix_raw` (`sensor_msgs::msg::NavSatFix`) : Publishes the raw SPP position fix without stereo3 fusion.
-  - `/baton/gnss/heading` (`std_msgs::msg::Float64`) : Publishes the heading estimation derived from stereo3 and GNSS SPP fusion.
+
+- **Viobot control**
+  - Publishes `/baton/stereo3_ctrl` (`system_ctrl/msg/AlgoCtrl`)
+  - Subscribes `/baton/algo_status` (`system_ctrl/msg/AlgoStatus`)
+
+- **GNSS SPP and fusion subscriptions**
+  - `/baton/gnss/ephem` (`gnss_comm/msg/GnssEphemMsg`): satellite ephemeris data.
+  - `/baton/gnss/meas` (`gnss_comm/msg/GnssMeasMsg`): GNSS observation epochs.
+  - `/baton/stereo3/odometry` (`nav_msgs/msg/Odometry`): Stereo3 relative odometry.
+  - `/baton/algo_status` (`system_ctrl/msg/AlgoStatus`): algorithm running state.
+
+- **GNSS SPP and fusion publications**
+  - `/baton/gnss/status` (`system_ctrl/msg/AlgoStatus`): GNSS fusion state machine.
+  - `/baton/gnss/spp_fix_raw` (`sensor_msgs/msg/NavSatFix`): raw SPP fix after GNSS filtering and calibration.
+  - `/baton/gnss/spp_fix` (`sensor_msgs/msg/NavSatFix`): Stereo3/GNSS fused global fix.
+  - `/baton/gnss/heading` (`std_msgs/msg/Float64`): fused heading in degrees.
+
+- **Camera**
+  - Publishes `/camera_x001/image_raw/compressed` (`sensor_msgs/msg/CompressedImage`) by default.
+
+`start_bag.sh` records the GNSS, odometry, algorithm status, camera, and heading topics above with MCAP/Zstd compression.
 
 ### Parameters
-- `gnss_initial_calibration_enu_` (vector3): Initial offset applied to the GNSS calculation natively in the ENU frame (default: 0.0, -7.5, 0.0).
-- more parameters are defined in the config files.
+
+- **`stereo3_auto_start_node`**
+  - `gnss_fix_topic` (string, default: `/baton/gnss/spp_fix_raw`)
+  - `stereo3_ctrl_topic` (string, default: `/baton/stereo3_ctrl`)
+
+- **`gnss_spp_node`**
+  - `enable_kml_export` (bool, default: `true`)
+  - `kml_directory` (string, default: `/home/symc/data/kml`)
+  - `kml_raw_directory` (string, default: `/home/symc/data/kml_raw`)
+  - `gnss.initial_calibration_enu` (vector3, config value: `[-3.0, -4.5, 0.0]`)
+  - `dynamic_aligner.window_size` (int, config value: `100`)
+  - `dynamic_aligner.min_dist` (double, config value: `1.0`)
+  - `dynamic_aligner.ransac_iters` (int, config value: `100`)
+  - `dynamic_aligner.inlier_thresh` (double, config value: `2.0`)
+  - `dynamic_aligner.filter_gain` (double, config value: `0.05`)
+  - `dynamic_aligner.anchor_window_size` (int, config value: `100`)
+  - `dynamic_aligner.anchor_min_dist` (double, config value: `10.0`)
+  - `dynamic_aligner.max_consecutive_jumps` (int, config value: `5`)
+
+- **`cam_pub`**
+  - `topic_name` (string, default: `/camera_x001/image_raw/compressed`)
+  - `frame_id` (string, default: `camera_link`)
+  - `video_device` (string, default: `/dev/video0`)
+  - `image_width` (int, default: `1920`)
+  - `image_height` (int, default: `1080`)
+  - `buffer_count` (int, default: `8`)
+  - `qos_depth` (int, default: `10`)
+  - `dqbuf_timeout_ms` (int, default: `2000`)
+  - `max_consecutive_timeouts` (int, default: `5`)
 
 ## Getting Started
 
 ### Prerequisites
 
-- **ROS 2** base environment
-- **C++14/17** compiler
-- Package dependencies: `rclcpp`, `std_msgs`, `sensor_msgs`, `nav_msgs`, `Eigen3`, `glog`
+- **ROS 2 Humble** or a compatible ROS 2 environment
+- **C++17** compiler for `gnss_comm_impl`
+- Package dependencies: `rclcpp`, `std_msgs`, `sensor_msgs`, `nav_msgs`, `launch`, `launch_ros`, `Eigen3`, `glog`, `OpenCV`, `cv_bridge`
+- Optional tools for deployment scripts: `zstd`, `ros2bag`, `rosbag2_storage_mcap`
 
 ### Installation
+
 0. Install dependencies:
    ```bash
    sudo apt-get update
@@ -67,27 +124,40 @@ This project contains the **Viobot Control** (`viobot_ctrl`) and **GNSS SPP Node
    ```bash
    cd Urban-Nav-SR/Locomotion_part/viobot_ctrl
    ```
-2. Build the target packages:
+
+2. Build the workspace:
    ```bash
-   colcon build
+   colcon build --symlink-install
    ```
+
 3. Source the environment setup:
    ```bash
    source install/setup.bash
    ```
+
+Common runtime commands after sourcing:
+
+```bash
+ros2 launch viobot_ctrl start_gnss_then_stereo3.launch.py
+ros2 run viobot_ctrl algo_ctrl_node
+ros2 run cam_pub cam_pub
+```
 
 ## Roadmap & TODO
 
 *The recent development progress and goals of the original project are recorded below:*
 
 - [x] Add RAIM gross error rejection
-- [x] Introduce elevation angle and SNR weighting
+- [x] Introduce elevation angle, observation noise, and URA weighting
+- [x] Implement GNSS ephemeris and observation validation
 - [x] Implement periodic ephemeris cleanup
-- [x] Save coordinates (latitude/longitude) for Google Earth visualization
+- [x] Save raw and fused trajectories for KML visualization
 - [x] Refactor and separate ROS 2 node code
-- [x] Fuse stereo3 odometry and GNSS SPP outputs
-- [ ] Collect data and perform field testing
-- [x] Test Euler angle output of stereo3
-- [x] Heading estimation using stereo3 and GNSS SPP
-- [ ] Migrate to Viobot2 platform
-- [ ] Incremental fusion or absolute fusion
+- [x] Fuse Stereo3 odometry and GNSS SPP outputs
+- [x] Add GNSS status heartbeat
+- [x] Add Stereo3 auto-start after raw GNSS fix
+- [x] Add heading estimation using Stereo3 and GNSS SPP
+- [x] Add V4L2 MJPEG camera publisher
+- [x] Add MCAP bag recording and repair scripts
+- [ ] Collect more field data and evaluate robustness
+- [x] Migrate to Viobot2 platform
