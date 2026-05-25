@@ -91,7 +91,7 @@ source ~/.bashrc
 
 | Script | Image topic | Odom topic |
 | --- | --- | --- |
-| `run_navflow_realsense_vis.py` | `/camera_x001/image_raw/compressed` | `/baton/stereo3/odometry` |
+| `run_navflow_realsense_vis.py` | `/camera/camera/color/image_raw/compressed` | `/globalEstimator/global_odometry` |
 | `run_navflow_realsense_vis_goal.py` | `/camera/camera/color/image_raw/compressed` | `/globalEstimator/global_odometry` |
 
 默认行为：
