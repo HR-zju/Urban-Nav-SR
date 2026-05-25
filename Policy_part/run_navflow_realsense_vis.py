@@ -107,11 +107,19 @@ class AsyncVideoWriter:
     target resolution and drawing trajectories before writing to disk.
     """
 
-    def __init__(self, out_path: str, fps: float, fourcc: int, max_queue: int = 128):
+    def __init__(
+        self,
+        out_path: str,
+        fps: float,
+        fourcc: int,
+        max_queue: int = 128,
+        overlay_camera_pitch_deg: float = 8.0,
+    ):
         self.out_path = out_path
         self.fps = float(fps)
         self.fourcc = fourcc
         self.max_queue = max_queue
+        self.overlay_camera_pitch_deg = float(overlay_camera_pitch_deg)
 
         # Queue of (frame_bgr, wp_np, frame_time) tuples, where wp_np is an
         # optional (N, 2) array of waypoints in robot frame.
@@ -119,7 +127,14 @@ class AsyncVideoWriter:
         self._stop_event = mp.Event()
         self._process = mp.Process(
             target=self._worker,
-            args=(self._queue, self._stop_event, self.out_path, self.fps, self.fourcc),
+            args=(
+                self._queue,
+                self._stop_event,
+                self.out_path,
+                self.fps,
+                self.fourcc,
+                self.overlay_camera_pitch_deg,
+            ),
             daemon=True,
         )
         self._queue_full_logged = False
@@ -158,6 +173,7 @@ class AsyncVideoWriter:
         out_path: str,
         fps: float,
         fourcc: int,
+        overlay_camera_pitch_deg: float,
     ):
         writer = None
         writer_size = None
@@ -232,6 +248,7 @@ class AsyncVideoWriter:
                                 [790.0, 1920.0 / 2.0, 1080.0 / 2.0, 0.0],
                                 rgb_img,
                                 save_fig=False,
+                                camera_pitch_deg=overlay_camera_pitch_deg,
                             )
                         except Exception as e:  # noqa: BLE001
                             # Fallback to plain image if overlay fails.
@@ -412,6 +429,7 @@ class RealSenseNavflowNode(Node):
         overlay_topic: str = "/navflow/overlay/image_raw/compressed",
         overlay_transport: str = "compressed",
         overlay_jpeg_quality: int = 85,
+        overlay_camera_pitch_deg: float = 8.0,
         video_writer: Optional[AsyncVideoWriter] = None,
     ):
         super().__init__("navflow_realsense_runner")
@@ -428,6 +446,7 @@ class RealSenseNavflowNode(Node):
         self.overlay_topic = str(overlay_topic)
         self.overlay_transport = str(overlay_transport)
         self.overlay_jpeg_quality = int(np.clip(int(overlay_jpeg_quality), 1, 100))
+        self.overlay_camera_pitch_deg = float(overlay_camera_pitch_deg)
         self.video_writer = video_writer
         self.window_name = "navflow_realsense_overlay"
         # Zero-overhead bypass when both recording and save_vis are disabled.
@@ -626,6 +645,7 @@ class RealSenseNavflowNode(Node):
                 self.intrinsic_params,
                 rgb_img,
                 save_fig=False,
+                camera_pitch_deg=self.overlay_camera_pitch_deg,
             )
             return frame_out
         except Exception as e:  # noqa: BLE001
@@ -1236,6 +1256,15 @@ def parse_args():
         help="JPEG quality for compressed overlay publishing (1-100)",
     )
     parser.add_argument(
+        "--overlay_camera_pitch_deg",
+        type=float,
+        default=8.0,
+        help=(
+            "Visualization-only camera pitch in degrees. Positive tilts the "
+            "virtual camera upward and moves projected ground paths lower."
+        ),
+    )
+    parser.add_argument(
         "--no_publish_overlay",
         action="store_false",
         dest="publish_overlay",
@@ -1308,7 +1337,12 @@ def main():
             f"[overlay] enabling AsyncVideoWriter at {out_path} "
             f"(fps estimate from input, fallback={args.output_fps})"
         )
-        async_writer = AsyncVideoWriter(out_path, args.output_fps, fourcc)
+        async_writer = AsyncVideoWriter(
+            out_path,
+            args.output_fps,
+            fourcc,
+            overlay_camera_pitch_deg=args.overlay_camera_pitch_deg,
+        )
         async_writer.start()
 
     rclpy.init(args=None)
@@ -1325,6 +1359,7 @@ def main():
         overlay_topic=args.overlay_topic,
         overlay_transport=args.overlay_transport,
         overlay_jpeg_quality=args.overlay_jpeg_quality,
+        overlay_camera_pitch_deg=args.overlay_camera_pitch_deg,
         video_writer=async_writer,
     )
 

@@ -87,6 +87,13 @@ source ~/.bashrc
 
 `run_navflow_realsense_vis.py` 和 `run_navflow_realsense_vis_goal.py` 都会订阅 RealSense 压缩图像和 odom，实时推理 NavFlow，并把预测轨迹画回图像。
 
+当前默认输入话题：
+
+| Script | Image topic | Odom topic |
+| --- | --- | --- |
+| `run_navflow_realsense_vis.py` | `/camera_x001/image_raw/compressed` | `/baton/stereo3/odometry` |
+| `run_navflow_realsense_vis_goal.py` | `/camera/camera/color/image_raw/compressed` | `/globalEstimator/global_odometry` |
+
 默认行为：
 - 开启 OpenCV 预览窗口，除非加 `--no_show_window`
 - 发布轨迹 overlay 图像话题，默认是 compressed JPEG
@@ -140,6 +147,17 @@ python run_navflow_realsense_vis.py \
 
 raw 默认话题为 `/navflow/overlay/image_raw`，compressed 默认话题为 `/navflow/overlay/image_raw/compressed`。
 
+如果轨迹在图像中偏高、不贴地，可以调可视化专用 pitch。这个参数只影响画图投影，不改变 ONNX 推理输出和发布到 `waypoint` 的控制轨迹：
+
+```bash
+python run_navflow_realsense_vis.py \
+  --onnx onnx_ckpts/vint_point_goal.onnx \
+  --targets ./topomaps/odom_poses.txt \
+  --overlay_camera_pitch_deg 8.0
+```
+
+`--overlay_camera_pitch_deg` 默认是 `8.0`。正值表示虚拟相机抬头，会让投影到地面的轨迹在图像中更靠下；如果仍然偏高，可以试 `10.0` 或 `12.0`。如果压得太低，则减小到 `6.0`、`3.0` 或 `0.0`。
+
 ## Offline GT odom trajectory overlay
 
 `tools/vis_odom_gt_video.py` 用于直接检查 `data_format` 数据集里的 GT odom。它会读取每个 clip 目录中的：
@@ -148,6 +166,12 @@ raw 默认话题为 `/navflow/overlay/image_raw`，compressed 默认话题为 `/
 - `front_pinhole_crop_resize.mp4`
 
 脚本按目录名去掉 `__clip_XXXX` 后分组，把同一个原视频的多个 clip 按编号合成为一个输出视频，并把未来一段 odom 轨迹投影到前视画面上。
+
+下面命令默认在仓库根目录执行。如果还没有 `data_format` 入口，先创建软链接：
+
+```bash
+ln -s /media/zjy/Elements\ SE/vint_fine_tune_data_format ./data_format
+```
 
 默认输入路径：
 
@@ -164,25 +188,25 @@ Policy_part/vis/gt_odom_overlay/
 查看分组但不渲染：
 
 ```bash
-python tools/vis_odom_gt_video.py --dry-run
+python Policy_part/tools/vis_odom_gt_video.py --dry-run
 ```
 
 渲染全部视频组：
 
 ```bash
-python tools/vis_odom_gt_video.py
+python Policy_part/tools/vis_odom_gt_video.py
 ```
 
 只渲染某一个视频组：
 
 ```bash
-python tools/vis_odom_gt_video.py --include 20260510_081025_2
+python Policy_part/tools/vis_odom_gt_video.py --include 20260510_081025_2
 ```
 
 常用可调参数：
 
 ```bash
-python tools/vis_odom_gt_video.py \
+python Policy_part/tools/vis_odom_gt_video.py \
   --future-frames 120 \
   --stride 5 \
   --max-forward-m 20 \
