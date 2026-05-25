@@ -82,6 +82,117 @@ docker run -it \
 source ~/.bashrc
 ```
 # Usage
+
+## Realtime NavFlow runner with overlay topic
+
+`run_navflow_realsense_vis.py` 和 `run_navflow_realsense_vis_goal.py` 都会订阅 RealSense 压缩图像和 odom，实时推理 NavFlow，并把预测轨迹画回图像。
+
+默认行为：
+- 开启 OpenCV 预览窗口，除非加 `--no_show_window`
+- 发布轨迹 overlay 图像话题，默认是 compressed JPEG
+- overlay 话题默认名：`/navflow/overlay/image_raw/compressed`
+- overlay 话题类型：`sensor_msgs/msg/CompressedImage`
+
+示例：
+
+```bash
+python run_navflow_realsense_vis.py \
+  --onnx onnx_ckpts/vint_point_goal.onnx \
+  --targets ./topomaps/odom_poses.txt
+```
+
+无窗口运行，但继续发布 compressed overlay：
+
+```bash
+python run_navflow_realsense_vis.py \
+  --onnx onnx_ckpts/vint_point_goal.onnx \
+  --targets ./topomaps/odom_poses.txt \
+  --no_show_window
+```
+
+关闭 overlay 图像话题发布：
+
+```bash
+python run_navflow_realsense_vis.py \
+  --onnx onnx_ckpts/vint_point_goal.onnx \
+  --targets ./topomaps/odom_poses.txt \
+  --no_publish_overlay
+```
+
+修改 overlay 话题名或 JPEG 质量：
+
+```bash
+python run_navflow_realsense_vis.py \
+  --onnx onnx_ckpts/vint_point_goal.onnx \
+  --targets ./topomaps/odom_poses.txt \
+  --overlay_topic /debug/navflow_overlay/compressed \
+  --overlay_jpeg_quality 90
+```
+
+如果需要发布 raw `sensor_msgs/msg/Image` 而不是 compressed：
+
+```bash
+python run_navflow_realsense_vis.py \
+  --onnx onnx_ckpts/vint_point_goal.onnx \
+  --targets ./topomaps/odom_poses.txt \
+  --overlay_transport raw
+```
+
+raw 默认话题为 `/navflow/overlay/image_raw`，compressed 默认话题为 `/navflow/overlay/image_raw/compressed`。
+
+## Offline GT odom trajectory overlay
+
+`tools/vis_odom_gt_video.py` 用于直接检查 `data_format` 数据集里的 GT odom。它会读取每个 clip 目录中的：
+
+- `frame_data.npy`
+- `front_pinhole_crop_resize.mp4`
+
+脚本按目录名去掉 `__clip_XXXX` 后分组，把同一个原视频的多个 clip 按编号合成为一个输出视频，并把未来一段 odom 轨迹投影到前视画面上。
+
+默认输入路径：
+
+```bash
+./data_format
+```
+
+默认输出路径：
+
+```bash
+Policy_part/vis/gt_odom_overlay/
+```
+
+查看分组但不渲染：
+
+```bash
+python tools/vis_odom_gt_video.py --dry-run
+```
+
+渲染全部视频组：
+
+```bash
+python tools/vis_odom_gt_video.py
+```
+
+只渲染某一个视频组：
+
+```bash
+python tools/vis_odom_gt_video.py --include 20260510_081025_2
+```
+
+常用可调参数：
+
+```bash
+python tools/vis_odom_gt_video.py \
+  --future-frames 120 \
+  --stride 5 \
+  --max-forward-m 20 \
+  --heading-smooth-window 8
+```
+
+其中 `future-frames` 控制每帧向后看的 odom horizon，`stride` 控制 waypoint 抽样间隔，`max-forward-m` 控制投影到画面上的最大前向距离。
+
+## Offline ONNX mp4 runner
+
 ```
 # test runner scripts
 python run_onnx_from_mp4.py --mp4 front/front.mp4 --onnx onnx_ckpts/s1_ours_coco_sft_stage2_goal_less.onnx --saveOverlay --sample_fps 5
