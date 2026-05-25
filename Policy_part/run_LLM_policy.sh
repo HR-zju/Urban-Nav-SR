@@ -27,6 +27,7 @@ tmux send-keys "tmux set -g mouse on" Enter
 # sleep 1
 tmux send-keys "docker exec -it ros1toros2 zsh" Enter
 sleep 1
+tmux send-keys "source /opt/ros/humble/setup.zsh" Enter
 tmux send-keys "ros2 launch realsense2_camera rs_launch.py \
     rgb_camera.color_profile:=640,360,30 \
     depth_module.depth_profile:=640,360,30 \
@@ -62,6 +63,7 @@ tmux send-keys "roslaunch joystick_control seekur_joy.launch" Enter
 tmux select-pane -t 4
 tmux send-keys "docker exec -it ros1toros2 zsh" Enter
 sleep 1
+tmux send-keys "source /opt/ros/humble/setup.zsh" Enter
 tmux send-keys "source /ros-humble-ros1-bridge/install/setup.zsh
 ros2 run ros1_bridge dynamic_bridge" Enter # change topic if necessary
 
@@ -69,6 +71,7 @@ ros2 run ros1_bridge dynamic_bridge" Enter # change topic if necessary
 tmux select-pane -t 5
 tmux send-keys "docker exec -it ros1toros2 zsh" Enter
 sleep 1
+tmux send-keys "source /opt/ros/humble/setup.zsh" Enter
 tmux send-keys "mamba activate foundation_policy" Enter
 tmux send-keys "cd /home/nuvo/SR/foundation-policy/Policy_part" Enter
 # 接收上位机LLM发来的目标点，并导航到目标点
@@ -80,6 +83,7 @@ tmux send-keys "python run_navflow_realsense_vis_goal.py --onnx onnx_ckpts/vint_
 tmux select-pane -t 6
 tmux send-keys "docker exec -it ros1toros2 zsh" Enter
 sleep 1
+tmux send-keys "source /opt/ros/humble/setup.zsh" Enter
 tmux send-keys "mamba activate foundation_policy" Enter
 tmux send-keys "cd /home/nuvo/SR/foundation-policy/Policy_part" Enter
 tmux send-keys "python pd_controller_ros2_new2.py" Enter 
