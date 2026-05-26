@@ -511,13 +511,13 @@ class RealSenseNavflowNode(Node):
         # Odom subscriptions
         self.localodom_sub = self.create_subscription(
             Odometry,
-            "/baton/stereo3/odometry",
+            "/globalEstimator/global_odometry",
             self.localodom_callback,
             20,
         )
         self.odom_sub = self.create_subscription(
             Odometry,
-            "/baton/stereo3/odometry",
+            "/globalEstimator/global_odometry",
             self.odom_callback,
             100,
         )
@@ -525,7 +525,7 @@ class RealSenseNavflowNode(Node):
         # RealSense compressed image subscription
         self.image_sub = self.create_subscription(
             CompressedImage,
-            "/camera_x001/image_raw/compressed",
+            "/camera/camera/color/image_raw/compressed",
             self.image_callback,
             10,
         )
