@@ -78,8 +78,8 @@ tmux send-keys "cd /home/nuvo/SR/foundation-policy/Policy_part" Enter
 # tmux send-keys "python run_navflow_realsense_vis.py --onnx onnx_ckpts/vint_goal_free.onnx --no_show_window" Enter
 # tmux send-keys "python run_navflow_realsense_vis_goal.py --onnx onnx_ckpts/vint_point_goal.onnx --targets ./topomaps/LLM_Policy/LLM_UTM_odom_poses.txt --no_show_window" Enter
 
-# tmux send-keys "python run_navflow_realsense_vis.py --onnx onnx_ckpts/vint_goal_free_full_resume_1e-4.onnx --no_show_window" Enter
-tmux send-keys "python run_navflow_realsense_vis_goal.py --onnx onnx_ckpts/vint_goal_conditioned_full_resume_mask90_1e-4.onnx --targets ./topomaps/LLM_Policy/LLM_UTM_odom_poses.txt --no_show_window" Enter
+# tmux send-keys "python run_navflow_realsense_vis.py --onnx onnx_ckpts/vint_goal_free.onnx --no_show_window" Enter
+tmux send-keys "python run_navflow_realsense_vis_goal.py --onnx onnx_ckpts/vint_goal_conditioned.onnx --targets ./topomaps/LLM_Policy/LLM_UTM_odom_poses.txt --no_show_window" Enter
 
 # run pd controller in pane 6
 tmux select-pane -t 6
