@@ -41,6 +41,10 @@ def _calculate_heading_from_gps(
     lat1: float, lng1: float, lat2: float, lng2: float
 ) -> float:
     """Calculate compass heading (0=North, clockwise) from two GPS points."""
+    # Check if points are the same (no movement)
+    if abs(lat1 - lat2) < 1e-7 and abs(lng1 - lng2) < 1e-7:
+        return 0.0
+
     d_lon = math.radians(lng2 - lng1)
     lat1_r = math.radians(lat1)
     lat2_r = math.radians(lat2)
@@ -150,6 +154,18 @@ def process_sidewalk_ride(
     print(f"Processing: {sidewalk_dir.name}")
     print(f"{'='*60}")
 
+    # Check if BEV video already exists - skip if yes
+    bev_video_path = sidewalk_dir / "bev_video.mp4"
+    if bev_video_path.exists():
+        print(f"BEV video already exists: {bev_video_path}")
+        print("Skipping...")
+        # Check if we have samples.json to return
+        samples_json = output_dir / "samples.json"
+        if samples_json.exists():
+            import json
+            return json.loads(samples_json.read_text())
+        return []
+
     # Load npy files
     gps_arr = np.load(sidewalk_dir / "frame_gps.npy")
     ori_arr = np.load(sidewalk_dir / "frame_orientations.npy")
@@ -182,6 +198,21 @@ def process_sidewalk_ride(
 
     # Step 2: Build trajectory
     trajectory = []
+    # First find a valid heading from GPS
+    valid_headings = []
+    for i in range(len(selected_indices) - 1):
+        idx1 = selected_indices[i]
+        idx2 = selected_indices[i + 1]
+        lat1 = float(gps_arr[idx1, 0])
+        lng1 = float(gps_arr[idx1, 1])
+        lat2 = float(gps_arr[idx2, 0])
+        lng2 = float(gps_arr[idx2, 1])
+        if (not math.isnan(lat1) and not math.isnan(lng1) and
+            not math.isnan(lat2) and not math.isnan(lng2)):
+            h = _calculate_heading_from_gps(lat1, lng1, lat2, lng2)
+            valid_headings.append(h)
+    default_heading = valid_headings[0] if valid_headings else 0.0
+
     for img_idx, (img_path, data_idx) in enumerate(zip(extracted_frames, selected_indices)):
         # GPS format looks like: [lat, lng, alt, ?, ?]
         lat = float(gps_arr[data_idx, 0])
@@ -200,8 +231,12 @@ def process_sidewalk_ride(
             # Use previous heading (same direction)
             heading_deg = _calculate_heading_from_gps(prev_lat, prev_lng, lat, lng)
         else:
-            # Only one point - default to 0
-            heading_deg = 0.0
+            # Only one point - default to first valid heading or 0
+            heading_deg = default_heading
+
+        # Fallback if heading is NaN
+        if math.isnan(heading_deg):
+            heading_deg = default_heading
 
         # Still get roll/pitch from quaternion (though they're 0)
         qx = float(ori_arr[data_idx, 0])
@@ -327,7 +362,7 @@ def main():
     parser.add_argument(
         "--sample-fps",
         type=float,
-        default=1.0,
+        default=20.0,
         help="Sampling rate for frames",
     )
     parser.add_argument(
