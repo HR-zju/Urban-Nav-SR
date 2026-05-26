@@ -45,7 +45,6 @@ from std_msgs.msg import Bool, Float32MultiArray
 import ast
 
 import matplotlib
-import math
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
@@ -512,13 +511,13 @@ class RealSenseNavflowNode(Node):
         # Odom subscriptions
         self.localodom_sub = self.create_subscription(
             Odometry,
-            "/globalEstimator/global_odometry",
+            "/baton/stereo3/odometry",
             self.localodom_callback,
             20,
         )
         self.odom_sub = self.create_subscription(
             Odometry,
-            "/globalEstimator/global_odometry",
+            "/baton/stereo3/odometry",
             self.odom_callback,
             100,
         )
@@ -526,7 +525,7 @@ class RealSenseNavflowNode(Node):
         # RealSense compressed image subscription
         self.image_sub = self.create_subscription(
             CompressedImage,
-            "/camera/camera/color/image_raw/compressed",
+            "/camera_x001/image_raw/compressed",
             self.image_callback,
             10,
         )
@@ -564,24 +563,12 @@ class RealSenseNavflowNode(Node):
         try:
             with self.lock:
                 self.localpose_buffer.append((msg.header.stamp, msg.pose))
-
-                if not self.goal_reached and len(self.target_xy) > 0:
-                    dx = self.target_xy[0][0] - msg.pose.pose.position.x
-                    dy = self.target_xy[0][1] - msg.pose.pose.position.y
-                    pose_diff = math.sqrt(dx ** 2 + dy ** 2)
-
-                    if pose_diff < self.distance_threshold:
-                        if len(self.target_xy) > 1:
-                            del self.target_xy[0]
-                            self.get_logger().info(
-                                f"Reached current target, {len(self.target_xy)} targets remaining"
-                            )
-                        else:
-                            self.goal_reached = True
-                            self.get_logger().info("Reached final target")
+                # Goal-free runner: targets may still be loaded for legacy
+                # pose transforms, but they must never stop the controller.
+                self.goal_reached = False
 
             reached_goal_msg = Bool()
-            reached_goal_msg.data = bool(self.goal_reached)
+            reached_goal_msg.data = False
             self.goal_pub.publish(reached_goal_msg)
         except Exception as e:  # noqa: BLE001
             self.get_logger().error(f"Error in local odom callback: {e}")
@@ -962,12 +949,11 @@ class RealSenseNavflowNode(Node):
         # Snapshot shared state once to avoid races with localodom_callback.
         with self.lock:
             target_snapshot = list(self.target_xy)
-            goal_reached_snapshot = self.goal_reached
 
         if not target_snapshot:
             self.get_logger().warning("No target pose available, skip this batch")
             reached_goal_msg = Bool()
-            reached_goal_msg.data = bool(goal_reached_snapshot)
+            reached_goal_msg.data = False
             self.goal_pub.publish(reached_goal_msg)
             self.inference_event.clear()
             return
@@ -1184,7 +1170,7 @@ class RealSenseNavflowNode(Node):
 
         self.waypoint_pub.publish(waypoint_msg)
         reached_goal_msg = Bool()
-        reached_goal_msg.data = bool(self.goal_reached)
+        reached_goal_msg.data = False
         self.goal_pub.publish(reached_goal_msg)
         self.inference_event.clear()
 
