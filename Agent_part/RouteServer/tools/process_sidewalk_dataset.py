@@ -37,11 +37,22 @@ def _quaternion_to_euler_deg(*, x: float, y: float, z: float, w: float) -> tuple
     return math.degrees(roll), math.degrees(pitch), math.degrees(yaw)
 
 
-def _yaw_to_compass_heading(yaw_deg: float) -> float:
-    """Convert sidewalk dataset yaw to compass heading (0=North)."""
-    # Based on analysis: quaternion is [w, x, y, z], yaw from ENU
-    # The correct heading is (-yaw_deg) to convert to compass
-    compass_heading = (-float(yaw_deg)) % 360.0
+def _calculate_heading_from_gps(
+    lat1: float, lng1: float, lat2: float, lng2: float
+) -> float:
+    """Calculate compass heading (0=North, clockwise) from two GPS points."""
+    # Check if points are the same (no movement)
+    if abs(lat1 - lat2) < 1e-7 and abs(lng1 - lng2) < 1e-7:
+        return 0.0
+
+    d_lon = math.radians(lng2 - lng1)
+    lat1_r = math.radians(lat1)
+    lat2_r = math.radians(lat2)
+
+    y = math.sin(d_lon) * math.cos(lat2_r)
+    x = math.cos(lat1_r) * math.sin(lat2_r) - math.sin(lat1_r) * math.cos(lat2_r) * math.cos(d_lon)
+    bearing = math.degrees(math.atan2(y, x))
+    compass_heading = (bearing + 360.0) % 360.0
     return compass_heading
 
 
@@ -143,6 +154,18 @@ def process_sidewalk_ride(
     print(f"Processing: {sidewalk_dir.name}")
     print(f"{'='*60}")
 
+    # Check if BEV video already exists - skip if yes
+    bev_video_path = sidewalk_dir / "bev_video.mp4"
+    if bev_video_path.exists():
+        print(f"BEV video already exists: {bev_video_path}")
+        print("Skipping...")
+        # Check if we have samples.json to return
+        samples_json = output_dir / "samples.json"
+        if samples_json.exists():
+            import json
+            return json.loads(samples_json.read_text())
+        return []
+
     # Load npy files
     gps_arr = np.load(sidewalk_dir / "frame_gps.npy")
     ori_arr = np.load(sidewalk_dir / "frame_orientations.npy")
@@ -175,22 +198,52 @@ def process_sidewalk_ride(
 
     # Step 2: Build trajectory
     trajectory = []
+    # First find a valid heading from GPS
+    valid_headings = []
+    for i in range(len(selected_indices) - 1):
+        idx1 = selected_indices[i]
+        idx2 = selected_indices[i + 1]
+        lat1 = float(gps_arr[idx1, 0])
+        lng1 = float(gps_arr[idx1, 1])
+        lat2 = float(gps_arr[idx2, 0])
+        lng2 = float(gps_arr[idx2, 1])
+        if (not math.isnan(lat1) and not math.isnan(lng1) and
+            not math.isnan(lat2) and not math.isnan(lng2)):
+            h = _calculate_heading_from_gps(lat1, lng1, lat2, lng2)
+            valid_headings.append(h)
+    default_heading = valid_headings[0] if valid_headings else 0.0
+
     for img_idx, (img_path, data_idx) in enumerate(zip(extracted_frames, selected_indices)):
         # GPS format looks like: [lat, lng, alt, ?, ?]
         lat = float(gps_arr[data_idx, 0])
         lng = float(gps_arr[data_idx, 1])
 
-        # Orientation is quaternion [w, x, y, z]
-        qw = float(ori_arr[data_idx, 0])
-        qx = float(ori_arr[data_idx, 1])
-        qy = float(ori_arr[data_idx, 2])
-        qz = float(ori_arr[data_idx, 3])
+        # Calculate heading from GPS - use current point and next point (or previous if last)
+        if img_idx < len(selected_indices) - 1:
+            next_data_idx = selected_indices[img_idx + 1]
+            next_lat = float(gps_arr[next_data_idx, 0])
+            next_lng = float(gps_arr[next_data_idx, 1])
+            heading_deg = _calculate_heading_from_gps(lat, lng, next_lat, next_lng)
+        elif img_idx > 0:
+            prev_data_idx = selected_indices[img_idx - 1]
+            prev_lat = float(gps_arr[prev_data_idx, 0])
+            prev_lng = float(gps_arr[prev_data_idx, 1])
+            # Use previous heading (same direction)
+            heading_deg = _calculate_heading_from_gps(prev_lat, prev_lng, lat, lng)
+        else:
+            # Only one point - default to first valid heading or 0
+            heading_deg = default_heading
 
-        # Convert to euler
-        roll_deg, pitch_deg, yaw_deg = _quaternion_to_euler_deg(x=qx, y=qy, z=qz, w=qw)
+        # Fallback if heading is NaN
+        if math.isnan(heading_deg):
+            heading_deg = default_heading
 
-        # Convert to compass heading
-        heading_deg = _yaw_to_compass_heading(yaw_deg)
+        # Still get roll/pitch from quaternion (though they're 0)
+        qx = float(ori_arr[data_idx, 0])
+        qy = float(ori_arr[data_idx, 1])
+        qz = float(ori_arr[data_idx, 2])
+        qw = float(ori_arr[data_idx, 3])
+        roll_deg, pitch_deg, _ = _quaternion_to_euler_deg(x=qx, y=qy, z=qz, w=qw)
 
         # Rename image to be 000001.jpg style
         img_name = f"{img_idx+1:06d}.jpg"
@@ -206,7 +259,7 @@ def process_sidewalk_ride(
                 "lng": lng,
                 "heading_deg": heading_deg,
                 "image_path": str(final_img_path.resolve()),
-                "attitude_source": "sidewalk_npy",
+                "attitude_source": "gps",
                 "roll_deg": roll_deg,
                 "pitch_deg": pitch_deg,
             }
@@ -224,7 +277,7 @@ def process_sidewalk_ride(
     provider_config = MAP_PROVIDERS.get(map_provider, MAP_PROVIDERS["osm"])
     options = ProcessOptions(
         map_provider=map_provider,
-        output_size=512,
+        output_size=1024,
         zoom=19,
         cache_dir=Path("/tmp/bev_cache"),
         draw_trajectory=True,
@@ -309,7 +362,7 @@ def main():
     parser.add_argument(
         "--sample-fps",
         type=float,
-        default=1.0,
+        default=20.0,
         help="Sampling rate for frames",
     )
     parser.add_argument(
