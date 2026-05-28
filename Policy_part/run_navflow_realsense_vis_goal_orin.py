@@ -36,6 +36,7 @@ import rclpy
 import torch
 import torchvision.transforms.functional as TF
 from PIL import Image as PILImage
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from scipy.spatial.transform import Rotation as R
 from sensor_msgs.msg import CompressedImage, Image
@@ -1415,13 +1416,16 @@ def main():
         rclpy.spin(node)
     except KeyboardInterrupt:
         print("[ros] KeyboardInterrupt, shutting down...")
+    except ExternalShutdownException:
+        print("[ros] external shutdown, exiting...")
     finally:
         if async_writer is not None:
             async_writer.close()
         if args.show_window:
             cv2.destroyAllWindows()
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":
