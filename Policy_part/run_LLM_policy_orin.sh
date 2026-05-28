@@ -71,6 +71,6 @@ tmux send-keys "python pd_controller_ros2_new2.py" Enter
 tmux select-pane -t 7
 tmux send-keys "source /opt/ros/humble/setup.zsh" Enter
 tmux send-keys "cd ${policy_dir}" Enter
-tmux send-keys "ros2 bag record /image_raw /gps/fix /mfla/dr_odom /globalEstimator/global_odometry /navflow/overlay/image_raw" Enter
+tmux send-keys "ros2 bag record /image_raw /gps/fix /mfla/dr_odom /globalEstimator/global_odometry /navflow/overlay/image_raw"
 
 tmux -2 attach-session -t $session_name
