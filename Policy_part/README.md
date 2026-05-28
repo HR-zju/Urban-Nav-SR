@@ -83,6 +83,16 @@ source ~/.bashrc
 ```
 # Usage
 
+## Orin26 aarch64 deployment
+
+Orin26 uses a separate aarch64/Jetson deployment path from the local x86/RTX
+3090 environment. For the current ROS2 Humble launch flow, benchmarked
+ONNX/engine files, FPS numbers, TensorRT notes, and Conv fallback pitfall, see:
+
+```text
+Policy_part/ORIN26_DEPLOYMENT.md
+```
+
 ## Realtime NavFlow runner with overlay topic
 
 `run_navflow_realsense_vis.py` 和 `run_navflow_realsense_vis_goal.py` 都会订阅 RealSense 压缩图像和 odom，实时推理 NavFlow，并把预测轨迹画回图像。
