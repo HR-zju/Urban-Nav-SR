@@ -58,7 +58,7 @@ tmux send-keys "export NAVFLOW_DISABLE_TRT=0" Enter
 tmux send-keys "export NAVFLOW_TRT_FP16=1" Enter
 tmux send-keys "export NAVFLOW_TRT_BUILDER_OPT_LEVEL=0" Enter
 tmux send-keys "export NAVFLOW_TRT_ENGINE_CACHE=/home/orin26/.cache/navflow_ort_trt_static224_fp16" Enter
-tmux send-keys "python run_navflow_realsense_vis_goal_orin.py --onnx onnx_ckpts/vint_goal_conditioned_orin_static224.onnx --targets ./topomaps/LLM_Policy/LLM_UTM_odom_poses.txt --image_topic /image_raw --image_transport raw --no_show_window" Enter
+tmux send-keys "python run_navflow_realsense_vis_goal_orin.py --onnx onnx_ckpts/vint_goal_conditioned_orin_static224.onnx --targets ./topomaps/LLM_Policy/LLM_UTM_odom_poses.txt --image_topic /image_raw --image_transport raw --overlay_transport compressed --no_show_window" Enter
 
 # PD controller
 tmux select-pane -t 6
@@ -71,6 +71,6 @@ tmux send-keys "python pd_controller_ros2_new2.py" Enter
 tmux select-pane -t 7
 tmux send-keys "source /opt/ros/humble/setup.zsh" Enter
 tmux send-keys "cd ${policy_dir}" Enter
-tmux send-keys "ros2 bag record /image_raw /gps/fix /mfla/dr_odom /globalEstimator/global_odometry /navflow/overlay/image_raw"
+tmux send-keys "ros2 bag record /image_raw /gps/fix /mfla/dr_odom /globalEstimator/global_odometry /navflow/overlay/image_raw/compressed" Enter
 
 tmux -2 attach-session -t $session_name

@@ -513,8 +513,8 @@ class RealSenseNavflowNode(Node):
         save_vis: bool = False,
         show_window: bool = True,
         publish_overlay: bool = True,
-        overlay_topic: str = "/navflow/overlay/image_raw",
-        overlay_transport: str = "raw",
+        overlay_topic: str = "/navflow/overlay/image_raw/compressed",
+        overlay_transport: str = "compressed",
         overlay_jpeg_quality: int = 85,
         overlay_camera_pitch_deg: float = 8.0,
         image_topic: str = "/image_raw",
@@ -1327,7 +1327,7 @@ def parse_args():
         "--overlay_transport",
         type=str,
         choices=("compressed", "raw"),
-        default="raw",
+        default="compressed",
         help="Publish overlay as sensor_msgs/CompressedImage or raw sensor_msgs/Image",
     )
     parser.add_argument(
