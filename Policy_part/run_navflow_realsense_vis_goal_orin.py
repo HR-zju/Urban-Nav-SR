@@ -109,15 +109,26 @@ def create_onnx_session(model_path: str) -> ort.InferenceSession:
     }
 
     if not disable_trt and "TensorrtExecutionProvider" in available_providers:
+        trt_fp16 = os.environ.get("NAVFLOW_TRT_FP16", "1").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
         providers.append("TensorrtExecutionProvider")
         provider_options.append(
             {
                 "trt_engine_cache_enable": "True",
                 "trt_engine_cache_path": os.environ.get(
                     "NAVFLOW_TRT_ENGINE_CACHE",
-                    os.path.expanduser("~/.cache/navflow_trt"),
+                    os.path.expanduser("~/.cache/navflow_ort_trt_fp16_fast"),
                 ),
                 "trt_max_workspace_size": str(gpu_mem_limit),
+                "trt_fp16_enable": "True" if trt_fp16 else "False",
+                "trt_builder_optimization_level": os.environ.get(
+                    "NAVFLOW_TRT_BUILDER_OPT_LEVEL",
+                    "0",
+                ),
             }
         )
 
@@ -127,7 +138,10 @@ def create_onnx_session(model_path: str) -> ort.InferenceSession:
             {
                 "gpu_mem_limit": str(gpu_mem_limit),
                 "arena_extend_strategy": "kSameAsRequested",
-                "cudnn_conv_algo_search": "DEFAULT",
+                "cudnn_conv_algo_search": os.environ.get(
+                    "NAVFLOW_CUDNN_CONV_ALGO_SEARCH",
+                    "EXHAUSTIVE",
+                ),
             }
         )
 
@@ -513,6 +527,7 @@ class RealSenseNavflowNode(Node):
         self.session = session
         self.device = device
         self.model_input_names = [inp.name for inp in self.session.get_inputs()]
+        self.model_image_h, self.model_image_w = self.resolve_model_image_shape()
         self.target_xy = target_xy
         self.distance_threshold = distance_threshold
         self.frames = frames
@@ -615,10 +630,16 @@ class RealSenseNavflowNode(Node):
         )
 
         self.get_logger().info(f"ONNX input names: {self.model_input_names}")
+        self.get_logger().info(
+            f"Model image input size: {self.model_image_w}x{self.model_image_h}"
+        )
 
         self.get_logger().info("Warming up ONNX model (this may take 10+ seconds)...")
         # 构建一个全 0 的 dummy 输入
-        dummy_obs = np.zeros((1, self.frames, 3, 288, 512), dtype=np.float32)
+        dummy_obs = np.zeros(
+            (1, self.frames, 3, self.model_image_h, self.model_image_w),
+            dtype=np.float32,
+        )
         dummy_goal = np.array([[0.1, 1.0, 0.0]], dtype=np.float32)
         try:
             warmup_feed = self.build_onnx_feed(dummy_obs, dummy_goal)
@@ -745,10 +766,27 @@ class RealSenseNavflowNode(Node):
         image_data = np.frombuffer(msg.data, dtype=np.uint8)
         return cv2.imdecode(image_data, cv2.IMREAD_COLOR)
 
-    @staticmethod
-    def preprocess_model_frame_rgb(image_rgb: np.ndarray) -> torch.Tensor:
-        img_np = cv2.resize(image_rgb, (512, 288), interpolation=cv2.INTER_LINEAR)
-        return torch.from_numpy(img_np).permute(2, 0, 1).float() / 255.0
+    def resolve_model_image_shape(self) -> tuple[int, int]:
+        for inp in self.session.get_inputs():
+            if inp.name == "observation":
+                shape = list(inp.shape)
+                break
+        else:
+            shape = list(self.session.get_inputs()[0].shape) if self.session.get_inputs() else []
+
+        if len(shape) >= 5:
+            h_dim, w_dim = shape[-2], shape[-1]
+            if isinstance(h_dim, (int, np.integer)) and isinstance(w_dim, (int, np.integer)):
+                return int(h_dim), int(w_dim)
+        return 288, 512
+
+    def preprocess_model_frame_rgb(self, image_rgb: np.ndarray) -> np.ndarray:
+        img_np = cv2.resize(
+            image_rgb,
+            (self.model_image_w, self.model_image_h),
+            interpolation=cv2.INTER_LINEAR,
+        )
+        return np.ascontiguousarray(img_np.transpose(2, 0, 1), dtype=np.float32) / 255.0
 
     def render_overlay_frame(self, frame_bgr: np.ndarray):
         frame_resized = cv2.resize(
@@ -848,11 +886,11 @@ class RealSenseNavflowNode(Node):
                 self.get_logger().warning("No pose yet for current image")
                 return
 
-            img_tensor = self.preprocess_model_frame_rgb(image_rgb)
+            img_chw = self.preprocess_model_frame_rgb(image_rgb)
 
             # Push into sliding window batch for ONNX thread at ~6 Hz.
             with self.lock:
-                self.image_batch.append((img_tensor, pose, localpose))
+                self.image_batch.append((img_chw, pose, localpose))
                 # Mark that a new frame has been appended so the
                 # processing thread can trigger a fresh ONNX run.
                 self.update_counter += 1
@@ -1025,7 +1063,7 @@ class RealSenseNavflowNode(Node):
     def process_batch(self, batch_snapshot):
         """Run ONNX on the latest batch and publish / cache waypoints.
 
-        `batch_snapshot` is a list of (img_tensor, pose, localpose) tuples.
+        `batch_snapshot` is a list of (image_chw_float32, pose, localpose) tuples.
         """
 
         self.get_logger().info(f"Processing batch of {len(batch_snapshot)} frames")
@@ -1033,12 +1071,12 @@ class RealSenseNavflowNode(Node):
             self.get_logger().warning("Empty batch snapshot, skip processing")
             return
 
-        snap_image, snap_pose, snap_localpose = batch_snapshot[-1]
+        snap_image_chw, snap_pose, snap_localpose = batch_snapshot[-1]
 
         image_list = []
         pose_list = []
-        for image, pose, _localpose in batch_snapshot:
-            image_list.append(image)
+        for image_chw, pose, _localpose in batch_snapshot:
+            image_list.append(image_chw)
             pose_list.append(
                 [
                     pose.pose.position.x,
@@ -1092,47 +1130,27 @@ class RealSenseNavflowNode(Node):
         self.get_logger().info(f"delta (x,y) = {target_diff[0][0], target_diff[0][1]}")
 
         transformed_input_positions = np.concatenate([post_odom, target_diff], axis=0)
-        step_scale = torch.tensor(
-            np.linalg.norm(np.diff(post_odom, axis=0), axis=1).mean()
-        )
-        step_scale = torch.clamp(step_scale, min=1e-2)
-        step_scale = torch.tensor(1)
         transformed_input_positions /= 0.25
 
-        video_frames = torch.stack(image_list, dim=0).unsqueeze(0)
-        input_positions = torch.tensor(transformed_input_positions).unsqueeze(0).to(self.device)
-
-        input_positions = input_positions.to(torch.float32).to(self.device)
-
-        goal = input_positions[:, -1, :].clone()
-        goal = torch.cat([goal[:, 1:2], -goal[:, 0:1]], dim=1).reshape(1, 2)
-        dis = torch.norm(goal, dim=1) * 0.25
-        goal[..., 0] = goal[..., 0].clamp(0.1, 200.0)
-        goal[..., 1] = goal[..., 1].clamp(-500.0, 500.0)
-
-        past_traj = torch.cat(
-            [
-                input_positions[:, :-2, 1:2],
-                -input_positions[:, :-2, 0:1],
-            ],
-            dim=2,
-        ).reshape(1, -1, 2) * 0.25
-        past_traj = torch.cat([past_traj], dim=1)
-
-        goal = torch.stack(
-            [
-                dis.clamp(0.1, 100.0) / 100.0,
-                torch.cos(torch.arctan2(goal[:, 1], goal[:, 0]).clamp(-torch.pi / 2.0, torch.pi / 2.0)),
-                torch.sin(torch.arctan2(goal[:, 1], goal[:, 0]).clamp(-torch.pi / 2.0, torch.pi / 2.0)),
-            ],
-            dim=-1,
+        observation = np.stack(image_list, axis=0)[np.newaxis, ...].astype(
+            np.float32,
+            copy=False,
         )
-
-        past_mask = torch.ones([1, self.frames]).float().to(self.device)
-        input_obs = video_frames[0]
+        goal_xy = transformed_input_positions[-1].astype(np.float32, copy=True)
+        goal = np.array([[goal_xy[1], -goal_xy[0]]], dtype=np.float32)
+        dis = np.linalg.norm(goal, axis=1) * 0.25
+        goal[:, 0] = np.clip(goal[:, 0], 0.1, 200.0)
+        goal[:, 1] = np.clip(goal[:, 1], -500.0, 500.0)
+        angle = np.clip(np.arctan2(goal[:, 1], goal[:, 0]), -np.pi / 2.0, np.pi / 2.0)
+        goal_point = np.stack(
+            [
+                np.clip(dis, 0.1, 100.0) / 100.0,
+                np.cos(angle),
+                np.sin(angle),
+            ],
+            axis=-1,
+        ).astype(np.float32)
         with torch.no_grad():
-            observation = input_obs.unsqueeze(0).cpu().numpy().astype(np.float32)
-            goal_point = goal.cpu().numpy().reshape(1, 3).astype(np.float32)
             onnx_feed = self.build_onnx_feed(observation, goal_point)
             t0 = time.perf_counter()
             output = self.session.run(None, onnx_feed)
@@ -1193,7 +1211,7 @@ class RealSenseNavflowNode(Node):
         if self.save_vis:
             
             # Save snapshot image + metadata for offline analysis.
-            img_np = snap_image.permute(1, 2, 0).detach().cpu().numpy()
+            img_np = np.transpose(snap_image_chw, (1, 2, 0))
             if img_np.dtype in (np.float32, np.float64):
                 img_np = (img_np * 255).astype(np.uint8)
 

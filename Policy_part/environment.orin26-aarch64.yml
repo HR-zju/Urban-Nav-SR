@@ -24,7 +24,7 @@
 #
 # Required JetPack runtime packages, not reproducible inside mamba:
 #   cuda-libraries-12-6 cuda-cupti-12-6 cuda-nvtx-12-6 nvidia-cudnn nvidia-tensorrt
-#   nvidia-l4t-dla-compiler
+#   nvidia-l4t-dla-compiler libnvinfer-bin
 #
 # Notes:
 #   * Do not install ROS1 for this setup. The ROS1 GPS/VINS source trees are kept

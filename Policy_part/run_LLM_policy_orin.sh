@@ -56,7 +56,10 @@ tmux send-keys "source /opt/ros/humble/setup.zsh" Enter
 tmux send-keys "source ${conda_setup} && conda activate foundation_nav" Enter
 tmux send-keys "cd ${policy_dir}" Enter
 tmux send-keys "export NAVFLOW_DISABLE_TRT=0" Enter
-tmux send-keys "python run_navflow_realsense_vis_goal_orin.py --onnx onnx_ckpts/vint_goal_conditioned_orin_shape.onnx --targets ./topomaps/LLM_Policy/LLM_UTM_odom_poses.txt --no_show_window" Enter
+tmux send-keys "export NAVFLOW_TRT_FP16=1" Enter
+tmux send-keys "export NAVFLOW_TRT_BUILDER_OPT_LEVEL=0" Enter
+tmux send-keys "export NAVFLOW_TRT_ENGINE_CACHE=/home/orin26/.cache/navflow_ort_trt_static224_fp16" Enter
+tmux send-keys "python run_navflow_realsense_vis_goal_orin.py --onnx onnx_ckpts/vint_goal_conditioned_orin_static224.onnx --targets ./topomaps/LLM_Policy/LLM_UTM_odom_poses.txt --no_show_window" Enter
 
 # PD controller
 tmux select-pane -t 6
