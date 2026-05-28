@@ -6,7 +6,7 @@ inference node) and reuses the visualization and asynchronous video writer
 patterns from `run_onnx_from_mp4.py`.
 
 Key features:
-- Subscribes to RealSense color compressed image and odometry.
+- Subscribes to RealSense color raw image and odometry by default.
 - Maintains a sliding window of 21 frames for ONNX inference.
 - Uses `project_waypoints_to_fisheye_image_with_polygon_new` to overlay
   predicted waypoints onto each incoming RGB frame.
@@ -20,6 +20,7 @@ producing a high-quality overlay video for later inspection.
 """
 
 import argparse
+import array
 import datetime
 import multiprocessing as mp
 import os
@@ -34,8 +35,6 @@ import numpy as np
 import onnxruntime as ort
 import rclpy
 import torch
-import torchvision.transforms.functional as TF
-from PIL import Image as PILImage
 from rclpy.node import Node
 from scipy.spatial.transform import Rotation as R
 from sensor_msgs.msg import CompressedImage, Image
@@ -500,10 +499,12 @@ class RealSenseNavflowNode(Node):
         save_vis: bool = False,
         show_window: bool = True,
         publish_overlay: bool = True,
-        overlay_topic: str = "/navflow/overlay/image_raw/compressed",
-        overlay_transport: str = "compressed",
+        overlay_topic: str = "/navflow/overlay/image_raw",
+        overlay_transport: str = "raw",
         overlay_jpeg_quality: int = 85,
         overlay_camera_pitch_deg: float = 8.0,
+        image_topic: str = "/camera/camera/color/image_raw",
+        image_transport: str = "raw",
         video_writer: Optional[AsyncVideoWriter] = None,
     ):
         super().__init__("navflow_realsense_runner")
@@ -521,6 +522,8 @@ class RealSenseNavflowNode(Node):
         self.overlay_transport = str(overlay_transport)
         self.overlay_jpeg_quality = int(np.clip(int(overlay_jpeg_quality), 1, 100))
         self.overlay_camera_pitch_deg = float(overlay_camera_pitch_deg)
+        self.image_topic = str(image_topic)
+        self.image_transport = str(image_transport)
         self.video_writer = video_writer
         self.window_name = "navflow_realsense_overlay"
         # Zero-overhead bypass when both recording and save_vis are disabled.
@@ -597,12 +600,16 @@ class RealSenseNavflowNode(Node):
             100,
         )
 
-        # RealSense compressed image subscription
+        # RealSense image subscription. Raw is the Orin default to avoid JPEG decode.
+        image_msg_type = CompressedImage if self.image_transport == "compressed" else Image
         self.image_sub = self.create_subscription(
-            CompressedImage,
-            "/camera/camera/color/image_raw/compressed",
+            image_msg_type,
+            self.image_topic,
             self.image_callback,
             10,
+        )
+        self.get_logger().info(
+            f"Subscribing image topic: {self.image_topic} ({self.image_transport})"
         )
 
         self.get_logger().info(f"ONNX input names: {self.model_input_names}")
@@ -691,6 +698,43 @@ class RealSenseNavflowNode(Node):
     # Image callback: capture, resize, push to batch, overlay, and record
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def raw_image_msg_to_rgb(msg: Image) -> np.ndarray:
+        encoding = msg.encoding.lower()
+        channels_by_encoding = {
+            "bgr8": 3,
+            "rgb8": 3,
+            "bgra8": 4,
+            "rgba8": 4,
+            "mono8": 1,
+        }
+        if encoding not in channels_by_encoding:
+            raise ValueError(f"Unsupported raw image encoding: {msg.encoding}")
+
+        channels = channels_by_encoding[encoding]
+        row = np.frombuffer(msg.data, dtype=np.uint8).reshape((msg.height, msg.step))
+        pixels = row[:, : msg.width * channels].reshape((msg.height, msg.width, channels))
+
+        if encoding == "rgb8":
+            return pixels.copy()
+        if encoding == "bgr8":
+            return cv2.cvtColor(pixels, cv2.COLOR_BGR2RGB)
+        if encoding == "bgra8":
+            return cv2.cvtColor(pixels, cv2.COLOR_BGRA2RGB)
+        if encoding == "rgba8":
+            return cv2.cvtColor(pixels, cv2.COLOR_RGBA2RGB)
+        return cv2.cvtColor(pixels, cv2.COLOR_GRAY2RGB)
+
+    @staticmethod
+    def compressed_image_msg_to_bgr(msg: CompressedImage) -> Optional[np.ndarray]:
+        image_data = np.frombuffer(msg.data, dtype=np.uint8)
+        return cv2.imdecode(image_data, cv2.IMREAD_COLOR)
+
+    @staticmethod
+    def preprocess_model_frame_rgb(image_rgb: np.ndarray) -> torch.Tensor:
+        img_np = cv2.resize(image_rgb, (512, 288), interpolation=cv2.INTER_LINEAR)
+        return torch.from_numpy(img_np).permute(2, 0, 1).float() / 255.0
+
     def render_overlay_frame(self, frame_bgr: np.ndarray):
         frame_resized = cv2.resize(
             frame_bgr,
@@ -723,7 +767,7 @@ class RealSenseNavflowNode(Node):
         msg.encoding = "bgr8"
         msg.is_bigendian = 0
         msg.step = int(frame_bgr.shape[1] * frame_bgr.shape[2])
-        msg.data = frame_bgr.tobytes()
+        msg.data = array.array("B", frame_bgr.tobytes())
         return msg
 
     def bgr_to_compressed_image_msg(self, frame_bgr: np.ndarray, header) -> Optional[CompressedImage]:
@@ -738,16 +782,21 @@ class RealSenseNavflowNode(Node):
         msg.data = encoded.tobytes()
         return msg
 
-    def image_callback(self, msg: CompressedImage):
+    def image_callback(self, msg):
         try:
-            # Decode compressed image
-            image_data = np.frombuffer(msg.data, dtype=np.uint8)
-            image_bgr = cv2.imdecode(image_data, cv2.IMREAD_COLOR)
-            if image_bgr is None:
-                self.get_logger().warning("Failed to decode compressed image")
-                return
+            image_bgr = None
+            if self.image_transport == "compressed":
+                image_bgr = self.compressed_image_msg_to_bgr(msg)
+                if image_bgr is None:
+                    self.get_logger().warning("Failed to decode image")
+                    return
+                image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+            else:
+                image_rgb = self.raw_image_msg_to_rgb(msg)
 
             if self.show_window or self.overlay_pub is not None:
+                if image_bgr is None:
+                    image_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
                 display_frame = self.render_overlay_frame(image_bgr)
                 if self.overlay_pub is not None:
                     if self.overlay_transport == "compressed":
@@ -768,6 +817,8 @@ class RealSenseNavflowNode(Node):
 
             # Record every incoming frame for video; no fixed-rate throttle.
             if self.enable_visualization and self.video_writer is not None:
+                if image_bgr is None:
+                    image_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
                 self.video_writer.write(image_bgr, self.last_wp_np, frame_time=current_time)
 
             # Only every ~6 Hz frame is preprocessed for the ONNX model; all
@@ -782,34 +833,7 @@ class RealSenseNavflowNode(Node):
                 self.get_logger().warning("No pose yet for current image")
                 return
 
-            # BGR -> RGB for model preprocessing
-            rgb_data = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-
-            # Resize via PIL to 1920x1080 (same as other runners)
-            pil_img = PILImage.fromarray(rgb_data, "RGB")
-            desired_height = 1080
-            desired_width = 1920
-            W, H = pil_img.size
-            scale_H, scale_W = desired_height / H, desired_width / W
-            new_H, new_W = int(H * scale_H), int(W * scale_W)
-            if (new_H, new_W) != (H, W):
-                pil_img = pil_img.resize((new_W, new_H), PILImage.BILINEAR)
-            img_np = np.array(pil_img)  # RGB, HxWx3
-
-            img_tensor = torch.from_numpy(img_np).permute(2, 0, 1).float() / 255.0
-            _, H_resized, W_resized = img_tensor.shape
-            pad_height = desired_height - H_resized
-            pad_width = desired_width - W_resized
-            if pad_height > 0 or pad_width > 0:
-                pad_top = pad_height // 2
-                pad_bottom = pad_height - pad_top
-                pad_left = pad_width // 2
-                pad_right = pad_width - pad_left
-                img_tensor = TF.pad(img_tensor, (pad_left, pad_top, pad_right, pad_bottom))
-            elif pad_height < 0 or pad_width < 0:
-                img_tensor = TF.center_crop(img_tensor, (desired_height, desired_width))
-
-            assert img_tensor.shape[1] == desired_height and img_tensor.shape[2] == desired_width
+            img_tensor = self.preprocess_model_frame_rgb(image_rgb)
 
             # Push into sliding window batch for ONNX thread at ~6 Hz.
             with self.lock:
@@ -1055,13 +1079,8 @@ class RealSenseNavflowNode(Node):
         step_scale = torch.tensor(1)
         transformed_input_positions /= 0.25
 
-        video_frames = torch.stack(image_list, dim=0).unsqueeze(0).to(self.device)
+        video_frames = torch.stack(image_list, dim=0).unsqueeze(0)
         input_positions = torch.tensor(transformed_input_positions).unsqueeze(0).to(self.device)
-
-        video_frames_raw = video_frames.clone()
-        video_frames_small = torch.nn.functional.interpolate(
-            video_frames_raw[0], (288, 512)
-        ).unsqueeze(0)
 
         input_positions = input_positions.to(torch.float32).to(self.device)
 
@@ -1092,9 +1111,7 @@ class RealSenseNavflowNode(Node):
         )
 
         past_mask = torch.ones([1, self.frames]).float().to(self.device)
-        video_frames_small = torch.cat([video_frames_small], dim=1)
-
-        input_obs = video_frames_small[0]
+        input_obs = video_frames[0]
         with torch.no_grad():
             observation = input_obs.unsqueeze(0).cpu().numpy().astype(np.float32)
             onnx_feed = self.build_onnx_feed(observation)
@@ -1307,7 +1324,7 @@ def parse_args():
         "--overlay_transport",
         type=str,
         choices=("compressed", "raw"),
-        default="compressed",
+        default="raw",
         help="Publish overlay as sensor_msgs/CompressedImage or raw sensor_msgs/Image",
     )
     parser.add_argument(
@@ -1332,6 +1349,19 @@ def parse_args():
         help="Disable publishing the rendered overlay image topic",
     )
     parser.add_argument(
+        "--image_topic",
+        type=str,
+        default=None,
+        help="Input image topic. Defaults depend on --image_transport.",
+    )
+    parser.add_argument(
+        "--image_transport",
+        type=str,
+        choices=("raw", "compressed"),
+        default="raw",
+        help="Subscribe to raw sensor_msgs/Image or sensor_msgs/CompressedImage.",
+    )
+    parser.add_argument(
         "--targets",
         type=str,
         default="odom_poses.txt",
@@ -1347,6 +1377,11 @@ def main():
             args.overlay_topic = "/navflow/overlay/image_raw/compressed"
         else:
             args.overlay_topic = "/navflow/overlay/image_raw"
+    if args.image_topic is None:
+        if args.image_transport == "compressed":
+            args.image_topic = "/camera/camera/color/image_raw/compressed"
+        else:
+            args.image_topic = "/camera/camera/color/image_raw"
 
     session = create_onnx_session(args.onnx)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -1390,6 +1425,8 @@ def main():
         overlay_transport=args.overlay_transport,
         overlay_jpeg_quality=args.overlay_jpeg_quality,
         overlay_camera_pitch_deg=args.overlay_camera_pitch_deg,
+        image_topic=args.image_topic,
+        image_transport=args.image_transport,
         video_writer=async_writer,
     )
 

@@ -55,7 +55,8 @@ tmux select-pane -t 5
 tmux send-keys "source /opt/ros/humble/setup.zsh" Enter
 tmux send-keys "source ${conda_setup} && conda activate foundation_nav" Enter
 tmux send-keys "cd ${policy_dir}" Enter
-tmux send-keys "python run_navflow_realsense_vis_goal_orin.py --onnx onnx_ckpts/vint_goal_conditioned.onnx --targets ./topomaps/LLM_Policy/LLM_UTM_odom_poses.txt --no_show_window" Enter
+tmux send-keys "export NAVFLOW_DISABLE_TRT=0" Enter
+tmux send-keys "python run_navflow_realsense_vis_goal_orin.py --onnx onnx_ckpts/vint_goal_conditioned_orin_shape.onnx --targets ./topomaps/LLM_Policy/LLM_UTM_odom_poses.txt --no_show_window" Enter
 
 # PD controller
 tmux select-pane -t 6
@@ -68,6 +69,6 @@ tmux send-keys "python pd_controller_ros2_new2.py" Enter
 tmux select-pane -t 7
 tmux send-keys "source /opt/ros/humble/setup.zsh" Enter
 tmux send-keys "cd ${policy_dir}" Enter
-tmux send-keys "ros2 bag record /camera/camera/color/image_raw/compressed /gps/fix /mfla/dr_odom /globalEstimator/global_odometry /navflow/overlay/image_raw/compressed" Enter
+tmux send-keys "ros2 bag record /camera/camera/color/image_raw /gps/fix /mfla/dr_odom /globalEstimator/global_odometry /navflow/overlay/image_raw" Enter
 
 tmux -2 attach-session -t $session_name
