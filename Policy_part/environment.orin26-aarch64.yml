@@ -1,0 +1,58 @@
+# orin26 foundation_nav runtime
+# Target: NVIDIA Jetson Orin, aarch64, Ubuntu 22.04, L4T R36.5.0 / JetPack 6.2.2 repo.
+#
+# Create the portable Python base:
+#   mamba env create -f Policy_part/environment.orin26-aarch64.yml
+#
+# Jetson-specific wheels are intentionally not listed below because generic
+# PyPI/conda resolution can pull x86 or non-Jetson CUDA builds. Install them
+# after the env is created:
+#   python -m pip install --index-url https://pypi.jetson-ai-lab.io/jp6/cu126 \
+#     torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0
+#   python -m pip install --index-url https://pypi.jetson-ai-lab.io/jp6/cu126 \
+#     onnxruntime-gpu==1.23.0
+#   python -m pip install pytorch-lightning==2.6.1
+#   python -m pip install --force-reinstall --no-deps numpy==1.26.4
+#
+# Required system packages, not reproducible inside mamba:
+#   ros-humble-desktop-full ros-humble-realsense2-camera ros-humble-rviz2
+#   ros-humble-rqt ros-humble-rqt-common-plugins ros-humble-cv-bridge
+#   ros-humble-image-transport ros-humble-tf2-tools ros-humble-rosbag2
+#   ros-humble-rosbag2-storage-mcap python3-colcon-common-extensions
+#   python3-rosdep python3-vcstool build-essential cmake git curl wget tmux htop tree
+#
+# Required JetPack runtime packages, not reproducible inside mamba:
+#   cuda-libraries-12-6 cuda-cupti-12-6 cuda-nvtx-12-6 nvidia-cudnn nvidia-tensorrt
+#   nvidia-l4t-dla-compiler
+#
+# Notes:
+#   * Do not install ROS1 for this setup. The ROS1 GPS/VINS source trees are kept
+#     in the repo only as legacy reference; use the ROS2 Python nodes under
+#     Policy_part/tools instead.
+#   * On orin26, ONNX Runtime GPU aborts at process exit in 15W mode when CPU4-7
+#     are offline. Use MAXN/25W after reboot, or temporarily online CPU4-7 before
+#     running navflow.
+#   * The current ViNT ONNX exports run on CUDAExecutionProvider. TensorRT is
+#     skipped by default with NAVFLOW_DISABLE_TRT=1 because these exports need
+#     additional ONNX shape inference before TensorRT can compile ScatterND subgraphs.
+name: foundation_nav
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - numpy=1.26.4
+  - scipy
+  - matplotlib
+  - pillow
+  - pyyaml
+  - tqdm
+  - six
+  - packaging
+  - protobuf
+  - sympy
+  - pyserial
+  - pip:
+      - coloredlogs
+      - flatbuffers
+      - opencv-python==4.10.0.84
