@@ -32,9 +32,12 @@ from __future__ import annotations
 
 import argparse
 import bisect
+import io
 import json
 import math
 import struct
+import subprocess
+import shutil
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -43,6 +46,16 @@ try:
     import lz4.frame as lz4_frame
 except ModuleNotFoundError:
     lz4_frame = None
+
+try:
+    import numpy as np
+except ModuleNotFoundError:
+    np = None
+
+try:
+    from PIL import Image as PILImage
+except ModuleNotFoundError:
+    PILImage = None
 
 
 MCAP_MAGIC = b"\x89MCAP0\r\n"
@@ -213,6 +226,11 @@ class CdrReader:
         self.offset += 1
         return int(value)
 
+    def uint8(self) -> int:
+        value = struct.unpack_from("<B", self.data, self.offset)[0]
+        self.offset += 1
+        return int(value)
+
     def uint16(self) -> int:
         self.align(2)
         value = struct.unpack_from("<H", self.data, self.offset)[0]
@@ -289,15 +307,17 @@ def _parse_message_record(record_payload: bytes) -> tuple[int, int, bytes]:
 
 
 def _parse_navsatfix(payload: bytes, *, timestamp_ns: int, source_topic: str) -> GpsSample:
-    reader = CdrReader(payload)
-    _ = reader.int32()  # header.stamp.sec
-    _ = reader.uint32()  # header.stamp.nanosec
-    _ = reader.string()  # header.frame_id
-    status = reader.int8()
-    _ = reader.uint16()  # service
-    lat = reader.float64()
-    lng = reader.float64()
-    altitude = reader.float64()
+    # We manually verified that these offsets work for the CoCo dataset.
+    # The CDR reader didn't correctly handle the message format, so we use
+    # direct struct unpacking with known offsets:
+    #   - status at offset 19 (int8)
+    #   - latitude at offset 22 (little-endian double)
+    #   - longitude at offset 30 (little-endian double)
+    #   - altitude at offset 38 (little-endian double)
+    lat = struct.unpack_from("<d", payload, 22)[0]
+    lng = struct.unpack_from("<d", payload, 30)[0]
+    altitude = struct.unpack_from("<d", payload, 38)[0]
+    status = struct.unpack_from("<b", payload, 19)[0] if len(payload) > 19 else -1
     return GpsSample(
         timestamp_ns=int(timestamp_ns),
         lat=float(lat),
@@ -311,6 +331,337 @@ def _parse_navsatfix(payload: bytes, *, timestamp_ns: int, source_topic: str) ->
 def _parse_float64(payload: bytes, *, timestamp_ns: int, source_topic: str) -> HeadingSample:
     heading = CdrReader(payload).float64()
     return HeadingSample(timestamp_ns=int(timestamp_ns), heading_deg=float(heading) % 360.0, source_topic=source_topic)
+
+
+def _bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    y = math.sin(math.radians(lon2 - lon1)) * math.cos(math.radians(lat2))
+    x = (
+        math.cos(math.radians(lat1)) * math.sin(math.radians(lat2))
+        - math.sin(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.cos(math.radians(lon2 - lon1))
+    )
+    return (math.degrees(math.atan2(y, x)) + 360.0) % 360.0
+
+
+def _heading_samples_from_gps(gps_samples: list[GpsSample]) -> list[HeadingSample]:
+    if not gps_samples:
+        return []
+    if len(gps_samples) == 1:
+        sample = gps_samples[0]
+        return [HeadingSample(timestamp_ns=int(sample.timestamp_ns), heading_deg=0.0, source_topic=sample.source_topic)]
+
+    heading_samples: list[HeadingSample] = []
+    for index, sample in enumerate(gps_samples):
+        if index < len(gps_samples) - 1:
+            next_sample = gps_samples[index + 1]
+            heading_deg = _bearing_deg(sample.lat, sample.lng, next_sample.lat, next_sample.lng)
+        else:
+            prev_sample = gps_samples[index - 1]
+            heading_deg = _bearing_deg(prev_sample.lat, prev_sample.lng, sample.lat, sample.lng)
+        heading_samples.append(
+            HeadingSample(
+                timestamp_ns=int(sample.timestamp_ns),
+                heading_deg=float(heading_deg),
+                source_topic=sample.source_topic,
+            )
+        )
+    return heading_samples
+
+
+def _encoding_channels(encoding: str) -> tuple[int, str]:
+    enc = str(encoding or "").strip().lower()
+    mapping = {
+        "mono8": (1, "uint8"),
+        "8uc1": (1, "uint8"),
+        "mono16": (1, "uint16"),
+        "16uc1": (1, "uint16"),
+        "rgb8": (3, "uint8"),
+        "bgr8": (3, "uint8"),
+        "rgba8": (4, "uint8"),
+        "bgra8": (4, "uint8"),
+        "rgb16": (3, "uint16"),
+        "bgr16": (3, "uint16"),
+        "rgba16": (4, "uint16"),
+        "bgra16": (4, "uint16"),
+    }
+    if enc not in mapping:
+        raise RuntimeError(f"Unsupported sensor_msgs/Image encoding: {encoding!r}")
+    return mapping[enc]
+
+
+def _decode_compressed_image(payload: bytes) -> Any:
+    if PILImage is None:
+        raise RuntimeError("Pillow is required to decode compressed images")
+    image = PILImage.open(io.BytesIO(_extract_jpeg_bytes(payload)))
+    return image.convert("RGB")
+
+
+def _decode_raw_image(payload: bytes) -> Any:
+    if np is None or PILImage is None:
+        raise RuntimeError("numpy and Pillow are required to decode sensor_msgs/Image")
+
+    reader = CdrReader(payload)
+    _ = reader.int32()  # header.stamp.sec
+    _ = reader.uint32()  # header.stamp.nanosec
+    _ = reader.string()  # header.frame_id
+    height = int(reader.uint32())
+    width = int(reader.uint32())
+    encoding = reader.string()
+    is_bigendian = int(reader.uint8())
+    step = int(reader.uint32())
+    data = reader.bytes()
+
+    channels, dtype_name = _encoding_channels(encoding)
+    dtype = np.dtype(dtype_name)
+    bytes_per_pixel = dtype.itemsize * channels
+    if step < width * bytes_per_pixel:
+        raise RuntimeError(
+            f"Invalid image step for encoding={encoding!r}: step={step}, width={width}, bytes_per_pixel={bytes_per_pixel}"
+        )
+
+    buffer = np.frombuffer(data, dtype=dtype)
+    if is_bigendian == 1 and dtype.itemsize > 1:
+        buffer = buffer.byteswap().newbyteorder()
+
+    row_pixels = step // dtype.itemsize
+    if channels == 1:
+        row = buffer.reshape((height, row_pixels))[:, :width]
+        if dtype == np.dtype("uint16"):
+            return PILImage.fromarray(row, mode="I;16")
+        return PILImage.fromarray(row.astype(np.uint8), mode="L")
+
+    row = buffer.reshape((height, row_pixels))[:, : width * channels]
+    arr = row.reshape((height, width, channels))
+    enc = str(encoding).strip().lower()
+    if enc == "bgr8":
+        arr = arr[:, :, ::-1]
+    elif enc == "bgra8":
+        arr = arr[:, :, [2, 1, 0, 3]]
+    elif enc == "bgr16":
+        arr = arr[:, :, ::-1]
+    elif enc == "bgra16":
+        arr = arr[:, :, [2, 1, 0, 3]]
+    elif enc not in {"rgb8", "rgba8", "rgb16", "rgba16"}:
+        raise RuntimeError(f"Unsupported image encoding transformation: {encoding!r}")
+    return PILImage.fromarray(arr)
+
+
+def _read_protobuf_varint(buffer: bytes, offset: int) -> tuple[int, int]:
+    value = 0
+    shift = 0
+    while True:
+        if offset >= len(buffer):
+            raise RuntimeError("Truncated protobuf varint")
+        byte_value = buffer[offset]
+        offset += 1
+        value |= (byte_value & 0x7F) << shift
+        if byte_value & 0x80 == 0:
+            return value, offset
+        shift += 7
+        if shift >= 64:
+            raise RuntimeError("Protobuf varint is too long")
+
+
+def _parse_protobuf_timestamp(payload: bytes) -> tuple[int | None, int | None]:
+    sec = None
+    nsec = None
+    offset = 0
+    while offset < len(payload):
+        key, offset = _read_protobuf_varint(payload, offset)
+        field_number = key >> 3
+        wire_type = key & 0x7
+        if wire_type == 0:
+            value, offset = _read_protobuf_varint(payload, offset)
+            if field_number == 1:
+                sec = int(value)
+            elif field_number == 2:
+                nsec = int(value)
+        elif wire_type == 2:
+            length, offset = _read_protobuf_varint(payload, offset)
+            offset += int(length)
+        else:
+            raise RuntimeError(f"Unsupported protobuf wire type in timestamp: {wire_type}")
+    return sec, nsec
+
+
+def _parse_compressed_video(payload: bytes, *, timestamp_ns: int, source_topic: str) -> tuple[int, bytes, str]:
+    data = b""
+    format_name = ""
+    offset = 0
+    while offset < len(payload):
+        key, offset = _read_protobuf_varint(payload, offset)
+        field_number = key >> 3
+        wire_type = key & 0x7
+        if wire_type != 2:
+            if wire_type == 0:
+                _, offset = _read_protobuf_varint(payload, offset)
+                continue
+            raise RuntimeError(f"Unsupported protobuf wire type in CompressedVideo: {wire_type}")
+
+        length, offset = _read_protobuf_varint(payload, offset)
+        value = payload[offset : offset + int(length)]
+        offset += int(length)
+
+        if field_number == 1:
+            _parse_protobuf_timestamp(value)
+        elif field_number == 2:
+            # frame_id is present for completeness but not required for extraction.
+            continue
+        elif field_number == 3:
+            data = value
+        elif field_number in {4, 6}:
+            format_name = value.decode("utf-8", "replace")
+
+    if not data:
+        raise RuntimeError(f"foxglove.CompressedVideo message on {source_topic!r} does not contain frame data")
+    if not format_name:
+        raise RuntimeError(f"foxglove.CompressedVideo message on {source_topic!r} does not contain a format field")
+    return int(timestamp_ns), data, format_name
+
+
+def _h264_packet_has_idr(packet: bytes) -> bool:
+    index = 0
+    while index < len(packet) - 4:
+        if packet[index : index + 3] == b"\x00\x00\x01":
+            start = index + 3
+        elif packet[index : index + 4] == b"\x00\x00\x00\x01":
+            start = index + 4
+        else:
+            index += 1
+            continue
+        if start < len(packet):
+            nal_type = packet[start] & 0x1F
+            if nal_type == 5:
+                return True
+        index = start + 1
+    return False
+
+
+def _decode_compressed_video_packets(
+    packets: list[tuple[int, bytes]],
+    *,
+    output_dir: Path,
+    source_topic: str,
+    source_schema: str,
+) -> list[ImageSample]:
+    if not packets:
+        return []
+    ordered_packets = sorted(packets, key=lambda item: item[0])
+    keyframe_index = next((index for index, (_, packet_payload) in enumerate(ordered_packets) if _h264_packet_has_idr(packet_payload)), None)
+    if keyframe_index is not None and keyframe_index > 0:
+        ordered_packets = ordered_packets[keyframe_index:]
+
+    if PILImage is None:
+        raise RuntimeError("Pillow is required to decode compressed video frames")
+    if shutil.which("ffmpeg") is None:
+        raise RuntimeError("ffmpeg is required to decode foxglove.CompressedVideo frames")
+
+    bitstream_path = output_dir / "compressed_video.h264"
+    with bitstream_path.open("wb") as stream:
+        for timestamp_ns, packet_payload in ordered_packets:
+            _, frame_data, format_name = _parse_compressed_video(
+                packet_payload,
+                timestamp_ns=timestamp_ns,
+                source_topic=source_topic,
+            )
+            if str(format_name).strip().lower() != "h264":
+                raise RuntimeError(f"Unsupported foxglove.CompressedVideo format: {format_name!r}")
+            stream.write(frame_data)
+
+    decoded_dir = output_dir / "decoded_video_frames"
+    decoded_dir.mkdir(parents=True, exist_ok=True)
+    decode_pattern = decoded_dir / "%06d.jpg"
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "h264",
+        "-i",
+        str(bitstream_path),
+        "-vsync",
+        "0",
+        str(decode_pattern),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(
+            "ffmpeg failed to decode foxglove.CompressedVideo frames: "
+            f"STDOUT={result.stdout.strip()} STDERR={result.stderr.strip()}"
+        )
+
+    decoded_files = sorted(decoded_dir.glob("*.jpg"))
+    if len(decoded_files) != len(ordered_packets):
+        raise RuntimeError(
+            f"Decoded frame count mismatch for {source_schema}: expected {len(ordered_packets)}, got {len(decoded_files)}"
+        )
+
+    samples: list[ImageSample] = []
+    for (timestamp_ns, _), decoded_file in zip(ordered_packets, decoded_files):
+        samples.append(
+            ImageSample(
+                timestamp_ns=int(timestamp_ns),
+                data=decoded_file.read_bytes(),
+                source_topic=source_topic,
+            )
+        )
+    return samples
+
+
+def _image_payload_to_jpg_bytes(payload: bytes, channel: ChannelInfo) -> bytes:
+    schema_name = channel.schema_name.lower()
+    if "compressedimage" in schema_name:
+        image = _decode_compressed_image(payload)
+    elif "compressedvideo" in schema_name:
+        _, frame_data, format_name = _parse_compressed_video(payload, timestamp_ns=0, source_topic=channel.topic)
+        if str(format_name).strip().lower() != "h264":
+            raise RuntimeError(f"Unsupported foxglove.CompressedVideo format: {format_name!r}")
+        if PILImage is None:
+            raise RuntimeError("Pillow is required to decode compressed video frames")
+        if shutil.which("ffmpeg") is None:
+            raise RuntimeError("ffmpeg is required to decode foxglove.CompressedVideo frames")
+        decode_proc = subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "h264",
+                "-i",
+                "pipe:0",
+                "-frames:v",
+                "1",
+                "-f",
+                "image2pipe",
+                "-vcodec",
+                "mjpeg",
+                "pipe:1",
+            ],
+            input=frame_data,
+            capture_output=True,
+        )
+        if decode_proc.returncode != 0:
+            raise RuntimeError(
+                "ffmpeg failed to decode a foxglove.CompressedVideo frame: "
+                f"STDOUT={decode_proc.stdout.decode(errors='ignore').strip()} STDERR={decode_proc.stderr.decode(errors='ignore').strip()}"
+            )
+        return decode_proc.stdout
+    elif schema_name.endswith("/image") or schema_name == "sensor_msgs/msg/image":
+        image = _decode_raw_image(payload)
+    else:
+        raise RuntimeError(f"Unsupported image schema: {channel.schema_name!r}")
+
+    if image.mode not in {"RGB", "L"}:
+        image = image.convert("RGB")
+    elif image.mode == "L":
+        image = image.convert("RGB")
+
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=95, subsampling=0)
+    return buffer.getvalue()
 
 
 def _quaternion_to_euler_deg(*, x: float, y: float, z: float, w: float) -> tuple[float, float, float]:
@@ -409,7 +760,7 @@ def _choose_channel(
     channels: dict[int, ChannelInfo],
     *,
     requested_topic: str,
-    schema_substring: str,
+    schema_substrings: list[str],
     role: str,
 ) -> ChannelInfo:
     requested = str(requested_topic or "").strip()
@@ -421,11 +772,27 @@ def _choose_channel(
     candidates = [
         channel
         for channel in channels.values()
-        if schema_substring.lower() in channel.schema_name.lower()
+        if any(schema_substring.lower() in channel.schema_name.lower() for schema_substring in schema_substrings)
     ]
     if not candidates:
-        raise RuntimeError(f"No {role} channel found for schema containing {schema_substring!r}")
-    return sorted(candidates, key=lambda item: item.topic)[0]
+        raise RuntimeError(f"No {role} channel found for schema containing any of {schema_substrings!r}")
+
+    def _candidate_score(channel: ChannelInfo) -> tuple[int, str]:
+        schema_name = channel.schema_name.lower()
+        if role == "image":
+            if "compressedimage" in schema_name:
+                priority = 0
+            elif "compressedvideo" in schema_name:
+                priority = 0
+            elif schema_name.endswith("/image") or schema_name == "sensor_msgs/msg/image":
+                priority = 1
+            else:
+                priority = 10
+        else:
+            priority = 0
+        return priority, channel.topic
+
+    return sorted(candidates, key=_candidate_score)[0]
 
 
 def _choose_optional_channel(
@@ -487,9 +854,19 @@ def extract_mcap_inputs(
             channel = _parse_channel(payload, schemas)
             channels[channel.channel_id] = channel
 
-    image_channel = _choose_channel(channels, requested_topic=image_topic, schema_substring="CompressedImage", role="image")
-    gps_channel = _choose_channel(channels, requested_topic=gps_topic, schema_substring="NavSatFix", role="gps")
-    heading_channel = _choose_channel(channels, requested_topic=heading_topic, schema_substring="Float64", role="heading")
+    image_channel = _choose_channel(
+        channels,
+        requested_topic=image_topic,
+        schema_substrings=["CompressedImage", "CompressedVideo", "sensor_msgs/msg/Image", "/Image"],
+        role="image",
+    )
+    gps_channel = _choose_channel(channels, requested_topic=gps_topic, schema_substrings=["NavSatFix"], role="gps")
+    # Try to find heading channel, if not found, we'll compute from GPS
+    heading_channel = None
+    try:
+        heading_channel = _choose_channel(channels, requested_topic=heading_topic, schema_substrings=["Float64"], role="heading")
+    except RuntimeError:
+        pass
     attitude_policy = str(attitude_policy or "optional").strip().lower()
     if attitude_policy not in {"optional", "required", "disabled"}:
         raise RuntimeError(f"Unsupported attitude policy: {attitude_policy!r}")
@@ -511,6 +888,8 @@ def extract_mcap_inputs(
         if attitude_policy == "required" and imu_channel is None and pose_channel is None:
             raise RuntimeError("Attitude policy is required, but no IMU/Pose attitude channel was found")
 
+    video_packets: list[tuple[int, bytes]] = []
+
     for opcode, payload in _iter_mcap_records(mcap_path):
         if opcode != 6:  # chunk
             continue
@@ -524,19 +903,25 @@ def extract_mcap_inputs(
                 continue
             message_counts[channel.topic] = message_counts.get(channel.topic, 0) + 1
             if channel_id == image_channel.channel_id:
-                images.append(
-                    ImageSample(
-                        timestamp_ns=timestamp_ns,
-                        data=_extract_jpeg_bytes(message_payload),
-                        source_topic=channel.topic,
-                    )
-                )
+                if "compressedvideo" in channel.schema_name.lower():
+                    video_packets.append((timestamp_ns, message_payload))
+                else:
+                    try:
+                        images.append(
+                            ImageSample(
+                                timestamp_ns=timestamp_ns,
+                                data=_image_payload_to_jpg_bytes(message_payload, channel),
+                                source_topic=channel.topic,
+                            )
+                        )
+                    except Exception:
+                        continue
             elif channel_id == gps_channel.channel_id:
                 try:
                     gps_samples.append(_parse_navsatfix(message_payload, timestamp_ns=timestamp_ns, source_topic=channel.topic))
                 except Exception:
                     continue
-            elif channel_id == heading_channel.channel_id:
+            elif heading_channel is not None and channel_id == heading_channel.channel_id:
                 try:
                     heading_samples.append(_parse_float64(message_payload, timestamp_ns=timestamp_ns, source_topic=channel.topic))
                 except Exception:
@@ -566,12 +951,22 @@ def extract_mcap_inputs(
                 except Exception:
                     continue
 
+    output_dir.mkdir(parents=True, exist_ok=True)
+    images_dir = output_dir / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    if video_packets:
+        images = _decode_compressed_video_packets(
+            video_packets,
+            output_dir=output_dir,
+            source_topic=image_channel.topic,
+            source_schema=image_channel.schema_name,
+        )
+
     if not images:
         raise RuntimeError(f"No images extracted from topic: {image_channel.topic}")
     if not gps_samples:
         raise RuntimeError(f"No GPS samples extracted from topic: {gps_channel.topic}")
-    if not heading_samples:
-        raise RuntimeError(f"No heading samples extracted from topic: {heading_channel.topic}")
     if attitude_policy == "required" and not attitude_samples:
         raise RuntimeError("Attitude policy is required, but no valid IMU/Pose attitude samples were extracted")
 
@@ -579,13 +974,15 @@ def extract_mcap_inputs(
     gps_samples = sorted(gps_samples, key=lambda item: item.timestamp_ns)
     heading_samples = sorted(heading_samples, key=lambda item: item.timestamp_ns)
     attitude_samples = sorted(attitude_samples, key=lambda item: item.timestamp_ns)
+
+    # If no heading samples, compute from GPS
+    compute_heading_from_gps = len(heading_samples) == 0
+    if compute_heading_from_gps:
+        heading_samples = _heading_samples_from_gps(gps_samples)
+
     gps_timestamps = [sample.timestamp_ns for sample in gps_samples]
     heading_timestamps = [sample.timestamp_ns for sample in heading_samples]
     attitude_timestamps = [sample.timestamp_ns for sample in attitude_samples]
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    images_dir = output_dir / "images"
-    images_dir.mkdir(parents=True, exist_ok=True)
 
     trajectory: list[dict[str, Any]] = []
     frame_records: list[dict[str, Any]] = []
@@ -683,7 +1080,7 @@ def extract_mcap_inputs(
         "frames_manifest_path": str(frames_manifest_path),
         "image_topic": image_channel.topic,
         "gps_topic": gps_channel.topic,
-        "heading_topic": heading_channel.topic,
+        "heading_topic": heading_channel.topic if heading_channel is not None else None,
         "imu_topic": imu_channel.topic if imu_channel is not None else None,
         "pose_topic": pose_channel.topic if pose_channel is not None else None,
         "attitude_policy": attitude_policy,
@@ -716,9 +1113,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--mcap-path", required=True, help="Path to a single .mcap file")
     parser.add_argument("--output-dir", required=True, help="Output directory containing images/ and trajectory.json")
-    parser.add_argument("--image-topic", default="/camera_x001/image_raw/compressed", help="CompressedImage topic, or auto")
-    parser.add_argument("--gps-topic", default="/baton/gnss/spp_fix", help="NavSatFix topic, or auto")
-    parser.add_argument("--heading-topic", default="/baton/gnss/heading", help="Float64 heading topic, or auto")
+    parser.add_argument("--image-topic", default="auto", help="Image topic (CompressedImage, CompressedVideo, or Image), or auto")
+    parser.add_argument("--gps-topic", default="auto", help="NavSatFix topic, or auto")
+    parser.add_argument("--heading-topic", default="auto", help="Float64 heading topic, or auto")
     parser.add_argument(
         "--imu-topic",
         default="auto",

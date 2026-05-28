@@ -160,10 +160,9 @@ def process_sidewalk_ride(
         print(f"BEV video already exists: {bev_video_path}")
         print("Skipping...")
         # Check if we have samples.json to return
-        samples_json = output_dir / "samples.json"
-        if samples_json.exists():
-            import json
-            return json.loads(samples_json.read_text())
+        samples_json_path = output_dir / "samples.json"
+        if samples_json_path.exists():
+            return json.loads(samples_json_path.read_text())
         return []
 
     # Load npy files
@@ -245,10 +244,13 @@ def process_sidewalk_ride(
         qw = float(ori_arr[data_idx, 3])
         roll_deg, pitch_deg, _ = _quaternion_to_euler_deg(x=qx, y=qy, z=qz, w=qw)
 
-        # Rename image to be 000001.jpg style
-        img_name = f"{img_idx+1:06d}.jpg"
+        # Use original FPV frame index (data_idx) for filename
+        # This ensures alignment with InternNav's frame indexing
+        img_name = f"{data_idx:06d}.jpg"
         final_img_path = output_dir / "images" / img_name
         if img_path != final_img_path:
+            if final_img_path.exists():
+                final_img_path.unlink()
             img_path.rename(final_img_path)
 
         # Add to trajectory
@@ -351,7 +353,7 @@ def main():
         "--sidewalk-root",
         type=Path,
         default="/media/ubuntu/data1/SR-Nav Dataset/sidewalk/chunk_0",
-        help="Root of sidewalk dataset",
+        help="Root of sidewalk dataset, or a single ride directory",
     )
     parser.add_argument(
         "--output-root",
@@ -362,7 +364,7 @@ def main():
     parser.add_argument(
         "--sample-fps",
         type=float,
-        default=20.0,
+        default=2.0,
         help="Sampling rate for frames",
     )
     parser.add_argument(
@@ -379,18 +381,27 @@ def main():
     )
     args = parser.parse_args()
 
-    # Find all ride directories
+    # Check if sidewalk_root is a single ride directory (has frame_gps.npy and front.mp4)
     sidewalk_root = args.sidewalk_root
-    ride_dirs = sorted([d for d in sidewalk_root.iterdir() if d.is_dir()])
+    is_single_ride = (sidewalk_root / "frame_gps.npy").exists() and (sidewalk_root / "front.mp4").exists()
 
-    if args.ride_filter:
-        ride_dirs = [d for d in ride_dirs if args.ride_filter in d.name]
-
-    print(f"Found {len(ride_dirs)} rides to process")
+    ride_dirs = []
+    if is_single_ride:
+        ride_dirs = [sidewalk_root]
+        print(f"Processing single ride directory: {sidewalk_root.name}")
+    else:
+        # Find all ride directories
+        ride_dirs = sorted([d for d in sidewalk_root.iterdir() if d.is_dir()])
+        if args.ride_filter:
+            ride_dirs = [d for d in ride_dirs if args.ride_filter in d.name]
+        print(f"Found {len(ride_dirs)} rides to process")
 
     all_samples = []
     for ride_dir in ride_dirs:
-        output_dir = args.output_root / ride_dir.name
+        if is_single_ride:
+            output_dir = args.output_root
+        else:
+            output_dir = args.output_root / ride_dir.name
         try:
             samples = process_sidewalk_ride(
                 ride_dir,

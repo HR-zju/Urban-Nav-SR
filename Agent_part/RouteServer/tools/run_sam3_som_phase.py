@@ -1084,6 +1084,7 @@ def process_frame(
     clip_dir: Path,
     class_config: dict[str, list[str]],
     sigma_px: float = 24.0,
+    disable_route_support: bool = False,
 ) -> dict[str, Any]:
     """Process single frame to generate all Phase2 artifacts."""
     frame_name = frame.frame_name
@@ -1118,7 +1119,8 @@ def process_frame(
 
         _ensure_dir(fpv_seg_dir)
         _ensure_dir(som_dir)
-        _ensure_dir(route_support_dir)
+        if not disable_route_support:
+            _ensure_dir(route_support_dir)
 
         seg_summary, mask_uint16, affordance_mask = process_sam3_mask(
             mask_path=mask_path,
@@ -1162,27 +1164,28 @@ def process_frame(
         np.save(str(som_npy_path), som_labels.astype(np.int32))
         draw_som_overlay(frame.image_path, som_data, som_labels, som_overlay_path)
 
-        route_support_heatmap, route_support_metadata = generate_route_support(
-            frame=frame,
-            frames_by_name=frames_by_name,
-            mask=mask_uint16,
-            class_mapping=class_mapping,
-            class_config=class_config,
-            image_width=image_width,
-            image_height=image_height,
-            sigma_px=sigma_px,
-        )
+        if not disable_route_support:
+            route_support_heatmap, route_support_metadata = generate_route_support(
+                frame=frame,
+                frames_by_name=frames_by_name,
+                mask=mask_uint16,
+                class_mapping=class_mapping,
+                class_config=class_config,
+                image_width=image_width,
+                image_height=image_height,
+                sigma_px=sigma_px,
+            )
 
-        route_support_metadata["heatmap_path"] = f"{frame_idx_str}_route_support.npy"
-        route_support_metadata["route_trace"] = som_data["route_trace"]
+            route_support_metadata["heatmap_path"] = f"{frame_idx_str}_route_support.npy"
+            route_support_metadata["route_trace"] = som_data["route_trace"]
 
-        route_support_npy_path = route_support_dir / f"{frame_idx_str}_route_support.npy"
-        route_support_json_path = route_support_dir / f"{frame_idx_str}_route_support.json"
-        route_support_overlay_path = route_support_dir / f"{frame_idx_str}_overlay.jpg"
+            route_support_npy_path = route_support_dir / f"{frame_idx_str}_route_support.npy"
+            route_support_json_path = route_support_dir / f"{frame_idx_str}_route_support.json"
+            route_support_overlay_path = route_support_dir / f"{frame_idx_str}_overlay.jpg"
 
-        np.save(str(route_support_npy_path), route_support_heatmap.astype(np.float32))
-        route_support_json_path.write_text(json.dumps(route_support_metadata, ensure_ascii=False, indent=2), encoding="utf-8")
-        draw_route_support_overlay(frame.image_path, route_support_heatmap, route_support_overlay_path)
+            np.save(str(route_support_npy_path), route_support_heatmap.astype(np.float32))
+            route_support_json_path.write_text(json.dumps(route_support_metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+            draw_route_support_overlay(frame.image_path, route_support_heatmap, route_support_overlay_path)
 
         result["status"] = "ok"
         result["segmentation"] = {
@@ -1198,12 +1201,13 @@ def process_frame(
             "overlay_path": str(som_overlay_path),
             "region_count": len(som_data["regions"]),
         }
-        result["route_support"] = {
-            "npy_path": str(route_support_npy_path),
-            "json_path": str(route_support_json_path),
-            "overlay_path": str(route_support_overlay_path),
-            "valid": route_support_metadata["valid"],
-        }
+        if not disable_route_support:
+            result["route_support"] = {
+                "npy_path": str(route_support_npy_path),
+                "json_path": str(route_support_json_path),
+                "overlay_path": str(route_support_overlay_path),
+                "valid": route_support_metadata["valid"],
+            }
 
         print(f"[OK] Processed frame {frame_name}: {len(seg_summary['classes'])} classes, {len(som_data['regions'])} regions")
 
@@ -1223,6 +1227,7 @@ def generate_debug_videos(
     clip_dir: Path,
     frame_names: list[str],
     video_fps: int = 10,
+    disable_route_support: bool = False,
 ) -> dict[str, str]:
     """Generate debug visualization videos."""
     debug_video_dir = clip_dir / "debug_video"
@@ -1237,7 +1242,6 @@ def generate_debug_videos(
 
         fpv_seg_dir = clip_dir / "fpv_segmentation"
         som_dir = clip_dir / "som"
-        route_support_dir = clip_dir / "route_support"
 
         first_overlay = fpv_seg_dir / f"{first_frame}_overlay.jpg"
         if first_overlay.exists():
@@ -1264,15 +1268,17 @@ def generate_debug_videos(
             subprocess.run(cmd_som, check=True, capture_output=True)
             results["som_video"] = str(som_video_path)
 
-            route_support_video_path = debug_video_dir / "route_support_overlay.mp4"
-            route_input_pattern = str(route_support_dir / "%06d_overlay.jpg")
-            cmd_route = [
-                "ffmpeg", "-y", "-framerate", str(video_fps), "-i", route_input_pattern,
-                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-vf", f"scale={width}:{height}",
-                str(route_support_video_path),
-            ]
-            subprocess.run(cmd_route, check=True, capture_output=True)
-            results["route_support_video"] = str(route_support_video_path)
+            if not disable_route_support:
+                route_support_dir = clip_dir / "route_support"
+                route_support_video_path = debug_video_dir / "route_support_overlay.mp4"
+                route_input_pattern = str(route_support_dir / "%06d_overlay.jpg")
+                cmd_route = [
+                    "ffmpeg", "-y", "-framerate", str(video_fps), "-i", route_input_pattern,
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-vf", f"scale={width}:{height}",
+                    str(route_support_video_path),
+                ]
+                subprocess.run(cmd_route, check=True, capture_output=True)
+                results["route_support_video"] = str(route_support_video_path)
 
             print(f"[OK] Generated debug videos in {debug_video_dir}")
 
@@ -1395,6 +1401,7 @@ def process_single_clip(clip_dir: Path, args: argparse.Namespace, class_config: 
             clip_dir=clip_dir,
             class_config=class_config,
             sigma_px=args.sigma_px,
+            disable_route_support=args.disable_route_support,
         )
         frames_processed.append(result)
 
@@ -1414,6 +1421,7 @@ def process_single_clip(clip_dir: Path, args: argparse.Namespace, class_config: 
                     clip_dir=clip_dir,
                     frame_names=frame_indices,
                     video_fps=args.video_fps,
+                    disable_route_support=args.disable_route_support,
                 )
 
     if args.cleanup_temp:
@@ -1453,27 +1461,39 @@ def process_single_clip(clip_dir: Path, args: argparse.Namespace, class_config: 
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="SAM3 + SoM + RouteSupport 标注工具 - Phase2 完整格式")
-    parser.add_argument("--clip-dir", help="单个 clip 目录")
-    parser.add_argument("--sidewalk-root", help="Sidewalk 根目录（批量处理）")
-    parser.add_argument("--sidewalk-dir", help="Sidewalk 根目录（批量处理，别名）")
-    parser.add_argument("--run-sam3", action="store_true", help="运行 SAM3 推理")
-    parser.add_argument("--sam3-env-name", default="sam3", help="SAM3 conda 环境名")
-    parser.add_argument("--sam3-inference-script", default="/home/ubuntu/WorkSpace/project/SR/Code/sam3/scripts/batch_sam3_demo_260124.py", help="SAM3 推理脚本路径")
-    parser.add_argument("--gpus", type=int, nargs="+", default=[0], help="GPU IDs")
-    parser.add_argument("--min-score", type=float, default=0.3, help="SAM3 最小分数阈值")
-    parser.add_argument("--checkpoint-path", default=None, help="SAM3 checkpoint 路径")
-    parser.add_argument("--finetuned", action="store_true", help="使用 finetuned checkpoint")
-    parser.add_argument("--frame-start", type=int, default=None, help="起始帧 ID")
-    parser.add_argument("--frame-end", type=int, default=None, help="结束帧 ID")
-    parser.add_argument("--frame-step", type=int, default=1, help="帧采样步长")
-    parser.add_argument("--sample-fps", type=float, default=2.0, help="从 front.mp4 采样的帧率")
-    parser.add_argument("--generate-video", action="store_true", help="生成 debug_video mp4")
-    parser.add_argument("--video-fps", type=int, default=10, help="视频帧率")
-    parser.add_argument("--sigma-px", type=float, default=24.0, help="route_support 高斯 sigma")
-    parser.add_argument("--skip-existing", action="store_true", help="跳过已有结果的 clip")
-    parser.add_argument("--cleanup-temp", action="store_true", help="处理完成后删除临时 images/ 和 sam3_work/ 目录")
+    parser.add_argument("--clip-dir", "--clip_dir", dest="clip_dir", help="单个 clip 目录")
+    parser.add_argument("--sidewalk-root", "--sidewalk_root", dest="sidewalk_root", help="Sidewalk 根目录（批量处理）")
+    parser.add_argument("--sidewalk-dir", "--sidewalk_dir", dest="sidewalk_dir", help="Sidewalk 根目录（批量处理，别名）")
+    parser.add_argument("--run-sam3", "--run_sam3", dest="run_sam3", action="store_true", help="运行 SAM3 推理")
+    parser.add_argument("--sam3-env-name", "--sam3_env_name", dest="sam3_env_name", default="sam3", help="SAM3 conda 环境名")
+    parser.add_argument("--sam3-inference-script", "--sam3_inference_script", dest="sam3_inference_script", default="/home/ubuntu/WorkSpace/project/SR/Code/sam3/scripts/batch_sam3_demo_260124.py", help="SAM3 推理脚本路径")
+    parser.add_argument("--gpus", help="GPU IDs (兼容旧版字符串格式)")
+    parser.add_argument("--min-score", "--min_score", dest="min_score", type=float, default=0.3, help="SAM3 最小分数阈值")
+    parser.add_argument("--checkpoint-path", "--checkpoint_path", dest="checkpoint_path", default=None, help="SAM3 checkpoint 路径")
+    parser.add_argument("--finetuned", "--finetuned", dest="finetuned", action="store_true", help="使用 finetuned checkpoint (兼容性)")
+    parser.add_argument("--frame-start", "--frame_start", dest="frame_start", type=int, default=None, help="起始帧 ID")
+    parser.add_argument("--frame-end", "--frame_end", dest="frame_end", type=int, default=None, help="结束帧 ID")
+    parser.add_argument("--frame-step", "--frame_step", dest="frame_step", type=int, default=1, help="帧采样步长")
+    parser.add_argument("--sample-fps", "--sample_fps", dest="sample_fps", type=float, default=2.0, help="从 front.mp4 采样的帧率")
+    parser.add_argument("--generate-video", "--generate_video", dest="generate_video", action="store_true", help="生成 debug_video mp4")
+    parser.add_argument("--video-fps", "--video_fps", dest="video_fps", type=int, default=10, help="视频帧率")
+    parser.add_argument("--sigma-px", "--sigma_px", dest="sigma_px", type=float, default=24.0, help="route_support 高斯 sigma")
+    parser.add_argument("--skip-existing", "--skip_existing", dest="skip_existing", action="store_true", help="跳过已有结果的 clip")
+    parser.add_argument("--cleanup-temp", "--cleanup_temp", dest="cleanup_temp", action="store_true", help="处理完成后删除临时 images/ 和 sam3_work/ 目录")
     parser.add_argument("--mode", default="foot", help="模式（占位参数，兼容旧脚本）")
-    return parser.parse_args()
+    # 兼容性参数 - 被接受但忽略
+    parser.add_argument("--output_format", help="(兼容性 - 忽略)")
+    parser.add_argument("--disable_route_support", "--disable-route-support", dest="disable_route_support", action="store_true", help="(兼容性 - 忽略)")
+    args = parser.parse_args()
+
+    # 处理 --gpus 参数的兼容性
+    if args.gpus is not None:
+        if isinstance(args.gpus, str):
+            args.gpus = [int(x) for x in args.gpus.split(",")]
+    else:
+        args.gpus = [0]
+
+    return args
 
 
 def main() -> None:

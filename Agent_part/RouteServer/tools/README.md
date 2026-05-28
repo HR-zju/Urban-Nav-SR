@@ -23,8 +23,55 @@
 | 文件 | 说明 |
 |------|------|
 | `mcap_to_sidewalk_inputs.py` | MCAP 转 sidewalk 输入格式 |
+| `process_chunks_26_29.py` | 批量处理 chunk_26-29（支持并行） |
 | `process_realword_mcap.py` | 处理 realword MCAP |
 | `process_sidewalk_dataset.py` | 处理 sidewalk 数据集 |
+| `srnav_processor.py` | **封装模块** - 提供简洁 API 供其他项目调用 |
+| `srnav_processor_examples.py` | 封装模块使用示例 |
+
+#### Chunk 26-29 快速处理
+
+```bash
+# 基础转换（4 worker 并行）
+python process_chunks_26_29.py \
+    --chunks 26 27 28 29 \
+    --skip-existing \
+    --num-workers 4
+
+# 完整处理（含 BEV + Phase2）
+python process_chunks_26_29.py \
+    --chunks 26 27 28 29 \
+    --generate-bev \
+    --generate-phase2 \
+    --num-workers 4
+```
+
+**关键修复（2026-05-28）：**
+- NavSatFix 解析：修复 GPS 坐标乱码问题（改用手动偏移量）
+- 并行处理：支持 `--num-workers` 多进程加速
+
+### 在其他项目中调用（推荐）
+
+使用 `srnav_processor.py` 封装模块，提供简洁 API：
+
+```python
+# 在你的项目中添加路径
+import sys
+sys.path.insert(0, "/home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer/tools")
+
+# 方式 1: 快捷函数
+from srnav_processor import process_chunk, batch_process_chunks
+result = process_chunk("chunk_26", num_workers=4)
+results = batch_process_chunks(["chunk_26", "chunk_27"], num_workers=4)
+
+# 方式 2: 使用类
+from srnav_processor import SRNavProcessor, ProcessingConfig
+config = ProcessingConfig(num_workers=4, sample_fps=20.0)
+processor = SRNavProcessor(config)
+result = processor.process_chunk("chunk_26")
+```
+
+详细示例见 `srnav_processor_examples.py`
 
 ### 视觉提示
 
