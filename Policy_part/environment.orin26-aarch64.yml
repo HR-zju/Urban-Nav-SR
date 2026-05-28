@@ -13,6 +13,7 @@
 #     onnxruntime-gpu==1.23.0
 #   python -m pip install pytorch-lightning==2.6.1
 #   python -m pip install --force-reinstall --no-deps numpy==1.26.4
+#   python -m pip install onnx==1.18.0
 #
 # Required system packages, not reproducible inside mamba:
 #   ros-humble-desktop-full ros-humble-realsense2-camera ros-humble-rviz2
@@ -32,9 +33,11 @@
 #   * On orin26, ONNX Runtime GPU aborts at process exit in 15W mode when CPU4-7
 #     are offline. Use MAXN/25W after reboot, or temporarily online CPU4-7 before
 #     running navflow.
-#   * The current ViNT ONNX exports run on CUDAExecutionProvider. TensorRT is
-#     skipped by default with NAVFLOW_DISABLE_TRT=1 because these exports need
-#     additional ONNX shape inference before TensorRT can compile ScatterND subgraphs.
+#   * Use Policy_part/tools/export_orin_shape_onnx.py to generate
+#     *_orin_shape.onnx from the original ViNT exports. These shape-inferred
+#     files let ONNX Runtime use TensorrtExecutionProvider on Orin.
+#   * Set NAVFLOW_DISABLE_TRT=0 for *_orin_shape.onnx. Use NAVFLOW_DISABLE_TRT=1
+#     only when falling back to CUDAExecutionProvider with the original exports.
 name: foundation_nav
 channels:
   - conda-forge
@@ -55,4 +58,5 @@ dependencies:
   - pip:
       - coloredlogs
       - flatbuffers
+      - onnx==1.18.0
       - opencv-python==4.10.0.84
