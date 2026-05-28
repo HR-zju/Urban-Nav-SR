@@ -517,7 +517,7 @@ class RealSenseNavflowNode(Node):
         overlay_transport: str = "raw",
         overlay_jpeg_quality: int = 85,
         overlay_camera_pitch_deg: float = 8.0,
-        image_topic: str = "/camera/camera/color/image_raw",
+        image_topic: str = "/image_raw",
         image_transport: str = "raw",
         video_writer: Optional[AsyncVideoWriter] = None,
     ):
@@ -1384,7 +1384,7 @@ def main():
         if args.image_transport == "compressed":
             args.image_topic = "/camera/camera/color/image_raw/compressed"
         else:
-            args.image_topic = "/camera/camera/color/image_raw"
+            args.image_topic = "/image_raw"
 
     session = create_onnx_session(args.onnx)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
