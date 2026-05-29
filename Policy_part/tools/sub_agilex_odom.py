@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Bridge AgileX rosbridge odometry JSON to a ROS2 Odometry topic."""
+
 import argparse
 import asyncio
 import inspect
@@ -19,11 +21,12 @@ except ModuleNotFoundError:
 
 
 DEFAULT_URI = "ws://192.168.1.102:9090"
-DEFAULT_ROS_TOPIC = "/agilex/odom"
+DEFAULT_ROS_TOPIC = "/agilex/odom_filtered"
 DEFAULT_HEARTBEAT_INTERVAL = 2.0
 DEFAULT_CLIENT_ID = f"agilex{uuid.uuid4().hex[:8]}"
-DEFAULT_SUB_TOPIC = "/web_global_topic"
-DEFAULT_SUB_TYPE = "board_ros/WebGlobalTopic"
+DEFAULT_SUB_TOPIC = "/odom_filtered"
+DEFAULT_SUB_TYPE = "nav_msgs/Odometry"
+WEB_GLOBAL_SUB_TYPE = "board_ros/WebGlobalTopic"
 ODOM_SUB_TYPE = "nav_msgs/Odometry"
 
 
@@ -187,19 +190,22 @@ class AgileXOdomBridge(Node):
         self.get_logger().info(f"Publishing AgileX odometry to ROS2 topic: {ros_topic}")
 
     def publish_json_odom(self, data: dict[str, Any], sub_type: str, debug: bool = False) -> None:
-        if sub_type == DEFAULT_SUB_TYPE:
+        if sub_type == WEB_GLOBAL_SUB_TYPE:
             odom_msg = web_global_json_to_msg(data, self)
         else:
             odom_msg = odom_json_to_msg(data, self)
+
         pos = odom_msg.pose.pose.position
+        twist = odom_msg.twist.twist
         self.publisher.publish(odom_msg)
         self.publish_count += 1
         if debug or self.publish_count == 1 or self.publish_count % 50 == 0:
             self.get_logger().info(
                 f"Published odom #{self.publish_count}: "
+                f"topic={self.ros_topic}, "
                 f"frame_id={odom_msg.header.frame_id}, child_frame_id={odom_msg.child_frame_id}, "
                 f"x={pos.x:.3f}, y={pos.y:.3f}, z={pos.z:.3f}, "
-                f"linear={odom_msg.twist.twist.linear.x:.3f}, angular={odom_msg.twist.twist.angular.z:.3f}"
+                f"linear_x={twist.linear.x:.3f}, angular_z={twist.angular.z:.3f}"
             )
 
 
@@ -214,8 +220,7 @@ async def heartbeat_loop(websocket: Any, interval: float, client_id: str, debug:
             "id": client_id,
             "timeStamp": int(time.time() * 1000),
         }
-        heartbeat_text = json.dumps(heartbeat_msg)
-        await websocket.send(heartbeat_text)
+        await websocket.send(json.dumps(heartbeat_msg))
         debug_print(debug, "\nSent heartbeat message:")
         debug_print(debug, pretty_json(heartbeat_msg))
 
@@ -249,9 +254,9 @@ async def subscribe_odom(
 
     async with websockets.connect(uri, ping_interval=None, **connect_kwargs) as websocket:
         print(f"Connected to AgileX WebSocket: {uri}")
-        subscribe_text = json.dumps(subscribe_msg)
-        await websocket.send(subscribe_text)
+        await websocket.send(json.dumps(subscribe_msg))
         print(f"Subscribed WebSocket topic: {sub_topic} ({sub_type})")
+        print(f"Publishing ROS2 odom topic: {node.ros_topic}")
         debug_print(debug, "Sent subscribe message:")
         debug_print(debug, pretty_json(subscribe_msg))
 
@@ -293,7 +298,7 @@ async def subscribe_odom(
                     )
                     continue
 
-                if sub_type in (DEFAULT_SUB_TYPE, ODOM_SUB_TYPE):
+                if sub_type in (WEB_GLOBAL_SUB_TYPE, ODOM_SUB_TYPE):
                     node.publish_json_odom(data, sub_type, debug)
                     rclpy.spin_once(node, timeout_sec=0.0)
                 else:
@@ -310,7 +315,12 @@ async def subscribe_odom(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Subscribe AgileX /odom over WebSocket.")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Subscribe AgileX odometry over WebSocket and publish it as "
+            "ROS2 nav_msgs/Odometry."
+        )
+    )
     parser.add_argument(
         "--uri",
         default=DEFAULT_URI,

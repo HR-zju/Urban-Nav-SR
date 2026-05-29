@@ -593,26 +593,18 @@ class RealSenseNavflowNode(Node):
                 f"({self.overlay_transport})"
             )
 
-        # Autonomy enable flag
-        self.enable_2 = False
         self.goal_reached = False
-        self.autonomy_sub2 = self.create_subscription(
-            Bool,
-            "/cmd_vel/autonomy_enable",
-            self.button_b_callback,
-            10,
-        )
 
         # Odom subscriptions
         self.localodom_sub = self.create_subscription(
             Odometry,
-            "/globalEstimator/global_odometry",
+            "/agilex/odom_filtered", # "/globalEstimator/global_odometry",
             self.localodom_callback,
             20,
         )
         self.odom_sub = self.create_subscription(
             Odometry,
-            "/globalEstimator/global_odometry",
+            "/agilex/odom_filtered", # "/globalEstimator/global_odometry",
             self.odom_callback,
             100,
         )
@@ -658,12 +650,6 @@ class RealSenseNavflowNode(Node):
     # ------------------------------------------------------------------
     # Odom + pose handling
     # ------------------------------------------------------------------
-
-    def button_b_callback(self, msg: Bool):
-        try:
-            self.enable_2 = bool(msg.data)
-        except Exception:  # noqa: BLE001
-            self.enable_2 = False
 
     def localodom_callback(self, msg: Odometry):
         try:
@@ -1242,7 +1228,6 @@ class RealSenseNavflowNode(Node):
             ax2.grid(True)
             ax2.legend()
 
-            enable_state = np.array(self.enable_2)
             folder_path = os.path.join(_REPO_ROOT, "Policy_part", "vis", f"navflow{self.timestamp}")
             os.makedirs(folder_path, exist_ok=True)
             plt.savefig(os.path.join(folder_path, f"vis_{self.image_count}.png"))
@@ -1264,7 +1249,6 @@ class RealSenseNavflowNode(Node):
 
             np.save(os.path.join(folder_path, f"sample_{self.image_count}_traj.npy"), traj_raw)
             np.save(os.path.join(folder_path, f"sample_{self.image_count}_score.npy"), score_raw)
-            np.save(os.path.join(folder_path, f"sample_{self.image_count}_auto.npy"), enable_state)
             np.save(os.path.join(folder_path, f"sample_{self.image_count}_pose.npy"), pose_snapshot_np)
             np.save(
                 os.path.join(folder_path, f"sample_{self.image_count}_pose_aligned.npy"),

@@ -35,7 +35,7 @@ from run_onnx_from_mp4 import (
     choose_providers,
 )
 
-from pd_controller_ros2_new2 import pd_controller
+from Policy_part.tools.pd_controller_ros2_new2_agilex import pd_controller
 
 
 def parse_args():
