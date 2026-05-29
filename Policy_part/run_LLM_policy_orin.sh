@@ -25,29 +25,29 @@ tmux send-keys "source ${conda_setup} && conda activate foundation_nav" Enter
 tmux send-keys "cd ${policy_dir}" Enter
 tmux send-keys "python3 tools/usb_camera_node.py" Enter
 
-# GPS / NTRIP ROS2 node
-tmux select-pane -t 1
-tmux send-keys "source /opt/ros/humble/setup.zsh" Enter
-tmux send-keys "source ${conda_setup} && conda activate foundation_nav" Enter
-tmux send-keys "cd ${policy_dir}" Enter
-tmux send-keys "python3 tools/ros2_gps_ntrip_node.py" Enter
+# # GPS / NTRIP ROS2 node
+# tmux select-pane -t 1
+# tmux send-keys "source /opt/ros/humble/setup.zsh" Enter
+# tmux send-keys "source ${conda_setup} && conda activate foundation_nav" Enter
+# tmux send-keys "cd ${policy_dir}" Enter
+# tmux send-keys "python3 tools/ros2_gps_ntrip_node.py" Enter
 
-# VINS-fusion replacement ROS2 Python node
-tmux select-pane -t 2
-tmux send-keys "source /opt/ros/humble/setup.zsh" Enter
-tmux send-keys "source ${conda_setup} && conda activate foundation_nav" Enter
-tmux send-keys "cd ${policy_dir}" Enter
-tmux send-keys "python3 tools/ros2_vins_fusion_node.py" Enter
+# # VINS-fusion replacement ROS2 Python node
+# tmux select-pane -t 2
+# tmux send-keys "source /opt/ros/humble/setup.zsh" Enter
+# tmux send-keys "source ${conda_setup} && conda activate foundation_nav" Enter
+# tmux send-keys "cd ${policy_dir}" Enter
+# tmux send-keys "python3 tools/ros2_vins_fusion_node.py" Enter
 
-# Reserved for robot base / joystick bridge on Orin.
-tmux select-pane -t 3
-tmux send-keys "cd ${policy_dir}" Enter
-tmux send-keys "echo '[orin] pane reserved for robot base / joystick bridge'" Enter
+# # Reserved for robot base / joystick bridge on Orin.
+# tmux select-pane -t 3
+# tmux send-keys "cd ${policy_dir}" Enter
+# tmux send-keys "echo '[orin] pane reserved for robot base / joystick bridge'" Enter
 
 # ROS1 bridge is intentionally not started on Orin.
 tmux select-pane -t 4
 tmux send-keys "source /opt/ros/humble/setup.zsh" Enter
-tmux send-keys "echo '[orin] ROS1 bridge disabled; use ROS2 replacement nodes'" Enter
+tmux send-keys "python tools/sub_agilex_odom.py" Enter
 
 # NavFlow policy node
 tmux select-pane -t 5
