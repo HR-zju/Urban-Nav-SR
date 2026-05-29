@@ -19,12 +19,7 @@ msg_type = sys.argv[3]
 
 
 async def main() -> None:
-    request = {
-        "op": "subscribe",
-        "topic": topic,
-        "type": msg_type,
-    }
-
+    request = {"op": "subscribe", "topic": topic, "type": msg_type}
     connect_kwargs = {}
     if "proxy" in inspect.signature(websockets.connect).parameters:
         connect_kwargs["proxy"] = None
