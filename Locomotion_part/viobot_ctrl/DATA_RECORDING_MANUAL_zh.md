@@ -1,6 +1,6 @@
 # Viobot 录制手册
 
-面向已经部署好的viobot设备进行数据录制工作。相机服务和录包服务均已配置为开机自启动，使用时通常只需要上电、等待初始化完成、检查录制状态、停止录制和取数据，不需要重新安装服务或修改脚本。viobot当前ip地址配置为`192.168.137.231`，注意需要在同一网段才能访问，官方手册地址见[这里](https://baton-doc.readthedocs.io/en/viobot2/)。
+面向已经部署好的viobot设备进行数据录制工作。相机服务和录包服务均已配置为开机自启动，使用时通常只需要上电、等待初始化完成、检查录制状态、停止录制和取数据，不需要重新安装服务或修改脚本。viobot当前ip地址配置为`192.168.137.231`，用户名root，密码为PRR，注意需要在同一网段才能访问，官方手册地址见[这里](https://baton-doc.readthedocs.io/en/viobot2/)。
 
 ## 目录
 - [服务与数据位置](#服务与数据位置)
@@ -13,6 +13,7 @@
 - [查看数据与日志](#查看数据与日志)
 - [修复异常中断的 Bag](#修复异常中断的-bag)
 - [传输数据到本地](#传输数据到本地)
+- [传输数据到foxglove](#传输数据到foxglove)
 - [常见异常检查](#常见异常检查)
 
 ## 服务与数据位置
@@ -25,21 +26,21 @@
 默认数据目录：
 
 ```bash
-/root/record_data/
+/data/upload/
 ```
 
 单次录制目录命名：
 
 ```bash
-/root/record_data/bag_YYYYmmdd_HHMMSS
+/data/upload/bag_YYYYmmdd_HHMMSS
 ```
 
 主要日志：
 
 ```bash
-/root/record_data/log/cam.log
-/root/record_data/log/bag.log
-/root/record_data/log/monitor_<bag_name>/
+/data/upload/log/cam.log
+/data/upload/log/bag.log
+/data/upload/log/monitor_<bag_name>/
 ```
 
 默认录制话题：
@@ -74,7 +75,7 @@
 ### 1. 检查磁盘空间
 
 ```bash
-df -h /root/record_data
+df -h /data/upload
 ```
 
 如果空间不足，先转移或删除旧数据。
@@ -146,14 +147,14 @@ systemctl status ros2_viobot_cam.service
 systemctl status ros2_viobot_ctrl_bag.service
 ```
 
-如果录包服务正常运行，`/root/record_data` 下会自动出现新的 `bag_...` 目录。
+如果录包服务正常运行，`/data/upload` 下会自动出现新的 `bag_...` 目录。
 
 ## 确认录制正常
 
 ### 1. 看是否生成新的 bag 目录
 
 ```bash
-ls -lt /root/record_data | head
+ls -lt /data/upload | head
 ```
 
 最新目录应类似：
@@ -165,7 +166,7 @@ bag_20260521_153000
 ### 2. 看录包日志
 
 ```bash
-tail -n 80 /root/record_data/log/bag.log
+tail -n 80 /data/upload/log/bag.log
 ```
 
 确认没有明显的`timeout` 或 `failed`。
@@ -173,7 +174,7 @@ tail -n 80 /root/record_data/log/bag.log
 ### 3. 看相机日志
 
 ```bash
-tail -n 80 /root/record_data/log/cam.log
+tail -n 80 /data/upload/log/cam.log
 ```
 
 确认没有相机打开失败、连续超时或反复重启。
@@ -215,8 +216,8 @@ sudo systemctl restart ros2_viobot_ctrl_bag.service
 
 ```bash
 systemctl status ros2_viobot_ctrl_bag.service
-ls -lt /root/record_data | head
-tail -n 80 /root/record_data/log/bag.log
+ls -lt /data/upload | head
+tail -n 80 /data/upload/log/bag.log
 ```
 
 ## 停止录制
@@ -242,19 +243,19 @@ systemctl status ros2_viobot_cam.service
 ### 1. 查看最新数据
 
 ```bash
-ls -lt /root/record_data | head
+ls -lt /data/upload | head
 ```
 
 ### 2. 查看 bag 信息
 
 ```bash
-ros2 bag info /root/record_data/bag_YYYYmmdd_HHMMSS
+ros2 bag info /data/upload/bag_YYYYmmdd_HHMMSS
 ```
 
 ### 3. 查看 bag 文件大小
 
 ```bash
-ls -lh /root/record_data/bag_YYYYmmdd_HHMMSS
+ls -lh /data/upload/bag_YYYYmmdd_HHMMSS
 ```
 
 录制使用 MCAP，并按 60 秒分段。如果采集时间较长，目录中会有多个分段文件。
@@ -278,7 +279,7 @@ journalctl -u ros2_viobot_ctrl_bag.service -n 100 --no-pager
 如果设备断电、强制关机，或者`ros2 bag info`失败，可以运行修复脚本：
 
 ```bash
-bash /root/viobot_ctrl/bash/fix_bag.sh /root/record_data/bag_YYYYmmdd_HHMMSS
+bash /root/viobot_ctrl/bash/fix_bag.sh /data/upload/bag_YYYYmmdd_HHMMSS
 ```
 
 修复脚本会执行以下操作：
@@ -293,8 +294,12 @@ bash /root/viobot_ctrl/bash/fix_bag.sh /root/record_data/bag_YYYYmmdd_HHMMSS
 
 可以使用 `rsync` 从本地传输数据，viobot 设备 IP 地址为`192.168.137.231`：
 ```bash
-rsync -avz root@192.168.137.231:/root/record_data/ /path/to/local_data/
+rsync -avz root@192.168.137.231:/data/upload/bag_YYYYmmdd_HHMMSS /path/to/local_data/
 ```
+
+## 传输数据到foxglove
+
+设备配置了foxglove agent来自动上传数据到foxglove云端，上传后可以在foxglove web中查看和分析数据。
 
 
 ## 常见异常检查
@@ -305,13 +310,13 @@ rsync -avz root@192.168.137.231:/root/record_data/ /path/to/local_data/
 
 ```bash
 journalctl -u ros2_viobot_ctrl_bag.service -n 100 --no-pager
-tail -n 120 /root/record_data/log/bag.log
+tail -n 120 /data/upload/log/bag.log
 ```
 
 重点检查以下问题：
 
 - 是否等不到`stereo3_running`。
-- `/root/record_data` 是否空间不足。
+- `/data/upload` 是否空间不足。
 - 底层ROS启动服务是否正常。
 - `/baton/algo_status`是否有输出。
 
@@ -329,8 +334,8 @@ ros2 topic info /baton/stereo3_ctrl
 
 ```bash
 systemctl status ros2_viobot_ctrl_bag.service
-tail -n 120 /root/record_data/log/bag.log
-ls -lt /root/record_data | head
+tail -n 120 /data/upload/log/bag.log
+ls -lt /data/upload | head
 ```
 
 如果日志显示等待状态超时，说明录包还没真正开始。
@@ -340,5 +345,5 @@ ls -lt /root/record_data | head
 ```bash
 ros2 topic hz /camera_x001/image_raw/compressed
 ros2 topic echo /baton/gnss/status --once
-ls -lh /root/record_data/bag_YYYYmmdd_HHMMSS
+ls -lh /data/upload/bag_YYYYmmdd_HHMMSS
 ```
