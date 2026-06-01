@@ -257,8 +257,9 @@ def parse_waypoints_from_json(data, default_altitude):
 
 
 class GlobalOptimization:
-    def __init__(self, clock):
+    def __init__(self, clock, max_pose_count=200):
         self.clock = clock
+        self.max_pose_count = int(max_pose_count)
         self.local_pose_map = {}
         self.global_pose_map = {}
         self.gps_position_map = {}
@@ -291,12 +292,27 @@ class GlobalOptimization:
             self.global_pose_map[t] = np.concatenate((global_p, global_q))
             self.last_p = global_p
             self.last_q = global_q
+            self._prune_maps_locked()
             self._update_path_locked()
 
     def input_gps(self, t, latitude, longitude, altitude, pos_accuracy):
         xyz = self.gps_to_xyz(latitude, longitude, altitude)
-        self.gps_position_map[t] = np.array([xyz[0], xyz[1], xyz[2], max(pos_accuracy, 1e-6)], dtype=float)
-        self.new_gps = True
+        with self.lock:
+            self.gps_position_map[t] = np.array([xyz[0], xyz[1], xyz[2], max(pos_accuracy, 1e-6)], dtype=float)
+            self._prune_maps_locked()
+            self.new_gps = True
+
+    def _prune_maps_locked(self):
+        if self.max_pose_count <= 0 or len(self.local_pose_map) <= self.max_pose_count:
+            return
+        keep_times = set(sorted(self.local_pose_map.keys())[-self.max_pose_count:])
+        for mapping in (self.local_pose_map, self.global_pose_map):
+            for t in list(mapping.keys()):
+                if t not in keep_times:
+                    mapping.pop(t, None)
+        for t in list(self.gps_position_map.keys()):
+            if t not in keep_times:
+                self.gps_position_map.pop(t, None)
 
     def get_global_odom(self):
         with self.lock:
@@ -550,13 +566,19 @@ class GlobalFusionNode(Node):
         self.declare_parameter('vio_global_csv_path', '/home/nuvo/SR/foundation-policy/Policy_part/topomaps/LLM_Policy/gkj/output/vio_global.csv')
         self.declare_parameter('gps_topic', '/gps/fix')
         self.declare_parameter('vio_topic', '/mfla/dr_odom')
-        self.declare_parameter('sync_tolerance_sec', 0.01)
+        self.declare_parameter('sync_tolerance_sec', 0.2)
+        self.declare_parameter('sync_time_source', 'receive')
+        self.declare_parameter('output_stamp_source', 'sync')
+        self.declare_parameter('max_optimization_poses', 200)
         self.declare_parameter('route_default_altitude', 33.0)
         self.declare_parameter('publish_car_model', False)
         self.declare_parameter('route_poll_sec', 1.0)
         self.declare_parameter('optimization_period_sec', 2.0)
 
-        self.estimator = GlobalOptimization(self.get_clock())
+        self.estimator = GlobalOptimization(
+            self.get_clock(),
+            max_pose_count=int(self.get_parameter('max_optimization_poses').value),
+        )
         self.gps_queue = deque()
         self.gps_lock = Lock()
         self.last_route_id = ''
@@ -588,13 +610,47 @@ class GlobalFusionNode(Node):
 
         self.get_logger().info(f"Watching route JSON file: {self.get_parameter('route_json_path').value}")
         self.get_logger().info(f"Route UTM output file: {self.get_parameter('route_output_path').value}")
+        self.get_logger().info(
+            'Fusion sync: sync_time_source=%s, output_stamp_source=%s, sync_tolerance_sec=%.3f'
+            % (
+                self.get_parameter('sync_time_source').value,
+                self.get_parameter('output_stamp_source').value,
+                float(self.get_parameter('sync_tolerance_sec').value),
+            )
+        )
+
+    def _now_sec(self):
+        return self.get_clock().now().nanoseconds * 1e-9
+
+    def _sync_time(self, msg):
+        source = str(self.get_parameter('sync_time_source').value).lower()
+        if source == 'header':
+            return stamp_to_sec(msg.header.stamp)
+        if source != 'receive':
+            self.get_logger().warn(
+                f"Unsupported sync_time_source '{source}', falling back to receive time",
+                throttle_duration_sec=5.0,
+            )
+        return self._now_sec()
+
+    def _output_stamp(self, input_stamp, sync_time):
+        source = str(self.get_parameter('output_stamp_source').value).lower()
+        if source == 'input_header':
+            return input_stamp
+        if source != 'sync':
+            self.get_logger().warn(
+                f"Unsupported output_stamp_source '{source}', falling back to sync time",
+                throttle_duration_sec=5.0,
+            )
+        return sec_to_msg_time(sync_time, self.get_clock())
 
     def gps_callback(self, msg):
+        gps_t = self._sync_time(msg)
         with self.gps_lock:
-            self.gps_queue.append(msg)
+            self.gps_queue.append((gps_t, msg))
 
     def vio_callback(self, pose_msg):
-        t = stamp_to_sec(pose_msg.header.stamp)
+        t = self._sync_time(pose_msg)
         vio_t = np.array([
             pose_msg.pose.pose.position.x,
             pose_msg.pose.pose.position.y,
@@ -612,6 +668,7 @@ class GlobalFusionNode(Node):
         global_t, global_q = self.estimator.get_global_odom()
         odometry = Odometry()
         odometry.header = pose_msg.header
+        odometry.header.stamp = self._output_stamp(pose_msg.header.stamp, t)
         odometry.header.frame_id = 'world'
         odometry.child_frame_id = 'world'
         odometry.pose.pose.position.x = float(global_t[0])
@@ -626,14 +683,13 @@ class GlobalFusionNode(Node):
         self.pub_global_path.publish(self.estimator.path_msg)
         if self.get_parameter('publish_car_model').value:
             self.publish_car_model(t, global_t, global_q)
-        self._append_global_csv(pose_msg.header.stamp, global_t, global_q)
+        self._append_global_csv(odometry.header.stamp, global_t, global_q)
 
     def _consume_matching_gps(self, vio_t):
         tolerance = float(self.get_parameter('sync_tolerance_sec').value)
         with self.gps_lock:
             while self.gps_queue:
-                gps_msg = self.gps_queue[0]
-                gps_t = stamp_to_sec(gps_msg.header.stamp)
+                gps_t, gps_msg = self.gps_queue[0]
                 if gps_t < vio_t - tolerance:
                     self.gps_queue.popleft()
                     continue
