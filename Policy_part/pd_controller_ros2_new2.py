@@ -119,7 +119,7 @@ def pd_controller(waypoint, current_v, current_w) -> Tuple[float, float]:
     v = np.clip(v, 0., MAX_V)
 
     # stop when almost at the end and turning is small
-    if dxmean < 0.15 and np.abs(w) < 0.05:
+    if dxmean < 0.05 and np.abs(w) < 0.01:
         v *= 0.0
 
     # penalize linear velocity when angular velocity is large
@@ -241,6 +241,7 @@ class PDController(Node):
         self.current_v = 0.0
         self.current_w = 0.0
         self.vel_msg = Twist()
+        # print("vel_msg v w:", self.vel_msg.linear.x, self.vel_msg.angular.z)
         self.vel_pub.publish(self.vel_msg)
         self.get_logger().info("Autonomy ENABLED. State: 2")
 
@@ -305,7 +306,7 @@ class PDController(Node):
 
         v, w = 0.0, 0.0
         x_stop = False
-        if self.reached_goal:
+        if self.reached_goal and False:
             # breakpoint()
             # self.vel_pub.publish(self.vel_msg)
             # # 创建UDP消息并发送
@@ -319,6 +320,7 @@ class PDController(Node):
         # HACK: mingxuan 
         elif self.waypoint.is_valid(verbose=True):
             # print('waypoints - ', self.waypoint.get())
+            # breakpoint()
             v, w = pd_controller(self.waypoint.get(), self.current_v, self.current_w)
             self.current_v = v
             self.current_w = w
