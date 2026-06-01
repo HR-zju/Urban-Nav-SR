@@ -35,6 +35,7 @@ import bisect
 import io
 import json
 import math
+import os
 import struct
 import subprocess
 import shutil
@@ -107,6 +108,26 @@ class AttitudeSample:
     roll_deg: float
     pitch_deg: float
     yaw_deg: float
+    source_topic: str
+    source_schema: str
+
+
+@dataclass(frozen=True)
+class ImuSample:
+    timestamp_ns: int
+    angular_velocity_x: float | None
+    angular_velocity_y: float | None
+    angular_velocity_z: float | None
+    source_topic: str
+    source_schema: str
+
+
+@dataclass(frozen=True)
+class OdometrySample:
+    timestamp_ns: int
+    angular_velocity_x: float | None
+    angular_velocity_y: float | None
+    angular_velocity_z: float | None
     source_topic: str
     source_schema: str
 
@@ -272,6 +293,41 @@ class CdrReader:
         return raw
 
 
+class Ros1Reader:
+    """Minimal ROS1 serialized-message reader (no CDR alignment)."""
+
+    def __init__(self, data: bytes) -> None:
+        self.data = data
+        self.offset = 0
+
+    def int32(self) -> int:
+        value = struct.unpack_from("<i", self.data, self.offset)[0]
+        self.offset += 4
+        return int(value)
+
+    def uint32(self) -> int:
+        value = struct.unpack_from("<I", self.data, self.offset)[0]
+        self.offset += 4
+        return int(value)
+
+    def float64(self) -> float:
+        value = struct.unpack_from("<d", self.data, self.offset)[0]
+        self.offset += 8
+        return float(value)
+
+    def string(self) -> str:
+        size = self.uint32()
+        raw = self.data[self.offset : self.offset + size]
+        self.offset += size
+        return raw.decode("utf-8", "replace")
+
+
+def _make_reader(payload: bytes, message_encoding: str) -> Any:
+    if str(message_encoding or "").strip().lower() == "ros1":
+        return Ros1Reader(payload)
+    return CdrReader(payload)
+
+
 def _parse_schema(record_payload: bytes) -> SchemaInfo:
     offset = 0
     schema_id, offset = _read_u16(record_payload, offset)
@@ -340,6 +396,20 @@ def _bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
         - math.sin(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.cos(math.radians(lon2 - lon1))
     )
     return (math.degrees(math.atan2(y, x)) + 360.0) % 360.0
+
+
+def _normalize_heading_deg(heading_deg: float) -> float:
+    return float(heading_deg) % 360.0
+
+
+def _angle_diff_deg(a_deg: float, b_deg: float) -> float:
+    return ((float(a_deg) - float(b_deg) + 180.0) % 360.0) - 180.0
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    temp_path = path.with_suffix(path.suffix + ".tmp")
+    temp_path.write_text(content, encoding="utf-8")
+    os.replace(temp_path, path)
 
 
 def _heading_samples_from_gps(gps_samples: list[GpsSample]) -> list[HeadingSample]:
@@ -683,10 +753,15 @@ def _quaternion_to_euler_deg(*, x: float, y: float, z: float, w: float) -> tuple
     return math.degrees(roll), math.degrees(pitch), math.degrees(yaw)
 
 
-def _parse_imu_attitude(payload: bytes, *, timestamp_ns: int, source_topic: str, source_schema: str) -> AttitudeSample:
-    reader = CdrReader(payload)
-    _ = reader.int32()  # header.stamp.sec
-    _ = reader.uint32()  # header.stamp.nanosec
+def _parse_imu_attitude(payload: bytes, *, timestamp_ns: int, source_topic: str, source_schema: str, message_encoding: str) -> AttitudeSample:
+    reader = _make_reader(payload, message_encoding)
+    if str(message_encoding or "").strip().lower() == "ros1":
+        _ = reader.uint32()  # header.seq
+        _ = reader.uint32()  # header.stamp.sec
+        _ = reader.uint32()  # header.stamp.nanosec
+    else:
+        _ = reader.int32()  # header.stamp.sec
+        _ = reader.uint32()  # header.stamp.nanosec
     _ = reader.string()  # header.frame_id
     qx = reader.float64()
     qy = reader.float64()
@@ -703,10 +778,15 @@ def _parse_imu_attitude(payload: bytes, *, timestamp_ns: int, source_topic: str,
     )
 
 
-def _parse_posestamped_attitude(payload: bytes, *, timestamp_ns: int, source_topic: str, source_schema: str) -> AttitudeSample:
-    reader = CdrReader(payload)
-    _ = reader.int32()  # header.stamp.sec
-    _ = reader.uint32()  # header.stamp.nanosec
+def _parse_posestamped_attitude(payload: bytes, *, timestamp_ns: int, source_topic: str, source_schema: str, message_encoding: str) -> AttitudeSample:
+    reader = _make_reader(payload, message_encoding)
+    if str(message_encoding or "").strip().lower() == "ros1":
+        _ = reader.uint32()  # header.seq
+        _ = reader.uint32()  # header.stamp.sec
+        _ = reader.uint32()  # header.stamp.nanosec
+    else:
+        _ = reader.int32()  # header.stamp.sec
+        _ = reader.uint32()  # header.stamp.nanosec
     _ = reader.string()  # header.frame_id
     _ = reader.float64()  # pose.position.x
     _ = reader.float64()  # pose.position.y
@@ -721,6 +801,75 @@ def _parse_posestamped_attitude(payload: bytes, *, timestamp_ns: int, source_top
         roll_deg=float(roll_deg),
         pitch_deg=float(pitch_deg),
         yaw_deg=float(yaw_deg),
+        source_topic=source_topic,
+        source_schema=source_schema,
+    )
+
+
+def _parse_imu_motion(payload: bytes, *, timestamp_ns: int, source_topic: str, source_schema: str, message_encoding: str) -> ImuSample:
+    reader = _make_reader(payload, message_encoding)
+    if str(message_encoding or "").strip().lower() == "ros1":
+        _ = reader.uint32()  # header.seq
+        _ = reader.uint32()  # header.stamp.sec
+        _ = reader.uint32()  # header.stamp.nanosec
+    else:
+        _ = reader.int32()  # header.stamp.sec
+        _ = reader.uint32()  # header.stamp.nanosec
+    _ = reader.string()  # header.frame_id
+    # orientation quaternion
+    _ = reader.float64()
+    _ = reader.float64()
+    _ = reader.float64()
+    _ = reader.float64()
+    # orientation covariance[9]
+    for _ in range(9):
+        _ = reader.float64()
+    angular_velocity_x = reader.float64()
+    angular_velocity_y = reader.float64()
+    angular_velocity_z = reader.float64()
+    return ImuSample(
+        timestamp_ns=int(timestamp_ns),
+        angular_velocity_x=float(angular_velocity_x),
+        angular_velocity_y=float(angular_velocity_y),
+        angular_velocity_z=float(angular_velocity_z),
+        source_topic=source_topic,
+        source_schema=source_schema,
+    )
+
+
+def _parse_odometry_motion(payload: bytes, *, timestamp_ns: int, source_topic: str, source_schema: str, message_encoding: str) -> OdometrySample:
+    reader = _make_reader(payload, message_encoding)
+    if str(message_encoding or "").strip().lower() == "ros1":
+        _ = reader.uint32()  # header.seq
+        _ = reader.uint32()  # header.stamp.sec
+        _ = reader.uint32()  # header.stamp.nanosec
+    else:
+        _ = reader.int32()  # header.stamp.sec
+        _ = reader.uint32()  # header.stamp.nanosec
+    _ = reader.string()  # header.frame_id
+    _ = reader.string()  # child_frame_id
+    # pose: geometry_msgs/PoseWithCovariance
+    _ = reader.float64()  # position.x
+    _ = reader.float64()  # position.y
+    _ = reader.float64()  # position.z
+    _ = reader.float64()  # orientation.x
+    _ = reader.float64()  # orientation.y
+    _ = reader.float64()  # orientation.z
+    _ = reader.float64()  # orientation.w
+    for _ in range(36):
+        _ = reader.float64()
+    # twist: geometry_msgs/TwistWithCovariance
+    _ = reader.float64()  # linear.x
+    _ = reader.float64()  # linear.y
+    _ = reader.float64()  # linear.z
+    angular_velocity_x = reader.float64()
+    angular_velocity_y = reader.float64()
+    angular_velocity_z = reader.float64()
+    return OdometrySample(
+        timestamp_ns=int(timestamp_ns),
+        angular_velocity_x=float(angular_velocity_x),
+        angular_velocity_y=float(angular_velocity_y),
+        angular_velocity_z=float(angular_velocity_z),
         source_topic=source_topic,
         source_schema=source_schema,
     )
@@ -840,6 +989,8 @@ def extract_mcap_inputs(
     gps_samples: list[GpsSample] = []
     heading_samples: list[HeadingSample] = []
     attitude_samples: list[AttitudeSample] = []
+    imu_motion_samples: list[ImuSample] = []
+    odom_motion_samples: list[OdometrySample] = []
     message_counts: dict[str, int] = {}
 
     # MCAP files commonly store schemas/channels in the summary section after
@@ -871,6 +1022,7 @@ def extract_mcap_inputs(
     if attitude_policy not in {"optional", "required", "disabled"}:
         raise RuntimeError(f"Unsupported attitude policy: {attitude_policy!r}")
     imu_channel = None
+    odom_channel = None
     pose_channel = None
     if attitude_policy != "disabled":
         imu_channel = _choose_optional_channel(
@@ -878,6 +1030,12 @@ def extract_mcap_inputs(
             requested_topic=imu_topic,
             schema_substrings=["Imu"],
             role="imu",
+        )
+        odom_channel = _choose_optional_channel(
+            channels,
+            requested_topic="auto",
+            schema_substrings=["Odometry"],
+            role="odom",
         )
         pose_channel = _choose_optional_channel(
             channels,
@@ -928,12 +1086,35 @@ def extract_mcap_inputs(
                     continue
             elif imu_channel is not None and channel_id == imu_channel.channel_id:
                 try:
+                    imu_motion_samples.append(
+                        _parse_imu_motion(
+                            message_payload,
+                            timestamp_ns=timestamp_ns,
+                            source_topic=channel.topic,
+                            source_schema=channel.schema_name,
+                            message_encoding=channel.message_encoding,
+                        )
+                    )
                     attitude_samples.append(
                         _parse_imu_attitude(
                             message_payload,
                             timestamp_ns=timestamp_ns,
                             source_topic=channel.topic,
                             source_schema=channel.schema_name,
+                            message_encoding=channel.message_encoding,
+                        )
+                    )
+                except Exception:
+                    continue
+            elif odom_channel is not None and channel_id == odom_channel.channel_id:
+                try:
+                    odom_motion_samples.append(
+                        _parse_odometry_motion(
+                            message_payload,
+                            timestamp_ns=timestamp_ns,
+                            source_topic=channel.topic,
+                            source_schema=channel.schema_name,
+                            message_encoding=channel.message_encoding,
                         )
                     )
                 except Exception:
@@ -946,6 +1127,7 @@ def extract_mcap_inputs(
                             timestamp_ns=timestamp_ns,
                             source_topic=channel.topic,
                             source_schema=channel.schema_name,
+                            message_encoding=channel.message_encoding,
                         )
                     )
                 except Exception:
@@ -974,6 +1156,8 @@ def extract_mcap_inputs(
     gps_samples = sorted(gps_samples, key=lambda item: item.timestamp_ns)
     heading_samples = sorted(heading_samples, key=lambda item: item.timestamp_ns)
     attitude_samples = sorted(attitude_samples, key=lambda item: item.timestamp_ns)
+    imu_motion_samples = sorted(imu_motion_samples, key=lambda item: item.timestamp_ns)
+    odom_motion_samples = sorted(odom_motion_samples, key=lambda item: item.timestamp_ns)
 
     # If no heading samples, compute from GPS
     compute_heading_from_gps = len(heading_samples) == 0
@@ -987,6 +1171,11 @@ def extract_mcap_inputs(
     trajectory: list[dict[str, Any]] = []
     frame_records: list[dict[str, Any]] = []
     skipped_records: list[dict[str, Any]] = []
+    attitude_compass_headings: list[float] = []
+    attitude_heading_diffs: list[float] = []
+    attitude_sync_deltas_s: list[float] = []
+    attitude_valid_frame_count = 0
+    imu_motion_z_nonzero_count = 0
     period_ns = 0 if float(sample_fps) <= 0.0 else int(round(1e9 / float(sample_fps)))
     next_emit_ns: int | None = None
     frame_index = int(image_start_index)
@@ -1015,16 +1204,27 @@ def extract_mcap_inputs(
             )
             continue
         attitude_payload: dict[str, Any] = {"attitude_source": "missing"}
+        attitude_valid = False
         if attitude is not None and attitude_delta_ns is not None and attitude_delta_ns <= max_delta_ns:
+            attitude_compass_yaw_deg = _normalize_heading_deg(90.0 - float(attitude.yaw_deg))
+            attitude_heading_diff_deg = abs(_angle_diff_deg(attitude_compass_yaw_deg, float(heading.heading_deg)))
+            attitude_valid = attitude_heading_diff_deg <= 45.0
             attitude_payload = {
                 "roll_deg": float(attitude.roll_deg),
                 "pitch_deg": float(attitude.pitch_deg),
                 "attitude_yaw_deg": float(attitude.yaw_deg),
+                "attitude_compass_yaw_deg": float(attitude_compass_yaw_deg),
+                "attitude_heading_diff_deg": float(attitude_heading_diff_deg),
                 "attitude_source": "imu" if "Imu" in attitude.source_schema else "pose",
                 "attitude_topic": attitude.source_topic,
                 "attitude_schema": attitude.source_schema,
                 "attitude_sync_delta_s": round(float(attitude_delta_ns) / 1e9, 6),
+                "attitude_valid": bool(attitude_valid),
             }
+            attitude_compass_headings.append(float(attitude_compass_yaw_deg))
+            attitude_heading_diffs.append(float(attitude_heading_diff_deg))
+            attitude_sync_deltas_s.append(float(attitude_delta_ns) / 1e9)
+            attitude_valid_frame_count += 1 if attitude_valid else 0
         elif attitude_policy == "required":
             skipped_records.append({"timestamp": image.timestamp_ns, "reason": "missing_nearest_attitude"})
             continue
@@ -1070,14 +1270,79 @@ def extract_mcap_inputs(
 
     trajectory_path = output_dir / "trajectory.json"
     frames_manifest_path = output_dir / "frames_manifest.json"
+    imu_motion_path = output_dir / "frame_angular_velocities.npy"
     meta_path = output_dir / "mcap_extract_meta.json"
     trajectory_path.write_text(json.dumps(trajectory, indent=2, ensure_ascii=True), encoding="utf-8")
     frames_manifest_path.write_text(json.dumps(frame_records, indent=2, ensure_ascii=True), encoding="utf-8")
+
+    motion_source_samples = imu_motion_samples if imu_motion_samples else odom_motion_samples
+    if motion_source_samples:
+        imu_motion = np.zeros((len(motion_source_samples), 4), dtype=np.float64)
+        for index, sample in enumerate(motion_source_samples):
+            imu_motion[index, 0] = float(sample.timestamp_ns)
+            imu_motion[index, 1] = float(sample.angular_velocity_x or 0.0)
+            imu_motion[index, 2] = float(sample.angular_velocity_y or 0.0)
+            imu_motion[index, 3] = float(sample.angular_velocity_z or 0.0)
+            if abs(float(sample.angular_velocity_z or 0.0)) > 1e-4:
+                imu_motion_z_nonzero_count += 1
+        np.save(imu_motion_path, imu_motion)
+
+    imu_motion_z_nonzero_fraction = (
+        float(imu_motion_z_nonzero_count) / float(len(motion_source_samples))
+        if motion_source_samples
+        else 0.0
+    )
+    attitude_yaw_range_deg = float(max(attitude_compass_headings) - min(attitude_compass_headings)) if attitude_compass_headings else 0.0
+    attitude_heading_mean_abs_diff_deg = (
+        float(sum(abs(diff) for diff in attitude_heading_diffs) / len(attitude_heading_diffs))
+        if attitude_heading_diffs
+        else 0.0
+    )
+    attitude_heading_frac_gt30 = (
+        float(sum(1 for diff in attitude_heading_diffs if abs(diff) > 30.0) / len(attitude_heading_diffs))
+        if attitude_heading_diffs
+        else 0.0
+    )
+    attitude_max_sync_delta_s = max(attitude_sync_deltas_s) if attitude_sync_deltas_s else None
+    attitude_valid_fraction = (
+        float(attitude_valid_frame_count) / float(len(attitude_heading_diffs))
+        if attitude_heading_diffs
+        else 0.0
+    )
+    invalid_quaternion_reasons: list[str] = []
+    if not attitude_heading_diffs:
+        invalid_quaternion_reasons.append("missing_attitude_samples")
+    if attitude_yaw_range_deg < 0.5 and attitude_heading_mean_abs_diff_deg > 20.0:
+        invalid_quaternion_reasons.append("constant_or_nearly_constant_attitude_yaw")
+    if attitude_heading_frac_gt30 > 0.5:
+        invalid_quaternion_reasons.append("attitude_heading_disagrees_with_gps")
+    if attitude_valid_fraction < 0.5 and attitude_heading_diffs:
+        invalid_quaternion_reasons.append("low_attitude_frame_quality")
+    if imu_motion_z_nonzero_fraction < 0.3 and motion_source_samples:
+        invalid_quaternion_reasons.append("low_imu_motion_activity")
+    if attitude_max_sync_delta_s is not None and attitude_max_sync_delta_s > float(max_sync_delta_s):
+        invalid_quaternion_reasons.append("attitude_sync_delta_exceeded")
+    overall_pose_quality_valid = len(invalid_quaternion_reasons) == 0
+    attitude_policy_summary = {
+        "attitude_frames": len(attitude_heading_diffs),
+        "attitude_valid_frames": attitude_valid_frame_count,
+        "attitude_valid_fraction": round(attitude_valid_fraction, 6),
+        "attitude_yaw_range_deg": round(attitude_yaw_range_deg, 6),
+        "attitude_heading_mean_abs_diff_deg": round(attitude_heading_mean_abs_diff_deg, 6),
+        "attitude_heading_frac_gt30": round(attitude_heading_frac_gt30, 6),
+        "attitude_max_sync_delta_s": round(attitude_max_sync_delta_s, 6) if attitude_max_sync_delta_s is not None else None,
+        "imu_motion_z_nonzero_count": int(imu_motion_z_nonzero_count),
+        "imu_motion_z_nonzero_fraction": round(imu_motion_z_nonzero_fraction, 6),
+        "overall_pose_quality_valid": bool(overall_pose_quality_valid),
+        "invalid_quaternion_reasons": invalid_quaternion_reasons,
+    }
+
     meta = {
         "mcap_path": str(mcap_path),
         "images_dir": str(images_dir),
         "trajectory_json": str(trajectory_path),
         "frames_manifest_path": str(frames_manifest_path),
+        "imu_motion_path": str(imu_motion_path) if imu_motion_samples else None,
         "image_topic": image_channel.topic,
         "gps_topic": gps_channel.topic,
         "heading_topic": heading_channel.topic if heading_channel is not None else None,
@@ -1087,11 +1352,14 @@ def extract_mcap_inputs(
         "sample_fps": float(sample_fps),
         "max_sync_delta_s": float(max_sync_delta_s),
         "image_start_index": int(image_start_index),
+        "pose_quality": attitude_policy_summary,
         "raw_counts": {
             "images": len(images),
             "gps_samples": len(gps_samples),
             "heading_samples": len(heading_samples),
             "attitude_samples": len(attitude_samples),
+            "imu_motion_samples": len(imu_motion_samples),
+            "odom_motion_samples": len(odom_motion_samples),
         },
         "written_frames": len(trajectory),
         "skipped_frames": len(skipped_records),
@@ -1103,7 +1371,7 @@ def extract_mcap_inputs(
             "trajectory_json": str(trajectory_path),
         },
     }
-    meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=True), encoding="utf-8")
+    _atomic_write_text(meta_path, json.dumps(meta, indent=2, ensure_ascii=True))
     return trajectory_path, meta_path
 
 

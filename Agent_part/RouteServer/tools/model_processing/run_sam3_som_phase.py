@@ -49,7 +49,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 
 def _repo_root() -> Path:
-    return Path(__file__).parent.parent
+    return Path(__file__).resolve().parents[2]
 
 
 _SRC_DIR = _repo_root() / "src"
@@ -297,8 +297,13 @@ def _run_sam3_inference_on_images(
     if finetuned and (checkpoint_path is None or not checkpoint_path.exists()):
         raise RuntimeError(f"Checkpoint not found: {checkpoint_path}")
 
+    sam3_python = os.getenv("SAM3_PYTHON")
+    if not sam3_python:
+        packed_python = Path(f"/home/ubuntu/anaconda3/envs/{sam3_env_name}/bin/python")
+        sam3_python = str(packed_python) if packed_python.exists() else "python"
+
     cmd: list[str] = [
-        "conda", "run", "-n", str(sam3_env_name), "python", str(script_path),
+        sam3_python, str(script_path),
         "--cocoa_base_dir", str(cocoa_base_dir),
         "--output_base_dir", str(sam3_output_base_dir),
         "--camera_views", str(camera_view),
@@ -311,6 +316,7 @@ def _run_sam3_inference_on_images(
         cmd.extend(["--checkpoint_path", str(checkpoint_path)])
 
     print(f"[INFO] Running SAM3 inference...")
+    print(f"[INFO] SAM3 python: {sam3_python}")
     if selected_frame_names:
         print(f"[INFO] SAM3 frame subset size: {len(selected_frame_names)}")
     print(f"[INFO] Output to: {sam3_output_base_dir}")
@@ -1085,6 +1091,7 @@ def process_frame(
     class_config: dict[str, list[str]],
     sigma_px: float = 24.0,
     disable_route_support: bool = False,
+    compact_semantic_only: bool = False,
 ) -> dict[str, Any]:
     """Process single frame to generate all Phase2 artifacts."""
     frame_name = frame.frame_name
@@ -1132,6 +1139,22 @@ def process_frame(
         seg_summary["frame_idx"] = frame.frame_idx
 
         frame_idx_str = f"{frame.frame_idx:06d}"
+
+        if compact_semantic_only:
+            semantic_dir = clip_dir / "semantic_masks"
+            _ensure_dir(semantic_dir)
+            semantic_path = semantic_dir / f"{frame_idx_str}.png"
+            if int(mask_uint16.max(initial=0)) > 255:
+                raise RuntimeError("compact semantic PNG requires class ids <= 255")
+            Image.fromarray(mask_uint16.astype(np.uint8), mode="L").save(semantic_path, optimize=True)
+            result["status"] = "ok"
+            result["segmentation"] = {
+                "semantic_segmentation_path": str(semantic_path),
+                "semantic_label_format": "label_png_uint8",
+                "class_count": len(seg_summary["classes"]),
+            }
+            print(f"[OK] Processed frame {frame_name}: compact semantic PNG, {len(seg_summary['classes'])} classes")
+            return result
 
         seg_summary["mask_path"] = f"{frame_idx_str}_mask.npy"
         seg_summary["affordance_path"] = f"{frame_idx_str}_affordance.npy"
@@ -1402,11 +1425,12 @@ def process_single_clip(clip_dir: Path, args: argparse.Namespace, class_config: 
             class_config=class_config,
             sigma_px=args.sigma_px,
             disable_route_support=args.disable_route_support,
+            compact_semantic_only=args.compact_semantic_only,
         )
         frames_processed.append(result)
 
     video_results = {}
-    if args.generate_video:
+    if args.generate_video and not args.compact_semantic_only:
         success_frames = [f for f in frames_processed if f["status"] == "ok"]
         if success_frames:
             frame_indices = []
@@ -1423,6 +1447,13 @@ def process_single_clip(clip_dir: Path, args: argparse.Namespace, class_config: 
                     video_fps=args.video_fps,
                     disable_route_support=args.disable_route_support,
                 )
+
+    if args.cleanup_sam3_artifacts:
+        if work_dir.exists():
+            shutil.rmtree(work_dir)
+        if sam3_output_dir.exists():
+            shutil.rmtree(sam3_output_dir)
+        print(f"[CLEANUP] Removed SAM3 work/intermediate directories")
 
     if args.cleanup_temp:
         if images_dir.exists():
@@ -1443,6 +1474,7 @@ def process_single_clip(clip_dir: Path, args: argparse.Namespace, class_config: 
         "frames_failed": len(frames_processed) - success_count,
         "frames": frames_processed,
         "video_results": video_results,
+        "compact_semantic_only": bool(args.compact_semantic_only),
     }
     manifest_path = clip_dir / "processing_manifest.json"
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1480,6 +1512,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sigma-px", "--sigma_px", dest="sigma_px", type=float, default=24.0, help="route_support 高斯 sigma")
     parser.add_argument("--skip-existing", "--skip_existing", dest="skip_existing", action="store_true", help="跳过已有结果的 clip")
     parser.add_argument("--cleanup-temp", "--cleanup_temp", dest="cleanup_temp", action="store_true", help="处理完成后删除临时 images/ 和 sam3_work/ 目录")
+    parser.add_argument("--cleanup-sam3-artifacts", "--cleanup_sam3_artifacts", dest="cleanup_sam3_artifacts", action="store_true", help="处理完成后删除 sam3_work/ 和 sam3_intermediate/，保留 images/")
+    parser.add_argument("--compact-semantic-only", "--compact_semantic_only", dest="compact_semantic_only", action="store_true", help="只保留 semantic_masks/*.png 和 manifest，不生成 .npy/overlay/SoM/route/debug video")
     parser.add_argument("--mode", default="foot", help="模式（占位参数，兼容旧脚本）")
     # 兼容性参数 - 被接受但忽略
     parser.add_argument("--output_format", help="(兼容性 - 忽略)")

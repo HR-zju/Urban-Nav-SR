@@ -52,7 +52,9 @@ class SRNavProcessor:
 
     def __init__(self, config: Optional[ProcessingConfig] = None):
         self.config = config or ProcessingConfig()
-        self._tools_dir = Path(__file__).parent
+        self._dataset_dir = Path(__file__).resolve().parent
+        self._tools_dir = self._dataset_dir.parent
+        self._model_dir = self._tools_dir / "model_processing"
 
     def process_single_mcap(
         self,
@@ -94,7 +96,7 @@ class SRNavProcessor:
 
         cmd = [
             sys.executable,
-            str(self._tools_dir / "mcap_to_sidewalk_inputs.py"),
+            str(self._dataset_dir / "mcap_to_sidewalk_inputs.py"),
             "--mcap-path", str(mcap_path),
             "--output-dir", str(output_dir),
             "--sample-fps", str(self.config.sample_fps),
@@ -165,7 +167,7 @@ class SRNavProcessor:
         # 使用 process_chunks_26_29.py 脚本
         cmd = [
             sys.executable,
-            str(self._tools_dir / "process_chunks_26_29.py"),
+            str(self._dataset_dir / "process_chunks_26_29.py"),
             "--dataset-root", str(self.config.dataset_root),
             "--sidewalk-root", str(self.config.sidewalk_root),
             "--temp-dir", str(self.config.temp_dir),
@@ -246,7 +248,7 @@ class SRNavProcessor:
         output_dir = output_dir or ride_dir
         cmd = [
             sys.executable,
-            str(self._tools_dir / "process_sidewalk_dataset.py"),
+            str(self._dataset_dir / "process_sidewalk_dataset.py"),
             "--sidewalk-root", str(ride_dir),
             "--output-root", str(output_dir),
             "--sample-fps", str(self.config.sample_fps),
@@ -276,7 +278,7 @@ class SRNavProcessor:
         """
         cmd = [
             sys.executable,
-            str(self._tools_dir / "run_sam3_som_phase.py"),
+            str(self._model_dir / "run_sam3_som_phase.py"),
             "--clip-dir", str(ride_dir),
             "--run-sam3",
             "--sam3-env-name", self.config.sam3_env_name,

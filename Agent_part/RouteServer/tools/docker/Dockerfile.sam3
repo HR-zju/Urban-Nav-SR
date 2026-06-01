@@ -1,0 +1,23 @@
+ARG BASE_IMAGE=urbannav-processor:latest
+FROM ${BASE_IMAGE}
+
+LABEL description="UrbanNav processor image extended with local sam3 conda environment and source repo"
+
+ENV SAM3_PYTHON=/home/ubuntu/anaconda3/envs/sam3/bin/python \
+    SAM3_REPO=/home/ubuntu/WorkSpace/project/SR/Code/sam3
+
+RUN mkdir -p /home/ubuntu/anaconda3/envs/sam3 /home/ubuntu/WorkSpace/project/SR/Code/sam3
+
+COPY sam3-env.tar.gz /tmp/sam3-env.tar.gz
+RUN tar -xzf /tmp/sam3-env.tar.gz -C /home/ubuntu/anaconda3/envs/sam3 \
+    && rm /tmp/sam3-env.tar.gz
+
+COPY sam3-repo.tar.gz /tmp/sam3-repo.tar.gz
+RUN tar -xzf /tmp/sam3-repo.tar.gz -C /home/ubuntu/WorkSpace/project/SR/Code/sam3 \
+    && rm /tmp/sam3-repo.tar.gz
+
+COPY tools/model_processing/run_sam3_som_phase.py /app/tools/model_processing/run_sam3_som_phase.py
+
+WORKDIR /app/tools
+ENTRYPOINT ["python"]
+CMD ["--help"]

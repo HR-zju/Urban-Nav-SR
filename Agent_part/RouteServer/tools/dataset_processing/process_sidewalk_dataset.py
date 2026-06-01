@@ -7,6 +7,7 @@ import math
 import json
 import argparse
 import subprocess
+import shutil
 from pathlib import Path
 from typing import Any
 from tqdm import tqdm
@@ -14,14 +15,16 @@ from tqdm import tqdm
 import numpy as np
 from PIL import Image
 
-# Add parent dir for imports
-sys.path.insert(0, str(Path(__file__).parent))
+TOOLS_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(TOOLS_DIR / "bev"))
+sys.path.insert(0, str(TOOLS_DIR / "math_tools"))
 
 from frodobot_bev_enhanced import (
     render_bev_map,
     MAP_PROVIDERS,
     ProcessOptions,
 )
+from pose_ekf import PoseEKF
 
 
 def _quaternion_to_euler_deg(*, x: float, y: float, z: float, w: float) -> tuple[float, float, float]:
@@ -54,6 +57,15 @@ def _calculate_heading_from_gps(
     bearing = math.degrees(math.atan2(y, x))
     compass_heading = (bearing + 360.0) % 360.0
     return compass_heading
+
+
+def normalize_heading_to_compass(heading_deg: float) -> float:
+    """Normalize heading to compass convention: 0=North, clockwise positive, range [0,360)."""
+    h = float(heading_deg)
+    h = h % 360.0
+    if h < 0:
+        h += 360.0
+    return h
 
 
 def _extract_frames_from_mp4(mp4_path: Path, output_dir: Path, sample_fps: float = 1.0) -> list[Path]:
@@ -148,27 +160,35 @@ def process_sidewalk_ride(
     output_dir: Path,
     sample_fps: float = 1.0,
     map_provider: str = "osm",
+    use_pose_ekf: bool = False,
+    ekf_q_pos: float = 1e-3,
+    ekf_q_theta: float = 1e-2,
+    ekf_r_xy: float = 9.0,
+    ekf_r_theta: float = 0.5,
 ) -> list[dict[str, Any]]:
     """Process one sidewalk ride directory."""
     print(f"\n{'='*60}")
     print(f"Processing: {sidewalk_dir.name}")
     print(f"{'='*60}")
 
-    # Check if BEV video already exists - skip if yes
+    # Check if BEV video already exists - regenerate if yes
     bev_video_path = sidewalk_dir / "bev_video.mp4"
     if bev_video_path.exists():
-        print(f"BEV video already exists: {bev_video_path}")
-        print("Skipping...")
-        # Check if we have samples.json to return
-        samples_json_path = output_dir / "samples.json"
-        if samples_json_path.exists():
-            return json.loads(samples_json_path.read_text())
-        return []
+        print(f"BEV video already exists, removing to regenerate: {bev_video_path}")
+        bev_video_path.unlink()
+    # Also remove old bev_images if exists
+    bev_images_dir = sidewalk_dir / "bev_images"
+    if bev_images_dir.exists():
+        shutil.rmtree(bev_images_dir)
 
     # Load npy files
     gps_arr = np.load(sidewalk_dir / "frame_gps.npy")
     ori_arr = np.load(sidewalk_dir / "frame_orientations.npy")
     times_arr = np.load(sidewalk_dir / "frame_times.npy")
+    imu_omega_arr = None
+    imu_omega_path = sidewalk_dir / "frame_angular_velocities.npy"
+    if imu_omega_path.exists():
+        imu_omega_arr = np.load(imu_omega_path)
 
     num_frames_total = len(gps_arr)
     print(f"Total frames in dataset: {num_frames_total}")
@@ -197,41 +217,152 @@ def process_sidewalk_ride(
 
     # Step 2: Build trajectory
     trajectory = []
-    # First find a valid heading from GPS
-    valid_headings = []
-    for i in range(len(selected_indices) - 1):
-        idx1 = selected_indices[i]
-        idx2 = selected_indices[i + 1]
-        lat1 = float(gps_arr[idx1, 0])
-        lng1 = float(gps_arr[idx1, 1])
-        lat2 = float(gps_arr[idx2, 0])
-        lng2 = float(gps_arr[idx2, 1])
-        if (not math.isnan(lat1) and not math.isnan(lng1) and
-            not math.isnan(lat2) and not math.isnan(lng2)):
-            h = _calculate_heading_from_gps(lat1, lng1, lat2, lng2)
-            valid_headings.append(h)
-    default_heading = valid_headings[0] if valid_headings else 0.0
+
+    # Smooth GPS positions first so the BEV center does not jitter with raw point noise.
+    raw_positions: list[tuple[float, float]] = []
+    for data_idx in selected_indices:
+        raw_positions.append((float(gps_arr[data_idx, 0]), float(gps_arr[data_idx, 1])))
+
+    window_size = 7
+    smoothed_positions: list[tuple[float, float]] = []
+    for i in range(len(raw_positions)):
+        window_start = max(0, i - window_size // 2)
+        window_end = min(len(raw_positions), i + window_size // 2 + 1)
+        window = raw_positions[window_start:window_end]
+        lat_sum = sum(lat for lat, _ in window)
+        lng_sum = sum(lng for _, lng in window)
+        smoothed_positions.append((lat_sum / len(window), lng_sum / len(window)))
+
+    # First calculate all raw headings from the smoothed positions.
+    raw_headings = []
+    for i in range(len(smoothed_positions)):
+        lat, lng = smoothed_positions[i]
+
+        # Calculate heading from GPS - use current point and next point (or previous if last)
+        if i < len(smoothed_positions) - 1:
+            next_lat, next_lng = smoothed_positions[i + 1]
+            h = _calculate_heading_from_gps(lat, lng, next_lat, next_lng)
+        elif i > 0:
+            prev_lat, prev_lng = smoothed_positions[i - 1]
+            h = _calculate_heading_from_gps(prev_lat, prev_lng, lat, lng)
+        else:
+            h = 0.0
+
+        raw_headings.append(h)
+
+    default_heading = raw_headings[0] if raw_headings else 0.0
+
+    # Apply sliding window smoothing to headings
+    smoothed_headings = raw_headings.copy()
+    window_size = 7  # 7-point window
+
+    for i in range(len(raw_headings)):
+        # Collect nearby headings
+        window = []
+        for j in range(max(0, i - window_size // 2), min(len(raw_headings), i + window_size // 2 + 1)):
+            h = raw_headings[j]
+            if not math.isnan(h):
+                window.append(h)
+
+        if window:
+            # Handle angle wrap-around (0-360) properly by converting to unit vectors
+            x_sum = 0.0
+            y_sum = 0.0
+            for h in window:
+                rad = math.radians(h)
+                x_sum += math.cos(rad)
+                y_sum += math.sin(rad)
+
+            avg_x = x_sum / len(window)
+            avg_y = y_sum / len(window)
+            smoothed_h = math.degrees(math.atan2(avg_y, avg_x))
+            smoothed_h = (smoothed_h + 360.0) % 360.0  # Normalize to 0-360
+            smoothed_headings[i] = smoothed_h
+        else:
+            smoothed_headings[i] = default_heading
+
+    # Now process each frame with smoothed position and smoothed heading
+    # Optionally run Pose EKF fusion to further smooth position+heading
+    if use_pose_ekf:
+        print("Using Pose EKF fusion for position and heading...")
+        # build yaw list from quaternion orientations for selected indices
+        yaw_list = []
+        for data_idx in selected_indices:
+            qx = float(ori_arr[data_idx, 0])
+            qy = float(ori_arr[data_idx, 1])
+            qz = float(ori_arr[data_idx, 2])
+            qw = float(ori_arr[data_idx, 3])
+            _, _, yaw_deg = _quaternion_to_euler_deg(x=qx, y=qy, z=qz, w=qw)
+            # Convert ROS/ENU yaw (0 = east, CCW-positive) to compass heading
+            # (0 = north, CW-positive) so EKF and BEV renderer use the same convention.
+            compass_yaw = (90.0 - float(yaw_deg)) % 360.0
+            yaw_list.append(compass_yaw)
+
+        # Initialize EKF at first frame
+        first_idx = selected_indices[0]
+        # Detect if yaw_list appears unreliable (near-constant), in which case prefer GPS bearing
+        yaw_range = max(yaw_list) - min(yaw_list) if yaw_list else 0.0
+        use_yaw_obs = True
+        if yaw_range < 0.5:
+            # yaw is nearly constant -> likely invalid quaternions
+            use_yaw_obs = False
+            # compute initial heading from GPS bearing between first two smoothed positions if possible
+            if len(smoothed_positions) >= 2:
+                lat0, lng0 = smoothed_positions[0]
+                lat1, lng1 = smoothed_positions[1]
+                init_heading = _calculate_heading_from_gps(lat0, lng0, lat1, lng1)
+            else:
+                init_heading = raw_headings[0] if raw_headings else 0.0
+            print(f"[WARN] Yaw observations appear constant (range={yaw_range:.3f}). Disabling yaw updates; initializing EKF heading from GPS: {init_heading:.3f}")
+            ekf = PoseEKF.init_from_latlng_heading(float(gps_arr[first_idx, 0]), float(gps_arr[first_idx, 1]), init_heading, pos_var=25.0, theta_var=0.5)
+        else:
+            ekf = PoseEKF.init_from_latlng_heading(float(gps_arr[first_idx, 0]), float(gps_arr[first_idx, 1]), yaw_list[0], pos_var=25.0, theta_var=0.5)
+        fused_positions = []
+        fused_headings = []
+        prev_time_ns = int(times_arr[first_idx])
+        for i, data_idx in enumerate(selected_indices):
+            t_ns = int(times_arr[data_idx])
+            dt = (t_ns - prev_time_ns) / 1e9 if i > 0 else 0.0
+            if imu_omega_arr is not None and data_idx < len(imu_omega_arr):
+                omega = float(imu_omega_arr[data_idx, 2])
+            else:
+                cur_yaw = yaw_list[i]
+                prev_yaw = yaw_list[i - 1] if i > 0 else cur_yaw
+                diff_rad = math.radians(cur_yaw - prev_yaw)
+                diff_rad = (diff_rad + math.pi) % (2 * math.pi) - math.pi
+                omega = diff_rad / max(dt, 1e-6)
+            ekf.predict(omega, dt, q_pos=ekf_q_pos, q_theta=ekf_q_theta)
+            if use_yaw_obs:
+                ekf.update_gps_and_yaw(
+                    float(gps_arr[data_idx, 0]),
+                    float(gps_arr[data_idx, 1]),
+                    yaw_deg=yaw_list[i],
+                    r_xy=ekf_r_xy,
+                    r_theta=ekf_r_theta,
+                )
+            else:
+                ekf.update_gps(float(gps_arr[data_idx, 0]), float(gps_arr[data_idx, 1]), r_xy=ekf_r_xy)
+            latf, lngf = ekf.get_latlng()
+            fused_positions.append((latf, lngf))
+            fused_headings.append(ekf.get_heading_deg())
+            prev_time_ns = t_ns
+
+        smoothed_positions = fused_positions
+        smoothed_headings = fused_headings
+        # Print a quick comparison for the first few frames: quaternion yaw, gps heading, ekf heading
+        print("[DEBUG] First 5 frame heading comparisons (quaternion_yaw_deg | gps_heading_deg | ekf_heading_deg):")
+        for k in range(min(5, len(selected_indices))):
+            qyaw = yaw_list[k]
+            gps_h = raw_headings[k] if k < len(raw_headings) else None
+            ekf_h = smoothed_headings[k]
+            print(f"  frame {k}: {qyaw:.6f} | {gps_h:.6f} | {ekf_h:.6f}")
 
     for img_idx, (img_path, data_idx) in enumerate(zip(extracted_frames, selected_indices)):
         # GPS format looks like: [lat, lng, alt, ?, ?]
-        lat = float(gps_arr[data_idx, 0])
-        lng = float(gps_arr[data_idx, 1])
+        lat, lng = smoothed_positions[img_idx]
 
-        # Calculate heading from GPS - use current point and next point (or previous if last)
-        if img_idx < len(selected_indices) - 1:
-            next_data_idx = selected_indices[img_idx + 1]
-            next_lat = float(gps_arr[next_data_idx, 0])
-            next_lng = float(gps_arr[next_data_idx, 1])
-            heading_deg = _calculate_heading_from_gps(lat, lng, next_lat, next_lng)
-        elif img_idx > 0:
-            prev_data_idx = selected_indices[img_idx - 1]
-            prev_lat = float(gps_arr[prev_data_idx, 0])
-            prev_lng = float(gps_arr[prev_data_idx, 1])
-            # Use previous heading (same direction)
-            heading_deg = _calculate_heading_from_gps(prev_lat, prev_lng, lat, lng)
-        else:
-            # Only one point - default to first valid heading or 0
-            heading_deg = default_heading
+        # Use smoothed heading
+        heading_deg = smoothed_headings[img_idx]
 
         # Fallback if heading is NaN
         if math.isnan(heading_deg):
@@ -261,7 +392,7 @@ def process_sidewalk_ride(
                 "lng": lng,
                 "heading_deg": heading_deg,
                 "image_path": str(final_img_path.resolve()),
-                "attitude_source": "gps",
+                "attitude_source": "ekf" if use_pose_ekf else "gps",
                 "roll_deg": roll_deg,
                 "pitch_deg": pitch_deg,
             }
@@ -287,7 +418,7 @@ def process_sidewalk_ride(
     )
 
     # Global trajectory - all GPS points
-    global_nav_path = [(float(gps_arr[i, 0]), float(gps_arr[i, 1])) for i in selected_indices]
+    global_nav_path = smoothed_positions
 
     samples = []
     print(f"Generating BEV maps for {len(trajectory)} frames...")
@@ -310,6 +441,17 @@ def process_sidewalk_ride(
             bev_filename = f"{fpv_image_path.stem}_bev.jpg"
             bev_path = bev_images_dir / bev_filename
             bev_image.save(bev_path, quality=95)
+
+            # Write a small metadata file next to each BEV image with the heading actually used for rendering
+            try:
+                meta = {
+                    "used_heading_deg": float(heading_deg),
+                    "attitude_source": frame.get("attitude_source", "unknown"),
+                }
+                meta_path = bev_path.with_suffix(bev_path.suffix + ".bevmeta.json")
+                meta_path.write_text(json.dumps(meta), encoding="utf-8")
+            except Exception:
+                pass
 
             sample = {
                 "ride_id": sidewalk_dir.name,
@@ -379,6 +521,15 @@ def main():
         default=None,
         help="Process only rides matching this substring",
     )
+    parser.add_argument(
+        "--use-pose-ekf",
+        action="store_true",
+        help="Use 2D pose EKF to fuse orientation (from quaternions) and GPS for smoother pose/heading",
+    )
+    parser.add_argument("--ekf-q-pos", type=float, default=1e-3, help="EKF process noise strength for x/y")
+    parser.add_argument("--ekf-q-theta", type=float, default=1e-2, help="EKF process noise strength for theta")
+    parser.add_argument("--ekf-r-xy", type=float, default=9.0, help="EKF GPS position observation variance")
+    parser.add_argument("--ekf-r-theta", type=float, default=0.5, help="EKF yaw/compass observation variance")
     args = parser.parse_args()
 
     # Check if sidewalk_root is a single ride directory (has frame_gps.npy and front.mp4)
@@ -408,6 +559,11 @@ def main():
                 output_dir,
                 sample_fps=args.sample_fps,
                 map_provider=args.map_provider,
+                use_pose_ekf=args.use_pose_ekf,
+                ekf_q_pos=args.ekf_q_pos,
+                ekf_q_theta=args.ekf_q_theta,
+                ekf_r_xy=args.ekf_r_xy,
+                ekf_r_theta=args.ekf_r_theta,
             )
             all_samples.extend(samples)
         except Exception as e:

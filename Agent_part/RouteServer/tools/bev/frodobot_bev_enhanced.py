@@ -28,8 +28,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-# Add the src directory to path
-project_root = Path(__file__).parent.parent
+# Add the RouteServer src directory to path
+project_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(project_root / "src"))
 
 from PIL import Image, ImageDraw, ImageFont
@@ -52,6 +52,15 @@ def _rotate_point_about_center(
     rx = dx * cos_a - dy * sin_a
     ry = dx * sin_a + dy * cos_a
     return (rx + center_x, ry + center_y)
+
+
+def normalize_heading_to_compass(heading_deg: float) -> float:
+    """Normalize heading to compass convention: 0=North, clockwise positive, range [0,360)."""
+    h = float(heading_deg)
+    h = h % 360.0
+    if h < 0:
+        h += 360.0
+    return h
 
 
 # ==================== Map Provider Configurations ====================
@@ -108,6 +117,14 @@ def _fetch_tile_image(
             pass
 
     cache_path.parent.mkdir(parents=True, exist_ok=True)
+    fallback = Image.new("RGB", (256, 256), (242, 239, 233))
+    if os.getenv("BEV_MAP_TILE_OFFLINE", "").strip().lower() in {"1", "true", "yes", "on"}:
+        try:
+            fallback.save(cache_path)
+        except Exception:
+            pass
+        return fallback
+
     url = template.format(z=int(zoom), x=x_wrapped, y=y_clamped)
 
     try:
@@ -131,7 +148,11 @@ def _fetch_tile_image(
         return Image.open(io.BytesIO(raw)).convert("RGB")
     except Exception as exc:
         print(f"  [WARN] Tile fetch failed {zoom}/{x}/{y}: {exc}")
-        return Image.new("RGB", (256, 256), (242, 239, 233))
+        try:
+            fallback.save(cache_path)
+        except Exception:
+            pass
+        return fallback
 
 
 # ==================== Data Structures ====================

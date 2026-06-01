@@ -115,7 +115,7 @@ def parse_args() -> argparse.Namespace:
         )
     )
     parser.add_argument("--provider", default="sam3", help="Segmentation provider (default: sam3)")
-    parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]), help="RouteServer repo root")
+    parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[2]), help="RouteServer repo root")
     parser.add_argument("--client", default="yuquan", choices=["yuquan", "zero-shot"], help="Visual prompt client")
     parser.add_argument("--run-sam3", action="store_true", help="Run segmentation provider once before frame loop")
     parser.add_argument("--sam3-env-name", default="sam3", help="Conda env name for SAM3")

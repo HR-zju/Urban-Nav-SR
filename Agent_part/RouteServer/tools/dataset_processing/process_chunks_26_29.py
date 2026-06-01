@@ -20,6 +20,30 @@ import numpy as np
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+TOOLS_DIR = SCRIPT_DIR.parent
+MODEL_PROCESSING_DIR = TOOLS_DIR / "model_processing"
+
+
+def _load_json_file(path: Path) -> Optional[dict[str, Any]]:
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return None
+
+
+def _should_use_pose_ekf_from_meta(meta: Optional[dict[str, Any]]) -> bool:
+    if not isinstance(meta, dict):
+        return True
+    quality = meta.get("pose_quality", {})
+    if not isinstance(quality, dict):
+        return True
+    if not bool(quality.get("overall_pose_quality_valid", False)):
+        return True
+    return False
+
 
 def process_single_mcap(
     args_tuple: tuple,
@@ -28,7 +52,8 @@ def process_single_mcap(
     (mcap_path, output_dir, temp_extract_dir, sample_fps,
      image_topic, gps_topic, heading_topic, imu_topic, pose_topic,
      generate_bev, bev_output_root, generate_phase2, generate_walkgpt,
-     checkpoint_path, sam3_env_name, gpus, skip_existing) = args_tuple
+     checkpoint_path, sam3_env_name, gpus, skip_existing,
+    use_pose_ekf, ekf_q_pos, ekf_q_theta, ekf_r_xy, ekf_r_theta, force_reextract) = args_tuple
 
     try:
         mcap_to_sidewalk_format(
@@ -44,13 +69,19 @@ def process_single_mcap(
             generate_bev=generate_bev,
             bev_output_root=bev_output_root,
             quiet=True,
+            use_pose_ekf=use_pose_ekf,
+            ekf_q_pos=ekf_q_pos,
+            ekf_q_theta=ekf_q_theta,
+            ekf_r_xy=ekf_r_xy,
+            ekf_r_theta=ekf_r_theta,
+            force_reextract=force_reextract,
         )
 
         # Generate Phase2 annotations if needed
         if generate_phase2:
             phase2_cmd = [
                 sys.executable,
-                str(Path(__file__).parent / "run_sam3_som_phase.py"),
+                str(MODEL_PROCESSING_DIR / "run_sam3_som_phase.py"),
                 "--clip_dir", str(output_dir),
                 "--run_sam3",
                 "--sam3_env_name", sam3_env_name,
@@ -85,6 +116,12 @@ def mcap_to_sidewalk_format(
     pose_topic: str = "auto",
     generate_bev: bool = False,
     bev_output_root: Optional[Path] = None,
+    use_pose_ekf: bool = False,
+    ekf_q_pos: float = 1e-3,
+    ekf_q_theta: float = 1e-2,
+    ekf_r_xy: float = 9.0,
+    ekf_r_theta: float = 0.5,
+    force_reextract: bool = False,
     quiet: bool = False,
 ):
     """Convert a single MCAP file to sidewalk format."""
@@ -103,16 +140,24 @@ def mcap_to_sidewalk_format(
     front_mp4 = output_dir / "front.mp4"
     bev_video = output_dir / "bev_video.mp4"
 
-    if frame_gps.exists() and front_mp4.exists():
-        if generate_bev and bev_output_root and not bev_video.exists():
+    if frame_gps.exists() and front_mp4.exists() and not force_reextract:
+        existing_meta = _load_json_file(output_dir / "mcap_extract_meta.json")
+        effective_use_pose_ekf = bool(use_pose_ekf or _should_use_pose_ekf_from_meta(existing_meta))
+        if generate_bev and bev_output_root:
             print(f"Base sidewalk files already exist; regenerating BEV only: {output_dir.name}")
             bev_cmd = [
                 sys.executable,
-                str(Path(__file__).parent / "process_sidewalk_dataset.py"),
+                str(SCRIPT_DIR / "process_sidewalk_dataset.py"),
                 "--sidewalk-root", str(output_dir),
                 "--output-root", str(output_dir),
                 "--sample-fps", str(sample_fps),
             ]
+            if effective_use_pose_ekf:
+                bev_cmd.append("--use-pose-ekf")
+                bev_cmd.extend(["--ekf-q-pos", str(ekf_q_pos)])
+                bev_cmd.extend(["--ekf-q-theta", str(ekf_q_theta)])
+                bev_cmd.extend(["--ekf-r-xy", str(ekf_r_xy)])
+                bev_cmd.extend(["--ekf-r-theta", str(ekf_r_theta)])
             print(f"Running: {' '.join(bev_cmd)}")
             result = subprocess.run(bev_cmd, capture_output=True, text=True)
             if result.returncode != 0:
@@ -126,6 +171,9 @@ def mcap_to_sidewalk_format(
         print(f"Skipping - already converted: {output_dir.name}")
         return output_dir
 
+    if force_reextract and (frame_gps.exists() or front_mp4.exists() or (output_dir / "trajectory.json").exists()):
+        print(f"Force re-extract enabled; refreshing extracted files for: {output_dir.name}")
+
     # Step 1: Extract from MCAP
     if not quiet:
         print("\n[1/4] Extracting data from MCAP...")
@@ -136,7 +184,7 @@ def mcap_to_sidewalk_format(
 
     cmd = [
         sys.executable,
-        str(Path(__file__).parent / "mcap_to_sidewalk_inputs.py"),
+        str(SCRIPT_DIR / "mcap_to_sidewalk_inputs.py"),
         "--mcap-path", str(mcap_path),
         "--output-dir", str(extract_dir),
         "--sample-fps", str(sample_fps),
@@ -161,6 +209,9 @@ def mcap_to_sidewalk_format(
     if not trajectory_path.exists():
         raise RuntimeError(f"trajectory.json not found: {trajectory_path}")
 
+    extract_meta_path = extract_dir / "mcap_extract_meta.json"
+    extract_meta = _load_json_file(extract_meta_path)
+
     trajectory = json.loads(trajectory_path.read_text())
     if not quiet:
         print(f"Extracted {len(trajectory)} frames")
@@ -173,6 +224,10 @@ def mcap_to_sidewalk_format(
     for frame in trajectory:
         image_path = Path(frame["image_path"])
         frame["image_path"] = str(output_images_dir / image_path.name)
+
+    # Keep extractor meta alongside the normalized clip outputs so downstream steps can read it.
+    if extract_meta_path.exists():
+        shutil.copy2(extract_meta_path, output_dir / extract_meta_path.name)
 
     normalized_trajectory_path = output_dir / "trajectory.json"
     normalized_trajectory_path.write_text(json.dumps(trajectory, indent=2, ensure_ascii=True), encoding="utf-8")
@@ -224,6 +279,24 @@ def mcap_to_sidewalk_format(
 
     # frame_angular_velocities.npy (float64, shape [N, 3])
     frame_angular_velocities = np.zeros((num_frames, 3), dtype=np.float64)
+    extracted_imu_motion = extract_dir / "frame_angular_velocities.npy"
+    if extracted_imu_motion.exists():
+        imu_motion = np.load(extracted_imu_motion)
+        # Support two formats from extractor:
+        # - [timestamp, omega_x, omega_y, omega_z] (shape [N,4])
+        # - [omega_x, omega_y, omega_z] (shape [N,3])
+        if imu_motion.ndim == 2 and imu_motion.shape[1] >= 4:
+            imu_times = imu_motion[:, 0].astype(np.int64)
+            imu_omega = imu_motion[:, 1:4]
+            for i, f in enumerate(trajectory):
+                timestamp = int(f["timestamp"])
+                nearest = int(np.argmin(np.abs(imu_times - timestamp)))
+                frame_angular_velocities[i, :] = imu_omega[nearest, :]
+        elif imu_motion.ndim == 2 and imu_motion.shape[1] == 3:
+            # No timestamps available: assume samples align by index. Use nearest index clamped.
+            for i, _ in enumerate(trajectory):
+                idx = min(i, imu_motion.shape[0] - 1)
+                frame_angular_velocities[i, :] = imu_motion[idx, :]
     np.save(output_dir / "frame_angular_velocities.npy", frame_angular_velocities)
 
     # frame_linear_velocities.npy (float64, shape [N, 3])
@@ -281,6 +354,14 @@ def mcap_to_sidewalk_format(
     elif not quiet:
         print(f"Created: {front_mp4}")
 
+    effective_use_pose_ekf = bool(use_pose_ekf or _should_use_pose_ekf_from_meta(extract_meta))
+    if not quiet:
+        if effective_use_pose_ekf:
+            reason = "CLI enabled" if use_pose_ekf else "extract_meta pose_quality invalid/missing"
+            print(f"Using EKF for BEV generation ({reason})")
+        else:
+            print("Using raw heading data for BEV generation (pose quality looks valid)")
+
     # Step 4: Generate BEV (optional)
     if generate_bev and bev_output_root:
         if not quiet:
@@ -288,11 +369,17 @@ def mcap_to_sidewalk_format(
 
         bev_cmd = [
             sys.executable,
-            str(Path(__file__).parent / "process_sidewalk_dataset.py"),
+            str(SCRIPT_DIR / "process_sidewalk_dataset.py"),
             "--sidewalk-root", str(output_dir),
             "--output-root", str(output_dir),
             "--sample-fps", str(sample_fps),
         ]
+        if effective_use_pose_ekf:
+            bev_cmd.append("--use-pose-ekf")
+            bev_cmd.extend(["--ekf-q-pos", str(ekf_q_pos)])
+            bev_cmd.extend(["--ekf-q-theta", str(ekf_q_theta)])
+            bev_cmd.extend(["--ekf-r-xy", str(ekf_r_xy)])
+            bev_cmd.extend(["--ekf-r-theta", str(ekf_r_theta)])
 
         if not quiet:
             print(f"Running: {' '.join(bev_cmd)}")
@@ -329,6 +416,12 @@ def process_chunk(
     gpus: str = "0",
     skip_existing: bool = True,
     num_workers: int = 4,
+    use_pose_ekf: bool = False,
+    ekf_q_pos: float = 1e-3,
+    ekf_q_theta: float = 1e-2,
+    ekf_r_xy: float = 9.0,
+    ekf_r_theta: float = 0.5,
+    force_reextract: bool = False,
 ):
     """Process all MCAP files in a chunk directory with parallel processing."""
 
@@ -382,7 +475,8 @@ def process_chunk(
             "auto", "auto", "auto", "auto", "auto",
             generate_bev, sidewalk_root / chunk_dir.name,
             generate_phase2, generate_walkgpt,
-            checkpoint_path, sam3_env_name, gpus, skip_existing
+            checkpoint_path, sam3_env_name, gpus, skip_existing,
+            use_pose_ekf, ekf_q_pos, ekf_q_theta, ekf_r_xy, ekf_r_theta, force_reextract
         ))
 
     print(f"Skipped {skipped_count} already processed files")
@@ -495,11 +589,25 @@ def main():
         help="Skip already processed clips",
     )
     parser.add_argument(
+        "--force-reextract",
+        action="store_true",
+        help="Rerun MCAP extraction even when frame_gps.npy/front.mp4 already exist",
+    )
+    parser.add_argument(
         "--num-workers",
         type=int,
         default=max(1, multiprocessing.cpu_count() // 2),
         help="Number of parallel workers (default: half CPU count)",
     )
+    parser.add_argument(
+        "--use-pose-ekf",
+        action="store_true",
+        help="Use EKF fusion with IMU angular velocity and yaw/compass during BEV generation",
+    )
+    parser.add_argument("--ekf-q-pos", type=float, default=1e-3, help="EKF process noise strength for x/y")
+    parser.add_argument("--ekf-q-theta", type=float, default=1e-2, help="EKF process noise strength for theta")
+    parser.add_argument("--ekf-r-xy", type=float, default=9.0, help="EKF GPS observation variance")
+    parser.add_argument("--ekf-r-theta", type=float, default=0.5, help="EKF yaw/compass observation variance")
     args = parser.parse_args()
 
     # Create output directories
@@ -526,6 +634,12 @@ def main():
             gpus=args.gpus,
             skip_existing=args.skip_existing,
             num_workers=args.num_workers,
+            use_pose_ekf=args.use_pose_ekf,
+            ekf_q_pos=args.ekf_q_pos,
+            ekf_q_theta=args.ekf_q_theta,
+            ekf_r_xy=args.ekf_r_xy,
+            ekf_r_theta=args.ekf_r_theta,
+            force_reextract=args.force_reextract,
         )
 
     print(f"\n{'='*80}")

@@ -38,8 +38,8 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-# 添加项目路径
-project_root = Path(__file__).parent.parent
+# 添加 RouteServer 项目路径
+project_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(project_root / "src"))
 
 from mcp_server.map_providers import create_map_client

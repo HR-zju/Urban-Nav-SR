@@ -14,7 +14,7 @@ from typing import Any, Iterable
 
 
 def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[1]
+    return Path(__file__).resolve().parents[2]
 
 
 # Ensure `import mcp_server...` works even when the package is not installed.

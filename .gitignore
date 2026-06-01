@@ -88,3 +88,5 @@ coverage/
 *.gcov
 
 Agent_part/RouteServer/apps/nav-assistant/.build/
+
+/docker/

@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  urbannav-processor:
+    build:
+      context: ../..
+      dockerfile: tools/docker/Dockerfile
+    image: urbannav-processor:latest
+    container_name: urbannav-processor
+    volumes:
+      # Mount your dataset directory - adjust paths as needed
+      - /media/ubuntu/data1/SR-Nav\ Dataset:/data/dataset:ro
+      - ./output:/data/output
+      - ./temp:/data/temp
+    environment:
+      - PYTHONUNBUFFERED=1
+    working_dir: /app/tools
+    # Default command - can be overridden
+    command: dataset_processing/process_chunks_26_29.py --help
+    stdin_open: true
+    tty: true

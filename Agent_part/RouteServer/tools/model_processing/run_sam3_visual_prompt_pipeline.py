@@ -249,7 +249,7 @@ def parse_args() -> argparse.Namespace:
             "with the generated fpv_segmentation artifacts injected automatically."
         )
     )
-    parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]), help="RouteServer/OpenStreetMCP repo root")
+    parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[2]), help="RouteServer/OpenStreetMCP repo root")
     parser.add_argument("--client", default="yuquan", choices=["yuquan", "zero-shot"], help="Visual prompt client to run after SAM3")
     parser.add_argument("--provider", default="sam3", choices=SUPPORTED_SEGMENTATION_PROVIDERS, help="Segmentation provider")
     parser.add_argument("--run-sam3", action="store_true", help="Run the external SAM3 pipeline before invoking the client")

@@ -1,0 +1,36 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info
+dist
+build
+venv
+.env
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Data directories (we mount these instead)
+temp
+output
+
+# IDE
+.vscode
+.idea
+*.iml
+
+# Logs
+*.log

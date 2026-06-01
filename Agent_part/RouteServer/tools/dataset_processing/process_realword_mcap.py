@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any
 import numpy as np
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+
 
 def mcap_to_chunk_format(
     mcap_path: Path,
@@ -46,7 +48,7 @@ def mcap_to_chunk_format(
 
     cmd = [
         sys.executable,
-        str(Path(__file__).parent / "mcap_to_sidewalk_inputs.py"),
+        str(SCRIPT_DIR / "mcap_to_sidewalk_inputs.py"),
         "--mcap-path", str(mcap_path),
         "--output-dir", str(extract_dir),
         "--sample-fps", str(sample_fps),
@@ -126,6 +128,15 @@ def mcap_to_chunk_format(
     frame_speeds = np.zeros(num_frames, dtype=np.float64)
     np.save(output_dir / "frame_speeds.npy", frame_speeds)
 
+    # frame_angular_velocities.npy (float64, shape [N, 3])
+    frame_angular_velocities = np.zeros((num_frames, 3), dtype=np.float64)
+    for i, f in enumerate(trajectory):
+        if "angular_velocity_x" in f or "angular_velocity_y" in f or "angular_velocity_z" in f:
+            frame_angular_velocities[i, 0] = float(f.get("angular_velocity_x", 0.0) or 0.0)
+            frame_angular_velocities[i, 1] = float(f.get("angular_velocity_y", 0.0) or 0.0)
+            frame_angular_velocities[i, 2] = float(f.get("angular_velocity_z", 0.0) or 0.0)
+    np.save(output_dir / "frame_angular_velocities.npy", frame_angular_velocities)
+
     print(f"Created npy files for {num_frames} frames")
 
     # Step 3: Create front.mp4 from images
@@ -181,7 +192,7 @@ def mcap_to_chunk_format(
 
     bev_cmd = [
         sys.executable,
-        str(Path(__file__).parent / "process_sidewalk_dataset.py"),
+        str(SCRIPT_DIR / "process_sidewalk_dataset.py"),
         "--sidewalk-root", str(output_chunk_dir),
         "--output-root", str(bev_temp_dir),
         "--sample-fps", str(sample_fps),
