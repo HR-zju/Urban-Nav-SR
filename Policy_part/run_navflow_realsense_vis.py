@@ -38,14 +38,13 @@ import torchvision.transforms.functional as TF
 from PIL import Image as PILImage
 from rclpy.node import Node
 from scipy.spatial.transform import Rotation as R
-from sensor_msgs.msg import CompressedImage
+from sensor_msgs.msg import CompressedImage, Image
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool, Float32MultiArray
 
 import ast
 
 import matplotlib
-import math
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
@@ -107,11 +106,19 @@ class AsyncVideoWriter:
     target resolution and drawing trajectories before writing to disk.
     """
 
-    def __init__(self, out_path: str, fps: float, fourcc: int, max_queue: int = 128):
+    def __init__(
+        self,
+        out_path: str,
+        fps: float,
+        fourcc: int,
+        max_queue: int = 128,
+        overlay_camera_pitch_deg: float = 8.0,
+    ):
         self.out_path = out_path
         self.fps = float(fps)
         self.fourcc = fourcc
         self.max_queue = max_queue
+        self.overlay_camera_pitch_deg = float(overlay_camera_pitch_deg)
 
         # Queue of (frame_bgr, wp_np, frame_time) tuples, where wp_np is an
         # optional (N, 2) array of waypoints in robot frame.
@@ -119,7 +126,14 @@ class AsyncVideoWriter:
         self._stop_event = mp.Event()
         self._process = mp.Process(
             target=self._worker,
-            args=(self._queue, self._stop_event, self.out_path, self.fps, self.fourcc),
+            args=(
+                self._queue,
+                self._stop_event,
+                self.out_path,
+                self.fps,
+                self.fourcc,
+                self.overlay_camera_pitch_deg,
+            ),
             daemon=True,
         )
         self._queue_full_logged = False
@@ -158,6 +172,7 @@ class AsyncVideoWriter:
         out_path: str,
         fps: float,
         fourcc: int,
+        overlay_camera_pitch_deg: float,
     ):
         writer = None
         writer_size = None
@@ -232,6 +247,7 @@ class AsyncVideoWriter:
                                 [790.0, 1920.0 / 2.0, 1080.0 / 2.0, 0.0],
                                 rgb_img,
                                 save_fig=False,
+                                camera_pitch_deg=overlay_camera_pitch_deg,
                             )
                         except Exception as e:  # noqa: BLE001
                             # Fallback to plain image if overlay fails.
@@ -408,6 +424,11 @@ class RealSenseNavflowNode(Node):
         output_fps: float = 30.0,
         save_vis: bool = False,
         show_window: bool = True,
+        publish_overlay: bool = True,
+        overlay_topic: str = "/navflow/overlay/image_raw/compressed",
+        overlay_transport: str = "compressed",
+        overlay_jpeg_quality: int = 85,
+        overlay_camera_pitch_deg: float = 8.0,
         video_writer: Optional[AsyncVideoWriter] = None,
     ):
         super().__init__("navflow_realsense_runner")
@@ -420,11 +441,19 @@ class RealSenseNavflowNode(Node):
         self.output_fps = float(output_fps) if float(output_fps) > 0.0 else 30.0
         self.save_vis = save_vis
         self.show_window = bool(show_window)
+        self.publish_overlay = bool(publish_overlay)
+        self.overlay_topic = str(overlay_topic)
+        self.overlay_transport = str(overlay_transport)
+        self.overlay_jpeg_quality = int(np.clip(int(overlay_jpeg_quality), 1, 100))
+        self.overlay_camera_pitch_deg = float(overlay_camera_pitch_deg)
         self.video_writer = video_writer
         self.window_name = "navflow_realsense_overlay"
         # Zero-overhead bypass when both recording and save_vis are disabled.
         self.enable_visualization = bool(
-            self.video_writer is not None or self.save_vis or self.show_window
+            self.video_writer is not None
+            or self.save_vis
+            or self.show_window
+            or self.publish_overlay
         )
 
         if self.show_window:
@@ -457,6 +486,17 @@ class RealSenseNavflowNode(Node):
         # Publishers
         self.waypoint_pub = self.create_publisher(Float32MultiArray, "waypoint", 1)
         self.goal_pub = self.create_publisher(Bool, "/topoplan/reached_goal", 1)
+        if self.publish_overlay and self.overlay_transport == "compressed":
+            self.overlay_pub = self.create_publisher(CompressedImage, self.overlay_topic, 1)
+        elif self.publish_overlay:
+            self.overlay_pub = self.create_publisher(Image, self.overlay_topic, 1)
+        else:
+            self.overlay_pub = None
+        if self.overlay_pub is not None:
+            self.get_logger().info(
+                f"Publishing overlay image topic: {self.overlay_topic} "
+                f"({self.overlay_transport})"
+            )
 
         # Autonomy enable flag
         self.enable_2 = False
@@ -471,13 +511,13 @@ class RealSenseNavflowNode(Node):
         # Odom subscriptions
         self.localodom_sub = self.create_subscription(
             Odometry,
-            "/globalEstimator/global_odometry",
+            "/agilex/odom_filtered", # "/globalEstimator/global_odometry",
             self.localodom_callback,
             20,
         )
         self.odom_sub = self.create_subscription(
             Odometry,
-            "/globalEstimator/global_odometry",
+            "/agilex/odom_filtered", # "/globalEstimator/global_odometry",
             self.odom_callback,
             100,
         )
@@ -523,24 +563,12 @@ class RealSenseNavflowNode(Node):
         try:
             with self.lock:
                 self.localpose_buffer.append((msg.header.stamp, msg.pose))
-
-                if not self.goal_reached and len(self.target_xy) > 0:
-                    dx = self.target_xy[0][0] - msg.pose.pose.position.x
-                    dy = self.target_xy[0][1] - msg.pose.pose.position.y
-                    pose_diff = math.sqrt(dx ** 2 + dy ** 2)
-
-                    if pose_diff < self.distance_threshold:
-                        if len(self.target_xy) > 1:
-                            del self.target_xy[0]
-                            self.get_logger().info(
-                                f"Reached current target, {len(self.target_xy)} targets remaining"
-                            )
-                        else:
-                            self.goal_reached = True
-                            self.get_logger().info("Reached final target")
+                # Goal-free runner: targets may still be loaded for legacy
+                # pose transforms, but they must never stop the controller.
+                self.goal_reached = False
 
             reached_goal_msg = Bool()
-            reached_goal_msg.data = bool(self.goal_reached)
+            reached_goal_msg.data = False
             self.goal_pub.publish(reached_goal_msg)
         except Exception as e:  # noqa: BLE001
             self.get_logger().error(f"Error in local odom callback: {e}")
@@ -604,11 +632,36 @@ class RealSenseNavflowNode(Node):
                 self.intrinsic_params,
                 rgb_img,
                 save_fig=False,
+                camera_pitch_deg=self.overlay_camera_pitch_deg,
             )
             return frame_out
         except Exception as e:  # noqa: BLE001
             self.get_logger().warning(f"Overlay render failed: {e}")
             return frame_resized
+
+    @staticmethod
+    def bgr_to_image_msg(frame_bgr: np.ndarray, header) -> Image:
+        msg = Image()
+        msg.header = header
+        msg.height = int(frame_bgr.shape[0])
+        msg.width = int(frame_bgr.shape[1])
+        msg.encoding = "bgr8"
+        msg.is_bigendian = 0
+        msg.step = int(frame_bgr.shape[1] * frame_bgr.shape[2])
+        msg.data = frame_bgr.tobytes()
+        return msg
+
+    def bgr_to_compressed_image_msg(self, frame_bgr: np.ndarray, header) -> Optional[CompressedImage]:
+        encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), self.overlay_jpeg_quality]
+        ok, encoded = cv2.imencode(".jpg", frame_bgr, encode_params)
+        if not ok:
+            self.get_logger().warning("Failed to JPEG-encode overlay image")
+            return None
+        msg = CompressedImage()
+        msg.header = header
+        msg.format = "jpeg"
+        msg.data = encoded.tobytes()
+        return msg
 
     def image_callback(self, msg: CompressedImage):
         try:
@@ -619,10 +672,18 @@ class RealSenseNavflowNode(Node):
                 self.get_logger().warning("Failed to decode compressed image")
                 return
 
-            if self.show_window:
+            if self.show_window or self.overlay_pub is not None:
                 display_frame = self.render_overlay_frame(image_bgr)
-                cv2.imshow(self.window_name, display_frame)
-                cv2.waitKey(1)
+                if self.overlay_pub is not None:
+                    if self.overlay_transport == "compressed":
+                        overlay_msg = self.bgr_to_compressed_image_msg(display_frame, msg.header)
+                    else:
+                        overlay_msg = self.bgr_to_image_msg(display_frame, msg.header)
+                    if overlay_msg is not None:
+                        self.overlay_pub.publish(overlay_msg)
+                if self.show_window:
+                    cv2.imshow(self.window_name, display_frame)
+                    cv2.waitKey(1)
 
             # Timestamp for rate control of ONNX enqueue (video itself runs at
             # full input frame rate).
@@ -888,12 +949,11 @@ class RealSenseNavflowNode(Node):
         # Snapshot shared state once to avoid races with localodom_callback.
         with self.lock:
             target_snapshot = list(self.target_xy)
-            goal_reached_snapshot = self.goal_reached
 
         if not target_snapshot:
             self.get_logger().warning("No target pose available, skip this batch")
             reached_goal_msg = Bool()
-            reached_goal_msg.data = bool(goal_reached_snapshot)
+            reached_goal_msg.data = False
             self.goal_pub.publish(reached_goal_msg)
             self.inference_event.clear()
             return
@@ -1110,7 +1170,7 @@ class RealSenseNavflowNode(Node):
 
         self.waypoint_pub.publish(waypoint_msg)
         reached_goal_msg = Bool()
-        reached_goal_msg.data = bool(self.goal_reached)
+        reached_goal_msg.data = False
         self.goal_pub.publish(reached_goal_msg)
         self.inference_event.clear()
 
@@ -1163,6 +1223,40 @@ def parse_args():
         help="Disable realtime OpenCV preview window",
     )
     parser.add_argument(
+        "--overlay_topic",
+        type=str,
+        default=None,
+        help="Topic for the rendered overlay frame. Defaults depend on --overlay_transport.",
+    )
+    parser.add_argument(
+        "--overlay_transport",
+        type=str,
+        choices=("compressed", "raw"),
+        default="compressed",
+        help="Publish overlay as sensor_msgs/CompressedImage or raw sensor_msgs/Image",
+    )
+    parser.add_argument(
+        "--overlay_jpeg_quality",
+        type=int,
+        default=85,
+        help="JPEG quality for compressed overlay publishing (1-100)",
+    )
+    parser.add_argument(
+        "--overlay_camera_pitch_deg",
+        type=float,
+        default=8.0,
+        help=(
+            "Visualization-only camera pitch in degrees. Positive tilts the "
+            "virtual camera upward and moves projected ground paths lower."
+        ),
+    )
+    parser.add_argument(
+        "--no_publish_overlay",
+        action="store_false",
+        dest="publish_overlay",
+        help="Disable publishing the rendered overlay image topic",
+    )
+    parser.add_argument(
         "--targets",
         type=str,
         default="odom_poses.txt",
@@ -1173,6 +1267,11 @@ def parse_args():
 
 def main():
     args = parse_args()
+    if args.overlay_topic is None:
+        if args.overlay_transport == "compressed":
+            args.overlay_topic = "/navflow/overlay/image_raw/compressed"
+        else:
+            args.overlay_topic = "/navflow/overlay/image_raw"
 
     # ONNX session and device
     available_providers = ort.get_available_providers()
@@ -1224,7 +1323,12 @@ def main():
             f"[overlay] enabling AsyncVideoWriter at {out_path} "
             f"(fps estimate from input, fallback={args.output_fps})"
         )
-        async_writer = AsyncVideoWriter(out_path, args.output_fps, fourcc)
+        async_writer = AsyncVideoWriter(
+            out_path,
+            args.output_fps,
+            fourcc,
+            overlay_camera_pitch_deg=args.overlay_camera_pitch_deg,
+        )
         async_writer.start()
 
     rclpy.init(args=None)
@@ -1237,6 +1341,11 @@ def main():
         output_fps=args.output_fps,
         save_vis=args.save_vis,
         show_window=args.show_window,
+        publish_overlay=args.publish_overlay,
+        overlay_topic=args.overlay_topic,
+        overlay_transport=args.overlay_transport,
+        overlay_jpeg_quality=args.overlay_jpeg_quality,
+        overlay_camera_pitch_deg=args.overlay_camera_pitch_deg,
         video_writer=async_writer,
     )
 

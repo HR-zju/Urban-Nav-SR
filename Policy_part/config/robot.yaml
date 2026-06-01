@@ -12,4 +12,3 @@ vel_navi_topic: /cmd_vel
 # vel_navi_topic: /robot0/cmd_vel
 vel_recovery_topic: /cmd_vel_mux/input/recovery
 
-

@@ -82,6 +82,8 @@ tmux send-keys "python run_navflow_realsense_vis.py --onnx onnx_ckpts/vint_goal_
 # tmux send-keys "python run_navflow_realsense_vis.py --onnx onnx_ckpts/vint_goal_free_lr1e4.onnx --no_show_window" Enter
 # tmux send-keys "python run_navflow_realsense_vis.py --onnx onnx_ckpts/vint_goal_free_fullResume1e4.onnx --no_show_window" Enter
 
+# tmux send-keys "python run_navflow_realsense_vis.py --onnx onnx_ckpts/vint_goal_free.onnx --no_show_window" Enter
+tmux send-keys "python run_navflow_realsense_vis_goal.py --onnx onnx_ckpts/vint_goal_conditioned.onnx --targets ./topomaps/LLM_Policy/LLM_UTM_odom_poses.txt --no_show_window" Enter
 
 # run pd controller in pane 6
 tmux select-pane -t 6
@@ -94,9 +96,11 @@ tmux send-keys "python pd_controller_ros2_new2.py" Enter
 
 # record bag in pane 7
 tmux select-pane -t 7
-# tmux send-keys "docker exec -it ros1toros2 zsh" Enter
-# sleep 1
+tmux send-keys "docker exec -it ros1toros2 zsh" Enter
+sleep 1
+tmux send-keys "source /opt/ros/humble/setup.zsh" Enter
 tmux send-keys "cd /home/nuvo/SR/foundation-policy/Policy_part/" Enter
+tmux send-keys "ros2 bag record /camera/camera/color/image_raw/compressed  /gps/fix  /mfla/dr_odom /globalEstimator/global_odometry /navflow/overlay/image_raw/compressed" Enter
 # tmux send-keys "mamba activate foundation_policy" Enter
 # tmux send-keys "python ws_raw_message_listener.py" Enter
 

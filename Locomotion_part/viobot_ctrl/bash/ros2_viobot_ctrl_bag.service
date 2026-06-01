@@ -13,8 +13,8 @@ KillSignal=SIGINT
 TimeoutStopSec=15
 KillMode=mixed
 
-StandardOutput=append:/root/record_data/log/bag.log
-StandardError=append:/root/record_data/log/bag.log
+StandardOutput=append:/data/upload/log/bag.log
+StandardError=append:/data/upload/log/bag.log
 
 [Install]
 WantedBy=multi-user.target

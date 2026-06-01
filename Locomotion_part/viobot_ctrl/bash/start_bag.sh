@@ -194,7 +194,9 @@ else
     exit 1 # 状态不对，建议直接退出脚本，不执行后续的录包
 fi
 
-RECORD_DIR="/root/record_data"
+# RECORD_DIR="/root/record_data"
+RECORD_DIR="/data/upload"
+
 # 确保父目录存在
 mkdir -p "$RECORD_DIR" "$RECORD_DIR/log"
 

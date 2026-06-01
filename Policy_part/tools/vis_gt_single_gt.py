@@ -7,7 +7,7 @@ import numpy as np
 def project_waypoints_to_fisheye_image_with_polygon_new(
         waypoints, intrinsic_params, image_path, save_path='projected_waypoints_fisheye.jpg', 
         camera_height=0.41, save_fig=False, color=None, base_alpha=0.15, 
-        text_to_visualize=None, plotted_number=None):
+        text_to_visualize=None, plotted_number=None, camera_pitch_deg=0.0):
     """
     New fisheye projection function with gradient transparency and side bars.
     
@@ -19,6 +19,9 @@ def project_waypoints_to_fisheye_image_with_polygon_new(
     - camera_height: Height of camera above ground (meters)
     - save_fig: Whether to save the result image
     - color: Custom color for the path (BGR format)
+    - camera_pitch_deg: Visualization-only camera pitch in degrees. Positive
+      values tilt the virtual camera upward and move projected ground paths
+      lower in the image.
     
     Returns:
     - img: Image with projected waypoints as navigation path
@@ -81,6 +84,18 @@ def project_waypoints_to_fisheye_image_with_polygon_new(
             [1, 0, 0]     
         ])
         cam_points = (R @ (ego_points - cam_translation).T).T
+        if abs(camera_pitch_deg) > 1e-6:
+            # Positive "pitch up" should make the ground path appear lower in
+            # the image. In this camera frame (+y down, +z forward), that is a
+            # negative rotation around the camera x-axis.
+            pitch = -np.deg2rad(camera_pitch_deg)
+            cp, sp = np.cos(pitch), np.sin(pitch)
+            pitch_R = np.array([
+                [1, 0, 0],
+                [0, cp, -sp],
+                [0, sp, cp],
+            ])
+            cam_points = (pitch_R @ cam_points.T).T
         valid_mask = cam_points[:, 2] > 0
         cam_points = cam_points[valid_mask]
         if cam_points.shape[0] == 0:
@@ -393,7 +408,7 @@ def draw_solid_centerline_alpha(img, points, color, thickness, alpha=0.7):
     cv2.addWeighted(overlay, alpha, img, 1 - alpha, 0, img)
 def project_multiple_centerlines_to_fisheye(
         multiple_waypoints, intrinsic_params, image_path, save_path='multiple_centerlines.jpg', 
-        camera_height=0.41, save_fig=False, line_colors=None, line_styles=None, i=0):
+        camera_height=0.61, save_fig=False, line_colors=None, line_styles=None, i=0):
     """
     Project multiple centerlines (trajectories) onto fisheye image
     
