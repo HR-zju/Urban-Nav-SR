@@ -561,11 +561,11 @@ class GlobalFusionNode(Node):
     def __init__(self):
         super().__init__('globalEstimator')
 
-        self.declare_parameter('route_json_path', '/home/nuvo/SR/foundation-policy/Policy_part/topomaps/LLM_Policy/route_waypoints.json')
-        self.declare_parameter('route_output_path', '/home/nuvo/SR/foundation-policy/Policy_part/topomaps/LLM_Policy/LLM_UTM_odom_poses.txt')
-        self.declare_parameter('vio_global_csv_path', '/home/nuvo/SR/foundation-policy/Policy_part/topomaps/LLM_Policy/gkj/output/vio_global.csv')
+        self.declare_parameter('route_json_path', '/home/orin26/code/Urban-Nav-SR/Policy_part/topomaps/LLM_Policy/route_waypoints.json')
+        self.declare_parameter('route_output_path', '/home/orin26/code/Urban-Nav-SR/Policy_part/topomaps/LLM_Policy/LLM_UTM_odom_poses.txt')
+        self.declare_parameter('vio_global_csv_path', '/home/orin26/code/Urban-Nav-SR/Policy_part/topomaps/LLM_Policy/gkj/output/vio_global.csv')
         self.declare_parameter('gps_topic', '/gps/fix')
-        self.declare_parameter('vio_topic', '/mfla/dr_odom')
+        self.declare_parameter('vio_topic', '/agilex/odom_filtered')
         self.declare_parameter('sync_tolerance_sec', 0.2)
         self.declare_parameter('sync_time_source', 'receive')
         self.declare_parameter('output_stamp_source', 'sync')
@@ -611,8 +611,10 @@ class GlobalFusionNode(Node):
         self.get_logger().info(f"Watching route JSON file: {self.get_parameter('route_json_path').value}")
         self.get_logger().info(f"Route UTM output file: {self.get_parameter('route_output_path').value}")
         self.get_logger().info(
-            'Fusion sync: sync_time_source=%s, output_stamp_source=%s, sync_tolerance_sec=%.3f'
+            'Fusion sync: gps_topic=%s, vio_topic=%s, sync_time_source=%s, output_stamp_source=%s, sync_tolerance_sec=%.3f'
             % (
+                self.get_parameter('gps_topic').value,
+                self.get_parameter('vio_topic').value,
                 self.get_parameter('sync_time_source').value,
                 self.get_parameter('output_stamp_source').value,
                 float(self.get_parameter('sync_tolerance_sec').value),
