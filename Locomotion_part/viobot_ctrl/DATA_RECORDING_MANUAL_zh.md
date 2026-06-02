@@ -363,8 +363,8 @@ ls -lh /data/upload/bag_YYYYmmdd_HHMMSS
 ## 硬件
 
 ### 1. 滑板车
-
-充电接口在车把下方，使用随车充电器连接220V交流电。其他操作教程在[这里]()。
+滑板车密码为5211。  
+充电接口在车把下方，使用随车充电器连接220V交流电。其他操作教程在[这里](https://support.ninebot.com/cn-zh/pdf?pdfUrl=https%253A%252F%252Fai-kb-private.ninebot.com%252Fai_kb%252F1761888941742_%2525E4%2525B9%25259D%2525E5%25258F%2525B7%2525E7%252594%2525B5%2525E5%25258A%2525A8%2525E6%2525BB%252591%2525E6%25259D%2525BF%2525E8%2525BD%2525A6F2Pro%2525E6%252596%2525B0%2525E5%25259B%2525BD%2525E6%2525A0%252587%2525E8%2525AF%2525B4%2525E6%252598%25258E%2525E4%2525B9%2525A6.pdf%253Fe%253D1780563783%2526token%253DIAM-2Snxhovigh9PO2Zci9b9ER0HgbXGHJ-NcMikkDc8%253AZ3A63rgDLh_Yt0P1qUSWLPNIgwQ%253D&openType=3&subCategoryCode=H1&seriesCode=K097&subSeriesName=%E4%B9%9D%E5%8F%B7%E7%94%B5%E5%8A%A8%E6%BB%91%E6%9D%BF%E8%BD%A6F2+Pro)。
 ![滑板车充电接口](./docs/imgs/viobot2_charging_port.jpg)
 滑板车面板位置安装了viobot和gnss的支撑平台，viobot背面有魔术贴，直接贴在平台上，gnss天线底座有磁性，可以吸附在平台左侧的平台上。
 ![滑板车平台](./docs/imgs/viobot2_platform.jpg)
