@@ -4,6 +4,54 @@
 
 ## 2026-06-02
 
+### 收敛 Agent baseline 为真实 trajectory-only 专家输出
+
+- `tools/model_processing/run_sidewalk_phase1_cot_baseline.py` 新增 Phase1 CoT baseline runner。
+  - 推荐 `--input-mode phase1_source`，直接读取 `phase1_source_*.jsonl`，复用 exporter 产出的 FPV/BEV 配对、训练 user prompt 和 CoT v2 输出格式。
+  - 兼容 `--input-mode online_bev`，仅 BEV 图来源改为在线 OSM 渲染，VLM prompt 与输出仍保持 Phase1 CoT v2。
+  - VLM 输出必须是 `<think><Scene>/<FPV>/<BEV>/<CrossView>/<Plan></think><finish>{...}</finish>`。
+  - 从 `<finish>.trajectory` 解析归一化 FPV 轨迹，再转换为 source-pixel `rendered_prompt.path_uv` 生成 overlay。
+  - 记录 normalized point ADE/FDE 和 curve ADE/FDE，便于与 `pixel_trajectory` 几何真值比较。
+- `src/mcp_server/brain/arbiter.py` 新增 `VISUAL_PROMPT_OUTPUT_MODE=trajectory` / `LVLM_VISUAL_PROMPT_OUTPUT_MODE=trajectory` 模式。
+  - A-stage prompt 明确要求 VLM/LLM 输出 `rendered_prompt.type=arrow_path` 和 `rendered_prompt.path_uv`。
+  - 不再要求 `path_corridor`、`path_samples`、`left_edge_uv`、`right_edge_uv`、`coverage_polygon_uv`、mask 或 SAM/SoM region id。
+  - 解析器接受 `path_uv`、`trajectory_uv`、`trajectory`、`points`、`path` 等同义字段，但不合成手写 fallback 轨迹。
+  - trajectory 模式下若模型只输出 `center_uv` 而没有路径点，仍判为解析失败，避免规则路径冒充专家输出。
+- `tools/model_processing/run_sidewalk_images_visual_prompt_pipeline.py` 新增 `--visual-prompt-output-mode trajectory|corridor`。
+  - SideWalk 图像推理默认使用 `trajectory`，产物用于 Agent expert trajectory baseline。
+  - 如需兼容旧 visual prompt corridor 链路，可显式传 `--visual-prompt-output-mode corridor`。
+- `tools/README.md` 增加 Agent expert trajectory 推理与可视化命令，区分几何真值标注与真实 Agent 推理结果。
+
+### 清理 Phase1 JSON 空字段
+
+- `tools/model_processing/sidewalk_phase1_dataset.py` 不再把缺失的 `lat`、`lng`、`heading_deg` 写成 `null`。
+  - source JSONL 的 `sidewalk_meta` 仅在字段有真实值时保留 GPS/heading。
+  - `bev_patch_meta/*.json` 的 `pose` 仅保留已有字段，例如 timestamp。
+- `tools/model_processing/sidewalk_phase1_cot_teacher.py` 不再为成功样本写空的 `cot_teacher.validation_errors: []`。
+- 已对当前 2fps clip test 产物执行一次机械清理，source/cot/qa_index JSONL 不再包含 `null`、空列表、空 dict 或空字符串字段。
+
+### 对齐 Phase1 QA 与 RouteServer baseline 轨迹输出口径
+
+- `tools/model_processing/sidewalk_phase1_dataset.py` 的离线 QA bundle 增加与在线 RouteServer QA 对齐的核心 task：
+  - `crossview_topology_grounding`
+  - `point_prompt`
+  - 保留 `trajectory_intent_check` 作为 Phase1 几何轨迹一致性审计项。
+- `src/mcp_server/services/visual_prompt_service.py` 新增 trajectory-only 导出规范：
+  - 最终 `arbiter_decision.rendered_prompt` 只保留 `path_uv` 中心轨迹、`center_uv`、`direction_vec`、`termination_semantics`、`support_confidence`。
+  - 内部 A/V 阶段仍可使用 corridor samples、segmentation validation 和 safe-corridor prior 做安全检查。
+  - 公开 baseline artifact 不再把 `left_edge_uv`、`right_edge_uv`、`coverage_polygon_uv` 或 `mask` 当成 Phase1 预测轨迹。
+- RouteServer overlay 和 fallback debug video 只绘制轨迹中心线，不再绘制 corridor 左右边界和 coverage polygon。
+- `Agent_part/SideWalkNav/README.md` 改写为中文，说明 QA 口径、CoT teacher 中 GT 轨迹与 Agent baseline 轨迹的区别、以及曲线级轨迹指标。
+
+### 升级 Phase1 CoT Teacher 为嵌套结构化 `<think>`
+
+- `tools/model_processing/sidewalk_phase1_cot_teacher.py` 从 `phase1_structured_cot_v1` 升级到 `phase1_structured_cot_v2`：
+  - `<think>` 内直接嵌套 `<Scene>/<FPV>/<BEV>/<CrossView>/<Plan>` 五个 JSON section。
+  - `<finish>` 单独位于 `<think>` 之后，只包含可执行输出：trajectory、intent、route theta、confidence。
+  - validator 禁止 `<think>` 内的额外叙述性文本，避免与结构化 JSON 重复。
+  - validator 新增 `<BEV>.ego_cell` / `<BEV>.target_cell` 与 `bev_patch_meta.ego_cell_gt` / `target_cell_gt` 的一致性检查。
+- 文档明确 `<BEV>.ego_cell` 和 `<BEV>.target_cell` 是 Stage1 GridAcc@1 / k-hop Accuracy 的模型预测字段，真值来自 `bev_patch_meta`。
+
 ### 修正 Phase1 FPV 轨迹近场回折并默认全帧生成
 
 - `tools/model_processing/sidewalk_phase1_dataset.py` 默认 `frame_step=1`，对每一个 FPV/pose 帧生成训练样本；低频 BEV 继续通过 `bev_index.json` 按 timestamp 最近邻配对。

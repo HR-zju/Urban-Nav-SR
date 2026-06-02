@@ -14,6 +14,205 @@
 | `docker/` | Dockerfile、镜像构建、部署和服务器批处理脚本 |
 | `archive/legacy_tests/` | 旧的手动测试脚本，仅作参考，不作为主流程入口 |
 
+## SideWalk 主流程命令速查
+
+以下命令按实际开发顺序组织。默认原始数据根目录：
+
+```bash
+SIDEWALK_DATASET="/media/ubuntu/data1/SR-Nav Dataset/sidewalk"
+CLIP="${SIDEWALK_DATASET}/chunk_0/<clip_id>"
+```
+
+### 1. 扫描 chunk/clip 状态
+
+```bash
+cd /home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer
+
+python tools/dataset_processing/scan_chunk.py \
+  --sidewalk-root "${SIDEWALK_DATASET}/chunk_0" \
+  --out-csv "${SIDEWALK_DATASET}/chunk_0/scan_summary.csv"
+```
+
+用途：检查每个 clip 是否已有 `front.mp4`、pose、GPS、BEV、Phase1 产物等，适合批处理前确认缺口。
+
+### 2. 生成单个 clip 的最简 Phase1 BEV
+
+```bash
+python tools/dataset_processing/process_sidewalk_dataset.py \
+  --sidewalk-root "${CLIP}" \
+  --bev-sample-fps 2.0 \
+  --map-provider osm \
+  --use-pose-ekf
+```
+
+默认写回原始 clip 目录：
+
+```text
+trajectory.json
+samples.json
+bev_images/
+bev_index.json
+```
+
+说明：
+
+- `bev_images/` 是 2fps ego-aligned BEV，默认画完整 route/start/end。
+- `bev_index.json` 记录 BEV 帧与原始 FPV timestamp 的映射。
+- 默认不生成 `bev_video*.mp4`、north-up BEV、重复 FPV 抽帧；这些只在 debug 参数显式打开。
+
+### 3. 批量生成 sidewalk 基础输入和 BEV
+
+```bash
+python tools/dataset_processing/process_chunks_26_29.py \
+  --dataset-root "/media/ubuntu/data1/SR-Nav Dataset" \
+  --sidewalk-root "${SIDEWALK_DATASET}" \
+  --chunks 0 \
+  --sample-fps 20.0 \
+  --generate-bev \
+  --use-pose-ekf \
+  --num-workers 4
+```
+
+用途：批量从 chunk 生成 `front.mp4`、pose/GPS 中间文件和最简 BEV。若使用 `--skip-existing`，注意旧逻辑可能按 `bev_video.mp4` 判断已有产物；需要重生 Phase1 BEV 时，建议先清理对应 clip 下的 `bev_images/`、`bev_index.json` 或去掉 `--skip-existing`。
+
+### 4. 生成 Phase1 source JSONL 和几何真值
+
+```bash
+SIDEWALK_ROOT="${CLIP}" \
+OUTPUT_ROOT="${CLIP}/phase1" \
+SPLIT_NAME=clip_test \
+FRAME_STEP=1 \
+WRITE_OVERLAYS=1 \
+./tools/model_processing/run_sidewalk_phase1_dataset.sh
+```
+
+主要产物：
+
+```text
+phase1/manifests/phase1_source_clip_test.jsonl
+phase1/clips/<clip_id>/trajectory_labels/*.json
+phase1/clips/<clip_id>/bev_patch_meta/*.json
+phase1/clips/<clip_id>/qa/*_qa.json
+phase1/clips/<clip_id>/overlays/*.jpg
+```
+
+这一步是“真值生成”主入口：
+
+- `trajectory_labels/*.json`：FPV normalized trajectory GT、intent、route theta。
+- `bev_patch_meta/*.json`：BEV grid、ego/target cell、route cells、intent。
+- `qa/*_qa.json`：离线 QA bundle。
+- FPV 高频样本会通过 `bev_index.json` 匹配最近的 2fps BEV，默认最大时间差 `300ms`。
+
+如需旧 GNSS/`trajectory.json` smoke fallback，必须显式允许：
+
+```bash
+ALLOW_HEURISTIC_TRAJECTORY=1 ./tools/model_processing/run_sidewalk_phase1_dataset.sh
+```
+
+### 5. 生成 CoT teacher 标注
+
+```bash
+LLM_PROVIDER=ark \
+ARK_API_KEY="<your-key>" \
+LLM_MODEL="doubao-seed-2-0-pro-260215" \
+OUTPUT_ROOT="${CLIP}/phase1" \
+SPLIT_NAME=clip_test \
+NUM_POINTS=16 \
+FALLBACK_POLICY=drop \
+./tools/model_processing/run_sidewalk_phase1_cot_teacher.sh
+```
+
+主要产物：
+
+```text
+phase1/manifests/phase1_cot_clip_test.jsonl
+phase1/manifests/phase1_cot_report_clip_test.json
+```
+
+输出格式固定为 Phase1 CoT v2：
+
+```xml
+<think>
+<Scene>{...}</Scene>
+<FPV>{...}</FPV>
+<BEV>{...}</BEV>
+<CrossView>{...}</CrossView>
+<Plan>{...}</Plan>
+</think>
+<finish>{"trajectory":[[x,y],...],"intent":"...","route_theta_deg":...,"confidence_level":"..."}</finish>
+```
+
+### 6. 审计 Phase1 数据产物
+
+```bash
+python tools/model_processing/eval_sidewalk_phase1_artifacts.py \
+  --source-jsonl "${CLIP}/phase1/manifests/phase1_source_clip_test.jsonl" \
+  --qa-root "${CLIP}/phase1/clips" \
+  --summary-json "${CLIP}/phase1/manifests/phase1_eval_clip_test.json" \
+  --output-jsonl "${CLIP}/phase1/manifests/phase1_eval_rows_clip_test.jsonl" \
+  --expected-points 16
+```
+
+用途：检查路径引用、trajectory shape、归一化范围、QA schema、CoT 输出是否可解析；后续可接预测 JSON 计算 ADE/FDE。
+
+### 7. 跑 Agent CoT baseline 并可视化预测轨迹
+
+推荐使用 exporter BEV，与训练输入完全一致：
+
+```bash
+LLM_PROVIDER=ark \
+ARK_API_KEY="<your-key>" \
+LLM_MODEL="doubao-seed-2-0-pro-260215" \
+python tools/model_processing/run_sidewalk_phase1_cot_baseline.py \
+  --input-mode phase1_source \
+  --source-jsonl "${CLIP}/phase1/manifests/phase1_source_clip_test.jsonl" \
+  --output-dir "${CLIP}/agent_cot_baseline_clip_test" \
+  --frame-start 130 \
+  --frame-end 150 \
+  --frame-step 10
+```
+
+输出：
+
+```text
+agent_cot_baseline_clip_test/json/*.json
+agent_cot_baseline_clip_test/overlay/*.svg
+agent_cot_baseline_clip_test/manifest.json
+```
+
+说明：baseline 输出也必须是 CoT v2；脚本从 `<finish>.trajectory` 解析模型预测，转换为 FPV pixel `path_uv` 只用于 overlay。不能用规则 fallback 补一条路径。
+
+### 8. 转成 ms-swift 训练 manifest
+
+在 ms-swift 仓库运行：
+
+```bash
+cd /home/ubuntu/WorkSpace/project/SR/Code/ms-swift
+
+python -m swift.sidewalk_nav.dataset_builder \
+  --input-format sidewalk \
+  --input-jsonl "${CLIP}/phase1/manifests/phase1_cot_clip_test.jsonl" \
+  --output-jsonl "${CLIP}/phase1/manifests/ms_swift_phase1_cot_clip_test.jsonl" \
+  --num-points 16
+```
+
+如果只做 text trajectory baseline，可把 `--input-jsonl` 换成 `phase1_source_clip_test.jsonl`；若做 CoT SFT，应使用 `phase1_cot_clip_test.jsonl`。
+
+### 9. Phase2 SAM/SoM 产物
+
+Phase1 不依赖 SAM/SoM。需要 Phase2 dense grounding 时再运行：
+
+```bash
+cd /home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer/tools/model_processing
+./run_phase_chunk0.sh
+```
+
+或按 chunk 全量运行：
+
+```bash
+./run_phase_all.sh
+```
+
 ## 推荐入口
 
 ### 数据集处理
@@ -52,7 +251,8 @@ python tools/dataset_processing/process_chunks_26_29.py \
 | `model_processing/run_sam3_som_phase.py` | 主入口，生成 fpv segmentation、SoM、route support 等 Phase2 artifacts |
 | `model_processing/run_phase_chunk0.sh` | 一键处理 chunk_0 |
 | `model_processing/run_phase_all.sh` | 一键处理 sidewalk 下所有数据 |
-| `model_processing/run_sidewalk_images_visual_prompt_pipeline.py` | sidewalk 图像视觉提示流水线 |
+| `model_processing/run_sidewalk_images_visual_prompt_pipeline.py` | sidewalk Agent expert trajectory 推理与可视化流水线；默认输出 `rendered_prompt.path_uv`，不依赖 SAM/SoM corridor |
+| `model_processing/run_sidewalk_phase1_cot_baseline.py` | 使用 Phase1 CoT v2 输入/输出格式运行 Agent baseline；支持 exporter BEV 和在线 BEV 两种输入 |
 | `model_processing/sidewalk_phase1_dataset.py` | 生成 Phase1 ms-swift source JSONL、trajectory label、BEV topology meta 和 QA bundle；默认使用 InternNav pose/camera 标定投影 |
 | `model_processing/sidewalk_phase1_cot_teacher.py` | 调用 Agent VLM/LLM，把 Phase1 source JSONL 升级为带 `<think>/<Scene>/<FPV>/<BEV>/<CrossView>/<Plan>/<finish>` 的 CoT SFT 数据 |
 | `model_processing/eval_sidewalk_phase1_artifacts.py` | 审计 Phase1 数据产物，并可选评估预测 ADE/FDE |
@@ -123,6 +323,57 @@ LIMIT=200 \
 ```
 
 `FALLBACK_POLICY=drop` 是正式构建推荐值；`template` 只用于 smoke test，因为它不能提供高质量自然语言 CoT。
+
+### Agent expert trajectory 推理与可视化
+
+数据标注链路里的 `trajectory_labels/*.json` 是几何真值；Agent baseline 链路需要让 VLM/LLM 基于同样的 FPV+BEV QA 语境真实推理出一条 `<finish>.trajectory`，再把该归一化轨迹转换成 `rendered_prompt.path_uv` 做可视化和指标评估。这里不使用手写 fallback 路径，也不要求模型输出 `path_corridor`、左右边界、coverage polygon、mask 或 SAM/SoM region id。
+
+推荐模式是直接读取 `phase1_source_*.jsonl`，这样 FPV、BEV、prompt、输出格式都与 ms-swift CoT 标注链路一致：
+
+```bash
+cd /home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer
+
+CLIP="/media/ubuntu/data1/SR-Nav Dataset/sidewalk/chunk_0/<clip_id>"
+
+LLM_PROVIDER=ark \
+ARK_API_KEY="<your-key>" \
+LLM_MODEL="doubao-seed-2-0-pro-260215" \
+python tools/model_processing/run_sidewalk_phase1_cot_baseline.py \
+  --input-mode phase1_source \
+  --source-jsonl "${CLIP}/phase1/manifests/phase1_source_clip_test.jsonl" \
+  --output-dir "${CLIP}/agent_cot_baseline_clip_test" \
+  --frame-start 130 \
+  --frame-end 150 \
+  --frame-step 10
+```
+
+兼容模式可以在线生成 BEV，但只允许 BEV 来源不同，VLM 的输入 prompt 和输出仍然是 Phase1 CoT v2：
+
+```bash
+cd /home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer
+
+CLIP="/media/ubuntu/data1/SR-Nav Dataset/sidewalk/chunk_0/<clip_id>"
+
+LLM_PROVIDER=ark \
+ARK_API_KEY="<your-key>" \
+LLM_MODEL="doubao-seed-2-0-pro-260215" \
+MAP_PROVIDER=osm \
+python tools/model_processing/run_sidewalk_phase1_cot_baseline.py \
+  --input-mode online_bev \
+  --images-dir "${CLIP}/images" \
+  --trajectory-json "${CLIP}/agent_baseline_frames_130_150_trajectory.json" \
+  --output-dir "${CLIP}/agent_cot_baseline_online_bev_130_150" \
+  --frame-start 130 \
+  --frame-end 150 \
+  --frame-step 10
+```
+
+输出检查重点：
+
+- `json/{frame}.json`：保留原始 CoT `response`、解析后的 `<finish>`、`prediction.trajectory_norm`、用于 overlay 的 `prediction.rendered_prompt.path_uv`，以及与 GT 的 normalized ADE/FDE。
+- `overlay/{frame}.svg`：只显示预测轨迹中心线，不显示 corridor 左右边界。
+- `manifest.json`：统计每帧是否成功解析 CoT 与轨迹。
+- 如果 `<finish>.trajectory` 为空，应优先检查 prompt/schema 和模型输出解析，不应通过规则 fallback 补一条路径。
 
 ### BEV 和数学工具
 

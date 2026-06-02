@@ -24,7 +24,7 @@ Phase1 分成三段，不能混用职责：
 | 阶段 | 输入 | 输出 | 说明 |
 | --- | --- | --- | --- |
 | Geometry Exporter | raw clip、FPV、BEV、pose、camera params | `phase1_source_*.jsonl`、trajectory label、BEV patch meta | 只生成可审计几何真值。 |
-| LLM Teacher | source JSONL、FPV/BEV 图、geometry evidence | `<think>/<Scene>/<FPV>/<BEV>/<CrossView>/<Plan>/<finish>` | CoT SFT 必需；LLM 只生成解释文本，不允许改写几何真值。 |
+| LLM Teacher | source JSONL、FPV/BEV 图、geometry evidence | `<think>{Scene/FPV/BEV/CrossView/Plan}</think><finish>` | CoT SFT 必需；LLM 只生成解释文本，不允许改写几何真值。 |
 | Validator + Manifest Builder | teacher answer、structured target | `phase1_cot_*.jsonl` | 校验 tags、JSON、intent、theta、trajectory 后写入 ms-swift 可消费行。 |
 
 ## 2. 入口脚本
@@ -241,10 +241,11 @@ Phase1 默认生成：
 
 - `bev_route_theta`
 - `bev_navigation_stage`
-- `crossview_region_grounding`
+- `crossview_topology_grounding`
+- `point_prompt`
 - `trajectory_intent_check`
 
-没有 segmentation 时，不生成强 `fpv_region_affordance` 和 `mask_route_sequence` 监督。
+其中 `bev_route_theta`、`bev_navigation_stage`、`crossview_topology_grounding`、`point_prompt` 与在线 RouteServer QA 核心 task 对齐；`trajectory_intent_check` 是 Phase1 离线几何轨迹一致性审计项。没有 segmentation 时，不生成强 `fpv_region_affordance` 和 `mask_route_sequence` 监督。
 
 ## 5. 使用方式
 
@@ -330,22 +331,25 @@ FALLBACK_POLICY=drop \
 ./tools/model_processing/run_sidewalk_phase1_cot_teacher.sh
 ```
 
-Teacher 输出格式固定为单轮 assistant target：
+Teacher 输出格式固定为单轮 assistant target。`<think>` 内只放结构化观察和规划 section，不再额外生成叙述性 reasoning，避免和 JSON section 重复：
 
 ```text
-<think>...</think>
+<think>
 <Scene>{...}</Scene>
 <FPV>{...}</FPV>
 <BEV>{...}</BEV>
 <CrossView>{...}</CrossView>
 <Plan>{...}</Plan>
+</think>
 <finish>{"trajectory":[[x,y],...],"intent":"...","route_theta_deg":...,"confidence_level":"..."}</finish>
 ```
 
 Validator 会检查：
 
 - 所有 tag 是否存在，且没有 tag 外说明文字。
+- `<think>` 内是否只包含 `Scene/FPV/BEV/CrossView/Plan` 五个结构化 JSON section，不允许额外叙述性文本。
 - `Scene/FPV/BEV/CrossView/Plan/finish` 是否为可解析 JSON。
+- `<BEV>.ego_cell` 和 `<BEV>.target_cell` 是否等于 `bev_patch_meta.ego_cell_gt/target_cell_gt`。
 - `<BEV>.intent` 和 `<finish>.intent` 是否等于 `intent_gt`。
 - `route_theta_deg` 是否在容差内等于几何真值。
 - `<finish>.trajectory` 点数、范围、与 `trajectory_label` 的偏差是否合格。
@@ -390,6 +394,45 @@ python -m swift.sidewalk_nav.dataset_builder \
   --qa-root "/media/ubuntu/data1/SR-Nav Dataset/sidewalk_phase1/clips" \
   --output-jsonl "/media/ubuntu/data1/SR-Nav Dataset/sidewalk_phase1/manifests/ms_swift_phase1_qa_train.jsonl"
 ```
+
+### 5.6 Agent baseline CoT 推理
+
+Agent baseline 不应再使用旧的 visual-prompt JSON schema。为了与数据标注、ms-swift SFT 和后续评估统一，baseline 的输入输出必须采用同一套 Phase1 CoT v2 格式：
+
+```text
+FPV + BEV
+  -> <think>
+       <Scene>{...}</Scene>
+       <FPV>{...}</FPV>
+       <BEV>{...}</BEV>
+       <CrossView>{...}</CrossView>
+       <Plan>{...}</Plan>
+     </think>
+     <finish>{"trajectory":[[x,y],...],"intent":"...","route_theta_deg":...,"confidence_level":"..."}</finish>
+```
+
+推荐使用 exporter BEV：
+
+```bash
+python tools/model_processing/run_sidewalk_phase1_cot_baseline.py \
+  --input-mode phase1_source \
+  --source-jsonl "/media/ubuntu/data1/SR-Nav Dataset/sidewalk_phase1/manifests/phase1_source_train.jsonl" \
+  --output-dir "/media/ubuntu/data1/SR-Nav Dataset/sidewalk_phase1/agent_cot_baseline_train" \
+  --limit 200
+```
+
+兼容模式可使用在线 OSM BEV，但仅 BEV 图来源不同，prompt 和输出仍保持 CoT v2：
+
+```bash
+python tools/model_processing/run_sidewalk_phase1_cot_baseline.py \
+  --input-mode online_bev \
+  --images-dir "<clip>/images" \
+  --trajectory-json "<clip>/trajectory.json" \
+  --output-dir "<clip>/agent_cot_baseline_online_bev" \
+  --frame-step 10
+```
+
+输出中的 `prediction.trajectory_norm` 直接来自模型 `<finish>.trajectory`，`prediction.rendered_prompt.path_uv` 只用于 FPV overlay。若 `<finish>.trajectory` 缺失，样本应记为解析失败，不允许用规则 fallback 补轨迹。
 
 ## 6. 评估指标
 
