@@ -15,6 +15,7 @@
 - [传输数据到本地](#传输数据到本地)
 - [传输数据到foxglove](#传输数据到foxglove)
 - [常见异常检查](#常见异常检查)
+- [硬件](#硬件)
 
 ## 服务与数据位置
 
@@ -56,6 +57,8 @@
 - `/baton/gnss/heading`
 
 ## 录制流程
+
+附[启动检查视频](./docs/vids/startup.mp4)以及[结束检查视频](./docs/vids/shutdown.mp4)。
 
 每次采集建议按这个顺序执行：
 
@@ -299,7 +302,16 @@ rsync -avz root@192.168.137.231:/data/upload/bag_YYYYmmdd_HHMMSS /path/to/local_
 
 ## 传输数据到foxglove
 
-设备配置了foxglove agent来自动上传数据到foxglove云端，上传后可以在foxglove web中查看和分析数据。
+设备配置了foxglove agent来自动上传数据到foxglove云端，上传后可以在foxglove web中查看和分析数据。注意要插上随身wifi。
+
+```bash
+systemctl restart foxglove-agent.service
+```
+并查看日志：
+
+```bash
+journalctl -u foxglove-agent.service -f
+```
 
 
 ## 常见异常检查
@@ -347,3 +359,34 @@ ros2 topic hz /camera_x001/image_raw/compressed
 ros2 topic echo /baton/gnss/status --once
 ls -lh /data/upload/bag_YYYYmmdd_HHMMSS
 ```
+
+## 硬件
+
+### 1. 滑板车
+
+充电接口在车把下方，使用随车充电器连接220V交流电。其他操作教程在[这里]()。
+![滑板车充电接口](./docs/imgs/viobot2_charging_port.jpg)
+滑板车面板位置安装了viobot和gnss的支撑平台，viobot背面有魔术贴，直接贴在平台上，gnss天线底座有磁性，可以吸附在平台左侧的平台上。
+![滑板车平台](./docs/imgs/viobot2_platform.jpg)
+![滑板车平台安装](./docs/imgs/viobot2_platform_install.jpg)
+相机安装在连杆靠下方位置，朝前方，用螺丝固定在平台上。
+![相机安装](./docs/imgs/viobot2_camera_mount.jpg)
+
+### 2. viobot
+![viobot](./docs/imgs/viobot2_device.jpg)
+![viobot](./docs/imgs/viobot2_device2.jpg)
+
+### 3. GNSS天线
+![gnss天线](./docs/imgs/viobot2_gnss_antenna.jpg)
+
+### 4. 相机
+![相机](./docs/imgs/viobot2_camera.jpg)
+
+### 5. 随身wifi
+![随身wifi](./docs/imgs/viobot2_wifi.jpg)
+
+### 6. 连接线
+原厂供电线：
+![供电线](./docs/imgs/viobot2_power_cable.jpg)
+充电宝供电线：
+![充电宝供电线](./docs/imgs/viobot2_powerbank_cable.jpg)
