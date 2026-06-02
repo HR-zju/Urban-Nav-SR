@@ -89,7 +89,12 @@ class SidewalkPhase1CotTeacherTest(unittest.TestCase):
             validation = validate_teacher_answer(answer, row, evidence, TeacherConfig(expected_points=4))
 
             self.assertTrue(validation.valid, validation.errors)
-            self.assertEqual(validation.sections["BEV"]["intent"], "go_straight")
+            self.assertTrue(answer.startswith("<think>\n<Scene>"))
+            self.assertIn("</Plan>\n</think>\n<finish>", answer)
+            self.assertIn("navigable_support", validation.sections["FPVScene"])
+            self.assertEqual(validation.sections["BEVContext"]["intent"], "go_straight")
+            self.assertEqual(validation.sections["BEVContext"]["ego_cell"], [8, 12])
+            self.assertEqual(validation.sections["BEVContext"]["target_cell"], [8, 4])
             self.assertEqual(validation.sections["finish"]["trajectory"], row["pixel_trajectory"])
             self.assertEqual(validation.sections["finish"]["route_theta_deg"], 0.0)
 
@@ -118,12 +123,37 @@ class SidewalkPhase1CotTeacherTest(unittest.TestCase):
                 teacher_model="unit-test",
             )
 
-            self.assertIn("<Scene>{...}</Scene>", manifest_row["prompt"])
+            self.assertIn('<Scene>{"summary":"..."', manifest_row["prompt"])
+            self.assertIn('<FPVScene>{"navigable_support"', manifest_row["prompt"])
+            self.assertIn('<BEVContext>{"grid_size"', manifest_row["prompt"])
+            self.assertIn("First identify safe visible navigation support in <FPVScene>.navigable_support", manifest_row["prompt"])
+            self.assertIn("Every trajectory point must lie on visible walkable ground support", manifest_row["prompt"])
+            self.assertIn("Do not place any point in sky", manifest_row["prompt"])
             self.assertNotIn("route_theta_gt", manifest_row["prompt"])
             self.assertNotIn("trajectory_norm", manifest_row["prompt"])
             self.assertNotIn("[[0.5, 0.9]", manifest_row["prompt"])
             self.assertEqual(manifest_row["response"], answer)
-            self.assertEqual(manifest_row["cot_teacher"]["schema_version"], "sidewalk_phase1_cot_teacher_v1")
+            self.assertEqual(manifest_row["cot_teacher"]["schema_version"], "sidewalk_phase1_cot_teacher_v3")
+
+    def test_validator_rejects_free_text_inside_think(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            row = _make_source_row(Path(tmp))
+            evidence = load_evidence(row)
+            answer = render_template_answer(row, evidence).replace("<think>\n", "<think>\nThis repeats the structured fields.\n", 1)
+            validation = validate_teacher_answer(answer, row, evidence, TeacherConfig(expected_points=4))
+
+            self.assertFalse(validation.valid)
+            self.assertIn("text_before_nested_tag:Scene", validation.errors)
+
+    def test_validator_rejects_bev_grid_cell_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            row = _make_source_row(Path(tmp))
+            evidence = load_evidence(row)
+            answer = render_template_answer(row, evidence).replace('"target_cell":[8,4]', '"target_cell":[7,4]', 1)
+            validation = validate_teacher_answer(answer, row, evidence, TeacherConfig(expected_points=4))
+
+            self.assertFalse(validation.valid)
+            self.assertTrue(any(error.startswith("target_cell_mismatch") for error in validation.errors))
 
     def test_generate_cot_dataset_retries_and_writes_valid_rows(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

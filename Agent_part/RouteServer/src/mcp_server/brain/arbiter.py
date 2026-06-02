@@ -131,6 +131,22 @@ def minimal_output_enabled() -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
+def trajectory_output_enabled() -> bool:
+    """Return whether A-stage should emit only an FPV trajectory path.
+
+    This mode is used by the SideWalk Phase1 expert-baseline data path. It
+    intentionally avoids SAM/SoM corridor fields such as left/right support
+    edges and coverage polygons: the expert signal we need is the LVLM/VLM's
+    image-plane `path_uv`, not a deterministic fallback corridor.
+    """
+
+    value = (
+        os.getenv("VISUAL_PROMPT_OUTPUT_MODE", "").strip().lower()
+        or os.getenv("LVLM_VISUAL_PROMPT_OUTPUT_MODE", "").strip().lower()
+    )
+    return value in {"trajectory", "trajectory_only", "path_uv", "arrow_path"}
+
+
 def _compact_prompt_context_enabled() -> bool:
     """Return whether to prefer a shorter, cache-friendly prompt envelope."""
 
@@ -147,9 +163,19 @@ def _prompt_cache_prefix(kind: str) -> dict[str, Any]:
     """Build a stable prompt prefix that stays identical across frames."""
 
     minimal = minimal_output_enabled()
+    trajectory = trajectory_output_enabled()
     base_schema = (
         {"r": 0, "t": "c|u|o", "p": "[[[center,left,right],...]]", "c": "0..1"}
         if minimal
+        else {
+            "selected_prompt_type": "trajectory",
+            "instruction": "short action summary",
+            "confidence": "0..1",
+            "reason": "short explanation",
+            "reject_all": "boolean",
+            "rendered_prompt": {"type": "arrow_path", "path_uv": "[[u,v],...]"},
+        }
+        if trajectory
         else {
             "selected_prompt_type": "path_corridor",
             "instruction": "short action summary",
@@ -162,13 +188,15 @@ def _prompt_cache_prefix(kind: str) -> dict[str, Any]:
     return {
         "cache_prefix_version": "visual_prompt_prefix_v1",
         "kind": str(kind),
-        "output_shape": "compact_nav_corridor" if minimal else "full_visual_prompt",
+        "output_shape": (
+            "compact_nav_corridor" if minimal else "fpv_trajectory_path" if trajectory else "full_visual_prompt"
+        ),
         "contract": base_schema,
         "stable_rules": [
             "JSON only",
             "image first",
             "FPV coordinates only",
-            "SoM for visual anchors",
+            "SoM for visual anchors" if not trajectory else "no SAM/SoM dependency",
             "BEV for topology only",
             "safe visible traversable support only",
         ],
@@ -319,6 +347,22 @@ def build_direct_prompt_system_prompt() -> str:
             "start near the bottom-center opening; keep samples smooth, compact, and forward-extending; "
             "follow safe_corridor_prior as a teacher guardrail unless a visible obstacle/occlusion requires shortening. "
             "If no safe visible corridor exists, output {\"r\":1,\"t\":\"o\",\"p\":[],\"c\":0}."
+        )
+    if trajectory_output_enabled():
+        return (
+            "Role: SideWalk first-person expert trajectory generator.\n"
+            "Goal: infer ONE executable FPV image-plane navigation trajectory from the FPV image and BEV topology image.\n"
+            "Output JSON ONLY, no prose, no markdown, no comments.\n"
+            "Schema: {\"selected_prompt_type\":\"trajectory\",\"instruction\":\"...\",\"confidence\":0..1,"
+            "\"reason\":\"...\",\"reject_all\":false,"
+            "\"rendered_prompt\":{\"type\":\"arrow_path\",\"path_uv\":[[u1,v1],[u2,v2],...],"
+            "\"termination_semantics\":\"continue_visible_corridor|reach_turn_entry|stop_before_occlusion\","
+            "\"support_confidence\":0..1}}.\n"
+            "Use FPV pixel coordinates in the provided image_size. The FPV image is the only coordinate frame for path_uv.\n"
+            "Use BEV only to infer route topology, intent, and long-range alignment; never copy BEV coordinates into FPV pixels.\n"
+            "Do not output path_corridor, path_samples, left_edge_uv, right_edge_uv, coverage_polygon_uv, mask, or region ids.\n"
+            "Do not require SAM, SoM, verifier, segmentation masks, or region overlap. They are not part of this Phase1 expert path contract.\n"
+            "Reject only when the FPV/BEV evidence is unusable for navigation; otherwise return a visible path_uv produced by your visual reasoning."
         )
     return (
         "Role: first-person navigation visual prompt generator.\n"
@@ -497,6 +541,49 @@ def build_direct_prompt_question(
                     "BEV_topology_only",
                     "reject_if_no_visible_safe_corridor",
                 ]),
+            }
+        )
+    if trajectory_output_enabled():
+        return _compact_json_dumps(
+            {
+                "prompt_prefix": _prompt_cache_prefix("generator:trajectory"),
+                "prompt_encoding": "sidewalk_expert_trajectory_v1",
+                "task": (
+                    "Generate ONE FPV image-plane sidewalk navigation trajectory. "
+                    "This is an expert inference output, not a template fallback. "
+                    "Use FPV for visible geometry and BEV for route/topology context."
+                ),
+                "navigation_mode": str(navigation_mode or "foot"),
+                "image_size": {"width": image_width, "height": image_height},
+                "image_input_contract": image_input_contract,
+                "route_context": compact_route,
+                "bev_map_overlay_legend": bev_map_overlay_legend,
+                "output_schema": {
+                    "selected_prompt_type": "trajectory",
+                    "instruction": "short navigation action",
+                    "confidence": "0..1",
+                    "reason": "brief visual/topological rationale",
+                    "reject_all": "false unless images are unusable",
+                    "rendered_prompt": {
+                        "type": "arrow_path",
+                        "path_uv": "4-16 FPV pixel points [[u,v],...]",
+                        "termination_semantics": (
+                            "continue_visible_corridor|reach_turn_entry|stop_before_occlusion"
+                        ),
+                        "support_confidence": "0..1",
+                    },
+                },
+                "rules": [
+                    "Return JSON only.",
+                    "The primary output is rendered_prompt.path_uv.",
+                    "Do not emit path_corridor, path_samples, left/right edges, mask, coverage polygon, or SAM/SoM region ids.",
+                    "Use image_size pixel coordinates; keep all points inside the FPV frame.",
+                    "Start near the visible robot-side walking support and extend forward along the safest sidewalk path.",
+                    "Keep the trajectory smooth and physically executable; do not use hand-written fallback geometry.",
+                    "Use BEV only for cross-view route intent and topology.",
+                    "If the BEV route conflicts with visible FPV safety, prefer visible safety and explain briefly in reason.",
+                    "Reject only if no usable FPV/BEV navigation evidence exists.",
+                ],
             }
         )
     return _compact_json_dumps(
@@ -934,10 +1021,26 @@ def _derive_direction_from_path(path_uv: list[list[float]] | None) -> list[float
     return [round(dx / norm, 4), round(dy / norm, 4)]
 
 
+def _first_present_path(raw_prompt: dict[str, Any]) -> Any:
+    """Return the first common LVLM trajectory/path field.
+
+    The expert trajectory path is generated by the LVLM. This helper only
+    accepts synonymous field names and does not synthesize fallback geometry.
+    """
+
+    for key in ("path_uv", "trajectory_uv", "trajectory", "points", "path"):
+        if key in raw_prompt:
+            return raw_prompt.get(key)
+    return None
+
+
 def _coerce_rendered_prompt(raw_prompt: Any, *, image_width: int, image_height: int) -> dict[str, Any] | None:
     if not isinstance(raw_prompt, dict):
         return None
+    raw_prompt = dict(raw_prompt)
     prompt_type = str(raw_prompt.get("type", "") or "").strip().lower()
+    if not prompt_type and _first_present_path(raw_prompt) is not None:
+        prompt_type = "arrow_path"
     if prompt_type not in {"arrow", "sector", "region", "arrow_path", "path_corridor"}:
         return None
     center = _coerce_point(raw_prompt.get("center_uv"), image_width=image_width, image_height=image_height)
@@ -956,7 +1059,7 @@ def _coerce_rendered_prompt(raw_prompt: Any, *, image_width: int, image_height: 
     except Exception:
         span_px = 64.0
     mask = _coerce_polygon(raw_prompt.get("mask"), image_width=image_width, image_height=image_height)
-    path_uv = _coerce_path(raw_prompt.get("path_uv"), image_width=image_width, image_height=image_height)
+    path_uv = _coerce_path(_first_present_path(raw_prompt), image_width=image_width, image_height=image_height)
     path_samples = _coerce_path_samples(
         raw_prompt.get("path_samples"),
         image_width=image_width,
@@ -986,9 +1089,20 @@ def _coerce_rendered_prompt(raw_prompt: Any, *, image_width: int, image_height: 
     except Exception:
         support_confidence = None
     if prompt_type == "arrow_path" and path_uv is None:
+        if trajectory_output_enabled():
+            return None
         if u is None or v is None:
             return None
         path_uv = [[round(image_width * 0.5, 2), round(image_height * 0.94, 2)], [round(u, 2), round(v, 2)]]
+    if prompt_type == "arrow_path" and path_uv is not None:
+        if u is None or v is None:
+            u, v = path_uv[-1]
+        if direction is None:
+            direction = _derive_direction_from_path(path_uv)
+        if termination_semantics is None:
+            termination_semantics = "continue_visible_corridor"
+        if support_confidence is None:
+            support_confidence = 0.0
     if prompt_type == "path_corridor":
         if path_samples is None or path_uv is None or coverage_polygon_uv is None or termination_semantics is None:
             return None
@@ -1028,6 +1142,11 @@ def coerce_direct_prompt_decision(
         image_width=image_width,
         image_height=image_height,
     )
+    raw = dict(raw)
+    if not isinstance(raw.get("rendered_prompt"), dict):
+        direct_path = _first_present_path(raw)
+        if direct_path is not None:
+            raw["rendered_prompt"] = {"type": "arrow_path", "path_uv": direct_path}
     reject_all = bool(raw.get("reject_all"))
     rendered_prompt = _coerce_rendered_prompt(
         raw.get("rendered_prompt"),
@@ -1036,6 +1155,8 @@ def coerce_direct_prompt_decision(
     )
     if rendered_prompt is None and not reject_all:
         return None
+    if rendered_prompt is not None:
+        reject_all = False
     local = route_context.get("local_semantics", {}) or {}
     try:
         confidence = _clamp(float(raw.get("confidence", 0.0) or 0.0), 0.0, 1.0)

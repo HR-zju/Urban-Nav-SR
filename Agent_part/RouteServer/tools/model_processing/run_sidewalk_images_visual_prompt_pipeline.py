@@ -820,6 +820,15 @@ def parse_args() -> argparse.Namespace:
         default=True,
         help="Save exact LVLM input images for audit/debug (default: true)",
     )
+    parser.add_argument(
+        "--visual-prompt-output-mode",
+        default="trajectory",
+        choices=["trajectory", "corridor"],
+        help=(
+            "A-stage output contract. trajectory asks the LVLM for rendered_prompt.path_uv only; "
+            "corridor keeps the legacy path_corridor contract."
+        ),
+    )
 
     parser.add_argument(
         "--allow-missing-segmentation",
@@ -881,6 +890,10 @@ async def main_async() -> None:
     _set_env_if_value("VISUAL_PROMPT_LLM_IMAGE_MAX_BYTES", args.llm_image_max_bytes)
     _set_env_if_value("VISUAL_PROMPT_LLM_IMAGE_JPEG_QUALITY", args.llm_image_jpeg_quality)
     _set_env_if_value("BEV_MAP_TILE_OUTPUT_SIZE_PX", args.bev_map_output_size_px)
+    if str(args.visual_prompt_output_mode) == "trajectory":
+        os.environ["VISUAL_PROMPT_OUTPUT_MODE"] = "trajectory"
+    else:
+        os.environ.pop("VISUAL_PROMPT_OUTPUT_MODE", None)
 
     _ensure_dir(output_dir)
     overlays_dir = output_dir / "overlay"
@@ -939,6 +952,7 @@ async def main_async() -> None:
         "segmentation_policy": segmentation_policy,
         "llm_primary_image_role": str(resolved_llm_primary_image_role),
         "llm_input_mode": str(llm_input_mode),
+        "visual_prompt_output_mode": str(args.visual_prompt_output_mode),
         "llm_image_overrides": {
             "max_side": args.llm_image_max_side,
             "max_bytes": args.llm_image_max_bytes,

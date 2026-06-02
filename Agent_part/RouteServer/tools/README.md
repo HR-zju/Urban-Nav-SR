@@ -134,8 +134,8 @@ phase1/manifests/phase1_cot_report_clip_test.json
 ```xml
 <think>
 <Scene>{...}</Scene>
-<FPV>{...}</FPV>
-<BEV>{...}</BEV>
+<FPVScene>{...}</FPVScene>
+<BEVContext>{...}</BEVContext>
 <CrossView>{...}</CrossView>
 <Plan>{...}</Plan>
 </think>
@@ -180,7 +180,13 @@ agent_cot_baseline_clip_test/overlay/*.svg
 agent_cot_baseline_clip_test/manifest.json
 ```
 
-说明：baseline 输出也必须是 CoT v2；脚本从 `<finish>.trajectory` 解析模型预测，转换为 FPV pixel `path_uv` 只用于 overlay。不能用规则 fallback 补一条路径。
+说明：baseline 输出也必须是 CoT v2；脚本从 `<finish>.trajectory` 解析模型预测，转换为 FPV pixel `path_uv` 只用于 overlay。不能用规则 fallback 补一条路径。每帧 JSON 会保留：
+
+- `system_prompt` 和 `prompt`：审计模型实际收到的系统约束和 user prompt。
+- `response`：模型原始 CoT。
+- `prediction.trajectory_norm`：模型 `<finish>.trajectory` 的归一化预测。
+- `prediction.rendered_prompt.path_uv`：仅用于 overlay 的 source-pixel 轨迹。
+- `trajectory_warnings`：例如轨迹延伸到过高图像区域、终点明显高于几何 GT 等，不做自动修正。
 
 ### 8. 转成 ms-swift 训练 manifest
 
@@ -254,7 +260,7 @@ python tools/dataset_processing/process_chunks_26_29.py \
 | `model_processing/run_sidewalk_images_visual_prompt_pipeline.py` | sidewalk Agent expert trajectory 推理与可视化流水线；默认输出 `rendered_prompt.path_uv`，不依赖 SAM/SoM corridor |
 | `model_processing/run_sidewalk_phase1_cot_baseline.py` | 使用 Phase1 CoT v2 输入/输出格式运行 Agent baseline；支持 exporter BEV 和在线 BEV 两种输入 |
 | `model_processing/sidewalk_phase1_dataset.py` | 生成 Phase1 ms-swift source JSONL、trajectory label、BEV topology meta 和 QA bundle；默认使用 InternNav pose/camera 标定投影 |
-| `model_processing/sidewalk_phase1_cot_teacher.py` | 调用 Agent VLM/LLM，把 Phase1 source JSONL 升级为带 `<think>/<Scene>/<FPV>/<BEV>/<CrossView>/<Plan>/<finish>` 的 CoT SFT 数据 |
+| `model_processing/sidewalk_phase1_cot_teacher.py` | 调用 Agent VLM/LLM，把 Phase1 source JSONL 升级为带 `<think>/<Scene>/<FPVScene>/<BEVContext>/<CrossView>/<Plan>/<finish>` 的 CoT SFT 数据 |
 | `model_processing/eval_sidewalk_phase1_artifacts.py` | 审计 Phase1 数据产物，并可选评估预测 ADE/FDE |
 | `model_processing/build_sam_semantic_dataset.py` | 汇总/构建 SAM semantic 数据集 |
 | `model_processing/README_PHASE.md` | Phase2 详细说明 |
@@ -311,7 +317,7 @@ python tools/dataset_processing/process_sidewalk_dataset.py \
 ALLOW_HEURISTIC_TRAJECTORY=1 ./tools/model_processing/run_sidewalk_phase1_dataset.sh
 ```
 
-如果要训练 `<Scene>/<FPV>/<BEV>/<CrossView>/<Plan>` CoT，必须在 source JSONL 后运行 LLM Teacher。该阶段把几何真值作为离线 evidence 交给 teacher，但最终 ms-swift user prompt 不包含 `intent_gt`、`route_theta_gt` 或 trajectory label，避免 GT 泄露。
+如果要训练 `<Scene>/<FPVScene>/<BEVContext>/<CrossView>/<Plan>` CoT，必须在 source JSONL 后运行 LLM Teacher。该阶段把几何真值作为离线 evidence 交给 teacher，但最终 ms-swift user prompt 不包含 `intent_gt`、`route_theta_gt` 或 trajectory label，避免 GT 泄露。
 
 ```bash
 LLM_PROVIDER=ark \

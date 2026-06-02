@@ -336,6 +336,28 @@ def build_phase1_sample(
         overlay_dir.mkdir(parents=True, exist_ok=True)
         write_debug_overlay(record.image_path, trajectory_norm, overlay_path)
 
+    sidewalk_meta = {
+        "source_dataset": "sidewalk_phase1_agent",
+        "clip_id": record.clip_id,
+        "frame_idx": record.frame_idx,
+        "frame_name": record.frame_name,
+        "timestamp": record.timestamp,
+        "bev_frame_idx": record.bev_frame_idx,
+        "bev_timestamp": record.bev_timestamp,
+        "bev_time_delta_ms": record.bev_time_delta_ms,
+        "bev_mapping_source": record.bev_mapping_source,
+        "lat": record.lat,
+        "lng": record.lng,
+        "heading_deg": record.heading_deg,
+        "intent_gt": intent,
+        "route_theta_deg": round(float(route_theta_deg), 3),
+        "trajectory_source": trajectory_source,
+        "bev_patch_meta_path": str(bev_meta_path),
+        "trajectory_label_path": str(label_path),
+        "qa_bundle_path": str(qa_path),
+    }
+    _drop_none_fields(sidewalk_meta)
+
     source_row = {
         "id": f"{record.clip_id}_{record.frame_name}",
         "clip_id": record.clip_id,
@@ -356,26 +378,7 @@ def build_phase1_sample(
             "intent_gt": intent,
             "anchor": anchor,
         },
-        "sidewalk_meta": {
-            "source_dataset": "sidewalk_phase1_agent",
-            "clip_id": record.clip_id,
-            "frame_idx": record.frame_idx,
-            "frame_name": record.frame_name,
-            "timestamp": record.timestamp,
-            "bev_frame_idx": record.bev_frame_idx,
-            "bev_timestamp": record.bev_timestamp,
-            "bev_time_delta_ms": record.bev_time_delta_ms,
-            "bev_mapping_source": record.bev_mapping_source,
-            "lat": record.lat,
-            "lng": record.lng,
-            "heading_deg": record.heading_deg,
-            "intent_gt": intent,
-            "route_theta_deg": round(float(route_theta_deg), 3),
-            "trajectory_source": trajectory_source,
-            "bev_patch_meta_path": str(bev_meta_path),
-            "trajectory_label_path": str(label_path),
-            "qa_bundle_path": str(qa_path),
-        },
+        "sidewalk_meta": sidewalk_meta,
     }
     if source_row["bev_image_path"] is None:
         source_row.pop("bev_image_path")
@@ -562,7 +565,7 @@ def build_bev_patch_meta(
     route_polyline_cells = [
         local_xy_to_grid_cell(float(x), float(y), config=config) for x, y in local_path
     ]
-    return {
+    meta = {
         "schema_version": "sidewalk_bev_patch_meta_v1",
         "clip_id": record.clip_id,
         "frame_idx": record.frame_idx,
@@ -598,6 +601,8 @@ def build_bev_patch_meta(
             "mapping_source": record.bev_mapping_source,
         },
     }
+    _drop_none_fields(meta["pose"])
+    return meta
 
 
 def build_qa_bundle(
@@ -617,6 +622,7 @@ def build_qa_bundle(
     target_cell = bev_meta["target_cell_gt"]
     ego_cell = bev_meta["ego_cell_gt"]
     qa_base = f"{record.clip_id}_{record.frame_name}"
+    terminal_point = trajectory_norm[-1].astype(float).tolist() if trajectory_norm.size else [0.5, 0.5]
     samples = [
         {
             "sample_id": f"{qa_base}_bev_route_theta",
@@ -667,23 +673,25 @@ def build_qa_bundle(
             "difficulty": "normal",
         },
         {
-            "sample_id": f"{qa_base}_crossview_region_grounding",
+            "sample_id": f"{qa_base}_crossview_topology_grounding",
             "task_family": "X_crossview",
-            "task_type": "crossview_region_grounding",
+            "task_type": "crossview_topology_grounding",
             "answer_type": "grounding_json",
             "question": "Does the FPV trajectory endpoint agree with the BEV route intent?",
             "teacher_answer": (
-                "<CrossViewGrounding>\n"
+                "<CrossView>\n"
                 f"bev_intent: {intent}\n"
                 "alignment_status: aligned\n"
                 f"anchored_area: {anchor}\n"
                 "reason: FPV waypoint endpoint and BEV local route have the same coarse direction.\n"
-                "</CrossViewGrounding>"
+                "</CrossView>"
             ),
             "structured_target": {
+                "bev_intention": intent,
                 "bev_intent": intent,
                 "alignment_status": "aligned",
                 "anchored_area": anchor,
+                "source": "gt_trajectory_and_bev_topology",
             },
             "evidence": {
                 "trajectory_label_path": str(label_path),
@@ -691,6 +699,29 @@ def build_qa_bundle(
             },
             "valid": True,
             "confidence": 0.78,
+            "difficulty": "normal",
+        },
+        {
+            "sample_id": f"{qa_base}_point_prompt",
+            "task_family": "P_prompt",
+            "task_type": "point_prompt",
+            "answer_type": "point_with_theta_json",
+            "question": "What is the FPV target point implied by the GT trajectory?",
+            "teacher_answer": (
+                "<PointPrompt>\n"
+                f"target_point_norm: [{terminal_point[0]:.5f}, {terminal_point[1]:.5f}]\n"
+                f"intent: {intent}\n"
+                "source: gt_trajectory_label\n"
+                "</PointPrompt>"
+            ),
+            "structured_target": {
+                "target_point_norm": [round(float(terminal_point[0]), 5), round(float(terminal_point[1]), 5)],
+                "intent_gt": intent,
+                "source": "gt_trajectory_label",
+            },
+            "evidence": {"trajectory_label_path": str(label_path)},
+            "valid": True,
+            "confidence": 0.9,
             "difficulty": "normal",
         },
         {
@@ -1238,6 +1269,14 @@ def local_xy_to_grid_cell(x_m: float, y_m: float, *, config: Phase1Config) -> li
     col = int(np.clip(math.floor(col_f * config.grid_width), 0, config.grid_width - 1))
     row = int(np.clip(math.floor(row_f * config.grid_height), 0, config.grid_height - 1))
     return [col, row]
+
+
+def _drop_none_fields(data: dict[str, Any]) -> dict[str, Any]:
+    """Remove optional fields that are absent before persisting JSON artifacts."""
+
+    for key in [key for key, value in data.items() if value is None]:
+        data.pop(key, None)
+    return data
 
 
 def resample_polyline(points: np.ndarray, num_points: int) -> np.ndarray:

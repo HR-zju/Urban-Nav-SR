@@ -807,6 +807,110 @@ def _scale_decision_to_source_coordinates(
     )
 
 
+def _rendered_prompt_path_uv(rendered_prompt: Dict[str, Any] | None) -> list[list[float]]:
+    """Return the center trajectory for baseline evaluation/export.
+
+    RouteServer historically stores path-corridor prompts as center/left/right
+    samples.  SideWalk Phase1 evaluates only the center trajectory, so this
+    helper makes the export path explicit and avoids treating support
+    boundaries or coverage polygons as model predictions.
+    """
+    if not isinstance(rendered_prompt, dict):
+        return []
+    raw_path = rendered_prompt.get("path_uv")
+    if isinstance(raw_path, list):
+        path: list[list[float]] = []
+        for point in raw_path:
+            if not (isinstance(point, (list, tuple)) and len(point) == 2):
+                continue
+            try:
+                path.append([round(float(point[0]), 2), round(float(point[1]), 2)])
+            except Exception:
+                continue
+        if len(path) >= 2:
+            return path
+    path_samples = rendered_prompt.get("path_samples")
+    if isinstance(path_samples, list):
+        path = []
+        for sample in path_samples:
+            if not isinstance(sample, dict):
+                continue
+            center = sample.get("center_uv")
+            if not (isinstance(center, (list, tuple)) and len(center) == 2):
+                continue
+            try:
+                path.append([round(float(center[0]), 2), round(float(center[1]), 2)])
+            except Exception:
+                continue
+        if len(path) >= 2:
+            return path
+    return []
+
+
+def _direction_from_path_uv(path_uv: list[list[float]]) -> list[float] | None:
+    if len(path_uv) < 2:
+        return None
+    start = path_uv[-2]
+    end = path_uv[-1]
+    dx = float(end[0] - start[0])
+    dy = float(end[1] - start[1])
+    norm = math.hypot(dx, dy)
+    if norm <= 1e-6:
+        return None
+    return [round(dx / norm, 4), round(dy / norm, 4)]
+
+
+def _trajectory_only_rendered_prompt(rendered_prompt: Dict[str, Any] | None) -> Dict[str, Any] | None:
+    """Strip corridor support geometry from the exported visual prompt.
+
+    Internal segmentation validation may still use corridor samples.  The public
+    baseline artifact keeps only the trajectory centerline so ms-swift labels,
+    RouteServer QA, and prediction overlays share the same contract.
+    """
+    if not isinstance(rendered_prompt, dict):
+        return None
+    path_uv = _rendered_prompt_path_uv(rendered_prompt)
+    if not path_uv:
+        return deepcopy(rendered_prompt)
+    center_uv = path_uv[-1]
+    prompt_type = str(rendered_prompt.get("type") or "arrow_path")
+    if prompt_type == "path_corridor":
+        export_type = "path_corridor"
+    else:
+        export_type = prompt_type
+    return {
+        "type": export_type,
+        "center_uv": center_uv,
+        "direction_vec": _direction_from_path_uv(path_uv),
+        "span_px": rendered_prompt.get("span_px"),
+        "path_uv": path_uv,
+        "termination_semantics": rendered_prompt.get("termination_semantics"),
+        "support_confidence": rendered_prompt.get("support_confidence"),
+        "trajectory_only": True,
+    }
+
+
+def _trajectory_only_decision(decision: VisualPromptDecision) -> VisualPromptDecision:
+    debug = dict(decision.debug or {})
+    if isinstance(decision.rendered_prompt, dict):
+        debug["trajectory_only_export"] = True
+        debug["raw_rendered_prompt_type"] = decision.rendered_prompt.get("type")
+        debug["raw_rendered_prompt_has_path_samples"] = isinstance(decision.rendered_prompt.get("path_samples"), list)
+        debug["raw_rendered_prompt_has_coverage_polygon"] = isinstance(decision.rendered_prompt.get("coverage_polygon_uv"), list)
+    return VisualPromptDecision(
+        selected_candidate_id=decision.selected_candidate_id,
+        selected_prompt_type=decision.selected_prompt_type,
+        instruction=decision.instruction,
+        confidence=decision.confidence,
+        reason=decision.reason,
+        reject_all=decision.reject_all,
+        fallback_used=decision.fallback_used,
+        arbiter_source=decision.arbiter_source,
+        rendered_prompt=_trajectory_only_rendered_prompt(decision.rendered_prompt),
+        debug=debug,
+    )
+
+
 def _render_prompt_overlay_svg(
     *,
     image_href: str,
@@ -856,8 +960,10 @@ def _render_prompt_overlay_svg(
         dy = float(direction[1])
     except Exception:
         dx, dy = 0.0, -1.0
-    coverage_polygon = rendered_prompt.get("coverage_polygon_uv")
-    path_samples = rendered_prompt.get("path_samples")
+    path_uv = _rendered_prompt_path_uv(rendered_prompt)
+    if path_uv:
+        cx = float(path_uv[-1][0])
+        cy = float(path_uv[-1][1])
 
     anchor_x = width * 0.5
     anchor_y = height * 0.94
@@ -871,49 +977,6 @@ def _render_prompt_overlay_svg(
         f'<text x="{title_font:.1f}" y="{title_font * 1.55:.1f}" fill="#e2e8f0" font-size="{title_font:.1f}" font-family="monospace">{escape(title)}</text>',
     ]
 
-    if isinstance(coverage_polygon, list) and len(coverage_polygon) >= 3:
-        points = " ".join(
-            f"{float(point[0]):.1f},{float(point[1]):.1f}"
-            for point in coverage_polygon
-            if isinstance(point, (list, tuple)) and len(point) == 2
-        )
-        if points:
-            overlay_parts.append(
-                f'<polygon points="{points}" fill="rgba(34,197,94,0.12)" stroke="#22c55e" stroke-width="{outline_stroke:.1f}" />'
-            )
-
-    if isinstance(path_samples, list):
-        left_points = []
-        right_points = []
-        center_points = []
-        for sample in path_samples:
-            if not isinstance(sample, dict):
-                continue
-            left = sample.get("left_edge_uv")
-            right = sample.get("right_edge_uv")
-            center_sample = sample.get("center_uv")
-            if isinstance(left, (list, tuple)) and len(left) == 2:
-                left_points.append([float(left[0]), float(left[1])])
-            if isinstance(right, (list, tuple)) and len(right) == 2:
-                right_points.append([float(right[0]), float(right[1])])
-            if isinstance(center_sample, (list, tuple)) and len(center_sample) == 2:
-                center_points.append([float(center_sample[0]), float(center_sample[1])])
-        if len(left_points) >= 2:
-            left_str = " ".join(f"{point[0]:.1f},{point[1]:.1f}" for point in left_points)
-            overlay_parts.append(
-                f'<polyline points="{left_str}" fill="none" stroke="#22c55e" stroke-width="{outline_stroke * 1.2:.1f}" stroke-linecap="round" />'
-            )
-        if len(right_points) >= 2:
-            right_str = " ".join(f"{point[0]:.1f},{point[1]:.1f}" for point in right_points)
-            overlay_parts.append(
-                f'<polyline points="{right_str}" fill="none" stroke="#22c55e" stroke-width="{outline_stroke * 1.2:.1f}" stroke-linecap="round" />'
-            )
-
-        if center_points:
-            cx = float(center_points[-1][0])
-            cy = float(center_points[-1][1])
-
-    path_uv = rendered_prompt.get("path_uv")
     valid_path = (
         isinstance(path_uv, list)
         and len(path_uv) >= 2
@@ -2322,7 +2385,8 @@ async def run_zero_shot_visual_prompt_pipeline(
             route_context=route_context_dict,
         )
 
-    decision_dict = visual_prompt_decision_to_dict(decision)
+    export_decision = _trajectory_only_decision(decision)
+    decision_dict = visual_prompt_decision_to_dict(export_decision)
     decision_dict.setdefault("debug", {})
     if llm_error:
         decision_dict["debug"]["llm_error"] = llm_error
@@ -2403,7 +2467,7 @@ async def run_zero_shot_visual_prompt_pipeline(
             image_height=image_height,
             fpv_segmentation_summary=segmentation_summary,
             segmentation_validation=segmentation_validation,
-            rendered_prompt=decision.rendered_prompt,
+            rendered_prompt=export_decision.rendered_prompt,
             arbiter_decision=decision_dict,
             candidate_bundle=candidate_bundle,
             som_summary=som_summary,
@@ -2424,7 +2488,7 @@ async def run_zero_shot_visual_prompt_pipeline(
         image_href=image_href,
         image_width=image_width,
         image_height=image_height,
-        rendered_prompt=decision.rendered_prompt,
+        rendered_prompt=export_decision.rendered_prompt,
         title="Mode-Aware Visual Prompt",
     )
 
@@ -2435,7 +2499,7 @@ async def run_zero_shot_visual_prompt_pipeline(
             image_href=image_href,
             image_width=image_width,
             image_height=image_height,
-            rendered_prompt=generator_decision.rendered_prompt,
+            rendered_prompt=_trajectory_only_rendered_prompt(generator_decision.rendered_prompt),
             title="Generator Visual Prompt (Pre-Verifier)",
         )
         generator_overlay_svg_data_url = _svg_to_data_url(generator_overlay_svg)

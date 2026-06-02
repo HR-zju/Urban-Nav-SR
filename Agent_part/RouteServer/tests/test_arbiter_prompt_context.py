@@ -136,6 +136,67 @@ class ArbiterPromptContextTest(unittest.TestCase):
         self.assertEqual(decision.rendered_prompt["path_uv"][0], [800.0, 827.0])
         self.assertIn("_minimal_output", decision.debug["raw"])
 
+    def test_trajectory_output_accepts_direct_path_uv_without_corridor_fields(self) -> None:
+        arbiter = _load_arbiter_module()
+        old_value = os.environ.get("VISUAL_PROMPT_OUTPUT_MODE")
+        os.environ["VISUAL_PROMPT_OUTPUT_MODE"] = "trajectory"
+        try:
+            decision = arbiter.coerce_direct_prompt_decision(
+                raw={
+                    "selected_prompt_type": "trajectory",
+                    "confidence": 0.82,
+                    "reject_all": False,
+                    "rendered_prompt": {
+                        "path_uv": [
+                            [800, 846],
+                            [806, 760],
+                            [818, 680],
+                            [832, 610],
+                        ]
+                    },
+                },
+                route_context={"local_semantics": {"short_action_summary": "Continue forward."}},
+                image_width=1600,
+                image_height=900,
+            )
+        finally:
+            if old_value is None:
+                os.environ.pop("VISUAL_PROMPT_OUTPUT_MODE", None)
+            else:
+                os.environ["VISUAL_PROMPT_OUTPUT_MODE"] = old_value
+
+        self.assertIsNotNone(decision)
+        self.assertFalse(decision.reject_all)
+        self.assertEqual(decision.selected_prompt_type, "trajectory")
+        self.assertEqual(decision.rendered_prompt["type"], "arrow_path")
+        self.assertEqual(decision.rendered_prompt["path_uv"][0], [800.0, 846.0])
+        self.assertIsNone(decision.rendered_prompt["path_samples"])
+        self.assertIsNone(decision.rendered_prompt["coverage_polygon_uv"])
+
+    def test_trajectory_output_rejects_center_only_arrow_path(self) -> None:
+        arbiter = _load_arbiter_module()
+        old_value = os.environ.get("VISUAL_PROMPT_OUTPUT_MODE")
+        os.environ["VISUAL_PROMPT_OUTPUT_MODE"] = "trajectory"
+        try:
+            decision = arbiter.coerce_direct_prompt_decision(
+                raw={
+                    "selected_prompt_type": "trajectory",
+                    "confidence": 0.82,
+                    "reject_all": False,
+                    "rendered_prompt": {"type": "arrow_path", "center_uv": [800, 600]},
+                },
+                route_context={"local_semantics": {"short_action_summary": "Continue forward."}},
+                image_width=1600,
+                image_height=900,
+            )
+        finally:
+            if old_value is None:
+                os.environ.pop("VISUAL_PROMPT_OUTPUT_MODE", None)
+            else:
+                os.environ["VISUAL_PROMPT_OUTPUT_MODE"] = old_value
+
+        self.assertIsNone(decision)
+
     def test_minimal_prompt_payload_is_ascii_safe(self) -> None:
         arbiter = _load_arbiter_module()
         old_value = os.environ.get("LVLM_MINIMAL_OUTPUT")

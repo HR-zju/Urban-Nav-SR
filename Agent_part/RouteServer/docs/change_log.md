@@ -7,11 +7,13 @@
 ### 收敛 Agent baseline 为真实 trajectory-only 专家输出
 
 - `tools/model_processing/run_sidewalk_phase1_cot_baseline.py` 新增 Phase1 CoT baseline runner。
-  - 推荐 `--input-mode phase1_source`，直接读取 `phase1_source_*.jsonl`，复用 exporter 产出的 FPV/BEV 配对、训练 user prompt 和 CoT v2 输出格式。
-  - 兼容 `--input-mode online_bev`，仅 BEV 图来源改为在线 OSM 渲染，VLM prompt 与输出仍保持 Phase1 CoT v2。
-  - VLM 输出必须是 `<think><Scene>/<FPV>/<BEV>/<CrossView>/<Plan></think><finish>{...}</finish>`。
+  - 推荐 `--input-mode phase1_source`，直接读取 `phase1_source_*.jsonl`，复用 exporter 产出的 FPV/BEV 配对、训练 user prompt 和 CoT v3 输出格式。
+  - 兼容 `--input-mode online_bev`，仅 BEV 图来源改为在线 OSM 渲染，VLM prompt 与输出仍保持 Phase1 CoT v3。
+  - VLM 输出必须是 `<think><Scene>/<FPVScene>/<BEVContext>/<CrossView>/<Plan></think><finish>{...}</finish>`。
   - 从 `<finish>.trajectory` 解析归一化 FPV 轨迹，再转换为 source-pixel `rendered_prompt.path_uv` 生成 overlay。
   - 记录 normalized point ADE/FDE 和 curve ADE/FDE，便于与 `pixel_trajectory` 几何真值比较。
+  - 收紧 CoT prompt 和 system prompt 的可通行性约束：轨迹必须是短程局部 visual prompt，点必须落在可见 walkable ground support 上，禁止延伸到 sky、建筑、围栏、树、车辆、行人或远背景。
+  - 每帧 baseline JSON 新增 `system_prompt` 和 `trajectory_warnings`，用于审计模型收到的约束以及“轨迹飞到图像上方”等异常；这些 warning 不会自动修正预测。
 - `src/mcp_server/brain/arbiter.py` 新增 `VISUAL_PROMPT_OUTPUT_MODE=trajectory` / `LVLM_VISUAL_PROMPT_OUTPUT_MODE=trajectory` 模式。
   - A-stage prompt 明确要求 VLM/LLM 输出 `rendered_prompt.type=arrow_path` 和 `rendered_prompt.path_uv`。
   - 不再要求 `path_corridor`、`path_samples`、`left_edge_uv`、`right_edge_uv`、`coverage_polygon_uv`、mask 或 SAM/SoM region id。
@@ -45,12 +47,20 @@
 
 ### 升级 Phase1 CoT Teacher 为嵌套结构化 `<think>`
 
-- `tools/model_processing/sidewalk_phase1_cot_teacher.py` 从 `phase1_structured_cot_v1` 升级到 `phase1_structured_cot_v2`：
-  - `<think>` 内直接嵌套 `<Scene>/<FPV>/<BEV>/<CrossView>/<Plan>` 五个 JSON section。
+- `tools/model_processing/sidewalk_phase1_cot_teacher.py` 从 `phase1_structured_cot_v1` 升级为嵌套结构化 CoT；当前最终标签版本见下方 v3：
+  - `<think>` 内直接嵌套 `<Scene>/<FPVScene>/<BEVContext>/<CrossView>/<Plan>` 五个 JSON section。
   - `<finish>` 单独位于 `<think>` 之后，只包含可执行输出：trajectory、intent、route theta、confidence。
   - validator 禁止 `<think>` 内的额外叙述性文本，避免与结构化 JSON 重复。
-  - validator 新增 `<BEV>.ego_cell` / `<BEV>.target_cell` 与 `bev_patch_meta.ego_cell_gt` / `target_cell_gt` 的一致性检查。
-- 文档明确 `<BEV>.ego_cell` 和 `<BEV>.target_cell` 是 Stage1 GridAcc@1 / k-hop Accuracy 的模型预测字段，真值来自 `bev_patch_meta`。
+  - validator 新增 `<BEVContext>.ego_cell` / `<BEVContext>.target_cell` 与 `bev_patch_meta.ego_cell_gt` / `target_cell_gt` 的一致性检查。
+- 文档明确 `<BEVContext>.ego_cell` 和 `<BEVContext>.target_cell` 是 Stage1 GridAcc@1 / k-hop Accuracy 的模型预测字段，真值来自 `bev_patch_meta`。
+
+### 统一 Phase1 CoT v3 的 FPVScene / BEVContext 语义
+
+- `tools/model_processing/sidewalk_phase1_cot_teacher.py` 从 `phase1_structured_cot_v2` 升级到 `phase1_structured_cot_v3`：
+  - `<FPV>` 重命名为 `<FPVScene>`，显式输出 `navigable_support`、`conditional_support`、`risk_objects`、`visibility`、`local_risk`。
+  - `<BEV>` 重命名为 `<BEVContext>`，继续承载 `grid_size`、`ego_cell`、`target_cell`、`route_theta_deg`、`intent`。
+  - prompt 和 validator 要求 `<finish>.trajectory` 必须落在 `<FPVScene>.navigable_support` 描述的可见可通行支撑物上，并避开 `risk_objects`。
+- `run_sidewalk_phase1_cot_baseline.py` 与 ms-swift `structured_cot_trajectory` prompt 同步使用 v3 tag，避免 teacher 数据和 Agent baseline 推理格式不一致。
 
 ### 修正 Phase1 FPV 轨迹近场回折并默认全帧生成
 
@@ -113,11 +123,11 @@
 - 新增 `tools/model_processing/sidewalk_phase1_cot_teacher.py`：
   - 读取 `phase1_source_*.jsonl`、trajectory label、BEV patch meta 和 QA bundle。
   - 调用 Agent 现有 `VisionAnalyzer`，使用 FPV 主图和 BEV 额外图生成单轮 structured CoT target。
-  - 固定输出 `<think>/<Scene>/<FPV>/<BEV>/<CrossView>/<Plan>/<finish>`，用于 ms-swift token-level CE 监督。
+  - 固定输出 `<think>/<Scene>/<FPVScene>/<BEVContext>/<CrossView>/<Plan>/<finish>`，用于 ms-swift token-level CE 监督。
   - 几何真值仍以 exporter 产物为准；teacher 只能解释，不允许改写 `intent_gt`、`route_theta_deg` 或 `pixel_trajectory`。
 - 增加 validator：
   - 检查 tag 完整性、tag 顺序、tag 外文本、JSON 解析。
-  - 校验 `<BEV>.intent`、`<finish>.intent`、`route_theta_deg` 和 trajectory 与几何真值一致。
+  - 校验 `<BEVContext>.intent`、`<finish>.intent`、`route_theta_deg` 和 trajectory 与几何真值一致。
   - 没有 segmentation context 时禁止 teacher 声称 `region_id`、mask overlap、mIoU、support ratio 等 Phase2 证据。
   - 支持 retry/repair；失败后可选择 `drop`、`error` 或显式 `template` 降级。
 - 新增 `tools/model_processing/run_sidewalk_phase1_cot_teacher.sh`，封装 teacher 生成、验证报告和下一步 ms-swift 转换提示。

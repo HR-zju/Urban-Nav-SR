@@ -167,7 +167,7 @@ sidewalk_phase1/
 - trajectory head 回归监督。
 - 作为 LLM Teacher 的输入。
 
-它没有高质量自然语言 CoT，不能直接当作 `<Scene>/<FPV>/<CrossView>/<Plan>` CoT SFT 的最终数据。
+它没有高质量自然语言 CoT，不能直接当作 `<Scene>/<FPVScene>/<CrossView>/<Plan>` CoT SFT 的最终数据。
 
 当 FPV 原始帧率高于 BEV 保留帧率时，`bev_image_path` 不要求和 `frame_idx` 同名。Phase1 exporter 会优先读取 `clip/bev_index.json`，按 timestamp 选择最近的 BEV 帧，并在 `sidewalk_meta` 里写入：
 
@@ -316,7 +316,7 @@ python tools/model_processing/eval_sidewalk_phase1_artifacts.py \
 
 ### 5.4 LLM Teacher 生成 CoT SFT 数据
 
-训练真正的 `<Scene>/<FPV>/<BEV>/<CrossView>/<Plan>` CoT 时，必须先运行 teacher 阶段。这个阶段使用 FPV 作为主图、BEV 作为额外图，并把 `bev_patch_meta`、`trajectory_label`、`route_context` 作为离线 evidence 提供给 teacher。注意：这些 GT evidence 只进入 teacher prompt，不进入最终 ms-swift user prompt。
+训练真正的 `<Scene>/<FPVScene>/<BEVContext>/<CrossView>/<Plan>` CoT 时，必须先运行 teacher 阶段。这个阶段使用 FPV 作为主图、BEV 作为额外图，并把 `bev_patch_meta`、`trajectory_label`、`route_context` 作为离线 evidence 提供给 teacher。注意：这些 GT evidence 只进入 teacher prompt，不进入最终 ms-swift user prompt。
 
 ```bash
 cd /home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer
@@ -336,8 +336,8 @@ Teacher 输出格式固定为单轮 assistant target。`<think>` 内只放结构
 ```text
 <think>
 <Scene>{...}</Scene>
-<FPV>{...}</FPV>
-<BEV>{...}</BEV>
+<FPVScene>{...}</FPVScene>
+<BEVContext>{...}</BEVContext>
 <CrossView>{...}</CrossView>
 <Plan>{...}</Plan>
 </think>
@@ -349,8 +349,8 @@ Validator 会检查：
 - 所有 tag 是否存在，且没有 tag 外说明文字。
 - `<think>` 内是否只包含 `Scene/FPV/BEV/CrossView/Plan` 五个结构化 JSON section，不允许额外叙述性文本。
 - `Scene/FPV/BEV/CrossView/Plan/finish` 是否为可解析 JSON。
-- `<BEV>.ego_cell` 和 `<BEV>.target_cell` 是否等于 `bev_patch_meta.ego_cell_gt/target_cell_gt`。
-- `<BEV>.intent` 和 `<finish>.intent` 是否等于 `intent_gt`。
+- `<BEVContext>.ego_cell` 和 `<BEVContext>.target_cell` 是否等于 `bev_patch_meta.ego_cell_gt/target_cell_gt`。
+- `<BEVContext>.intent` 和 `<finish>.intent` 是否等于 `intent_gt`。
 - `route_theta_deg` 是否在容差内等于几何真值。
 - `<finish>.trajectory` 点数、范围、与 `trajectory_label` 的偏差是否合格。
 - 没有 SAM/SoM segmentation context 时，禁止声称 `region_id`、mask overlap、mIoU、support ratio 等 Phase2 才有的证据。
@@ -403,8 +403,8 @@ Agent baseline 不应再使用旧的 visual-prompt JSON schema。为了与数据
 FPV + BEV
   -> <think>
        <Scene>{...}</Scene>
-       <FPV>{...}</FPV>
-       <BEV>{...}</BEV>
+       <FPVScene>{...}</FPVScene>
+       <BEVContext>{...}</BEVContext>
        <CrossView>{...}</CrossView>
        <Plan>{...}</Plan>
      </think>

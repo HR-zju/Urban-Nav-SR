@@ -5,12 +5,13 @@ This script is the second offline stage after ``sidewalk_phase1_dataset.py``.
 It calls the Agent repository's configured VLM endpoint to produce a single
 assistant answer with strict tags:
 
-    <think>...</think>
+    <think>
     <Scene>{...}</Scene>
-    <FPV>{...}</FPV>
-    <BEV>{...}</BEV>
+    <FPVScene>{...}</FPVScene>
+    <BEVContext>{...}</BEVContext>
     <CrossView>{...}</CrossView>
     <Plan>{...}</Plan>
+    </think>
     <finish>{...}</finish>
 
 Geometry targets remain authoritative.  The VLM may explain the sample, but it
@@ -35,7 +36,10 @@ import numpy as np
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-REQUIRED_TAGS = ["think", "Scene", "FPV", "BEV", "CrossView", "Plan", "finish"]
+THINK_SECTION_TAGS = ["Scene", "FPVScene", "BEVContext", "CrossView", "Plan"]
+REQUIRED_TAGS = ["think", *THINK_SECTION_TAGS, "finish"]
+COT_SCHEMA_VERSION = "sidewalk_phase1_cot_teacher_v3"
+COT_PROMPT_TEMPLATE = "phase1_structured_cot_v3"
 NO_SEG_FORBIDDEN_PATTERNS = [
     r"\br\d{2,}\b",
     r"\bregion_id\b",
@@ -108,7 +112,8 @@ def build_teacher_system_prompt() -> str:
         "Generate one structured chain-of-thought annotation for supervised fine-tuning. "
         "Use the provided FPV image, BEV image, and geometry evidence. "
         "The geometry evidence is ground truth: do not alter intent, route_theta_deg, target cells, or trajectory. "
-        "Return only the required XML-like tags with strict JSON inside every section except <think>."
+        "Return only the required XML-like tags. Put structured observation and planning JSON sections inside <think>; "
+        "put only the executable trajectory JSON inside <finish>."
     )
 
 
@@ -162,19 +167,26 @@ def build_teacher_question(row: dict[str, Any], evidence: dict[str, Any], *, pre
     }
     return (
         "Create a Phase1 single-shot structured CoT assistant target for this sidewalk navigation sample.\n"
-        "Output exactly these tags in this order:\n"
-        "<think>short reasoning, 1-3 sentences</think>\n"
+        "Output exactly this nested tag structure in this order:\n"
+        "<think>\n"
         "<Scene>{\"summary\":\"...\",\"visibility\":\"visible|partially_visible|occluded|unknown\",\"uncertainty\":\"...\"}</Scene>\n"
-        "<FPV>{\"walkable_support\":\"...\",\"risk_objects\":[\"...\"],\"local_risk\":\"low|medium|high|unknown\"}</FPV>\n"
-        "<BEV>{\"ego_cell\":[c,r],\"target_cell\":[c,r],\"route_theta_deg\":0.0,\"intent\":\"go_straight|turn_left|turn_right|stop\",\"target_direction\":\"...\"}</BEV>\n"
+        "<FPVScene>{\"navigable_support\":[\"stable semantic names for visible safe navigation support\"],\"conditional_support\":[\"stable semantic names for conditionally usable connectors\"],\"risk_objects\":[\"stable semantic names for visible regions to avoid\"],\"visibility\":\"visible|partially_visible|occluded|unknown\",\"local_risk\":\"low|medium|high|unknown\"}</FPVScene>\n"
+        "<BEVContext>{\"grid_size\":[M,N],\"ego_cell\":[c,r],\"target_cell\":[c,r],\"route_theta_deg\":0.0,\"intent\":\"go_straight|turn_left|turn_right|stop\",\"target_direction\":\"...\"}</BEVContext>\n"
         "<CrossView>{\"bev_anchor\":\"...\",\"fpv_anchor\":\"...\",\"alignment\":\"aligned|partially_aligned|uncertain\",\"confidence\":\"high|medium|low|unknown\"}</CrossView>\n"
         "<Plan>{\"primary_route\":\"...\",\"safety_policy\":\"...\",\"contingency\":\"...\"}</Plan>\n"
+        "</think>\n"
         "<finish>{\"trajectory\":[[x,y],...],\"intent\":\"...\",\"route_theta_deg\":0.0,\"confidence_level\":\"normal|conflict|low\"}</finish>\n\n"
         "Rules:\n"
+        "- Do not write narrative prose inside <think>; it must contain only the five structured JSON sections.\n"
+        "- <FPVScene>.navigable_support must list visible safe ground/support semantics, not route goals or distant background.\n"
+        "- <FPVScene>.risk_objects must list visible obstacles, occlusions, non-ground surfaces, or regions to avoid.\n"
+        "- <BEVContext>.ego_cell and <BEVContext>.target_cell must exactly copy ego_cell_gt and target_cell_gt.\n"
         "- The <finish>.trajectory must exactly copy trajectory_label.trajectory_norm.\n"
-        "- <BEV>.intent and <finish>.intent must equal intent_gt.\n"
+        "- <BEVContext>.intent and <finish>.intent must equal intent_gt.\n"
         "- route_theta_deg must equal the evidence route_theta_deg.\n"
         "- Use normalized FPV coordinates in [0, 1].\n"
+        "- The trajectory must be supported by <FPVScene>.navigable_support or conservative conditional_support.\n"
+        "- Do not route through <FPVScene>.risk_objects or into sky/buildings/fences/trees/far background.\n"
         "- Do not add markdown or text outside the tags.\n\n"
         "Evidence JSON:\n"
         f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
@@ -194,15 +206,26 @@ def build_training_prompt(row: dict[str, Any]) -> str:
         "Input 1: First-person view (FPV) from the robot\n"
         f"{bev_line}"
         f"Instruction: {row.get('instruction') or 'Navigate safely on the sidewalk.'}\n\n"
-        "Output exactly these sections:\n"
-        "<think>...</think>\n"
-        "<Scene>{...}</Scene>\n"
-        "<FPV>{...}</FPV>\n"
-        "<BEV>{...}</BEV>\n"
-        "<CrossView>{...}</CrossView>\n"
-        "<Plan>{...}</Plan>\n"
+        "Output exactly this nested structured CoT format. Every section must be valid JSON:\n"
+        "<think>\n"
+        "<Scene>{\"summary\":\"...\",\"visibility\":\"visible|partially_visible|occluded|unknown\",\"uncertainty\":\"...\"}</Scene>\n"
+        "<FPVScene>{\"navigable_support\":[\"sidewalk\",...],\"conditional_support\":[\"curb_cut\",...],\"risk_objects\":[\"pedestrian\",...],\"visibility\":\"visible|partially_visible|occluded|unknown\",\"local_risk\":\"low|medium|high|unknown\"}</FPVScene>\n"
+        "<BEVContext>{\"grid_size\":[M,N],\"ego_cell\":[c,r],\"target_cell\":[c,r],\"route_theta_deg\":...,\"intent\":\"go_straight|turn_left|turn_right|stop|unknown\",\"target_direction\":\"left_front|right_front|front|stop|unknown\"}</BEVContext>\n"
+        "<CrossView>{\"bev_anchor\":\"...\",\"fpv_anchor\":\"...\",\"alignment\":\"aligned|partially_aligned|uncertain\",\"confidence\":\"high|medium|low|unknown\"}</CrossView>\n"
+        "<Plan>{\"primary_route\":\"...\",\"safety_policy\":\"...\",\"contingency\":\"...\"}</Plan>\n"
+        "</think>\n"
         "<finish>{\"trajectory\":[[x,y],...],\"intent\":\"...\",\"route_theta_deg\":...,\"confidence_level\":\"...\"}</finish>\n\n"
-        f"Use {num_points} normalized FPV trajectory points. Origin (0,0) is the top-left corner."
+        "Trajectory rules:\n"
+        f"- Use exactly {num_points} normalized FPV trajectory points in [0, 1]. Do not output pixel coordinates.\n"
+        "- Origin (0,0) is the top-left corner; x is horizontal, y is vertical.\n"
+        "- First identify safe visible navigation support in <FPVScene>.navigable_support, conditional connectors in <FPVScene>.conditional_support, and avoid regions in <FPVScene>.risk_objects.\n"
+        "- The first point should be near the robot-side bottom-center walking support, usually around x=0.5 and y=0.85-0.95.\n"
+        "- The path is a short local visual prompt, not a route-to-horizon polyline. Stop before occlusion, sky, building facades, fences, walls, vehicles, pedestrians, or uncertain support.\n"
+        "- Every trajectory point must lie on visible walkable ground support named in <FPVScene>.navigable_support, such as sidewalk, pedestrian paving, curb cut, or crosswalk.\n"
+        "- Use conditional_support only as a short connector, and never through risk_objects.\n"
+        "- Do not place any point in sky, trees, building walls, fences, vertical objects, pedestrians, vehicles, clutter, or far background above the visible ground corridor.\n"
+        "- Use BEV only for route topology and intent. If BEV intent conflicts with FPV safety, FPV safety wins and the trajectory should stop or shorten.\n"
+        "- If the immediate sidewalk is blocked or unsafe, output a short stop/hold trajectory and set intent or confidence_level accordingly."
     )
 
 
@@ -221,12 +244,15 @@ def render_template_answer(row: dict[str, Any], evidence: dict[str, Any]) -> str
             "visibility": "unknown",
             "uncertainty": "Phase1 has no segmentation or temporal risk evidence.",
         },
-        "FPV": {
-            "walkable_support": "visible sidewalk or pedestrian support should be followed conservatively",
+        "FPVScene": {
+            "navigable_support": ["visible sidewalk or pedestrian paving"],
+            "conditional_support": [],
             "risk_objects": [],
+            "visibility": "unknown",
             "local_risk": "unknown",
         },
-        "BEV": {
+        "BEVContext": {
+            "grid_size": bev_meta.get("grid_size"),
             "ego_cell": bev_meta.get("ego_cell_gt"),
             "target_cell": bev_meta.get("target_cell_gt"),
             "route_theta_deg": round(route_theta, 3),
@@ -251,18 +277,15 @@ def render_template_answer(row: dict[str, Any], evidence: dict[str, Any]) -> str
             "confidence_level": bev_meta.get("confidence_level_gt") or "normal",
         },
     }
-    think = (
-        "The BEV route context gives the local navigation direction, and the FPV image provides the visible "
-        "support for placing the visual trajectory. I will keep the geometry target unchanged."
-    )
     return "\n".join(
         [
-            f"<think>{think}</think>",
+            "<think>",
             f"<Scene>{json.dumps(sections['Scene'], ensure_ascii=False, separators=(',', ':'))}</Scene>",
-            f"<FPV>{json.dumps(sections['FPV'], ensure_ascii=False, separators=(',', ':'))}</FPV>",
-            f"<BEV>{json.dumps(sections['BEV'], ensure_ascii=False, separators=(',', ':'))}</BEV>",
+            f"<FPVScene>{json.dumps(sections['FPVScene'], ensure_ascii=False, separators=(',', ':'))}</FPVScene>",
+            f"<BEVContext>{json.dumps(sections['BEVContext'], ensure_ascii=False, separators=(',', ':'))}</BEVContext>",
             f"<CrossView>{json.dumps(sections['CrossView'], ensure_ascii=False, separators=(',', ':'))}</CrossView>",
             f"<Plan>{json.dumps(sections['Plan'], ensure_ascii=False, separators=(',', ':'))}</Plan>",
+            "</think>",
             f"<finish>{json.dumps(sections['finish'], ensure_ascii=False, separators=(',', ':'))}</finish>",
         ]
     )
@@ -275,13 +298,17 @@ def validate_teacher_answer(answer: str, row: dict[str, Any], evidence: dict[str
         return ValidationResult(False, ["empty_answer"], {})
 
     errors.extend(validate_tag_layout(answer))
+    think_body = extract_tag(answer, "think")
     for tag in REQUIRED_TAGS:
-        body = extract_tag(answer, tag)
+        if tag in THINK_SECTION_TAGS:
+            body = extract_tag(think_body or "", tag)
+        else:
+            body = extract_tag(answer, tag)
         if body is None:
             errors.append(f"missing_tag:{tag}")
             continue
         if tag == "think":
-            if not body.strip():
+            if not body.strip() or not any(extract_tag(body, section) for section in THINK_SECTION_TAGS):
                 errors.append("empty_think")
             sections[tag] = body.strip()
             continue
@@ -305,14 +332,22 @@ def validate_teacher_answer(answer: str, row: dict[str, Any], evidence: dict[str
         errors.append("target_trajectory_invalid")
         target_traj = np.empty((0, 2), dtype=np.float32)
 
-    bev = sections.get("BEV") or {}
+    fpv_scene = sections.get("FPVScene") or {}
+    bev = sections.get("BEVContext") or {}
     finish = sections.get("finish") or {}
+    for field in ("navigable_support", "conditional_support", "risk_objects"):
+        if field not in fpv_scene:
+            errors.append(f"missing_fpv_scene_field:{field}")
+    if _normalize_cell(bev.get("ego_cell")) != _normalize_cell(bev_meta.get("ego_cell_gt")):
+        errors.append(f"ego_cell_mismatch:{bev.get('ego_cell')}!={bev_meta.get('ego_cell_gt')}")
+    if _normalize_cell(bev.get("target_cell")) != _normalize_cell(bev_meta.get("target_cell_gt")):
+        errors.append(f"target_cell_mismatch:{bev.get('target_cell')}!={bev_meta.get('target_cell_gt')}")
     if str(bev.get("intent") or "") != intent_gt:
         errors.append(f"bev_intent_mismatch:{bev.get('intent')}!={intent_gt}")
     if str(finish.get("intent") or "") != intent_gt:
         errors.append(f"finish_intent_mismatch:{finish.get('intent')}!={intent_gt}")
 
-    for section_name, payload in (("BEV", bev), ("finish", finish)):
+    for section_name, payload in (("BEVContext", bev), ("finish", finish)):
         theta = optional_float(payload.get("route_theta_deg"))
         if theta_gt is not None and theta is not None and abs(theta - theta_gt) > float(config.theta_tolerance_deg):
             errors.append(f"theta_mismatch:{section_name}:{theta}!={theta_gt}")
@@ -354,18 +389,20 @@ def build_cot_manifest_row(
 ) -> dict[str, Any]:
     out = json.loads(json.dumps(row, ensure_ascii=False))
     out["prompt"] = build_training_prompt(row)
-    out["prompt_template"] = "phase1_structured_cot_v1"
+    out["prompt_template"] = COT_PROMPT_TEMPLATE
     out["response"] = answer
-    out["cot_teacher"] = {
-        "schema_version": "sidewalk_phase1_cot_teacher_v1",
+    cot_teacher = {
+        "schema_version": COT_SCHEMA_VERSION,
         "teacher_source": teacher_source,
         "teacher_model": teacher_model,
-        "validation_errors": validation.errors,
         "sections": sorted(validation.sections.keys()),
     }
+    if validation.errors:
+        cot_teacher["validation_errors"] = validation.errors
+    out["cot_teacher"] = cot_teacher
     meta = out.setdefault("sidewalk_meta", {})
     meta["cot_teacher_source"] = teacher_source
-    meta["cot_schema_version"] = "sidewalk_phase1_cot_teacher_v1"
+    meta["cot_schema_version"] = COT_SCHEMA_VERSION
     return out
 
 
@@ -413,7 +450,7 @@ async def generate_cot_dataset(
 
     output_rows: list[dict[str, Any]] = []
     report: dict[str, Any] = {
-        "schema_version": "sidewalk_phase1_cot_teacher_report_v1",
+        "schema_version": f"{COT_SCHEMA_VERSION}_report",
         "source_jsonl": str(source_jsonl),
         "output_jsonl": str(output_jsonl),
         "input_rows": len(rows),
@@ -510,25 +547,40 @@ def validate_tag_layout(text: str) -> list[str]:
     here makes invalid teacher generations visible before they enter SFT data.
     """
 
-    raw = str(text or "")
+    raw = str(text or "").strip()
     errors: list[str] = []
-    last_end = 0
-    first_start: int | None = None
-    for tag in REQUIRED_TAGS:
-        match = re.search(rf"<{re.escape(tag)}>\s*.*?\s*</{re.escape(tag)}>", raw, re.IGNORECASE | re.DOTALL)
+    think_match = re.match(r"^<think>\s*([\s\S]*?)\s*</think>\s*", raw, flags=re.IGNORECASE)
+    if not think_match:
+        errors.append("outer_layout_missing_think_first")
+        return errors
+
+    finish_tail = raw[think_match.end():]
+    finish_match = re.match(r"^<finish>\s*[\s\S]*?\s*</finish>\s*$", finish_tail, flags=re.IGNORECASE)
+    if not finish_match:
+        errors.append("outer_layout_missing_finish_after_think")
+
+    think_body = think_match.group(1)
+    pos = 0
+    for tag in THINK_SECTION_TAGS:
+        match = re.search(rf"<{re.escape(tag)}>\s*[\s\S]*?\s*</{re.escape(tag)}>", think_body[pos:], re.IGNORECASE)
         if not match:
+            errors.append(f"missing_nested_tag:{tag}")
             continue
-        if first_start is None:
-            first_start = match.start()
-        if match.start() < last_end:
-            errors.append(f"tag_order:{tag}")
-        last_end = match.end()
-    if first_start is not None:
-        if raw[:first_start].strip():
-            errors.append("text_before_tags")
-        if raw[last_end:].strip():
-            errors.append("text_after_tags")
+        if think_body[pos:pos + match.start()].strip():
+            errors.append(f"text_before_nested_tag:{tag}")
+        pos += match.end()
+    if think_body[pos:].strip():
+        errors.append("text_after_nested_tags")
     return errors
+
+
+def _normalize_cell(value: Any) -> list[int] | None:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return None
+    try:
+        return [int(value[0]), int(value[1])]
+    except Exception:
+        return None
 
 
 def parse_json_object(text: str) -> dict[str, Any] | None:

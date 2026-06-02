@@ -432,31 +432,28 @@ def _draw_polyline(img: np.ndarray, pts: list[tuple[int, int]], color_bgr: tuple
 
 
 def _draw_prompt_overlay_on_fpv(rgb_bgr: np.ndarray, prompt: dict[str, Any] | None, alpha: float = 0.55) -> np.ndarray:
-    """Fallback renderer for final path_corridor prompts on top of FPV RGB."""
+    """Fallback renderer for final prompts on top of FPV RGB.
+
+    SideWalk Phase1 evaluates only the center trajectory.  Support boundaries
+    and coverage polygons are intentionally ignored here so this debug video
+    matches the baseline metric contract.
+    """
     if not isinstance(prompt, dict) or str(prompt.get("type") or "") != "path_corridor":
         return rgb_bgr
     overlay = rgb_bgr.copy()
-    samples = prompt.get("path_samples") if isinstance(prompt.get("path_samples"), list) else []
     centers: list[tuple[int, int]] = []
-    lefts: list[tuple[int, int]] = []
-    rights: list[tuple[int, int]] = []
-    for sample in samples:
-        if not isinstance(sample, dict):
-            continue
-        center = sample.get("center_uv")
-        left = sample.get("left_edge_uv")
-        right = sample.get("right_edge_uv")
-        if isinstance(center, list) and len(center) >= 2:
-            centers.append((_safe_int(center[0]), _safe_int(center[1])))
-        if isinstance(left, list) and len(left) >= 2:
-            lefts.append((_safe_int(left[0]), _safe_int(left[1])))
-        if isinstance(right, list) and len(right) >= 2:
-            rights.append((_safe_int(right[0]), _safe_int(right[1])))
-    if len(lefts) == len(rights) and len(lefts) >= 2:
-        poly = np.array(lefts + list(reversed(rights)), dtype=np.int32).reshape((-1, 1, 2))
-        cv2.fillPoly(overlay, [poly], color=(60, 180, 80))
-    _draw_polyline(overlay, lefts, color_bgr=(80, 200, 80), thickness=5)
-    _draw_polyline(overlay, rights, color_bgr=(80, 200, 80), thickness=5)
+    path_uv = prompt.get("path_uv") if isinstance(prompt.get("path_uv"), list) else []
+    for point in path_uv:
+        if isinstance(point, list) and len(point) >= 2:
+            centers.append((_safe_int(point[0]), _safe_int(point[1])))
+    if len(centers) < 2:
+        samples = prompt.get("path_samples") if isinstance(prompt.get("path_samples"), list) else []
+        for sample in samples:
+            if not isinstance(sample, dict):
+                continue
+            center = sample.get("center_uv")
+            if isinstance(center, list) and len(center) >= 2:
+                centers.append((_safe_int(center[0]), _safe_int(center[1])))
     _draw_polyline(overlay, centers, color_bgr=(0, 120, 255), thickness=8)
     for point in centers:
         cv2.circle(overlay, point, radius=8, color=(0, 120, 255), thickness=-1, lineType=cv2.LINE_AA)

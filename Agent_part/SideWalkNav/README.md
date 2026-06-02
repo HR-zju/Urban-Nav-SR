@@ -53,17 +53,17 @@ LLM teacher 使用 FPV、BEV 和几何证据生成。`<think>` 内部只保留�
 ```text
 <think>
 <Scene>{...}</Scene>
-<FPV>{...}</FPV>
-<BEV>{"grid_size":[16,16],"ego_cell":[8,12],"target_cell":[8,9],...}</BEV>
+<FPVScene>{"navigable_support":[...],"conditional_support":[...],"risk_objects":[...],...}</FPVScene>
+<BEVContext>{"grid_size":[16,16],"ego_cell":[8,12],"target_cell":[8,9],...}</BEVContext>
 <CrossView>{...}</CrossView>
 <Plan>{...}</Plan>
 </think>
 <finish>{"trajectory":[[x,y],...],"intent":"...","route_theta_deg":...,"confidence_level":"..."}</finish>
 ```
 
-validator 会强制 `<BEV>.ego_cell/target_cell`、`<finish>.trajectory`、`intent`、`route_theta_deg` 与几何标签一致。LLM 只能生成解释文本，不允许改写几何真值。
+validator 会强制 `<BEVContext>.ego_cell/target_cell`、`<finish>.trajectory`、`intent`、`route_theta_deg` 与几何标签一致。LLM 只能生成解释文本，不允许改写几何真值。
 
-其中 `<BEV>.ego_cell` 和 `<BEV>.target_cell` 是 Stage1 拓扑锚定的模型输出字段；对应真值来自 `bev_patch_meta.ego_cell_gt` 和 `bev_patch_meta.target_cell_gt`。后续 GridAcc@1 和 k-hop Accuracy 就是用模型解析出的 cell 与这两个 GT cell 比较。
+其中 `<BEVContext>.ego_cell` 和 `<BEVContext>.target_cell` 是 Stage1 拓扑锚定的模型输出字段；对应真值来自 `bev_patch_meta.ego_cell_gt` 和 `bev_patch_meta.target_cell_gt`。后续 GridAcc@1 和 k-hop Accuracy 就是用模型解析出的 cell 与这两个 GT cell 比较。`<FPVScene>.navigable_support`、`conditional_support` 和 `risk_objects` 用于约束最终轨迹必须落在可见可通行支撑物上，不能漂到天空、建筑立面或远背景。
 
 ## GT 轨迹与 Agent Baseline 轨迹
 
