@@ -44,13 +44,22 @@ from mcp_server.services.visual_prompt_service import (
 def _rotate_point_about_center(
     x: float, y: float, center_x: float, center_y: float, angle_deg: float
 ) -> tuple[float, float]:
+    """Map a source mosaic point to the same destination used by PIL.rotate.
+
+    PIL rotates image content counter-clockwise for positive angles in screen
+    coordinates.  The forward mapping for an overlaid vector is therefore
+    ``x' = x*cos + y*sin`` and ``y' = -x*sin + y*cos`` around the rotation
+    center.  Using the usual Cartesian formula with a y-down image coordinate
+    system flips the route overlay and makes start/end markers drift relative
+    to the rotated OSM raster.
+    """
     angle_rad = math.radians(angle_deg)
     cos_a = math.cos(angle_rad)
     sin_a = math.sin(angle_rad)
     dx = x - center_x
     dy = y - center_y
-    rx = dx * cos_a - dy * sin_a
-    ry = dx * sin_a + dy * cos_a
+    rx = dx * cos_a + dy * sin_a
+    ry = -dx * sin_a + dy * cos_a
     return (rx + center_x, ry + center_y)
 
 
@@ -181,6 +190,7 @@ class ProcessOptions:
     cache_dir: Path = Path("/tmp/frodobot_bev_cache")
     draw_trajectory: bool = True
     add_attribution: bool = True
+    bev_alignment: str = "ego_aligned"
 
 
 # ==================== GPS Processing ====================
@@ -300,8 +310,12 @@ def render_bev_map(
     if mosaic_tiles % 2 == 0:
         mosaic_tiles += 1
 
-    # Heading rotation
-    heading_rotation_deg, _ = _bev_map_heading_rotation_deg(heading_deg)
+    # Heading rotation. North-up keeps the map in slippy-map orientation;
+    # ego-aligned rotates the map so the current travel direction points up.
+    if options.bev_alignment == "north_up":
+        heading_rotation_deg = 0.0
+    else:
+        heading_rotation_deg, _ = _bev_map_heading_rotation_deg(heading_deg)
 
     # Tile coordinates
     center_x, center_y = _osm_tile_xy_float(lat=lat, lng=lng, zoom=zoom)
@@ -371,7 +385,7 @@ def render_bev_map(
                     y=mosaic_y,
                     center_x=float(local_center_px),
                     center_y=float(local_center_py),
-                    angle_deg=-float(heading_rotation_deg),  # Reverse rotation direction
+                    angle_deg=float(heading_rotation_deg),
                 )
                 return (
                     (rotated_x - float(crop_box[0])) * scale_x,
@@ -393,26 +407,24 @@ def render_bev_map(
                     joint="curve"
                 )
                 # Start and end markers
-                start_r = max(int(round(output_size * 0.012)), 5)
+                start_r = max(int(round(output_size * 0.008)), 4)
                 sx, sy = projected[0]
                 ex, ey = projected[-1]
                 draw.ellipse([sx - start_r, sy - start_r, sx + start_r, sy + start_r],
-                    fill=(34, 197, 94, 245), outline=(255, 255, 255, 245), width=2)
+                    fill=(34, 197, 94, 245), outline=(255, 255, 255, 245), width=1)
                 draw.rectangle([ex - start_r, ey - start_r, ex + start_r, ey + start_r],
-                    fill=(239, 68, 68, 245), outline=(255, 255, 255, 245), width=2)
+                    fill=(239, 68, 68, 245), outline=(255, 255, 255, 245), width=1)
         except Exception as e:
             print(f"[WARN] Failed to draw navigation path: {e}")
 
     # Draw ego marker
-    marker_r = max(int(round(output_size * 0.018)), 7)
+    marker_r = max(int(round(output_size * 0.012)), 5)
     draw.ellipse(
         [center - marker_r, center - marker_r, center + marker_r, center + marker_r],
         fill=(249, 115, 22, 250),
         outline=(255, 255, 255, 255),
-        width=3,
+        width=2,
     )
-    heading_len = marker_r * 2.2
-    draw.line([(center, center), (center, center - heading_len)], fill=(255, 255, 255, 255), width=3)
 
     # Add attribution
     if options.add_attribution and provider_config.get("attribution"):
@@ -446,7 +458,6 @@ def render_bev_map(
         )
 
     return image
-
 
 # ==================== Ride Discovery ====================
 def discover_rides(dataset_dir: Path) -> list[RideInfo]:

@@ -370,14 +370,21 @@ def _rotate_point_about_center(
     center_y: float,
     angle_deg: float,
 ) -> tuple[float, float]:
+    """Map overlay points through the same forward transform as PIL.rotate.
+
+    PIL rotates raster content counter-clockwise for positive angles in screen
+    coordinates.  Vector overlays must use the matching image-coordinate
+    transform; otherwise route/start/end markers drift relative to the OSM
+    background after ego-alignment.
+    """
     theta = math.radians(float(angle_deg))
     dx = float(x) - float(center_x)
     dy = float(y) - float(center_y)
     cos_t = math.cos(theta)
     sin_t = math.sin(theta)
     return (
-        float(center_x) + dx * cos_t - dy * sin_t,
-        float(center_y) + dx * sin_t + dy * cos_t,
+        float(center_x) + dx * cos_t + dy * sin_t,
+        float(center_y) - dx * sin_t + dy * cos_t,
     )
 
 

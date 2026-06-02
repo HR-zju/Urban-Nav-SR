@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Process sidewalk dataset (npy + mp4) to generate BEV maps."""
 
+from __future__ import annotations
+
 import sys
 import os
 import math
@@ -9,7 +11,7 @@ import argparse
 import subprocess
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 from tqdm import tqdm
 
 import numpy as np
@@ -59,6 +61,103 @@ def _calculate_heading_from_gps(
     return compass_heading
 
 
+def _distance_m_between_gps(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    lat_mid = math.radians((float(lat1) + float(lat2)) * 0.5)
+    dlat = math.radians(float(lat2) - float(lat1))
+    dlng = math.radians(float(lng2) - float(lng1))
+    earth_radius_m = 6371000.0
+    dx = earth_radius_m * dlng * math.cos(lat_mid)
+    dy = earth_radius_m * dlat
+    return math.hypot(dx, dy)
+
+
+def _circular_mean_deg(values: list[float]) -> float:
+    valid = [float(v) for v in values if not math.isnan(float(v))]
+    if not valid:
+        return float("nan")
+    x_sum = 0.0
+    y_sum = 0.0
+    for value in valid:
+        rad = math.radians(value)
+        x_sum += math.cos(rad)
+        y_sum += math.sin(rad)
+    if abs(x_sum) < 1e-12 and abs(y_sum) < 1e-12:
+        return float("nan")
+    return (math.degrees(math.atan2(y_sum, x_sum)) + 360.0) % 360.0
+
+
+def _calculate_robust_gps_headings(
+    positions: list[tuple[float, float]],
+    *,
+    min_distance_m: float = 0.75,
+    max_lookahead_frames: int = 40,
+) -> list[float]:
+    """Estimate heading from GPS using points far enough apart to beat jitter/stops."""
+    headings: list[float] = []
+    n = len(positions)
+    for i, (lat, lng) in enumerate(positions):
+        heading = float("nan")
+
+        upper = min(n, i + max_lookahead_frames + 1)
+        for j in range(i + 1, upper):
+            next_lat, next_lng = positions[j]
+            if _distance_m_between_gps(lat, lng, next_lat, next_lng) >= min_distance_m:
+                heading = _calculate_heading_from_gps(lat, lng, next_lat, next_lng)
+                break
+
+        if math.isnan(heading):
+            lower = max(-1, i - max_lookahead_frames - 1)
+            for j in range(i - 1, lower, -1):
+                prev_lat, prev_lng = positions[j]
+                if _distance_m_between_gps(prev_lat, prev_lng, lat, lng) >= min_distance_m:
+                    heading = _calculate_heading_from_gps(prev_lat, prev_lng, lat, lng)
+                    break
+
+        headings.append(heading)
+
+    valid_headings = [h for h in headings if not math.isnan(h)]
+    fallback = valid_headings[0] if valid_headings else 0.0
+
+    # Fill gaps from nearest usable heading so stationary sections preserve travel direction.
+    filled = headings.copy()
+    last = float("nan")
+    for i, h in enumerate(filled):
+        if math.isnan(h):
+            if not math.isnan(last):
+                filled[i] = last
+        else:
+            last = h
+    next_h = float("nan")
+    for i in range(n - 1, -1, -1):
+        if math.isnan(filled[i]):
+            filled[i] = next_h if not math.isnan(next_h) else fallback
+        else:
+            next_h = filled[i]
+
+    return [normalize_heading_to_compass(h) for h in filled]
+
+
+def _is_yaw_observation_reliable(yaw_list: list[float], ori_arr: np.ndarray, selected_indices: list[int]) -> tuple[bool, str]:
+    if not yaw_list:
+        return False, "empty yaw list"
+
+    norms = []
+    for data_idx in selected_indices[: min(len(selected_indices), 200)]:
+        q = ori_arr[data_idx]
+        norms.append(float(np.linalg.norm(q)))
+    median_norm = float(np.median(norms)) if norms else 0.0
+    if median_norm < 0.5:
+        return False, f"invalid quaternion norm median={median_norm:.3f}"
+
+    mean_heading = _circular_mean_deg(yaw_list)
+    deviations = [abs(((h - mean_heading + 180.0) % 360.0) - 180.0) for h in yaw_list]
+    p95_dev = float(np.percentile(deviations, 95)) if deviations else 0.0
+    if p95_dev < 0.5:
+        return False, f"near-constant yaw p95_dev={p95_dev:.3f}"
+
+    return True, f"yaw p95_dev={p95_dev:.3f}"
+
+
 def normalize_heading_to_compass(heading_deg: float) -> float:
     """Normalize heading to compass convention: 0=North, clockwise positive, range [0,360)."""
     h = float(heading_deg)
@@ -106,27 +205,151 @@ def _extract_frames_from_mp4(mp4_path: Path, output_dir: Path, sample_fps: float
     return frames
 
 
+def _extract_video_frame_by_index(mp4_path: Path, frame_idx: int, output_path: Path) -> Path:
+    """Extract one FPV frame only when a downstream consumer needs a JPG."""
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.is_file():
+        return output_path
+    try:
+        import cv2  # type: ignore
+
+        capture = cv2.VideoCapture(str(mp4_path))
+        try:
+            capture.set(cv2.CAP_PROP_POS_FRAMES, int(frame_idx))
+            ok, frame = capture.read()
+            if ok and frame is not None:
+                cv2.imwrite(str(output_path), frame)
+                return output_path
+        finally:
+            capture.release()
+    except Exception:
+        pass
+    try:
+        import decord  # type: ignore
+
+        reader = decord.VideoReader(str(mp4_path))
+        if int(frame_idx) < len(reader):
+            Image.fromarray(reader[int(frame_idx)].asnumpy()).save(output_path, quality=95)
+            return output_path
+    except Exception as exc:
+        raise RuntimeError(f"Failed to extract frame {frame_idx} from {mp4_path}") from exc
+    raise RuntimeError(f"Failed to extract frame {frame_idx} from {mp4_path}")
+
+
+def _find_existing_fpv_image(clip_dir: Path, frame_idx: int) -> Optional[Path]:
+    for image_dir_name in ("images", "front_images"):
+        image_dir = clip_dir / image_dir_name
+        if not image_dir.is_dir():
+            continue
+        candidates = [f"{int(frame_idx):06d}", str(int(frame_idx)), f"{int(frame_idx) + 1:06d}", str(int(frame_idx) + 1)]
+        for stem in candidates:
+            for suffix in (".jpg", ".jpeg", ".png"):
+                path = image_dir / f"{stem}{suffix}"
+                if path.is_file():
+                    return path.resolve()
+    return None
+
+
+def _select_indices_by_fps(times_arr: np.ndarray, sample_fps: float) -> list[int]:
+    """Select frame indices using timestamps instead of integer stride."""
+
+    n = int(len(times_arr))
+    if n <= 0:
+        return []
+    fps = float(sample_fps)
+    if fps <= 0:
+        return list(range(n))
+    times = [int(x) for x in np.asarray(times_arr).reshape(-1).tolist()]
+    period_ns = int(round(1e9 / fps))
+    if period_ns <= 0:
+        return list(range(n))
+    selected = [0]
+    next_target = int(times[0]) + period_ns
+    for idx in range(1, n):
+        if int(times[idx]) >= next_target:
+            selected.append(idx)
+            while next_target <= int(times[idx]):
+                next_target += period_ns
+    return selected
+
+
+def _route_path_for_bev_frame(
+    route_points: list[tuple[float, float]],
+    frame_pos: int,
+    *,
+    route_scope: str,
+    lookahead_s: float,
+    bev_sample_fps: float,
+) -> tuple[list[tuple[float, float]] | None, dict[str, Any]]:
+    """Return the route overlay to draw for one BEV training frame.
+
+    The route overlay is part of the BEV task condition, not a debug artifact.
+    ``global_full`` draws the whole route, including fixed start/end points.
+    ``local_future`` is kept for ablations that want a bounded lookahead path
+    starting from the current ego pose.
+    """
+
+    normalized_scope = str(route_scope or "global_full")
+    if normalized_scope == "none" or not route_points:
+        return None, {"scope": "none", "point_count": 0}
+
+    safe_pos = max(0, min(int(frame_pos), len(route_points) - 1))
+    if normalized_scope == "global_full":
+        return list(route_points), {
+            "scope": "global_full",
+            "point_count": len(route_points),
+            "start_sample_index": 0,
+            "end_sample_index": len(route_points) - 1,
+        }
+
+    horizon_frames = max(1, int(math.ceil(max(float(lookahead_s), 0.0) * max(float(bev_sample_fps), 1e-6))))
+    end_pos = min(len(route_points) - 1, safe_pos + horizon_frames)
+    if end_pos <= safe_pos:
+        return None, {
+            "scope": "local_future",
+            "point_count": 0,
+            "start_sample_index": safe_pos,
+            "end_sample_index": end_pos,
+        }
+    local_path = list(route_points[safe_pos : end_pos + 1])
+    return local_path, {
+        "scope": "local_future",
+        "point_count": len(local_path),
+        "start_sample_index": safe_pos,
+        "end_sample_index": end_pos,
+        "lookahead_s": float(lookahead_s),
+    }
+
+
 def generate_bev_mp4(
     bev_images_dir: Path,
     output_dir: Path,
     fps: float = 1.0,
+    output_filename: str = "bev_video.mp4",
+    timestamps_ns: Optional[list[int]] = None,
 ) -> Path:
     """Generate BEV video from BEV images."""
     bev_images = sorted(list(bev_images_dir.glob("*_bev.jpg")))
     if not bev_images:
         raise RuntimeError("No BEV images found to generate video")
 
-    mp4_path = output_dir / "bev_video.mp4"
+    mp4_path = output_dir / output_filename
+    durations, encode_fps = _bev_video_timing(
+        num_frames=len(bev_images),
+        fallback_fps=fps,
+        timestamps_ns=timestamps_ns,
+    )
 
     # Use ffmpeg to generate video
     # First create a list file
     list_file = output_dir / "bev_images_list.txt"
     with open(list_file, "w") as f:
-        for img in bev_images:
+        for img, duration in zip(bev_images, durations):
             # Use absolute path in the list file
             abs_path = img.resolve()
             f.write(f"file '{abs_path}'\n")
-            f.write(f"duration {1.0/fps}\n")
+            f.write(f"duration {duration:.9f}\n")
 
         # Add the last frame again to avoid cutoff
         if bev_images:
@@ -141,7 +364,7 @@ def generate_bev_mp4(
             "-safe", "0",
             "-i", str(list_file),
             "-c:v", "libx264",
-            "-vf", "fps={}".format(fps),
+            "-vf", "fps={}".format(encode_fps),
             "-pix_fmt", "yuv420p",
             str(mp4_path),
         ]
@@ -151,35 +374,87 @@ def generate_bev_mp4(
         if list_file.exists():
             list_file.unlink()
 
-    print(f"Generated BEV video: {mp4_path}")
+    print(f"Generated BEV video: {mp4_path} (fps={encode_fps:.3f}, frames={len(bev_images)})")
     return mp4_path
+
+
+def _bev_video_timing(
+    *,
+    num_frames: int,
+    fallback_fps: float,
+    timestamps_ns: Optional[list[int]],
+) -> tuple[list[float], float]:
+    """Return per-frame durations and a stable CFR encode fps.
+
+    BEV images are aligned to sampled FPV frames.  Using a stale default fps
+    when writing the mp4 makes videos appear too long or too short.  Prefer the
+    actual frame timestamps and only fall back to the CLI sampling fps when
+    timestamp inference is unavailable.
+    """
+
+    safe_fps = float(fallback_fps) if float(fallback_fps or 0.0) > 0 else 1.0
+    fallback_duration = 1.0 / safe_fps
+    if num_frames <= 0:
+        return [], safe_fps
+
+    if timestamps_ns and len(timestamps_ns) == num_frames:
+        ts = [int(t) for t in timestamps_ns]
+        diffs = [
+            (ts[i + 1] - ts[i]) / 1e9
+            for i in range(len(ts) - 1)
+            if ts[i + 1] > ts[i]
+        ]
+        if diffs:
+            median_duration = float(np.median(diffs))
+            valid_durations = [
+                max(1e-3, min(float(dt), median_duration * 5.0))
+                for dt in diffs
+            ]
+            last_duration = valid_durations[-1] if valid_durations else median_duration
+            durations = valid_durations + [last_duration]
+            encode_fps = 1.0 / max(float(np.median(valid_durations)), 1e-3)
+            return durations, encode_fps
+
+    return [fallback_duration for _ in range(num_frames)], safe_fps
 
 
 def process_sidewalk_ride(
     sidewalk_dir: Path,
     output_dir: Path,
     sample_fps: float = 1.0,
+    bev_sample_fps: float = 2.0,
     map_provider: str = "osm",
     use_pose_ekf: bool = False,
     ekf_q_pos: float = 1e-3,
     ekf_q_theta: float = 1e-2,
     ekf_r_xy: float = 9.0,
     ekf_r_theta: float = 0.5,
+    extract_fpv_images: bool = False,
+    write_north_up_bev: bool = False,
+    write_bev_videos: bool = False,
+    draw_bev_trajectory: bool = True,
+    bev_route_scope: str = "global_full",
+    bev_route_lookahead_s: float = 8.0,
+    bev_alignment: str = "ego_aligned",
+    bev_jpeg_quality: int = 90,
 ) -> list[dict[str, Any]]:
     """Process one sidewalk ride directory."""
     print(f"\n{'='*60}")
     print(f"Processing: {sidewalk_dir.name}")
     print(f"{'='*60}")
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     # Check if BEV video already exists - regenerate if yes
-    bev_video_path = sidewalk_dir / "bev_video.mp4"
-    if bev_video_path.exists():
-        print(f"BEV video already exists, removing to regenerate: {bev_video_path}")
-        bev_video_path.unlink()
-    # Also remove old bev_images if exists
-    bev_images_dir = sidewalk_dir / "bev_images"
-    if bev_images_dir.exists():
-        shutil.rmtree(bev_images_dir)
+    for bev_video_name in ("bev_video.mp4", "bev_video_ego_aligned.mp4", "bev_video_north_up.mp4"):
+        bev_video_path = sidewalk_dir / bev_video_name
+        if bev_video_path.exists():
+            print(f"BEV video already exists, removing to regenerate: {bev_video_path}")
+            bev_video_path.unlink()
+    # Also remove old BEV image dirs if they exist.
+    for bev_images_name in ("bev_images", "bev_images_ego_aligned", "bev_images_north_up"):
+        bev_images_dir = sidewalk_dir / bev_images_name
+        if bev_images_dir.exists():
+            shutil.rmtree(bev_images_dir)
 
     # Load npy files
     gps_arr = np.load(sidewalk_dir / "frame_gps.npy")
@@ -193,27 +468,16 @@ def process_sidewalk_ride(
     num_frames_total = len(gps_arr)
     print(f"Total frames in dataset: {num_frames_total}")
 
-    # Step 1: Extract frames from video
     mp4_path = sidewalk_dir / "front.mp4"
     if not mp4_path.exists():
         raise RuntimeError(f"front.mp4 not found: {mp4_path}")
 
-    # Extract frames and get their indices
-    extracted_frames = _extract_frames_from_mp4(mp4_path, output_dir, sample_fps)
-
-    # Estimate which indices we extracted (approximate)
     total_duration_s = (times_arr[-1] - times_arr[0]) / 1e9
-    num_samples = len(extracted_frames)
-    print(f"Total duration: {total_duration_s:.1f}s, sampling {num_samples} frames")
-
-    # Calculate step - make sure we have matching number of GPS/pose for extracted images
-    step = max(1, num_frames_total // max(1, num_samples))
-    selected_indices = list(range(0, num_frames_total, step))[:num_samples]
-    print(f"Selected indices: {len(selected_indices)} (step={step})")
-
-    # If mismatch, adjust
-    if len(selected_indices) != len(extracted_frames):
-        selected_indices = selected_indices[: len(extracted_frames)]
+    selected_indices = _select_indices_by_fps(times_arr, bev_sample_fps)
+    print(
+        f"Total duration: {total_duration_s:.1f}s, "
+        f"selected {len(selected_indices)} BEV frames at {bev_sample_fps:g}fps"
+    )
 
     # Step 2: Build trajectory
     trajectory = []
@@ -233,22 +497,9 @@ def process_sidewalk_ride(
         lng_sum = sum(lng for _, lng in window)
         smoothed_positions.append((lat_sum / len(window), lng_sum / len(window)))
 
-    # First calculate all raw headings from the smoothed positions.
-    raw_headings = []
-    for i in range(len(smoothed_positions)):
-        lat, lng = smoothed_positions[i]
-
-        # Calculate heading from GPS - use current point and next point (or previous if last)
-        if i < len(smoothed_positions) - 1:
-            next_lat, next_lng = smoothed_positions[i + 1]
-            h = _calculate_heading_from_gps(lat, lng, next_lat, next_lng)
-        elif i > 0:
-            prev_lat, prev_lng = smoothed_positions[i - 1]
-            h = _calculate_heading_from_gps(prev_lat, prev_lng, lat, lng)
-        else:
-            h = 0.0
-
-        raw_headings.append(h)
+    # Calculate GPS headings from points far enough apart. Adjacent 20 FPS GPS
+    # samples can be duplicated or dominated by jitter, especially while stopped.
+    raw_headings = _calculate_robust_gps_headings(smoothed_positions)
 
     default_heading = raw_headings[0] if raw_headings else 0.0
 
@@ -265,19 +516,7 @@ def process_sidewalk_ride(
                 window.append(h)
 
         if window:
-            # Handle angle wrap-around (0-360) properly by converting to unit vectors
-            x_sum = 0.0
-            y_sum = 0.0
-            for h in window:
-                rad = math.radians(h)
-                x_sum += math.cos(rad)
-                y_sum += math.sin(rad)
-
-            avg_x = x_sum / len(window)
-            avg_y = y_sum / len(window)
-            smoothed_h = math.degrees(math.atan2(avg_y, avg_x))
-            smoothed_h = (smoothed_h + 360.0) % 360.0  # Normalize to 0-360
-            smoothed_headings[i] = smoothed_h
+            smoothed_headings[i] = _circular_mean_deg(window)
         else:
             smoothed_headings[i] = default_heading
 
@@ -298,25 +537,16 @@ def process_sidewalk_ride(
             compass_yaw = (90.0 - float(yaw_deg)) % 360.0
             yaw_list.append(compass_yaw)
 
-        # Initialize EKF at first frame
         first_idx = selected_indices[0]
-        # Detect if yaw_list appears unreliable (near-constant), in which case prefer GPS bearing
-        yaw_range = max(yaw_list) - min(yaw_list) if yaw_list else 0.0
-        use_yaw_obs = True
-        if yaw_range < 0.5:
-            # yaw is nearly constant -> likely invalid quaternions
-            use_yaw_obs = False
-            # compute initial heading from GPS bearing between first two smoothed positions if possible
-            if len(smoothed_positions) >= 2:
-                lat0, lng0 = smoothed_positions[0]
-                lat1, lng1 = smoothed_positions[1]
-                init_heading = _calculate_heading_from_gps(lat0, lng0, lat1, lng1)
-            else:
-                init_heading = raw_headings[0] if raw_headings else 0.0
-            print(f"[WARN] Yaw observations appear constant (range={yaw_range:.3f}). Disabling yaw updates; initializing EKF heading from GPS: {init_heading:.3f}")
-            ekf = PoseEKF.init_from_latlng_heading(float(gps_arr[first_idx, 0]), float(gps_arr[first_idx, 1]), init_heading, pos_var=25.0, theta_var=0.5)
+        use_yaw_obs, yaw_reason = _is_yaw_observation_reliable(yaw_list, ori_arr, selected_indices)
+        heading_obs = yaw_list if use_yaw_obs else smoothed_headings
+        heading_obs_source = "quaternion" if use_yaw_obs else "gps"
+        init_heading = heading_obs[0] if heading_obs else default_heading
+        if use_yaw_obs:
+            print(f"Using quaternion yaw observations for EKF heading ({yaw_reason})")
         else:
-            ekf = PoseEKF.init_from_latlng_heading(float(gps_arr[first_idx, 0]), float(gps_arr[first_idx, 1]), yaw_list[0], pos_var=25.0, theta_var=0.5)
+            print(f"[WARN] Quaternion yaw unreliable ({yaw_reason}). Using robust GPS bearing observations for EKF heading.")
+        ekf = PoseEKF.init_from_latlng_heading(float(gps_arr[first_idx, 0]), float(gps_arr[first_idx, 1]), init_heading, pos_var=25.0, theta_var=0.5)
         fused_positions = []
         fused_headings = []
         prev_time_ns = int(times_arr[first_idx])
@@ -332,16 +562,13 @@ def process_sidewalk_ride(
                 diff_rad = (diff_rad + math.pi) % (2 * math.pi) - math.pi
                 omega = diff_rad / max(dt, 1e-6)
             ekf.predict(omega, dt, q_pos=ekf_q_pos, q_theta=ekf_q_theta)
-            if use_yaw_obs:
-                ekf.update_gps_and_yaw(
-                    float(gps_arr[data_idx, 0]),
-                    float(gps_arr[data_idx, 1]),
-                    yaw_deg=yaw_list[i],
-                    r_xy=ekf_r_xy,
-                    r_theta=ekf_r_theta,
-                )
-            else:
-                ekf.update_gps(float(gps_arr[data_idx, 0]), float(gps_arr[data_idx, 1]), r_xy=ekf_r_xy)
+            ekf.update_gps_and_yaw(
+                float(gps_arr[data_idx, 0]),
+                float(gps_arr[data_idx, 1]),
+                yaw_deg=heading_obs[i],
+                r_xy=ekf_r_xy,
+                r_theta=ekf_r_theta,
+            )
             latf, lngf = ekf.get_latlng()
             fused_positions.append((latf, lngf))
             fused_headings.append(ekf.get_heading_deg())
@@ -350,14 +577,14 @@ def process_sidewalk_ride(
         smoothed_positions = fused_positions
         smoothed_headings = fused_headings
         # Print a quick comparison for the first few frames: quaternion yaw, gps heading, ekf heading
-        print("[DEBUG] First 5 frame heading comparisons (quaternion_yaw_deg | gps_heading_deg | ekf_heading_deg):")
+        print(f"[DEBUG] First 5 frame heading comparisons (quaternion_yaw_deg | gps_heading_deg | ekf_heading_deg, obs={heading_obs_source}):")
         for k in range(min(5, len(selected_indices))):
             qyaw = yaw_list[k]
             gps_h = raw_headings[k] if k < len(raw_headings) else None
             ekf_h = smoothed_headings[k]
             print(f"  frame {k}: {qyaw:.6f} | {gps_h:.6f} | {ekf_h:.6f}")
 
-    for img_idx, (img_path, data_idx) in enumerate(zip(extracted_frames, selected_indices)):
+    for img_idx, data_idx in enumerate(selected_indices):
         # GPS format looks like: [lat, lng, alt, ?, ?]
         lat, lng = smoothed_positions[img_idx]
 
@@ -375,100 +602,178 @@ def process_sidewalk_ride(
         qw = float(ori_arr[data_idx, 3])
         roll_deg, pitch_deg, _ = _quaternion_to_euler_deg(x=qx, y=qy, z=qz, w=qw)
 
-        # Use original FPV frame index (data_idx) for filename
-        # This ensures alignment with InternNav's frame indexing
-        img_name = f"{data_idx:06d}.jpg"
-        final_img_path = output_dir / "images" / img_name
-        if img_path != final_img_path:
-            if final_img_path.exists():
-                final_img_path.unlink()
-            img_path.rename(final_img_path)
+        image_path = _find_existing_fpv_image(sidewalk_dir, data_idx)
+        if extract_fpv_images:
+            image_path = _extract_video_frame_by_index(mp4_path, data_idx, output_dir / "images" / f"{data_idx:06d}.jpg")
 
         # Add to trajectory
-        trajectory.append(
-            {
-                "timestamp": int(times_arr[data_idx]),
-                "lat": lat,
-                "lng": lng,
-                "heading_deg": heading_deg,
-                "image_path": str(final_img_path.resolve()),
-                "attitude_source": "ekf" if use_pose_ekf else "gps",
-                "roll_deg": roll_deg,
-                "pitch_deg": pitch_deg,
-            }
-        )
+        item = {
+            "frame_idx": int(data_idx),
+            "frame_name": f"{int(data_idx):06d}",
+            "timestamp": int(times_arr[data_idx]),
+            "lat": lat,
+            "lng": lng,
+            "heading_deg": heading_deg,
+            "fpv_video_path": str(mp4_path.resolve()),
+            "attitude_source": f"ekf_{heading_obs_source}" if use_pose_ekf else "gps",
+            "roll_deg": roll_deg,
+            "pitch_deg": pitch_deg,
+        }
+        if image_path is not None:
+            item["image_path"] = str(image_path.resolve())
+        trajectory.append(item)
 
     # Save trajectory.json
     traj_path = output_dir / "trajectory.json"
     traj_path.write_text(json.dumps(trajectory, indent=2), encoding="utf-8")
     print(f"Saved trajectory: {traj_path}")
 
-    # Step 3: Generate BEV maps with global trajectory - in the original sidewalk dir
+    # Step 3: Generate minimal BEV maps in the original sidewalk dir. Phase1
+    # keeps one ego-aligned BEV by default, and the BEV training input includes
+    # the route overlay.  The route/start/end are projected with the exact same
+    # rotate-then-crop transform as the OSM raster so they stay anchored to map
+    # features even though the ego pose is centered in the image.
     bev_images_dir = sidewalk_dir / "bev_images"
+    bev_images_north_up_dir = sidewalk_dir / "bev_images_north_up"
     bev_images_dir.mkdir(parents=True, exist_ok=True)
+    if write_north_up_bev:
+        bev_images_north_up_dir.mkdir(parents=True, exist_ok=True)
 
     provider_config = MAP_PROVIDERS.get(map_provider, MAP_PROVIDERS["osm"])
-    options = ProcessOptions(
+    ego_options = ProcessOptions(
         map_provider=map_provider,
         output_size=1024,
         zoom=19,
         cache_dir=Path("/tmp/bev_cache"),
-        draw_trajectory=True,
+        draw_trajectory=bool(draw_bev_trajectory and str(bev_route_scope) != "none"),
         add_attribution=True,
+        bev_alignment=str(bev_alignment),
     )
+    north_up_options = None
+    if write_north_up_bev and str(bev_alignment) != "north_up":
+        north_up_options = ProcessOptions(
+            map_provider=map_provider,
+            output_size=1024,
+            zoom=19,
+            cache_dir=Path("/tmp/bev_cache"),
+            draw_trajectory=bool(draw_bev_trajectory and str(bev_route_scope) != "none"),
+            add_attribution=True,
+            bev_alignment="north_up",
+        )
 
     # Global trajectory - all GPS points
     global_nav_path = smoothed_positions
 
     samples = []
-    print(f"Generating BEV maps for {len(trajectory)} frames...")
+    bev_index_entries = []
+    mode_text = str(bev_alignment) if north_up_options is None else f"{bev_alignment} and north-up"
+    print(f"Generating {mode_text} BEV maps for {len(trajectory)} frames...")
     for i, frame in enumerate(tqdm(trajectory, desc="Generating BEV")):
         lat = frame["lat"]
         lng = frame["lng"]
         heading_deg = frame["heading_deg"]
-        fpv_image_path = Path(frame["image_path"])
+        frame_name = str(frame.get("frame_name") or f"{int(frame.get('frame_idx', i)):06d}")
+        fpv_image_path = Path(frame["image_path"]) if frame.get("image_path") else None
+        route_overlay_path, route_overlay_meta = _route_path_for_bev_frame(
+            global_nav_path,
+            i,
+            route_scope=str(bev_route_scope) if draw_bev_trajectory else "none",
+            lookahead_s=float(bev_route_lookahead_s),
+            bev_sample_fps=float(bev_sample_fps),
+        )
 
         try:
-            bev_image = render_bev_map(
+            ego_bev_image = render_bev_map(
                 lat=lat,
                 lng=lng,
                 heading_deg=heading_deg,
-                navigation_path_gps=global_nav_path,
-                options=options,
+                navigation_path_gps=route_overlay_path,
+                options=ego_options,
                 provider_config=provider_config,
             )
+            north_up_bev_image = None
+            if north_up_options is not None:
+                north_up_bev_image = render_bev_map(
+                    lat=lat,
+                    lng=lng,
+                    heading_deg=heading_deg,
+                    navigation_path_gps=route_overlay_path,
+                    options=north_up_options,
+                    provider_config=provider_config,
+                )
 
-            bev_filename = f"{fpv_image_path.stem}_bev.jpg"
+            bev_filename = f"{frame_name}_bev.jpg"
             bev_path = bev_images_dir / bev_filename
-            bev_image.save(bev_path, quality=95)
+            ego_bev_image.save(bev_path, quality=int(bev_jpeg_quality))
+            bev_north_up_path = None
+            if north_up_bev_image is not None:
+                bev_north_up_path = bev_images_north_up_dir / bev_filename
+                north_up_bev_image.save(bev_north_up_path, quality=int(bev_jpeg_quality))
 
             # Write a small metadata file next to each BEV image with the heading actually used for rendering
             try:
                 meta = {
+                    "source_frame_idx": int(frame.get("frame_idx", i)),
+                    "source_frame_name": frame_name,
+                    "source_timestamp_ns": int(frame["timestamp"]),
                     "used_heading_deg": float(heading_deg),
                     "attitude_source": frame.get("attitude_source", "unknown"),
+                    "bev_alignment": str(bev_alignment),
+                    "bev_sample_fps": float(bev_sample_fps),
+                    "draw_trajectory": bool(draw_bev_trajectory),
+                    "bev_route_overlay": route_overlay_meta,
                 }
                 meta_path = bev_path.with_suffix(bev_path.suffix + ".bevmeta.json")
                 meta_path.write_text(json.dumps(meta), encoding="utf-8")
+                if bev_north_up_path is not None:
+                    north_up_meta = dict(meta)
+                    north_up_meta["bev_alignment"] = "north_up"
+                    north_up_meta_path = bev_north_up_path.with_suffix(bev_north_up_path.suffix + ".bevmeta.json")
+                    north_up_meta_path.write_text(json.dumps(north_up_meta), encoding="utf-8")
             except Exception:
                 pass
 
+            bev_index_entry = {
+                "frame_idx": int(frame.get("frame_idx", i)),
+                "frame_name": frame_name,
+                "timestamp": int(frame["timestamp"]),
+                "bev_image_path": str(bev_path.resolve()),
+                "bev_alignment": str(bev_alignment),
+                "bev_sample_fps": float(bev_sample_fps),
+                "draw_trajectory": bool(draw_bev_trajectory),
+                "bev_route_overlay": route_overlay_meta,
+            }
+            bev_index_entries.append(bev_index_entry)
             sample = {
                 "ride_id": sidewalk_dir.name,
                 "source": "sidewalk_npy",
-                "fpv_image_path": str(fpv_image_path),
+                "fpv_image_path": str(fpv_image_path) if fpv_image_path is not None else None,
+                "fpv_video_path": str(mp4_path.resolve()),
+                "fpv_frame_idx": int(frame.get("frame_idx", i)),
                 "bev_image_path": str(bev_path),
+                "bev_image_alignment": str(bev_alignment),
                 "metadata": {
                     "lat": lat,
                     "lng": lng,
                     "timestamp": frame["timestamp"],
                     "heading_deg": heading_deg,
+                    "bev_route_overlay": route_overlay_meta,
+                    "bev_outputs": {
+                        str(bev_alignment): str(bev_path),
+                    },
                 },
                 "instruction": "",
                 "action": "",
                 "plan": "",
                 "think": "",
             }
+            if str(bev_alignment) == "ego_aligned":
+                sample["bev_image_path_ego_aligned"] = str(bev_path)
+            elif str(bev_alignment) == "north_up":
+                sample["bev_image_path_north_up"] = str(bev_path)
+            if bev_north_up_path is not None:
+                sample["bev_image_path_north_up"] = str(bev_north_up_path)
+                sample["metadata"]["bev_outputs"]["north_up"] = str(bev_north_up_path)
             samples.append(sample)
         except Exception as e:
             print(f"Warning: failed frame {i}: {e}")
@@ -477,12 +782,44 @@ def process_sidewalk_ride(
     samples_path = output_dir / "samples.json"
     samples_path.write_text(json.dumps(samples, indent=2), encoding="utf-8")
     print(f"Saved {len(samples)} samples: {samples_path}")
+    bev_index = {
+        "schema_version": "sidewalk_bev_index_v1",
+        "clip_id": sidewalk_dir.name,
+        "bev_sample_fps": float(bev_sample_fps),
+        "bev_alignment": str(bev_alignment),
+        "draw_trajectory": bool(draw_bev_trajectory),
+        "bev_route_scope": str(bev_route_scope) if draw_bev_trajectory else "none",
+        "bev_route_lookahead_s": float(bev_route_lookahead_s),
+        "entries": bev_index_entries,
+    }
+    bev_index_path = sidewalk_dir / "bev_index.json"
+    bev_index_path.write_text(json.dumps(bev_index, indent=2), encoding="utf-8")
+    (bev_images_dir / "bev_index.json").write_text(json.dumps(bev_index, indent=2), encoding="utf-8")
+    print(f"Saved BEV index: {bev_index_path}")
 
     # Step 4: Generate BEV mp4 video in the original sidewalk dir
-    if samples:
+    if samples and write_bev_videos:
         try:
-            print("Generating BEV video...")
-            generate_bev_mp4(bev_images_dir, sidewalk_dir, sample_fps)
+            print("Generating BEV videos...")
+            bev_timestamps_ns = [int(frame["timestamp"]) for frame in trajectory if frame.get("timestamp") is not None]
+            if len(bev_timestamps_ns) != len(trajectory):
+                bev_timestamps_ns = None
+            generate_bev_mp4(bev_images_dir, sidewalk_dir, bev_sample_fps, timestamps_ns=bev_timestamps_ns)
+            generate_bev_mp4(
+                bev_images_dir,
+                sidewalk_dir,
+                bev_sample_fps,
+                output_filename="bev_video_ego_aligned.mp4",
+                timestamps_ns=bev_timestamps_ns,
+            )
+            if write_north_up_bev:
+                generate_bev_mp4(
+                    bev_images_north_up_dir,
+                    sidewalk_dir,
+                    bev_sample_fps,
+                    output_filename="bev_video_north_up.mp4",
+                    timestamps_ns=bev_timestamps_ns,
+                )
         except Exception as e:
             print(f"Warning: failed to generate BEV video: {e}")
 
@@ -501,13 +838,19 @@ def main():
         "--output-root",
         type=Path,
         default="/media/ubuntu/data1/sr_nav_chunk0_final",
-        help="Output root directory",
+        help="Legacy output root directory. Ignored by default; use --write-to-output-root to restore old behavior.",
     )
     parser.add_argument(
         "--sample-fps",
         type=float,
+        default=20.0,
+        help="Legacy FPV extraction sampling rate. Phase1 minimal mode does not extract FPV by default.",
+    )
+    parser.add_argument(
+        "--bev-sample-fps",
+        type=float,
         default=2.0,
-        help="Sampling rate for frames",
+        help="Sampling rate for persisted BEV images. Use 2fps for Phase1 storage control.",
     )
     parser.add_argument(
         "--map-provider",
@@ -530,7 +873,46 @@ def main():
     parser.add_argument("--ekf-q-theta", type=float, default=1e-2, help="EKF process noise strength for theta")
     parser.add_argument("--ekf-r-xy", type=float, default=9.0, help="EKF GPS position observation variance")
     parser.add_argument("--ekf-r-theta", type=float, default=0.5, help="EKF yaw/compass observation variance")
+    parser.add_argument("--extract-fpv-images", action="store_true", help="Persist sampled FPV JPGs. Off by default to avoid duplicating front.mp4.")
+    parser.add_argument("--write-north-up-bev", action="store_true", help="Also write north-up BEV images for debugging.")
+    parser.add_argument("--write-bev-videos", action="store_true", help="Write BEV mp4 debug videos. Off by default for minimal Phase1 data.")
+    parser.add_argument(
+        "--draw-bev-trajectory",
+        action="store_true",
+        help="Compatibility flag: force drawing the full recorded clip trajectory on BEV images.",
+    )
+    parser.add_argument(
+        "--no-bev-route-overlay",
+        action="store_true",
+        help="Disable route overlay in BEV training images. By default the full route is drawn.",
+    )
+    parser.add_argument(
+        "--bev-route-scope",
+        default="global_full",
+        choices=["local_future", "global_full", "none"],
+        help="Route overlay in BEV images. global_full draws the whole task route; local_future is an ablation/debug mode.",
+    )
+    parser.add_argument(
+        "--bev-route-lookahead-s",
+        type=float,
+        default=8.0,
+        help="Lookahead horizon in seconds for local_future BEV route overlay.",
+    )
+    parser.add_argument(
+        "--bev-alignment",
+        default="ego_aligned",
+        choices=["ego_aligned", "north_up"],
+        help="BEV frame for saved bev_images. ego_aligned rotates robot heading up; north_up keeps OSM north-up while centering ego.",
+    )
+    parser.add_argument("--bev-jpeg-quality", type=int, default=90, help="JPEG quality for persisted BEV images")
+    parser.add_argument(
+        "--write-to-output-root",
+        action="store_true",
+        help="Legacy behavior: write trajectory/samples/FPV extraction under --output-root instead of the original clip directory.",
+    )
     args = parser.parse_args()
+    if not args.write_to_output_root:
+        print("[INFO] Writing generated artifacts into each original clip directory. --output-root is ignored.")
 
     # Check if sidewalk_root is a single ride directory (has frame_gps.npy and front.mp4)
     sidewalk_root = args.sidewalk_root
@@ -549,21 +931,37 @@ def main():
 
     all_samples = []
     for ride_dir in ride_dirs:
-        if is_single_ride:
+        if args.write_to_output_root and is_single_ride:
             output_dir = args.output_root
-        else:
+        elif args.write_to_output_root:
             output_dir = args.output_root / ride_dir.name
+        else:
+            output_dir = ride_dir
+        draw_route_overlay = not bool(args.no_bev_route_overlay)
+        bev_route_scope = str(args.bev_route_scope)
+        if args.draw_bev_trajectory:
+            draw_route_overlay = True
+            bev_route_scope = "global_full"
         try:
             samples = process_sidewalk_ride(
                 ride_dir,
                 output_dir,
                 sample_fps=args.sample_fps,
+                bev_sample_fps=args.bev_sample_fps,
                 map_provider=args.map_provider,
                 use_pose_ekf=args.use_pose_ekf,
                 ekf_q_pos=args.ekf_q_pos,
                 ekf_q_theta=args.ekf_q_theta,
                 ekf_r_xy=args.ekf_r_xy,
                 ekf_r_theta=args.ekf_r_theta,
+                extract_fpv_images=bool(args.extract_fpv_images),
+                write_north_up_bev=bool(args.write_north_up_bev),
+                write_bev_videos=bool(args.write_bev_videos),
+                draw_bev_trajectory=draw_route_overlay,
+                bev_route_scope=bev_route_scope,
+                bev_route_lookahead_s=float(args.bev_route_lookahead_s),
+                bev_alignment=str(args.bev_alignment),
+                bev_jpeg_quality=int(args.bev_jpeg_quality),
             )
             all_samples.extend(samples)
         except Exception as e:
@@ -573,7 +971,8 @@ def main():
 
     # Save combined samples
     if all_samples:
-        combined_path = args.output_root / "all_samples.json"
+        combined_root = args.output_root if args.write_to_output_root else sidewalk_root
+        combined_path = combined_root / "all_samples.json"
         combined_path.parent.mkdir(parents=True, exist_ok=True)
         combined_path.write_text(json.dumps(all_samples, indent=2), encoding="utf-8")
         print(f"\n{'='*60}")

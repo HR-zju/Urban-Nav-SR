@@ -2,6 +2,109 @@
 
 本文档用于记录影响 FPV/BEV visual prompt 主链路、QA teachers、调试产物和批处理工具的工程变更。记录目标是方便后续审计：为什么改、改了什么、对运行行为有什么影响。
 
+## 2026-06-02
+
+### 修正 Phase1 FPV 轨迹近场回折并默认全帧生成
+
+- `tools/model_processing/sidewalk_phase1_dataset.py` 默认 `frame_step=1`，对每一个 FPV/pose 帧生成训练样本；低频 BEV 继续通过 `bev_index.json` 按 timestamp 最近邻配对。
+- 新增 `max_bev_time_delta_ms`，默认 `300ms`，用于拒绝时间差过大的 FPV/BEV 配对。
+- 标定 FPV trajectory 投影后新增近场平滑：
+  - 第一个点固定为 bottom-center anchor `(0.5, 0.9)`。
+  - 后续点按图像 y 方向单调向前。
+  - 对过近 future pose 投影到图像底部造成的回折点，使用下一个有效前向点插值修正。
+- `run_sidewalk_phase1_dataset.sh` 默认 `FRAME_STEP=1`，并暴露 `MIN_FUTURE_DISTANCE_M`、`TRAJECTORY_MIN_Y_STEP`、`MAX_BEV_TIME_DELTA_MS`。
+- 扩展测试覆盖近场回折修复和默认全帧 FPV 到低频 BEV 的 timestamp 匹配。
+
+## 2026-06-01
+
+### 修复 SideWalk BEV route overlay 坐标漂移
+
+- 修复 `tools/bev/frodobot_bev_enhanced.py` 和 `src/mcp_server/services/visual_prompt_service.py` 中 route overlay 的旋转公式。
+  - 原实现使用常规笛卡尔旋转公式，但图像坐标系 y 轴向下，且 PIL `Image.rotate()` 对正角度的 raster 内容变换方向不同。
+  - 现在 route/start/end 点使用与 OSM raster 完全一致的 PIL screen-coordinate forward transform，避免起点、终点相对 OSM 地图漂移。
+- `process_sidewalk_dataset.py` 明确 Phase1 训练 BEV 默认绘制完整 `global_full` route/start/end。
+  - `--bev-route-scope global_full` 为默认训练输入。
+  - `--bev-route-scope local_future` 仅用于局部路线消融。
+  - `--no-bev-route-overlay` 可关闭路线 overlay。
+- 增加单测覆盖 PIL 旋转坐标方向和 `global_full` route scope。
+
+### 实现 SideWalk Phase1 最简 BEV 保留策略
+
+- `tools/dataset_processing/process_sidewalk_dataset.py` 改为 Phase1 最简默认：
+  - BEV 默认按 `--bev-sample-fps 2.0` 生成。
+  - 默认只写 `bev_images/` ego-aligned BEV。
+  - 默认绘制完整 route/start/end，作为 System2 的 BEV 任务输入条件。
+  - 新增 `--bev-alignment ego_aligned|north_up`，用于区分车头朝上和 OSM north-up 的 centered BEV。
+  - 默认不写 `bev_images_north_up/` 和 `bev_video*.mp4`。
+  - 默认不重复抽取 FPV JPG；若下游需要单帧图，Phase1 exporter 会按样本从 `front.mp4` 抽取。
+  - 默认把所有预处理产物写入原始 clip 目录；`--output-root` 仅作为旧流程兼容参数，显式 `--write-to-output-root` 时才生效。
+- 新增 `bev_index.json`：
+  - 记录每张低频 BEV 对应的原始 `frame_idx`、timestamp、BEV 路径。
+  - 支持高频 FPV/pose 样本映射到最近的低频 BEV。
+- `tools/model_processing/sidewalk_phase1_dataset.py` 支持 FPV/BEV 异频：
+  - 优先读取 `bev_index.json`。
+  - 按 timestamp 最近邻选择 BEV。
+  - 在 `sidewalk_meta`、`bev_patch_meta`、QA bundle 中记录 `bev_frame_idx`、`bev_timestamp`、`bev_time_delta_ms`、`bev_mapping_source`。
+  - 当原始 clip 只有 `front.mp4` 而没有 FPV JPG 时，只对最终被采样的训练帧按需抽取，避免全量复制 FPV。
+- 更新 `docs/SIDEWALK_PHASE1_DATA_PIPELINE.md` 和 `tools/README.md`，明确最终数据形态为原始视频 + 2fps BEV + JSON sidecars。
+- 扩展测试覆盖 20fps timestamp -> 2fps BEV index 选择和 Phase1 最近 BEV 映射。
+- 修复单 clip 最简运行时 `output_root` 不存在导致 `trajectory.json` 写入失败的问题。
+
+### 修正 SideWalk BEV 视频时长与采样帧率不一致
+
+- `tools/dataset_processing/process_sidewalk_dataset.py` 的 BEV mp4 生成不再只依赖 `--sample-fps` 写固定 duration。
+- `generate_bev_mp4()` 新增 timestamp 驱动的 timing 逻辑：
+  - 优先使用 `trajectory` 中每帧真实 `timestamp` 推导帧间隔。
+  - 只有缺少 timestamp 时才回退到 `--sample-fps`。
+  - 打印实际用于编码的 fps，便于发现 20fps 帧被误封成 2fps 的问题。
+- 单 clip 处理脚本默认 `--sample-fps` 从 `2.0` 改为 `20.0`，与当前 SideWalk 数据采样约定一致。
+- 新增 `tests/test_sidewalk_bev_video_timing.py`，覆盖 timestamp 推导 fps 和 fallback fps 两种路径。
+
+### 增加 SideWalk Phase1 LLM Teacher CoT 数据阶段
+
+- 新增 `tools/model_processing/sidewalk_phase1_cot_teacher.py`：
+  - 读取 `phase1_source_*.jsonl`、trajectory label、BEV patch meta 和 QA bundle。
+  - 调用 Agent 现有 `VisionAnalyzer`，使用 FPV 主图和 BEV 额外图生成单轮 structured CoT target。
+  - 固定输出 `<think>/<Scene>/<FPV>/<BEV>/<CrossView>/<Plan>/<finish>`，用于 ms-swift token-level CE 监督。
+  - 几何真值仍以 exporter 产物为准；teacher 只能解释，不允许改写 `intent_gt`、`route_theta_deg` 或 `pixel_trajectory`。
+- 增加 validator：
+  - 检查 tag 完整性、tag 顺序、tag 外文本、JSON 解析。
+  - 校验 `<BEV>.intent`、`<finish>.intent`、`route_theta_deg` 和 trajectory 与几何真值一致。
+  - 没有 segmentation context 时禁止 teacher 声称 `region_id`、mask overlap、mIoU、support ratio 等 Phase2 证据。
+  - 支持 retry/repair；失败后可选择 `drop`、`error` 或显式 `template` 降级。
+- 新增 `tools/model_processing/run_sidewalk_phase1_cot_teacher.sh`，封装 teacher 生成、验证报告和下一步 ms-swift 转换提示。
+- 新增 `tests/test_sidewalk_phase1_cot_teacher.py`，覆盖模板 fallback、GT 改写拒绝、训练 prompt 不泄露 geometry evidence、retry 后写出有效行。
+- 更新 `docs/SIDEWALK_PHASE1_DATA_PIPELINE.md` 和 `tools/README.md`，明确 CoT SFT 必须走 Geometry Exporter -> LLM Teacher -> Validator/Manifest Builder 三段。
+
+### 修正 SideWalk Phase1 轨迹真值生成链路
+
+- `tools/model_processing/sidewalk_phase1_dataset.py` 默认优先读取 InternNav clip 标定格式：
+  - `frame_positions.npy`
+  - `frame_orientations.npy`
+  - `camera_params.json`
+  - FPV/BEV 图像
+- FPV `pixel_trajectory` 改为使用与 InternNav `SidewalkTrajectoryGenerator` 一致的 pose -> robot -> camera -> image 投影公式。
+- `route_theta_gt`、`intent_gt` 改为从同一条 robot-frame future path 生成，避免与 FPV trajectory label 使用不同几何来源。
+- 旧 GNSS/HFOV 轨迹生成降级为显式 fallback，必须通过 `--allow-heuristic-trajectory` 或 `ALLOW_HEURISTIC_TRAJECTORY=1` 开启。
+- 输出 `trajectory_source` 元数据，用于区分 `calibrated_pose_projection`、`heuristic_pose_projection`、`heuristic_gnss_projection`。
+- 增加单测覆盖 calibrated projection、legacy fallback 和 InternNav 投影公式一致性。
+- 更新 `docs/SIDEWALK_PHASE1_DATA_PIPELINE.md`，明确正式训练数据必须优先使用标定投影。
+
+### 增加 SideWalk Phase1 ms-swift 数据生成流水线
+
+- 新增 `tools/model_processing/sidewalk_phase1_dataset.py`：
+  - 从 InternNav clip 的 pose/camera/FPV/BEV 产物生成 Phase1 source JSONL；旧 `trajectory.json` 仅作为显式 fallback。
+  - 为每帧写出 `trajectory_labels/{frame}.json`，包含归一化 FPV trajectory、pixel trajectory、local metric path、intent 和 route theta。
+  - 为每帧写出 `bev_patch_meta/{frame}.json`，包含 local metric BEV grid、`ego_cell_gt`、`target_cell_gt`、route cells、intent 和 confidence。
+  - 为每帧写出 `qa/{frame}_qa.json`，使用 ms-swift SideWalk QA schema，默认生成 `bev_route_theta`、`bev_navigation_stage`、`crossview_region_grounding`、`trajectory_intent_check`。
+  - Phase1 明确不依赖 SAM/SoM，不生成强 `fpv_region_affordance` 或 `mask_route_sequence` 监督。
+- 新增 `tools/model_processing/eval_sidewalk_phase1_artifacts.py`：
+  - 检查 source JSONL 引用路径、trajectory shape、归一化范围和 QA bundle schema。
+  - 支持读取对齐的预测 JSONL，计算 `prediction_parse_success`、ADE、FDE。
+- 新增 `tools/model_processing/run_sidewalk_phase1_dataset.sh`，封装 Phase1 构建与审计的一键入口。
+- 新增文档 `docs/SIDEWALK_PHASE1_DATA_PIPELINE.md`，说明 Agent 仓库与 ms-swift 的数据边界、输入要求、输出结构、QA bundle 和训练前转换命令。
+- 新增测试 `tests/test_sidewalk_phase1_dataset.py`，覆盖 local BEV 坐标约定、grid cell 生成和最小 clip 导出流程。
+
 ## 2026-05-19
 
 ### 优化 LVLM 输入缓存与两图模式
