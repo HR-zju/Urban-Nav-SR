@@ -25,6 +25,11 @@ RATE = 10
 EPS = 1e-8
 WAYPOINT_TIMEOUT = 1 # seconds # TODO: tune this
 FLIP_ANG_VEL = np.pi/4
+TURN_KP = 1.2
+MIN_TURN_W = 0.18
+TURN_DEADBAND_ANGLE = 0.03
+MAX_DELTA_W = 0.12
+TURN_SPEED_DECAY = 0.8
 
 # GLOBALS
 vel_msg = Twist()
@@ -97,7 +102,8 @@ def pd_controller(waypoint, current_v, current_w) -> Tuple[float, float]:
 
     # --- base control from lookahead point ---
     v = dx / DT / 2.0
-    w = np.arctan2(dy, dx) / DT / 2.0
+    heading_error = np.arctan2(dy, dx)
+    w = TURN_KP * heading_error / DT
 
     # --- simple progress metric along x for stop condition ---
     if waypoints.shape[0] > 1:
@@ -108,9 +114,10 @@ def pd_controller(waypoint, current_v, current_w) -> Tuple[float, float]:
 
     max_v = current_v + 0.4
     min_v = current_v - 0.5
-    # angular rate limits (kept for possible future use)
-    # max_w = current_w + 0.2
-    # min_w = current_w - 0.2
+    # angular velocity smoothing
+    w = np.clip(w, current_w - MAX_DELTA_W, current_w + MAX_DELTA_W)
+    if abs(heading_error) > TURN_DEADBAND_ANGLE and abs(w) < MIN_TURN_W:
+        w = np.sign(heading_error) * MIN_TURN_W
 
     # acceleration smoothing and limits on linear velocity
     v = np.clip(v, min_v, max_v)
@@ -121,8 +128,8 @@ def pd_controller(waypoint, current_v, current_w) -> Tuple[float, float]:
         v *= 0.0
 
     # penalize linear velocity when angular velocity is large
-    if np.abs(w) > 0.1:
-        v *= np.exp(-0.02 * np.abs(w))
+    if np.abs(w) >= MIN_TURN_W:
+        v *= np.exp(-TURN_SPEED_DECAY * np.abs(w))
 
     w = np.clip(w, -MAX_W, MAX_W)
 

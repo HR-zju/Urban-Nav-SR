@@ -703,7 +703,7 @@ int main(int argc, char **argv)
                          "/home/nuvo/SR/foundation-policy/Policy_part/topomaps/LLM_Policy/LLM_UTM_odom_poses.txt");
 
     ros::Subscriber sub_GPS = n.subscribe("/gps/fix", 100, GPS_callback);
-    ros::Subscriber sub_vio = n.subscribe("/mfla/dr_odom", 100, vio_callback);
+    ros::Subscriber sub_vio = n.subscribe("/agilex/odom", 100, vio_callback);
     ros::Timer route_file_timer = n.createTimer(ros::Duration(1.0), route_file_timer_callback);
     pub_global_path = n.advertise<nav_msgs::Path>("global_path", 100);
     pub_global_odometry = n.advertise<nav_msgs::Odometry>("global_odometry", 100);

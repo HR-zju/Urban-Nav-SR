@@ -1,7 +1,7 @@
 import argparse
 import os
 import time
-from tools.utils import msg_to_pil
+from utils import msg_to_pil
 import atexit
 from nav_msgs.msg import Odometry
 import math
@@ -15,7 +15,7 @@ import datetime
 import shutil
 
 # IMAGE_TOPIC = "/usb_cam/image_raw"
-IMAGE_TOPIC = "/camera/camera/color/image_raw/compressed"
+IMAGE_TOPIC = "/image_raw"
 TOPOMAP_IMAGES_DIR = "./topomaps/images"
 
 
@@ -71,7 +71,7 @@ class CreateTopomapNode(Node):
         # 创建订阅者
         self.odom_sub = self.create_subscription(
             Odometry,
-            '/mfla/dr_odom',
+            '/agilex/odom',
             self.odom_callback,
             100
         )

@@ -450,7 +450,7 @@ def load_target_positions_from_file(filename: str = "odom_poses.txt"):
 
 
 def trajectory_nms(trajectory_raw: torch.Tensor, score_raw: torch.Tensor,
-                   max_trajectories: int = 6, distance_threshold: float = 2.0):
+                   max_trajectories: int = 6, distance_threshold: float = 5.0):
     """Apply NMS to trajectories based on endpoint distance.
 
     Args:
@@ -577,6 +577,8 @@ class RealSenseNavflowNode(Node):
         # Metrics and logging
         self.timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         self.image_count = 0
+        self.save_vis_interval_sec = 3.0
+        self.last_save_vis_time = 0.0
 
         # Publishers
         self.waypoint_pub = self.create_publisher(Float32MultiArray, "waypoint", 1)
@@ -598,13 +600,13 @@ class RealSenseNavflowNode(Node):
         # Odom subscriptions
         self.localodom_sub = self.create_subscription(
             Odometry,
-            "/globalEstimator/global_odometry",
+            "/agilex/odom",
             self.localodom_callback,
             20,
         )
         self.odom_sub = self.create_subscription(
             Odometry,
-            "/globalEstimator/global_odometry",
+            "/agilex/odom",
             self.odom_callback,
             100,
         )
@@ -1194,7 +1196,15 @@ class RealSenseNavflowNode(Node):
         waypoint_msg = Float32MultiArray()
         wp_pred_np = wp_pred_cam.detach().cpu().numpy()
 
-        if self.save_vis:
+        save_vis_time = time.monotonic()
+        if (
+            self.save_vis
+            and (
+                self.image_count == 0
+                or save_vis_time - self.last_save_vis_time >= self.save_vis_interval_sec
+            )
+        ):
+            self.last_save_vis_time = save_vis_time
             
             # Save snapshot image + metadata for offline analysis.
             img_np = np.transpose(snap_image_chw, (1, 2, 0))
@@ -1285,7 +1295,15 @@ class RealSenseNavflowNode(Node):
         reached_goal_msg = Bool()
         reached_goal_msg.data = bool(self.goal_reached)
         self.goal_pub.publish(reached_goal_msg)
-        self.inference_event.clear()
+        with self.lock:
+            has_pending_frames = (
+                len(self.image_batch) == self.frames
+                and self.update_counter > self.last_processed_counter
+            )
+        if has_pending_frames:
+            self.inference_event.set()
+        else:
+            self.inference_event.clear()
 
 
 # -----------------------------------------------------------------------------
@@ -1304,7 +1322,7 @@ def parse_args():
     parser.add_argument(
         "--distance_threshold",
         type=float,
-        default=10.0,
+        default=2.0,
         help="Distance threshold used in odom-based logic (default: 10)",
     )
     parser.add_argument(

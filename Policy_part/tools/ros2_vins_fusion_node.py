@@ -2,10 +2,18 @@
 import csv
 import json
 import math
+import multiprocessing as mp
 import os
+import time
 from collections import deque
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
-from threading import Lock
+from threading import Event, Lock, Thread
+
+os.environ.setdefault('OMP_NUM_THREADS', '1')
+os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
+os.environ.setdefault('MKL_NUM_THREADS', '1')
+os.environ.setdefault('NUMEXPR_NUM_THREADS', '1')
 
 import numpy as np
 import rclpy
@@ -256,6 +264,182 @@ def parse_waypoints_from_json(data, default_altitude):
     return waypoints
 
 
+def solve_global_optimization_job(job):
+    try:
+        os.nice(5)
+    except OSError:
+        pass
+
+    times = job['times']
+    poses = job['poses']
+    local_relative = job['local_relative']
+    gps_constraints = job['gps_constraints']
+    last_local_pose = job['last_local_pose']
+
+    if not times:
+        return None
+
+    def copy_poses(src_poses):
+        return [[pose[0].copy(), pose[1].copy()] for pose in src_poses]
+
+    def apply_delta(src_poses, delta):
+        trial = copy_poses(src_poses)
+        for idx in range(len(trial)):
+            base = idx * 6
+            trial[idx][0] += delta[base:base + 3]
+            trial[idx][1] = quat_multiply(rotvec_to_quat(delta[base + 3:base + 6]), trial[idx][1])
+        return trial
+
+    def relative_translation_residual(src_poses, i, j, measured_p):
+        p_i, q_i = src_poses[i]
+        p_j, _ = src_poses[j]
+        return (quat_to_matrix(q_i).T @ (p_j - p_i) - measured_p) / 0.1
+
+    def relative_rotation_residual(src_poses, i, j, measured_q):
+        q_i = src_poses[i][1]
+        q_j = src_poses[j][1]
+        rel_q = quat_multiply(quat_inverse(q_i), q_j)
+        q_err = quat_multiply(quat_inverse(measured_q), rel_q)
+        return (2.0 * q_err[1:4]) / 0.01
+
+    def gps_residual(src_poses, i, gps_xyz, pos_accuracy):
+        return (src_poses[i][0] - gps_xyz) / pos_accuracy
+
+    def numeric_rot_jacobian(residual_fn, src_poses, pose_idx, *args, eps=1e-6):
+        base_q = src_poses[pose_idx][1].copy()
+        base_res = residual_fn(src_poses, *args)
+        jac = np.zeros((base_res.size, 3), dtype=float)
+        for axis in range(3):
+            delta = np.zeros(3, dtype=float)
+            delta[axis] = eps
+            src_poses[pose_idx][1] = quat_multiply(rotvec_to_quat(delta), base_q)
+            perturbed_res = residual_fn(src_poses, *args)
+            jac[:, axis] = (perturbed_res - base_res) / eps
+        src_poses[pose_idx][1] = base_q
+        return jac
+
+    def huber_scale_block(residual):
+        return huber_weight(float(np.linalg.norm(residual)))
+
+    def add_measurement(hessian, gradient, residual, blocks):
+        for pose_i, jac_i in blocks:
+            slice_i = slice(pose_i * 6, pose_i * 6 + 6)
+            gradient[slice_i] += jac_i.T @ residual
+            for pose_j, jac_j in blocks:
+                slice_j = slice(pose_j * 6, pose_j * 6 + 6)
+                hessian[slice_i, slice_j] += jac_i.T @ jac_j
+
+    def compute_cost(src_poses):
+        total = 0.0
+        for i, j, measured_p, measured_q in local_relative:
+            residual_t = relative_translation_residual(src_poses, i, j, measured_p)
+            residual_r = relative_rotation_residual(src_poses, i, j, measured_q)
+            wt = huber_scale_block(residual_t)
+            wr = huber_scale_block(residual_r)
+            total += 0.5 * float((residual_t * wt) @ (residual_t * wt))
+            total += 0.5 * float((residual_r * wr) @ (residual_r * wr))
+        for i, gps_xyz, pos_accuracy in gps_constraints:
+            residual_gps = gps_residual(src_poses, i, gps_xyz, pos_accuracy)
+            wg = huber_scale_block(residual_gps)
+            total += 0.5 * float((residual_gps * wg) @ (residual_gps * wg))
+        return total
+
+    current_poses = copy_poses(poses)
+    current_cost = compute_cost(current_poses)
+    lambda_damping = 1e-3
+
+    for _ in range(6):
+        dim = len(current_poses) * 6
+        hessian = np.zeros((dim, dim), dtype=float)
+        gradient = np.zeros(dim, dtype=float)
+
+        for i, j, measured_p, measured_q in local_relative:
+            residual_t = relative_translation_residual(current_poses, i, j, measured_p)
+            residual_r = relative_rotation_residual(current_poses, i, j, measured_q)
+            wt = huber_scale_block(residual_t)
+            wr = huber_scale_block(residual_r)
+
+            _, q_i = current_poses[i]
+            rot_i_t = quat_to_matrix(q_i).T / 0.1
+            jac_t_i = np.hstack([
+                -rot_i_t,
+                numeric_rot_jacobian(relative_translation_residual, current_poses, i, i, j, measured_p),
+            ]) * wt
+            jac_t_j = np.hstack([
+                rot_i_t,
+                np.zeros((3, 3), dtype=float),
+            ]) * wt
+            add_measurement(
+                hessian,
+                gradient,
+                residual_t * wt,
+                [(i, jac_t_i), (j, jac_t_j)],
+            )
+
+            jac_r_i = np.hstack([
+                np.zeros((3, 3), dtype=float),
+                numeric_rot_jacobian(relative_rotation_residual, current_poses, i, i, j, measured_q),
+            ]) * wr
+            jac_r_j = np.hstack([
+                np.zeros((3, 3), dtype=float),
+                numeric_rot_jacobian(relative_rotation_residual, current_poses, j, i, j, measured_q),
+            ]) * wr
+            add_measurement(
+                hessian,
+                gradient,
+                residual_r * wr,
+                [(i, jac_r_i), (j, jac_r_j)],
+            )
+
+        for i, gps_xyz, pos_accuracy in gps_constraints:
+            residual_gps = gps_residual(current_poses, i, gps_xyz, pos_accuracy)
+            wg = huber_scale_block(residual_gps)
+            jac_gps = np.hstack([
+                np.eye(3, dtype=float) / pos_accuracy,
+                np.zeros((3, 3), dtype=float),
+            ]) * wg
+            add_measurement(
+                hessian,
+                gradient,
+                residual_gps * wg,
+                [(i, jac_gps)],
+            )
+
+        hessian += lambda_damping * np.eye(dim, dtype=float)
+
+        try:
+            step = np.linalg.solve(hessian, -gradient)
+        except np.linalg.LinAlgError:
+            lambda_damping *= 10.0
+            continue
+
+        if float(np.linalg.norm(step)) < 1e-6:
+            break
+
+        trial_poses = apply_delta(current_poses, step)
+        trial_cost = compute_cost(trial_poses)
+        if trial_cost < current_cost:
+            current_poses = trial_poses
+            current_cost = trial_cost
+            lambda_damping = max(lambda_damping * 0.5, 1e-6)
+        else:
+            lambda_damping *= 10.0
+
+    optimized_pose_items = [
+        (t, np.concatenate((current_poses[i][0], current_poses[i][1])))
+        for i, t in enumerate(times)
+    ]
+    last_global_p, last_global_q = current_poses[-1]
+    next_wgps_r_wvio = quat_to_matrix(last_global_q) @ quat_to_matrix(last_local_pose[3:7]).T
+    next_wgps_t_wvio = last_global_p - next_wgps_r_wvio @ last_local_pose[:3]
+
+    return {
+        'optimized_pose_items': optimized_pose_items,
+        'wgps_r_wvio': next_wgps_r_wvio,
+        'wgps_t_wvio': next_wgps_t_wvio,
+    }
+
+
 class GlobalOptimization:
     def __init__(self, clock, max_pose_count=200):
         self.clock = clock
@@ -273,6 +457,11 @@ class GlobalOptimization:
         self.new_gps = False
         self.path_msg = Path()
         self.lock = Lock()
+        self.optimization_pool = ProcessPoolExecutor(
+            max_workers=1,
+            mp_context=mp.get_context('spawn'),
+        )
+        self.optimization_future = None
 
     def gps_to_xyz(self, latitude, longitude, altitude):
         ecef = llh_to_ecef(latitude, longitude, altitude)
@@ -292,8 +481,11 @@ class GlobalOptimization:
             self.global_pose_map[t] = np.concatenate((global_p, global_q))
             self.last_p = global_p
             self.last_q = global_q
-            self._prune_maps_locked()
-            self._update_path_locked()
+            pruned = self._prune_maps_locked()
+            if pruned:
+                self._update_path_locked()
+            else:
+                self._append_path_pose_locked(t, global_p, global_q)
 
     def input_gps(self, t, latitude, longitude, altitude, pos_accuracy):
         xyz = self.gps_to_xyz(latitude, longitude, altitude)
@@ -304,7 +496,7 @@ class GlobalOptimization:
 
     def _prune_maps_locked(self):
         if self.max_pose_count <= 0 or len(self.local_pose_map) <= self.max_pose_count:
-            return
+            return False
         keep_times = set(sorted(self.local_pose_map.keys())[-self.max_pose_count:])
         for mapping in (self.local_pose_map, self.global_pose_map):
             for t in list(mapping.keys()):
@@ -313,28 +505,53 @@ class GlobalOptimization:
         for t in list(self.gps_position_map.keys()):
             if t not in keep_times:
                 self.gps_position_map.pop(t, None)
+        return True
 
     def get_global_odom(self):
         with self.lock:
             return self.last_p.copy(), self.last_q.copy()
 
+    def shutdown(self):
+        if self.optimization_future is not None:
+            self.optimization_future.cancel()
+            self.optimization_future = None
+        self.optimization_pool.shutdown(wait=False, cancel_futures=True)
+
     def optimize(self, logger):
-        if not self.new_gps:
+        self._finish_optimization(logger)
+        if self.optimization_future is not None:
             return
 
+        job = self._make_optimization_job()
+        if job is None:
+            return
+
+        logger.info('global optimization')
+        self.optimization_future = self.optimization_pool.submit(
+            solve_global_optimization_job,
+            job,
+        )
+
+    def _make_optimization_job(self):
         with self.lock:
+            if not self.new_gps:
+                return None
             if len(self.local_pose_map) < 1:
                 self.new_gps = False
-                return
+                return None
             self.new_gps = False
 
             times = sorted(self.local_pose_map.keys())
+            local_pose_snapshot = {
+                t: self.local_pose_map[t].copy()
+                for t in times
+            }
             index_by_time = {t: i for i, t in enumerate(times)}
             poses = []
             for t in times:
                 pose = self.global_pose_map.get(t)
                 if pose is None:
-                    pose = self.local_pose_map[t]
+                    pose = local_pose_snapshot[t]
                 poses.append([
                     np.asarray(pose[:3], dtype=float).copy(),
                     quat_normalize(np.asarray(pose[3:7], dtype=float)),
@@ -342,8 +559,8 @@ class GlobalOptimization:
 
             local_relative = []
             for t_i, t_j in zip(times[:-1], times[1:]):
-                pose_i = self.local_pose_map[t_i]
-                pose_j = self.local_pose_map[t_j]
+                pose_i = local_pose_snapshot[t_i]
+                pose_j = local_pose_snapshot[t_j]
                 rel_p, rel_q = relative_pose(pose_i[:3], pose_i[3:7], pose_j[:3], pose_j[3:7])
                 local_relative.append((index_by_time[t_i], index_by_time[t_j], rel_p, rel_q))
 
@@ -353,188 +570,72 @@ class GlobalOptimization:
                     gps_constraints.append((index_by_time[t], gps_xyz_acc[:3], gps_xyz_acc[3]))
 
         if not gps_constraints and not local_relative:
+            return None
+
+        return {
+            'times': times,
+            'poses': poses,
+            'local_relative': local_relative,
+            'gps_constraints': gps_constraints,
+            'last_local_pose': local_pose_snapshot[times[-1]],
+        }
+
+    def _finish_optimization(self, logger):
+        if self.optimization_future is None or not self.optimization_future.done():
             return
+        future = self.optimization_future
+        self.optimization_future = None
+        try:
+            result = future.result()
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f'Global optimization failed: {exc}')
+            return
+        if result is not None:
+            self._apply_optimization_result(result)
 
-        logger.info('global optimization')
-
-        def copy_poses(src_poses):
-            return [[pose[0].copy(), pose[1].copy()] for pose in src_poses]
-
-        def poses_to_vector(src_poses):
-            vec = np.zeros(len(src_poses) * 6, dtype=float)
-            for idx, (p, q) in enumerate(src_poses):
-                base = idx * 6
-                vec[base:base + 3] = p
-                vec[base + 3:base + 6] = quat_to_rotvec(q)
-            return vec
-
-        def vector_to_poses(vec):
-            out = []
-            for idx in range(len(times)):
-                base = idx * 6
-                out.append([
-                    np.asarray(vec[base:base + 3], dtype=float).copy(),
-                    rotvec_to_quat(vec[base + 3:base + 6]),
-                ])
-            return out
-
-        def apply_delta(src_poses, delta):
-            trial = copy_poses(src_poses)
-            for idx in range(len(trial)):
-                base = idx * 6
-                trial[idx][0] += delta[base:base + 3]
-                trial[idx][1] = quat_multiply(rotvec_to_quat(delta[base + 3:base + 6]), trial[idx][1])
-            return trial
-
-        def relative_translation_residual(src_poses, i, j, measured_p):
-            p_i, q_i = src_poses[i]
-            p_j, _ = src_poses[j]
-            return (quat_to_matrix(q_i).T @ (p_j - p_i) - measured_p) / 0.1
-
-        def relative_rotation_residual(src_poses, i, j, measured_q):
-            q_i = src_poses[i][1]
-            q_j = src_poses[j][1]
-            rel_q = quat_multiply(quat_inverse(q_i), q_j)
-            q_err = quat_multiply(quat_inverse(measured_q), rel_q)
-            return (2.0 * q_err[1:4]) / 0.01
-
-        def gps_residual(src_poses, i, gps_xyz, pos_accuracy):
-            return (src_poses[i][0] - gps_xyz) / pos_accuracy
-
-        def numeric_rot_jacobian(residual_fn, src_poses, pose_idx, *args, eps=1e-6):
-            base_q = src_poses[pose_idx][1].copy()
-            base_res = residual_fn(src_poses, *args)
-            jac = np.zeros((base_res.size, 3), dtype=float)
-            for axis in range(3):
-                delta = np.zeros(3, dtype=float)
-                delta[axis] = eps
-                src_poses[pose_idx][1] = quat_multiply(rotvec_to_quat(delta), base_q)
-                perturbed_res = residual_fn(src_poses, *args)
-                jac[:, axis] = (perturbed_res - base_res) / eps
-            src_poses[pose_idx][1] = base_q
-            return jac
-
-        def huber_scale_block(residual):
-            return huber_weight(float(np.linalg.norm(residual)))
-
-        def add_measurement(hessian, gradient, residual, blocks):
-            for pose_i, jac_i in blocks:
-                slice_i = slice(pose_i * 6, pose_i * 6 + 6)
-                gradient[slice_i] += jac_i.T @ residual
-                for pose_j, jac_j in blocks:
-                    slice_j = slice(pose_j * 6, pose_j * 6 + 6)
-                    hessian[slice_i, slice_j] += jac_i.T @ jac_j
-
-        def compute_cost(src_poses):
-            total = 0.0
-            for i, j, measured_p, measured_q in local_relative:
-                residual_t = relative_translation_residual(src_poses, i, j, measured_p)
-                residual_r = relative_rotation_residual(src_poses, i, j, measured_q)
-                wt = huber_scale_block(residual_t)
-                wr = huber_scale_block(residual_r)
-                total += 0.5 * float((residual_t * wt) @ (residual_t * wt))
-                total += 0.5 * float((residual_r * wr) @ (residual_r * wr))
-            for i, gps_xyz, pos_accuracy in gps_constraints:
-                residual_gps = gps_residual(src_poses, i, gps_xyz, pos_accuracy)
-                wg = huber_scale_block(residual_gps)
-                total += 0.5 * float((residual_gps * wg) @ (residual_gps * wg))
-            return total
-
-        current_poses = copy_poses(poses)
-        current_cost = compute_cost(current_poses)
-        lambda_damping = 1e-3
-
-        for _ in range(6):
-            dim = len(current_poses) * 6
-            hessian = np.zeros((dim, dim), dtype=float)
-            gradient = np.zeros(dim, dtype=float)
-
-            for i, j, measured_p, measured_q in local_relative:
-                residual_t = relative_translation_residual(current_poses, i, j, measured_p)
-                residual_r = relative_rotation_residual(current_poses, i, j, measured_q)
-                wt = huber_scale_block(residual_t)
-                wr = huber_scale_block(residual_r)
-
-                p_i, q_i = current_poses[i]
-                p_j, _ = current_poses[j]
-                rot_i_t = quat_to_matrix(q_i).T / 0.1
-                jac_t_i = np.hstack([
-                    -rot_i_t,
-                    numeric_rot_jacobian(relative_translation_residual, current_poses, i, i, j, measured_p),
-                ]) * wt
-                jac_t_j = np.hstack([
-                    rot_i_t,
-                    np.zeros((3, 3), dtype=float),
-                ]) * wt
-                add_measurement(
-                    hessian,
-                    gradient,
-                    residual_t * wt,
-                    [(i, jac_t_i), (j, jac_t_j)],
-                )
-
-                jac_r_i = np.hstack([
-                    np.zeros((3, 3), dtype=float),
-                    numeric_rot_jacobian(relative_rotation_residual, current_poses, i, i, j, measured_q),
-                ]) * wr
-                jac_r_j = np.hstack([
-                    np.zeros((3, 3), dtype=float),
-                    numeric_rot_jacobian(relative_rotation_residual, current_poses, j, i, j, measured_q),
-                ]) * wr
-                add_measurement(
-                    hessian,
-                    gradient,
-                    residual_r * wr,
-                    [(i, jac_r_i), (j, jac_r_j)],
-                )
-
-            for i, gps_xyz, pos_accuracy in gps_constraints:
-                residual_gps = gps_residual(current_poses, i, gps_xyz, pos_accuracy)
-                wg = huber_scale_block(residual_gps)
-                jac_gps = np.hstack([
-                    np.eye(3, dtype=float) / pos_accuracy,
-                    np.zeros((3, 3), dtype=float),
-                ]) * wg
-                add_measurement(
-                    hessian,
-                    gradient,
-                    residual_gps * wg,
-                    [(i, jac_gps)],
-                )
-
-            hessian += lambda_damping * np.eye(dim, dtype=float)
-
-            try:
-                step = np.linalg.solve(hessian, -gradient)
-            except np.linalg.LinAlgError:
-                lambda_damping *= 10.0
-                continue
-
-            if float(np.linalg.norm(step)) < 1e-6:
-                break
-
-            trial_poses = apply_delta(current_poses, step)
-            trial_cost = compute_cost(trial_poses)
-            if trial_cost < current_cost:
-                current_poses = trial_poses
-                current_cost = trial_cost
-                lambda_damping = max(lambda_damping * 0.5, 1e-6)
-            else:
-                lambda_damping *= 10.0
-
+    def _apply_optimization_result(self, result):
+        optimized_pose_map = dict(result['optimized_pose_items'])
         with self.lock:
-            for i, t in enumerate(times):
-                p, q = current_poses[i]
-                self.global_pose_map[t] = np.concatenate((p, q))
-                if i == len(times) - 1:
-                    local_pose = self.local_pose_map[t]
-                    local_r = quat_to_matrix(local_pose[3:7])
-                    global_r = quat_to_matrix(q)
-                    self.wgps_r_wvio = global_r @ local_r.T
-                    self.wgps_t_wvio = p - self.wgps_r_wvio @ local_pose[:3]
-                    self.last_p = p
-                    self.last_q = q
+            self.wgps_r_wvio = result['wgps_r_wvio']
+            self.wgps_t_wvio = result['wgps_t_wvio']
+            for t, pose in optimized_pose_map.items():
+                if t in self.local_pose_map:
+                    self.global_pose_map[t] = pose
+
+            for t, local_pose in self.local_pose_map.items():
+                if t in optimized_pose_map:
+                    continue
+                local_p = local_pose[:3]
+                local_q = local_pose[3:7]
+                global_p = self.wgps_r_wvio @ local_p + self.wgps_t_wvio
+                global_q = matrix_to_quat(self.wgps_r_wvio @ quat_to_matrix(local_q))
+                self.global_pose_map[t] = np.concatenate((global_p, global_q))
+
+            if self.local_pose_map:
+                latest_t = max(self.local_pose_map.keys())
+                latest_pose = self.global_pose_map.get(latest_t)
+                if latest_pose is not None:
+                    self.last_p = latest_pose[:3].copy()
+                    self.last_q = latest_pose[3:7].copy()
             self._update_path_locked()
+
+    def _make_path_pose(self, t, p, q):
+        pose_stamped = PoseStamped()
+        pose_stamped.header.stamp = sec_to_msg_time(t, self.clock)
+        pose_stamped.header.frame_id = 'world'
+        pose_stamped.pose.position.x = float(p[0])
+        pose_stamped.pose.position.y = float(p[1])
+        pose_stamped.pose.position.z = float(p[2])
+        pose_stamped.pose.orientation.w = float(q[0])
+        pose_stamped.pose.orientation.x = float(q[1])
+        pose_stamped.pose.orientation.y = float(q[2])
+        pose_stamped.pose.orientation.z = float(q[3])
+        return pose_stamped
+
+    def _append_path_pose_locked(self, t, p, q):
+        self.path_msg.header.frame_id = 'world'
+        self.path_msg.header.stamp = sec_to_msg_time(t, self.clock)
+        self.path_msg.poses.append(self._make_path_pose(t, p, q))
 
     def _update_path_locked(self):
         path = Path()
@@ -543,17 +644,7 @@ class GlobalOptimization:
             path.header.stamp = sec_to_msg_time(max(self.global_pose_map.keys()), self.clock)
         for t in sorted(self.global_pose_map.keys()):
             pose = self.global_pose_map[t]
-            pose_stamped = PoseStamped()
-            pose_stamped.header.stamp = sec_to_msg_time(t, self.clock)
-            pose_stamped.header.frame_id = 'world'
-            pose_stamped.pose.position.x = float(pose[0])
-            pose_stamped.pose.position.y = float(pose[1])
-            pose_stamped.pose.position.z = float(pose[2])
-            pose_stamped.pose.orientation.w = float(pose[3])
-            pose_stamped.pose.orientation.x = float(pose[4])
-            pose_stamped.pose.orientation.y = float(pose[5])
-            pose_stamped.pose.orientation.z = float(pose[6])
-            path.poses.append(pose_stamped)
+            path.poses.append(self._make_path_pose(t, pose[:3], pose[3:7]))
         self.path_msg = path
 
 
@@ -565,7 +656,7 @@ class GlobalFusionNode(Node):
         self.declare_parameter('route_output_path', '/home/orin26/code/Urban-Nav-SR/Policy_part/topomaps/LLM_Policy/LLM_UTM_odom_poses.txt')
         self.declare_parameter('vio_global_csv_path', '/home/orin26/code/Urban-Nav-SR/Policy_part/topomaps/LLM_Policy/gkj/output/vio_global.csv')
         self.declare_parameter('gps_topic', '/gps/fix')
-        self.declare_parameter('vio_topic', '/agilex/odom_filtered')
+        self.declare_parameter('vio_topic', '/agilex/odom')
         self.declare_parameter('sync_tolerance_sec', 0.2)
         self.declare_parameter('sync_time_source', 'header')
         self.declare_parameter('output_stamp_source', 'input_header')
@@ -574,6 +665,7 @@ class GlobalFusionNode(Node):
         self.declare_parameter('publish_car_model', False)
         self.declare_parameter('route_poll_sec', 1.0)
         self.declare_parameter('optimization_period_sec', 2.0)
+        self.declare_parameter('path_publish_period_sec', 0.2)
 
         self.estimator = GlobalOptimization(
             self.get_clock(),
@@ -582,6 +674,7 @@ class GlobalFusionNode(Node):
         self.gps_queue = deque()
         self.gps_lock = Lock()
         self.last_route_id = ''
+        self.last_path_publish_mono = 0.0
 
         self.sub_gps = self.create_subscription(
             NavSatFix,
@@ -603,10 +696,13 @@ class GlobalFusionNode(Node):
             float(self.get_parameter('route_poll_sec').value),
             self.route_file_timer_callback,
         )
-        self.optimization_timer = self.create_timer(
-            float(self.get_parameter('optimization_period_sec').value),
-            lambda: self.estimator.optimize(self.get_logger()),
+        self.optimization_period_sec = float(self.get_parameter('optimization_period_sec').value)
+        self.optimization_stop = Event()
+        self.optimization_thread = Thread(
+            target=self.optimization_loop,
+            daemon=True,
         )
+        self.optimization_thread.start()
 
         self.get_logger().info(f"Watching route JSON file: {self.get_parameter('route_json_path').value}")
         self.get_logger().info(f"Route UTM output file: {self.get_parameter('route_output_path').value}")
@@ -619,6 +715,14 @@ class GlobalFusionNode(Node):
                 self.get_parameter('output_stamp_source').value,
                 float(self.get_parameter('sync_tolerance_sec').value),
             )
+        )
+        self.get_logger().info(
+            'Global optimization runs in a background thread every %.3f seconds'
+            % self.optimization_period_sec
+        )
+        self.get_logger().info(
+            'Global path publish period: %.3f seconds'
+            % float(self.get_parameter('path_publish_period_sec').value)
         )
 
     def _now_sec(self):
@@ -645,6 +749,23 @@ class GlobalFusionNode(Node):
                 throttle_duration_sec=5.0,
             )
         return sec_to_msg_time(sync_time, self.get_clock())
+
+    def destroy_node(self):
+        if hasattr(self, 'optimization_stop'):
+            self.optimization_stop.set()
+        if hasattr(self, 'optimization_thread') and self.optimization_thread.is_alive():
+            self.optimization_thread.join(timeout=2.0)
+        if hasattr(self, 'estimator'):
+            self.estimator.shutdown()
+        super().destroy_node()
+
+    def optimization_loop(self):
+        period = self.optimization_period_sec
+        while rclpy.ok() and not self.optimization_stop.wait(max(0.0, period)):
+            try:
+                self.estimator.optimize(self.get_logger())
+            except Exception as exc:  # noqa: BLE001
+                self.get_logger().error(f'Global optimization failed: {exc}')
 
     def gps_callback(self, msg):
         gps_t = self._sync_time(msg)
@@ -682,10 +803,18 @@ class GlobalFusionNode(Node):
         odometry.pose.pose.orientation.z = float(global_q[3])
 
         self.pub_global_odometry.publish(odometry)
-        self.pub_global_path.publish(self.estimator.path_msg)
+        self._publish_global_path_if_due()
         if self.get_parameter('publish_car_model').value:
             self.publish_car_model(t, global_t, global_q)
         self._append_global_csv(odometry.header.stamp, global_t, global_q)
+
+    def _publish_global_path_if_due(self):
+        period = float(self.get_parameter('path_publish_period_sec').value)
+        now = time.monotonic()
+        if period > 0.0 and now - self.last_path_publish_mono < period:
+            return
+        self.last_path_publish_mono = now
+        self.pub_global_path.publish(self.estimator.path_msg)
 
     def _consume_matching_gps(self, vio_t):
         tolerance = float(self.get_parameter('sync_tolerance_sec').value)
@@ -820,7 +949,8 @@ def main(args=None):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

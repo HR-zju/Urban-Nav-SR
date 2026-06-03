@@ -2,10 +2,10 @@
 set -euo pipefail
 
 URI="${1:-ws://192.168.1.102:9090}"
-TOPIC="/odom_filtered"
+TOPIC="/odom"
 TYPE="nav_msgs/Odometry"
 
-/home/zjy/miniforge3/condabin/mamba run -n foundation_nav python -c '
+/home/orin26/miniforge3/condabin/mamba run -n foundation_nav python -c '
 import asyncio
 import inspect
 import json

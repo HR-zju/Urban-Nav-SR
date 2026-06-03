@@ -22,8 +22,9 @@ except ModuleNotFoundError:
 
 
 DEFAULT_URI = "ws://192.168.1.102:9090"
-DEFAULT_ROS_TOPIC = "/agilex/odom_filtered"
+DEFAULT_ROS_TOPIC = "/agilex/odom"
 DEFAULT_HEARTBEAT_INTERVAL = 2.0
+DEFAULT_RECONNECT_DELAY = 2.0
 DEFAULT_PUBLISH_RATE = 100.0
 DEFAULT_CLIENT_ID = f"agilex{uuid.uuid4().hex[:8]}"
 DEFAULT_SUB_TOPIC = "/odom_filtered"
@@ -449,37 +450,49 @@ def main() -> None:
     rclpy.init()
     node = AgileXOdomBridge(args.ros_topic, args.restamp_published)
     try:
-        asyncio.run(
-            subscribe_odom(
-                args.uri,
-                node,
-                args.sub_topic,
-                args.sub_type,
-                args.heartbeat_interval,
-                args.publish_rate,
-                args.client_id,
-                args.debug,
-            )
-        )
-    except KeyboardInterrupt:
-        print("\nStopped by user.")
-    except OSError as exc:
-        print(f"WebSocket connection failed: {exc}")
-    except RuntimeError as exc:
-        print(exc)
-    except Exception as exc:  # noqa: BLE001
-        if websockets is not None and isinstance(exc, websockets.exceptions.InvalidMessage):
-            print(
-                "WebSocket handshake failed: did not receive a valid HTTP response.\n"
-                f"Current URI: {args.uri}\n"
-                "This usually means the host/port/path is not a WebSocket endpoint. "
-                "Check the AgileX User API WebSocket address and rerun with "
-                "--uri ws://<robot-ip>:<port>/<path>."
-            )
-        elif websockets is not None and isinstance(exc, websockets.exceptions.ConnectionClosed):
-            print(f"WebSocket connection closed: code={exc.code}, reason={exc.reason}")
-        else:
-            raise
+        while rclpy.ok():
+            try:
+                asyncio.run(
+                    subscribe_odom(
+                        args.uri,
+                        node,
+                        args.sub_topic,
+                        args.sub_type,
+                        args.heartbeat_interval,
+                        args.publish_rate,
+                        args.client_id,
+                        args.debug,
+                    )
+                )
+                print(
+                    "WebSocket connection ended; "
+                    f"reconnecting in {DEFAULT_RECONNECT_DELAY:.1f}s..."
+                )
+            except KeyboardInterrupt:
+                print("\nStopped by user.")
+                break
+            except OSError as exc:
+                print(f"WebSocket connection failed: {exc}")
+                print(f"Reconnecting in {DEFAULT_RECONNECT_DELAY:.1f}s...")
+            except RuntimeError as exc:
+                print(exc)
+                break
+            except Exception as exc:  # noqa: BLE001
+                if websockets is not None and isinstance(exc, websockets.exceptions.InvalidMessage):
+                    print(
+                        "WebSocket handshake failed: did not receive a valid HTTP response.\n"
+                        f"Current URI: {args.uri}\n"
+                        "This usually means the host/port/path is not a WebSocket endpoint. "
+                        "Check the AgileX User API WebSocket address and rerun with "
+                        "--uri ws://<robot-ip>:<port>/<path>."
+                    )
+                    break
+                if websockets is not None and isinstance(exc, websockets.exceptions.ConnectionClosed):
+                    print(f"WebSocket connection closed: code={exc.code}, reason={exc.reason}")
+                    print(f"Reconnecting in {DEFAULT_RECONNECT_DELAY:.1f}s...")
+                else:
+                    raise
+            time.sleep(DEFAULT_RECONNECT_DELAY)
     finally:
         node.destroy_node()
         if rclpy.ok():

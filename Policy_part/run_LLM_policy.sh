@@ -100,7 +100,7 @@ tmux send-keys "docker exec -it ros1toros2 zsh" Enter
 sleep 1
 tmux send-keys "source /opt/ros/humble/setup.zsh" Enter
 tmux send-keys "cd /home/nuvo/SR/foundation-policy/Policy_part/" Enter
-tmux send-keys "ros2 bag record /camera/camera/color/image_raw/compressed  /gps/fix  /mfla/dr_odom /globalEstimator/global_odometry /navflow/overlay/image_raw/compressed" Enter
+tmux send-keys "ros2 bag record /camera/camera/color/image_raw/compressed  /gps/fix  /agilex/odom /globalEstimator/global_odometry /navflow/overlay/image_raw/compressed" Enter
 # tmux send-keys "mamba activate foundation_policy" Enter
 # tmux send-keys "python ws_raw_message_listener.py" Enter
 
