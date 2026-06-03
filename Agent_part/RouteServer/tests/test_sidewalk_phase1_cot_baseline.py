@@ -22,13 +22,13 @@ class SidewalkPhase1CotBaselineTest(unittest.TestCase):
         answer = "\n".join(
             [
                 "<think>",
-                '<Scene>{"summary":"clear sidewalk","visibility":"visible","uncertainty":"low"}</Scene>',
-                '<FPVScene>{"navigable_support":["sidewalk"],"conditional_support":[],"risk_objects":[],"visibility":"visible","local_risk":"low"}</FPVScene>',
-                '<BEVContext>{"grid_size":[16,16],"ego_cell":[8,12],"target_cell":[8,8],"route_theta_deg":0.0,"intent":"go_straight","target_direction":"front"}</BEVContext>',
-                '<CrossView>{"bev_anchor":"front","fpv_anchor":"center corridor","alignment":"aligned","confidence":"high"}</CrossView>',
-                '<Plan>{"primary_route":"go forward","safety_policy":"stay centered","contingency":"stop"}</Plan>',
+                '<Scene>{"summary":"clear sidewalk","visibility":"clear","occlusion_sources":[],"uncertainty":"low"}</Scene>',
+                '<FPVScene>{"navigable_support":["sidewalk"],"conditional_support":[],"risk_objects":[],"visibility":"clear","local_risk":"low"}</FPVScene>',
+                '<BEVContext>{"scene_summary":"local sidewalk","route_summary":"front route","navigation_state":"following_sidewalk","topology_state":"same_sidewalk_segment","grid_size":[16,16],"ego_cell":[8,12],"target_cell":[8,8],"route_theta_deg":0.0,"route_theta_bin":"[-5,5)","route_direction_bin":"front","intent":"go_straight","target_direction":"front","bev_anchor":"front","topology_evidence":"route continues forward"}</BEVContext>',
+                '<CrossView>{"bev_anchor":"front","fpv_anchor":"center corridor","near_reference":"sidewalk edge","blind_area_context":{"left":"visible","right":"visible","front":"support continues"},"fpv_route_region":"center","route_to_fpv_direction":"forward_center","safe_corridor":"center_corridor","alignment":"aligned","confidence":"high"}</CrossView>',
+                '<Plan>{"motion_primitive":"go_straight","lateral_preference":"center","avoidance_side":"none","speed_policy":"normal","primary_route":"go forward","safety_policy":"stay centered","contingency":"stop"}</Plan>',
                 "</think>",
-                '<finish>{"trajectory":[[0.5,0.9],[0.5,0.7],[0.51,0.5]],"intent":"go_straight","route_theta_deg":0.0,"confidence_level":"normal"}</finish>',
+                '<finish>{"trajectory":[[0.5,0.9],[0.5,0.7],[0.51,0.5]],"intent":"go_straight","confidence_level":"normal","trajectory_type":"straight_center","trajectory_validity":"valid"}</finish>',
             ]
         )
         sections, errors = _MODULE.parse_cot_answer(answer)

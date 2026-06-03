@@ -117,7 +117,7 @@ def _make_cot_row(root: Path) -> dict:
     if not validation.valid:
         raise AssertionError(validation.errors)
     row["response"] = answer
-    row["cot_teacher"] = {"teacher_source": "template_after_llm_failure", "schema_version": "sidewalk_phase1_cot_teacher_v4"}
+    row["cot_teacher"] = {"teacher_source": "template_after_llm_failure", "schema_version": "sidewalk_phase1_cot_teacher_v5"}
     return row
 
 

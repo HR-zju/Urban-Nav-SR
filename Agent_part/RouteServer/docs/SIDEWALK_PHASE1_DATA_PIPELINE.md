@@ -25,7 +25,7 @@ Phase1 分成四段，不能混用职责：
 | 阶段 | 输入 | 输出 | 说明 |
 | --- | --- | --- | --- |
 | Geometry Exporter | raw clip、FPV、BEV、pose、camera params | `phase1_source_*.jsonl`、trajectory label、BEV patch meta | 只生成可审计几何真值。 |
-| LLM Teacher | source JSONL、FPV/BEV 图、geometry evidence | `<think>{Scene/FPV/BEV/CrossView/Plan}</think><finish>` | CoT SFT 必需；LLM 只生成解释文本，不允许改写几何真值。 |
+| LLM Teacher | source JSONL、FPV/BEV 图、geometry evidence | `<think>{Scene/FPVScene/BEVContext/CrossView/Plan}</think><finish>` | CoT SFT 必需；LLM 只生成解释文本，不允许改写几何真值。 |
 | CoT Validator | teacher answer、structured target | `phase1_cot_*.jsonl` | 校验 tags、JSON、intent、theta、trajectory，保留 teacher 中间产物。 |
 | Archive Validator | `phase1_cot_*.jsonl`、FPV/BEV、sidecar | `archive/manifests/train.jsonl` | 再次判定样本合理性，通过样本才写入 ms-swift 直接训练 manifest。 |
 
@@ -417,17 +417,22 @@ Teacher 输出格式固定为单轮 assistant target。`<think>` 内只放结构
 <CrossView>{...}</CrossView>
 <Plan>{...}</Plan>
 </think>
-<finish>{"trajectory":[[x,y],...],"intent":"...","route_theta_deg":...,"confidence_level":"..."}</finish>
+<finish>{"trajectory":[[x,y],...],"intent":"...","confidence_level":"...","trajectory_type":"...","trajectory_validity":"valid|invalid"}</finish>
 ```
 
 Validator 会检查：
 
 - 所有 tag 是否存在，且没有 tag 外说明文字。
-- `<think>` 内是否只包含 `Scene/FPV/BEV/CrossView/Plan` 五个结构化 JSON section，不允许额外叙述性文本。
-- `Scene/FPV/BEV/CrossView/Plan/finish` 是否为可解析 JSON。
+- `<think>` 内是否只包含 `Scene/FPVScene/BEVContext/CrossView/Plan` 五个结构化 JSON section，不允许额外叙述性文本。
+- `Scene/FPVScene/BEVContext/CrossView/Plan/finish` 是否为可解析 JSON。
 - `<BEVContext>.ego_cell` 和 `<BEVContext>.target_cell` 是否等于 `bev_patch_meta.ego_cell_gt/target_cell_gt`。
 - `<BEVContext>.intent` 和 `<finish>.intent` 是否等于 `intent_gt`。
 - `route_theta_deg` 是否在容差内等于几何真值。
+- `<BEVContext>.route_theta_bin`、`route_direction_bin`、`topology_state` 是否与几何真值派生标签一致。
+- `<FPVScene>.risk_objects` 是否为 `{name, side, risk}` 结构化对象。
+- `<CrossView>.fpv_route_region`、`route_to_fpv_direction`、`safe_corridor` 是否与轨迹区域派生标签一致。
+- `<Plan>.motion_primitive/lateral_preference/avoidance_side/speed_policy` 是否存在。
+- `<finish>.trajectory_type` 和 `trajectory_validity` 是否存在，且正式样本必须标记为 `valid`。
 - `<finish>.trajectory` 点数、范围、与 `trajectory_label` 的偏差是否合格。
 - 没有 SAM/SoM segmentation context 时，禁止声称 `region_id`、mask overlap、mIoU、support ratio 等 Phase2 才有的证据。
 
@@ -505,7 +510,7 @@ python -m swift.sidewalk_nav.dataset_builder \
 
 ### 5.6 Agent baseline CoT 推理
 
-Agent baseline 不应再使用旧的 visual-prompt JSON schema。为了与数据标注、ms-swift SFT 和后续评估统一，baseline 的输入输出必须采用同一套 Phase1 CoT v4 格式：
+Agent baseline 不应再使用旧的 visual-prompt JSON schema。为了与数据标注、ms-swift SFT 和后续评估统一，baseline 的输入输出必须采用同一套 Phase1 CoT v5 格式：
 
 ```text
 FPV + BEV
@@ -516,7 +521,7 @@ FPV + BEV
        <CrossView>{...}</CrossView>
        <Plan>{...}</Plan>
      </think>
-     <finish>{"trajectory":[[x,y],...],"intent":"...","route_theta_deg":...,"confidence_level":"..."}</finish>
+     <finish>{"trajectory":[[x,y],...],"intent":"...","confidence_level":"...","trajectory_type":"...","trajectory_validity":"valid|invalid"}</finish>
 ```
 
 推荐使用 exporter BEV：
@@ -529,7 +534,7 @@ python tools/model_processing/run_sidewalk_phase1_cot_baseline.py \
   --limit 200
 ```
 
-兼容模式可使用在线 OSM BEV，但仅 BEV 图来源不同，prompt 和输出仍保持 CoT v4：
+兼容模式可使用在线 OSM BEV，但仅 BEV 图来源不同，prompt 和输出仍保持 CoT v5：
 
 ```bash
 python tools/model_processing/run_sidewalk_phase1_cot_baseline.py \

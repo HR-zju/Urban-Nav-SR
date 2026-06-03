@@ -131,7 +131,7 @@ phase1/manifests/phase1_cot_clip_test.jsonl
 phase1/manifests/phase1_cot_report_clip_test.json
 ```
 
-输出格式固定为 Phase1 CoT v4：
+输出格式固定为 Phase1 CoT v5：
 
 ```xml
 <think>
@@ -141,7 +141,7 @@ phase1/manifests/phase1_cot_report_clip_test.json
 <CrossView>{...}</CrossView>
 <Plan>{...}</Plan>
 </think>
-<finish>{"trajectory":[[x,y],...],"intent":"...","route_theta_deg":...,"confidence_level":"..."}</finish>
+<finish>{"trajectory":[[x,y],...],"intent":"...","confidence_level":"...","trajectory_type":"...","trajectory_validity":"valid|invalid"}</finish>
 ```
 
 ### 6. 归档为 ms-swift 直接训练数据
@@ -234,7 +234,7 @@ agent_cot_baseline_clip_test/overlay/*.svg
 agent_cot_baseline_clip_test/manifest.json
 ```
 
-说明：baseline 输出也必须是 CoT v4；脚本从 `<finish>.trajectory` 解析模型预测，转换为 FPV pixel `path_uv` 只用于 overlay。不能用规则 fallback 补一条路径。每帧 JSON 会保留：
+说明：baseline 输出也必须是 CoT v5；脚本从 `<finish>.trajectory` 解析模型预测，转换为 FPV pixel `path_uv` 只用于 overlay。不能用规则 fallback 补一条路径。每帧 JSON 会保留：
 
 - `system_prompt` 和 `prompt`：审计模型实际收到的系统约束和 user prompt。
 - `response`：模型原始 CoT。
@@ -319,7 +319,7 @@ python tools/dataset_processing/process_chunks_26_29.py \
 | `model_processing/run_phase_chunk0.sh` | 一键处理 chunk_0 |
 | `model_processing/run_phase_all.sh` | 一键处理 sidewalk 下所有数据 |
 | `model_processing/run_sidewalk_images_visual_prompt_pipeline.py` | sidewalk Agent expert trajectory 推理与可视化流水线；默认输出 `rendered_prompt.path_uv`，不依赖 SAM/SoM corridor |
-| `model_processing/run_sidewalk_phase1_cot_baseline.py` | 使用 Phase1 CoT v4 输入/输出格式运行 Agent baseline；支持 exporter BEV 和在线 BEV 两种输入 |
+| `model_processing/run_sidewalk_phase1_cot_baseline.py` | 使用 Phase1 CoT v5 输入/输出格式运行 Agent baseline；支持 exporter BEV 和在线 BEV 两种输入 |
 | `model_processing/sidewalk_phase1_dataset.py` | 生成 Phase1 ms-swift source JSONL、trajectory label、BEV topology meta 和 QA bundle；默认使用 InternNav pose/camera 标定投影 |
 | `model_processing/sidewalk_phase1_cot_teacher.py` | 调用 Agent VLM/LLM，把 Phase1 source JSONL 升级为带 `<think>/<Scene>/<FPVScene>/<BEVContext>/<CrossView>/<Plan>/<finish>` 的 CoT SFT 数据 |
 | `model_processing/sidewalk_phase1_archive.py` | 先校验 CoT/几何一致性，再把通过样本归档成 ms-swift 可直接训练的 `messages/images` JSONL |
@@ -438,7 +438,7 @@ python tools/model_processing/run_sidewalk_phase1_cot_baseline.py \
   --frame-step 10
 ```
 
-兼容模式可以在线生成 BEV，但只允许 BEV 来源不同，VLM 的输入 prompt 和输出仍然是 Phase1 CoT v4：
+兼容模式可以在线生成 BEV，但只允许 BEV 来源不同，VLM 的输入 prompt 和输出仍然是 Phase1 CoT v5：
 
 ```bash
 cd /home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer

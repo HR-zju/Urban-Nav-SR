@@ -510,9 +510,9 @@ async def run_sample(
             "rendered_prompt": rendered_prompt,
             "intent": (sections.get("finish") or {}).get("intent") if isinstance(sections.get("finish"), dict) else None,
             "route_theta_deg": (
-                (sections.get("finish") or {}).get("route_theta_deg")
-                if isinstance(sections.get("finish"), dict)
-                else None
+                (sections.get("BEVContext") or {}).get("route_theta_deg")
+                if isinstance(sections.get("BEVContext"), dict)
+                else ((sections.get("finish") or {}).get("route_theta_deg") if isinstance(sections.get("finish"), dict) else None)
             ),
             "confidence_level": (
                 (sections.get("finish") or {}).get("confidence_level")

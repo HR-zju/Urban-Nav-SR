@@ -2,6 +2,17 @@
 
 ## 2026-06-03
 
+
+### 升级 Phase1 CoT v5 机器可学习字段
+
+- CoT schema 升级为 `sidewalk_phase1_cot_teacher_v5` / `phase1_structured_cot_v5`。
+- `Scene` 新增 `occlusion_sources`，`visibility` 改为 `clear/partial_occlusion/low_light/crowded/uncertain` 离散标签。
+- `FPVScene.risk_objects` 从自然语言字符串列表升级为 `{name, side, risk}` 结构化对象。
+- `BEVContext` 新增 `topology_state`、`route_theta_bin`、`route_direction_bin`，保留 `route_theta_deg` 作为几何审计数值。
+- `CrossView` 新增 `fpv_route_region`、`route_to_fpv_direction`、`safe_corridor`，用于监督 BEV route 到 FPV 安全走廊的对齐。
+- `Plan` 新增 `motion_primitive`、`lateral_preference`、`avoidance_side`、`speed_policy` 动作级标签，减少模板化长句对训练的干扰。
+- `<finish>` 新增 `trajectory_type` 和 `trajectory_validity`，不再放置 `route_theta_deg`。
+
 ### 修正 Phase1 BEV 位姿来源
 
 - 修正 `process_sidewalk_dataset.py` 中 `--use-pose-ekf` 的语义：默认只使用 EKF 平滑 heading，不再用 EKF x/y 覆盖 BEV center 和 route overlay 的 GPS-smoothed 位置。

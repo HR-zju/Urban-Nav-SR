@@ -93,9 +93,16 @@ class SidewalkPhase1CotTeacherTest(unittest.TestCase):
             self.assertIn("</Plan>\n</think>\n<finish>", answer)
             self.assertIn("navigable_support", validation.sections["FPVScene"])
             self.assertEqual(validation.sections["BEVContext"]["intent"], "go_straight")
+            self.assertEqual(validation.sections["BEVContext"]["route_theta_bin"], "[-5,5)")
+            self.assertEqual(validation.sections["BEVContext"]["route_direction_bin"], "front")
+            self.assertEqual(validation.sections["BEVContext"]["topology_state"], "same_sidewalk_segment")
             self.assertEqual(validation.sections["BEVContext"]["ego_cell"], [8, 12])
             self.assertEqual(validation.sections["BEVContext"]["target_cell"], [8, 4])
             self.assertEqual(validation.sections["finish"]["trajectory"], row["pixel_trajectory"])
+            self.assertEqual(validation.sections["finish"]["trajectory_type"], "straight_center")
+            self.assertEqual(validation.sections["finish"]["trajectory_validity"], "valid")
+            self.assertEqual(validation.sections["CrossView"]["fpv_route_region"], "center")
+            self.assertEqual(validation.sections["Plan"]["speed_policy"], "normal")
             self.assertEqual(validation.sections["BEVContext"]["route_theta_deg"], 0.0)
             self.assertNotIn("route_theta_deg", validation.sections["finish"])
 
@@ -124,10 +131,16 @@ class SidewalkPhase1CotTeacherTest(unittest.TestCase):
                 teacher_model="unit-test",
             )
 
-            self.assertIn('<Scene>{"summary":"..."', manifest_row["prompt"])
+            self.assertIn('<Scene>{"summary":"urban sidewalk scene"', manifest_row["prompt"])
+            self.assertIn("occlusion_sources", manifest_row["prompt"])
             self.assertIn('<FPVScene>{"navigable_support"', manifest_row["prompt"])
             self.assertIn('<BEVContext>{"scene_summary"', manifest_row["prompt"])
+            self.assertIn("route_theta_bin", manifest_row["prompt"])
+            self.assertIn("fpv_route_region", manifest_row["prompt"])
+            self.assertIn("motion_primitive", manifest_row["prompt"])
+            self.assertIn("trajectory_validity", manifest_row["prompt"])
             self.assertIn("FPV image size: 640x360 px", manifest_row["prompt"])
+            self.assertIn('<finish>{"trajectory":[[0.5,0.9]]', manifest_row["prompt"])
             self.assertIn("pixel conversion is x_px=x*width, y_px=y*height", manifest_row["prompt"])
             self.assertIn("First identify safe visible navigation support in <FPVScene>.navigable_support", manifest_row["prompt"])
             self.assertIn("final point should still be on near-field visible ground support", manifest_row["prompt"])
@@ -137,7 +150,7 @@ class SidewalkPhase1CotTeacherTest(unittest.TestCase):
             self.assertNotIn("trajectory_norm", manifest_row["prompt"])
             self.assertNotIn("[[0.5, 0.9]", manifest_row["prompt"])
             self.assertEqual(manifest_row["response"], answer)
-            self.assertEqual(manifest_row["cot_teacher"]["schema_version"], "sidewalk_phase1_cot_teacher_v4")
+            self.assertEqual(manifest_row["cot_teacher"]["schema_version"], "sidewalk_phase1_cot_teacher_v5")
 
     def test_validator_rejects_free_text_inside_think(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
