@@ -348,6 +348,7 @@ WRITE_OVERLAYS=1 \
 - `--bev-sample-fps` 默认 2fps。
 - 写 `bev_index.json`，用于 FPV 高帧率到 BEV 低帧率的 timestamp 最近邻匹配。
 - 默认把 `trajectory.json`、`samples.json`、`bev_images/`、`bev_index.json` 全部写入原始 clip 目录，便于后续直接扫 `/media/ubuntu/data1/SR-Nav Dataset/sidewalk` 制作数据集。
+- `--use-pose-ekf` 只平滑 BEV heading，不再覆盖 BEV center/route 的 GPS 位置；如需诊断旧行为才显式加 `--use-ekf-position`。
 - 默认在 BEV 上绘制完整 route/start/end。route 是训练输入条件，不是 debug overlay；图例固定为蓝色路线、绿色圆形起点、红色方形终点、橙色圆形当前 ego。模型需要学会从这些标记判断自己处于路线的哪个阶段。其 GPS 点与 OSM raster 使用同一套 Web-Mercator -> PIL rotate -> crop -> resize 变换，保证起点、终点和路线相对地图不漂移。
 - 如需消融，可用 `--bev-route-scope local_future` 只画当前帧之后的局部路线，或用 `--no-bev-route-overlay` 关闭路线。
 - 不写 `bev_video*.mp4`，除非显式加 `--write-bev-videos`。
@@ -365,7 +366,7 @@ python tools/dataset_processing/process_sidewalk_dataset.py \
   --use-pose-ekf
 ```
 
-注意：只要 agent 固定在中心，连续播放时 OSM 背景就会随 agent 位移发生平移；这是 ego-centered/local-centered 坐标系的必然结果。固定 OSM 背景、agent 在地图上移动属于 global debug map，不应作为 Phase1 默认训练输入。
+注意：只要 agent 固定在中心，连续播放时 OSM 背景就会随 agent 位移发生平移；这是 ego-centered/local-centered 坐标系的必然结果。固定 OSM 背景、agent 在地图上移动属于 global debug map，不应作为 Phase1 默认训练输入。若 FPV 已经过路口但 BEV 仍明显滞后，优先检查 `trajectory.json` 的 `position_source` 和 raw GPS/`frame_positions.npy` 位移；不要用无平移里程计的 EKF x/y 作为 BEV 位置。
 
 ### 5.2 只运行构建器
 

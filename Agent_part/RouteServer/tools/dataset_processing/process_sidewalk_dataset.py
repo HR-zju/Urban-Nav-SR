@@ -425,6 +425,7 @@ def process_sidewalk_ride(
     bev_sample_fps: float = 2.0,
     map_provider: str = "osm",
     use_pose_ekf: bool = False,
+    use_ekf_position: bool = False,
     ekf_q_pos: float = 1e-3,
     ekf_q_theta: float = 1e-2,
     ekf_r_xy: float = 9.0,
@@ -520,10 +521,16 @@ def process_sidewalk_ride(
         else:
             smoothed_headings[i] = default_heading
 
-    # Now process each frame with smoothed position and smoothed heading
-    # Optionally run Pose EKF fusion to further smooth position+heading
+    # BEV position and route overlay must stay tied to the measured GNSS path.
+    # The current PoseEKF has no translational odometry input, so using its x/y
+    # state can shrink long clips and make FPV frames appear behind the BEV route
+    # stage.  Keep EKF position opt-in for diagnostics, but use it for heading
+    # smoothing only in the normal dataset path.
+    position_source = "gps_smoothed"
+    heading_source = "gps_robust"
+
     if use_pose_ekf:
-        print("Using Pose EKF fusion for position and heading...")
+        print("Using Pose EKF for heading smoothing; BEV position remains GPS-smoothed.")
         # build yaw list from quaternion orientations for selected indices
         yaw_list = []
         for data_idx in selected_indices:
@@ -574,8 +581,14 @@ def process_sidewalk_ride(
             fused_headings.append(ekf.get_heading_deg())
             prev_time_ns = t_ns
 
-        smoothed_positions = fused_positions
+        if use_ekf_position:
+            print("[WARN] --use-ekf-position enabled: BEV center/route will use EKF x/y. This is diagnostic and can drift without translational odometry.")
+            smoothed_positions = fused_positions
+            position_source = "ekf_position"
+        else:
+            position_source = "gps_smoothed"
         smoothed_headings = fused_headings
+        heading_source = f"ekf_{heading_obs_source}"
         # Print a quick comparison for the first few frames: quaternion yaw, gps heading, ekf heading
         print(f"[DEBUG] First 5 frame heading comparisons (quaternion_yaw_deg | gps_heading_deg | ekf_heading_deg, obs={heading_obs_source}):")
         for k in range(min(5, len(selected_indices))):
@@ -615,7 +628,8 @@ def process_sidewalk_ride(
             "lng": lng,
             "heading_deg": heading_deg,
             "fpv_video_path": str(mp4_path.resolve()),
-            "attitude_source": f"ekf_{heading_obs_source}" if use_pose_ekf else "gps",
+            "attitude_source": heading_source,
+            "position_source": position_source,
             "roll_deg": roll_deg,
             "pitch_deg": pitch_deg,
         }
@@ -718,6 +732,8 @@ def process_sidewalk_ride(
                     "source_timestamp_ns": int(frame["timestamp"]),
                     "used_heading_deg": float(heading_deg),
                     "attitude_source": frame.get("attitude_source", "unknown"),
+                    "position_source": frame.get("position_source", "unknown"),
+                    "use_ekf_position": bool(use_ekf_position),
                     "bev_alignment": str(bev_alignment),
                     "bev_sample_fps": float(bev_sample_fps),
                     "draw_trajectory": bool(draw_bev_trajectory),
@@ -740,6 +756,8 @@ def process_sidewalk_ride(
                 "bev_image_path": str(bev_path.resolve()),
                 "bev_alignment": str(bev_alignment),
                 "bev_sample_fps": float(bev_sample_fps),
+                "position_source": frame.get("position_source", "unknown"),
+                "attitude_source": frame.get("attitude_source", "unknown"),
                 "draw_trajectory": bool(draw_bev_trajectory),
                 "bev_route_overlay": route_overlay_meta,
             }
@@ -757,6 +775,8 @@ def process_sidewalk_ride(
                     "lng": lng,
                     "timestamp": frame["timestamp"],
                     "heading_deg": heading_deg,
+                    "position_source": frame.get("position_source", "unknown"),
+                    "attitude_source": frame.get("attitude_source", "unknown"),
                     "bev_route_overlay": route_overlay_meta,
                     "bev_outputs": {
                         str(bev_alignment): str(bev_path),
@@ -867,7 +887,12 @@ def main():
     parser.add_argument(
         "--use-pose-ekf",
         action="store_true",
-        help="Use 2D pose EKF to fuse orientation (from quaternions) and GPS for smoother pose/heading",
+        help="Use 2D pose EKF for heading smoothing. BEV position stays GPS-smoothed unless --use-ekf-position is set.",
+    )
+    parser.add_argument(
+        "--use-ekf-position",
+        action="store_true",
+        help="Diagnostic legacy mode: also use EKF x/y for BEV center/route. Avoid for dataset generation unless translational odometry is modeled.",
     )
     parser.add_argument("--ekf-q-pos", type=float, default=1e-3, help="EKF process noise strength for x/y")
     parser.add_argument("--ekf-q-theta", type=float, default=1e-2, help="EKF process noise strength for theta")
@@ -950,6 +975,7 @@ def main():
                 bev_sample_fps=args.bev_sample_fps,
                 map_provider=args.map_provider,
                 use_pose_ekf=args.use_pose_ekf,
+                use_ekf_position=args.use_ekf_position,
                 ekf_q_pos=args.ekf_q_pos,
                 ekf_q_theta=args.ekf_q_theta,
                 ekf_r_xy=args.ekf_r_xy,

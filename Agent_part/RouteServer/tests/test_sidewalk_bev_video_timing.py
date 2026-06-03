@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 import sys
 import tempfile
 import unittest
 
 import numpy as np
+from PIL import Image
 
 
 _MODULE_PATH = Path(__file__).resolve().parents[1] / "tools" / "dataset_processing" / "process_sidewalk_dataset.py"
@@ -98,6 +100,60 @@ class SidewalkBevVideoTimingTest(unittest.TestCase):
                 pass
 
             self.assertTrue(output.exists())
+
+    def test_pose_ekf_does_not_override_bev_position_by_default(self) -> None:
+        class FakePoseEKF:
+            @classmethod
+            def init_from_latlng_heading(cls, lat, lng, heading_deg, pos_var=25.0, theta_var=0.5):
+                return cls(float(lat), float(lng), float(heading_deg))
+
+            def __init__(self, lat: float, lng: float, heading_deg: float) -> None:
+                self.lat = lat
+                self.lng = lng
+                self.heading_deg = heading_deg
+
+            def predict(self, omega, dt, q_pos=1e-3, q_theta=1e-2) -> None:
+                return None
+
+            def update_gps_and_yaw(self, lat, lng, yaw_deg=None, r_xy=9.0, r_theta=0.5) -> None:
+                if yaw_deg is not None:
+                    self.heading_deg = float(yaw_deg)
+
+            def get_latlng(self):
+                # Simulate the historical failure mode: EKF x/y remains pinned at
+                # the first frame because there is no translational odometry input.
+                return self.lat, self.lng
+
+            def get_heading_deg(self):
+                return self.heading_deg
+
+        original_ekf = _MODULE.PoseEKF
+        original_render = _MODULE.render_bev_map
+        _MODULE.PoseEKF = FakePoseEKF
+        _MODULE.render_bev_map = lambda **kwargs: Image.new("RGB", (64, 64), (240, 240, 240))
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp) / "clip"
+                root.mkdir()
+                frames = 81
+                gps = np.asarray([[30.0 + idx * 0.00001, 120.0] for idx in range(frames)], dtype=np.float64)
+                np.save(root / "frame_gps.npy", gps)
+                np.save(root / "frame_orientations.npy", np.asarray([[0.0, 0.0, 0.0, 1.0] for _ in range(frames)], dtype=np.float64))
+                np.save(root / "frame_times.npy", np.asarray([idx * 50_000_000 for idx in range(frames)], dtype=np.int64))
+                (root / "front.mp4").write_bytes(b"not a real video")
+
+                process_sidewalk_ride(root, root, bev_sample_fps=2.0, use_pose_ekf=True)
+
+                trajectory = json.loads((root / "trajectory.json").read_text(encoding="utf-8"))
+                self.assertGreater(trajectory[-1]["lat"] - trajectory[0]["lat"], 0.00003)
+                self.assertEqual(trajectory[0]["position_source"], "gps_smoothed")
+                self.assertTrue(str(trajectory[0]["attitude_source"]).startswith("ekf_"))
+                meta = json.loads((root / "bev_images" / "000000_bev.jpg.bevmeta.json").read_text(encoding="utf-8"))
+                self.assertEqual(meta["position_source"], "gps_smoothed")
+                self.assertFalse(meta["use_ekf_position"])
+        finally:
+            _MODULE.PoseEKF = original_ekf
+            _MODULE.render_bev_map = original_render
 
 
 if __name__ == "__main__":

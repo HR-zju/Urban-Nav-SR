@@ -358,7 +358,7 @@ def mcap_to_sidewalk_format(
     if not quiet:
         if effective_use_pose_ekf:
             reason = "CLI enabled" if use_pose_ekf else "extract_meta pose_quality invalid/missing"
-            print(f"Using EKF for BEV generation ({reason})")
+            print(f"Using EKF heading smoothing for BEV generation ({reason}); position remains GPS-smoothed")
         else:
             print("Using raw heading data for BEV generation (pose quality looks valid)")
 

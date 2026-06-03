@@ -58,6 +58,8 @@ bev_index.json
 
 - `bev_images/` 是 2fps ego-aligned BEV，默认画完整 route/start/end。
 - `bev_index.json` 记录 BEV 帧与原始 FPV timestamp 的映射。
+- `--use-pose-ekf` 现在只用于 heading 平滑；BEV center 和 route overlay 仍使用 GPS-smoothed 位置，避免无平移里程计的 EKF 把路线距离压缩。
+- `--use-ekf-position` 仅用于诊断/复现旧行为，默认不要用于数据集生成。
 - 默认不生成 `bev_video*.mp4`、north-up BEV、重复 FPV 抽帧；这些只在 debug 参数显式打开。
 
 ### 3. 批量生成 sidewalk 基础输入和 BEV
@@ -476,8 +478,9 @@ python tools/model_processing/run_sidewalk_phase1_cot_baseline.py \
 当前 BEV 航向优先级：
 
 - 默认不加 `--use-pose-ekf`：使用 GPS 轨迹点计算 compass heading，并跳过距离过近的点，避免 20 FPS 相邻帧 GPS 重复或抖动导致 0°/乱跳。
-- 加 `--use-pose-ekf`：优先检查四元数 yaw 是否可靠；若 yaw 近似常数或四元数无效，EKF 会改用鲁棒 GPS bearing 作为 heading 观测，而不是只靠 IMU 角速度积分。
-- 产物 `trajectory.json` 的 `heading_deg` 是实际送入 BEV 渲染的朝向；`bev_images/*.bevmeta.json` 里的 `used_heading_deg` 是每张 BEV 图实际使用的角度。
+- 加 `--use-pose-ekf`：只使用 EKF 平滑 `heading_deg`；BEV 的 `lat/lng` 仍来自 GPS-smoothed 轨迹。若四元数 yaw 近似常数或无效，EKF 会改用鲁棒 GPS bearing 作为 heading 观测。
+- 不要默认使用 `--use-ekf-position`：当前 EKF 没有平移速度/里程计输入，直接使用其 x/y 会让长 clip 的 BEV 位姿滞后或距离被压缩。
+- 产物 `trajectory.json` 的 `heading_deg` 是实际送入 BEV 渲染的朝向，`position_source` 是实际送入 BEV 渲染的位置来源；`bev_images/*.bevmeta.json` 里的 `used_heading_deg`、`position_source` 是每张 BEV 图实际使用的位姿元数据。
 - Phase1 最简 BEV 默认只生成 `bev_images/` ego-aligned 图像和 `bev_index.json`，并绘制完整 route/start/end 作为任务输入条件。`bev_index.json` 记录每张 BEV 对应的原始 `frame_idx` 和 timestamp，ms-swift Phase1 exporter 会用它把每个高频 FPV 帧映射到最近的低频 BEV 帧，默认最大时间差 `300ms`。
 - `bev_images_north_up/`、`bev_video.mp4`、`bev_video_north_up.mp4`、`bev_video_ego_aligned.mp4` 仅在显式 debug 参数打开时生成。
 

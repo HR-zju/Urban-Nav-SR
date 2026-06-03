@@ -1,5 +1,14 @@
 # RouteServer 变更记录
 
+## 2026-06-03
+
+### 修正 Phase1 BEV 位姿来源
+
+- 修正 `process_sidewalk_dataset.py` 中 `--use-pose-ekf` 的语义：默认只使用 EKF 平滑 heading，不再用 EKF x/y 覆盖 BEV center 和 route overlay 的 GPS-smoothed 位置。
+- 新增 `--use-ekf-position` 诊断开关，用于显式复现旧的 EKF 位置行为；默认数据集生成不应启用。
+- 在 `trajectory.json`、`samples.json` 和 `bev_images/*.bevmeta.json` 中记录 `position_source`，便于排查 FPV/BEV 时间与位置对齐问题。
+- 增加回归测试，确保 `--use-pose-ekf` 不会在无平移里程计时压缩 BEV 路线距离。
+
 
 
 
