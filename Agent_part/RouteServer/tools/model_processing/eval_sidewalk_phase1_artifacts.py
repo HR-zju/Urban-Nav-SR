@@ -56,6 +56,9 @@ def evaluate_one(ref: dict[str, Any], *, pred: dict[str, Any] | None, expected_p
     image_width = int(ref.get("image_width") or meta.get("image_width") or 1920)
     image_height = int(ref.get("image_height") or meta.get("image_height") or 1080)
     target = np.asarray(ref.get("pixel_trajectory") or [], dtype=np.float32).reshape(-1, 2)
+    fpv_t = _optional_array(ref.get("trajectory_fpv_t"), cols=3)
+    fpv_tv = _optional_array(ref.get("trajectory_fpv_tv"), cols=4)
+    ego_t = _optional_array(ref.get("trajectory_ego_t"), cols=4)
     missing_paths = []
     for key in ("fpv_image_path", "bev_image_path", "trajectory_label_path", "bev_patch_meta_path", "qa_bundle_path"):
         value = ref.get(key) or meta.get(key)
@@ -63,6 +66,14 @@ def evaluate_one(ref: dict[str, Any], *, pred: dict[str, Any] | None, expected_p
             missing_paths.append(key)
 
     target_ok = target.shape == (int(expected_points), 2)
+    fpv_t_ok = fpv_t is not None and fpv_t.shape == (int(expected_points), 3)
+    fpv_tv_ok = fpv_tv is not None and fpv_tv.shape == (int(expected_points), 4)
+    ego_t_ok = ego_t is not None and ego_t.shape == (int(expected_points), 4)
+    temporal_dt_ok = bool(
+        fpv_t_ok
+        and abs(float(fpv_t[0, 2])) <= 1e-6
+        and np.all(np.diff(fpv_t[:, 2]) >= -1e-6)
+    )
     in_bounds = bool(target.size > 0 and np.all(np.isfinite(target)) and np.min(target) >= -1e-4 and np.max(target) <= 1.0001)
     row: dict[str, Any] = {
         "source_id": ref.get("id") or meta.get("source_id"),
@@ -73,6 +84,10 @@ def evaluate_one(ref: dict[str, Any], *, pred: dict[str, Any] | None, expected_p
         "target_shape_ok": float(target_ok),
         "target_in_bounds": float(in_bounds),
         "target_points": float(target.shape[0]),
+        "trajectory_fpv_t_shape_ok": float(fpv_t_ok),
+        "trajectory_fpv_tv_shape_ok": float(fpv_tv_ok),
+        "trajectory_ego_t_shape_ok": float(ego_t_ok),
+        "trajectory_dt_monotonic": float(temporal_dt_ok),
         "intent_gt": meta.get("intent_gt") or (ref.get("route_context") or {}).get("intent_gt"),
         "route_theta_deg": _optional_float(meta.get("route_theta_deg") or (ref.get("route_context") or {}).get("route_theta_deg")),
         "image_width": float(image_width),
@@ -102,6 +117,10 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "missing_path_rate": mean(row["missing_path_count"] > 0 for row in rows),
         "target_shape_ok": mean(row["target_shape_ok"] for row in rows),
         "target_in_bounds": mean(row["target_in_bounds"] for row in rows),
+        "trajectory_fpv_t_shape_ok": mean(row["trajectory_fpv_t_shape_ok"] for row in rows),
+        "trajectory_fpv_tv_shape_ok": mean(row["trajectory_fpv_tv_shape_ok"] for row in rows),
+        "trajectory_ego_t_shape_ok": mean(row["trajectory_ego_t_shape_ok"] for row in rows),
+        "trajectory_dt_monotonic": mean(row["trajectory_dt_monotonic"] for row in rows),
     }
     if rows and "prediction_parse_success" in rows[0]:
         summary["prediction_parse_success"] = mean(row.get("prediction_parse_success") for row in rows)
@@ -177,6 +196,16 @@ def normalize_prediction(points: np.ndarray, image_width: int, image_height: int
     if float(np.nanmax(arr)) > 2.0:
         arr[:, 0] /= float(image_width)
         arr[:, 1] /= float(image_height)
+    return arr
+
+
+def _optional_array(value: Any, *, cols: int) -> np.ndarray | None:
+    if value is None:
+        return None
+    try:
+        arr = np.asarray(value, dtype=np.float32).reshape(-1, int(cols))
+    except Exception:
+        return None
     return arr
 
 

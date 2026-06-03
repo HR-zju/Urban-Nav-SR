@@ -1,8 +1,59 @@
 # RouteServer 变更记录
 
+
+
+
+
+
+
+## 2026-06-03: BEV Route Marker Legend 写入 Prompt
+
+- Phase1 CoT teacher prompt 和 ms-swift 训练 prompt 增加 BEV 图例说明：蓝色路线、绿色圆形起点、红色方形终点、橙色圆形当前 ego。
+- `<BEVContext>.topology_evidence` 要求模型显式利用 route/start/end/ego 标记判断当前导航阶段。
+- 文档补充说明：这些标记是训练输入条件，不是 debug overlay；模型应学习从 BEV 标记中读取路线进度和局部意图。
+
+## 2026-06-03: Phase1 CoT v4 与 Review GT 轨迹审计
+
+- CoT schema 升级为 `sidewalk_phase1_cot_teacher_v4` / `phase1_structured_cot_v4`。
+- `<BEVContext>` 增加 `scene_summary`、`route_summary`、`navigation_state`、`bev_anchor`、`topology_evidence`，用于表达 BEV 场景、全局 route 描述和当前导航阶段。
+- `<CrossView>` 增加 `near_reference` 和 `blind_area_context`，用于记录最近可见参考物，以及 FPV 外左右/前方盲区的 BEV 语义补充。
+- `<finish>` 不再要求 `route_theta_deg`；该角度只保留在 `<BEVContext>`，作为 Stage 1 topology / intent 评估字段。
+- Archive review HTML 增加 `FPV + GT trajectory` 视图，直接用 `pixel_trajectory` 叠加 GT 轨迹，便于人工检查轨迹是否落在可通行区域。
+
+## 2026-06-02: Phase1 默认 2fps 采样与 clip 数量控制
+
+- `run_sidewalk_phase1_dataset.sh` 默认 `FRAME_STEP=10`，在 20Hz FPV clip 上约等于 2fps 训练采样，避免误生成每帧 CoT 样本。
+- `sidewalk_phase1_dataset.py` CLI 默认 `--frame-step 10`，并新增 `--max-clips`，用于按排序后的 clip 顺序限制处理数量。
+- wrapper 新增 `MAX_CLIPS` 环境变量，生成前三个 clip 时使用 `MAX_CLIPS=3`，不要用 `LIMIT` 代替；`LIMIT` 仍表示最多写入多少条样本。
+- `tools/README.md` 更新 2fps 默认说明和前三个 clip 的运行示例。
+
 本文档用于记录影响 FPV/BEV visual prompt 主链路、QA teachers、调试产物和批处理工具的工程变更。记录目标是方便后续审计：为什么改、改了什么、对运行行为有什么影响。
 
 ## 2026-06-02
+
+### 新增 Phase1 Archive 合理性判定与 ms-swift 直接输入
+
+- 新增 `tools/model_processing/sidewalk_phase1_archive.py`：
+  - 输入 `phase1_cot_*.jsonl`。
+  - 复用 CoT teacher validator，再次检查 tag、JSON、intent、route theta、trajectory 与几何 sidecar 的一致性。
+  - 检查 FPV/BEV 路径、`<image>` 数量、trajectory shape/range、时间条件轨迹 shape 和 `dt` 单调性。
+  - 通过样本写入 `manifests/{split}.jsonl`，格式为 ms-swift 可直接训练的 `messages/images` JSONL。
+  - 失败样本写入 `manifests/{split}.errors.jsonl`，并输出 `review.csv`、`stats.json` 和可选 HTML review 页面。
+  - 支持 `reference`、`hardlink`、`copy`、`symlink` 四种媒体归档方式；本地训练推荐 `hardlink + absolute path`，发布数据集推荐 `copy + relative path`。
+- 新增 `tools/model_processing/run_sidewalk_phase1_archive.sh` 一键入口。
+- 新增 `tests/test_sidewalk_phase1_archive.py`，覆盖有效样本归档、无效 CoT 拒绝、relative media path 三个关键行为。
+- `tools/README.md` 和 `docs/SIDEWALK_PHASE1_DATA_PIPELINE.md` 更新流程：CoT teacher 之后先 archive 判定合理性，archive manifest 才作为 ms-swift 训练输入，不再默认要求运行 ms-swift `dataset_builder` 转换。
+
+### 升级 Phase1 轨迹真值为时间条件标签
+
+- `tools/model_processing/sidewalk_phase1_dataset.py` 的 trajectory label 从 `sidewalk_phase1_trajectory_v1` 升级到 `sidewalk_phase1_trajectory_v2`。
+- 保留兼容字段 `pixel_trajectory` / `trajectory_norm`，新增：
+  - `trajectory_fpv_t`: `[x_norm, y_norm, dt_s]`
+  - `trajectory_fpv_tv`: `[x_norm, y_norm, dt_s, speed_mps]`
+  - `trajectory_ego_t`: `[x_right_m, y_front_m, dt_s, speed_mps]`
+  - `trajectory_policy`
+- exporter 优先用 `frame_times.npy` 生成 `dt_s`，缺失时用 `--frame-rate-hz` 回退；优先用 `frame_speeds.npy`，缺失时由 ego path 差分估计速度。
+- `trajectory_policy.dynamic_obstacle_audit` 明确记录 `not_evaluated_no_dynamic_masks`：future odom 是实际执行路径，不等价于当前 FPV 静态 free-space；没有动态 mask/tracking 时不自动改写避障轨迹。
 
 ### 收敛 Agent baseline 为真实 trajectory-only 专家输出
 

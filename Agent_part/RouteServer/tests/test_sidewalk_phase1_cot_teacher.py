@@ -96,7 +96,8 @@ class SidewalkPhase1CotTeacherTest(unittest.TestCase):
             self.assertEqual(validation.sections["BEVContext"]["ego_cell"], [8, 12])
             self.assertEqual(validation.sections["BEVContext"]["target_cell"], [8, 4])
             self.assertEqual(validation.sections["finish"]["trajectory"], row["pixel_trajectory"])
-            self.assertEqual(validation.sections["finish"]["route_theta_deg"], 0.0)
+            self.assertEqual(validation.sections["BEVContext"]["route_theta_deg"], 0.0)
+            self.assertNotIn("route_theta_deg", validation.sections["finish"])
 
     def test_validator_rejects_teacher_that_changes_gt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -125,15 +126,18 @@ class SidewalkPhase1CotTeacherTest(unittest.TestCase):
 
             self.assertIn('<Scene>{"summary":"..."', manifest_row["prompt"])
             self.assertIn('<FPVScene>{"navigable_support"', manifest_row["prompt"])
-            self.assertIn('<BEVContext>{"grid_size"', manifest_row["prompt"])
+            self.assertIn('<BEVContext>{"scene_summary"', manifest_row["prompt"])
+            self.assertIn("FPV image size: 640x360 px", manifest_row["prompt"])
+            self.assertIn("pixel conversion is x_px=x*width, y_px=y*height", manifest_row["prompt"])
             self.assertIn("First identify safe visible navigation support in <FPVScene>.navigable_support", manifest_row["prompt"])
+            self.assertIn("final point should still be on near-field visible ground support", manifest_row["prompt"])
             self.assertIn("Every trajectory point must lie on visible walkable ground support", manifest_row["prompt"])
             self.assertIn("Do not place any point in sky", manifest_row["prompt"])
             self.assertNotIn("route_theta_gt", manifest_row["prompt"])
             self.assertNotIn("trajectory_norm", manifest_row["prompt"])
             self.assertNotIn("[[0.5, 0.9]", manifest_row["prompt"])
             self.assertEqual(manifest_row["response"], answer)
-            self.assertEqual(manifest_row["cot_teacher"]["schema_version"], "sidewalk_phase1_cot_teacher_v3")
+            self.assertEqual(manifest_row["cot_teacher"]["schema_version"], "sidewalk_phase1_cot_teacher_v4")
 
     def test_validator_rejects_free_text_inside_think(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

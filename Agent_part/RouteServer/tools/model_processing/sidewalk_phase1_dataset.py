@@ -50,6 +50,7 @@ class Phase1Config:
     min_future_distance_m: float = 0.3
     trajectory_min_y_step: float = 0.005
     max_bev_time_delta_ms: float = 300.0
+    frame_rate_hz: float = 20.0
 
 
 @dataclass(frozen=True)
@@ -96,6 +97,7 @@ class FrameRecord:
     lng: float | None = None
     heading_deg: float | None = None
     timestamp: int | None = None
+    speed_mps: float | None = None
     roll_deg: float | None = None
     pitch_deg: float | None = None
     position_xy: tuple[float, float] | None = None
@@ -156,6 +158,7 @@ def build_phase1_dataset(
     split_name: str = "train",
     config: Phase1Config | None = None,
     limit: int | None = None,
+    max_clips: int | None = None,
     allow_missing_bev: bool = False,
     allow_heuristic_trajectory: bool = False,
     write_overlays: bool = False,
@@ -178,6 +181,7 @@ def build_phase1_dataset(
         "output_root": str(output),
         "split_name": split_name,
         "allow_heuristic_trajectory": bool(allow_heuristic_trajectory),
+        "max_clips": max_clips,
         "clips_total": 0,
         "clips_used": 0,
         "frames_written": 0,
@@ -189,6 +193,8 @@ def build_phase1_dataset(
 
     for clip_dir in discover_clip_dirs(input_root):
         if limit is not None and len(source_rows) >= limit:
+            break
+        if max_clips is not None and int(report["clips_total"]) >= int(max_clips):
             break
         report["clips_total"] += 1
         try:
@@ -275,6 +281,10 @@ def build_phase1_sample(
     )
     local_path = target_pack["local_path"]
     trajectory_norm = target_pack["trajectory_norm"]
+    trajectory_fpv_t = target_pack["trajectory_fpv_t"]
+    trajectory_fpv_tv = target_pack["trajectory_fpv_tv"]
+    trajectory_ego_t = target_pack["trajectory_ego_t"]
+    trajectory_policy = target_pack["trajectory_policy"]
     trajectory_source = str(target_pack["trajectory_source"])
     route_theta_deg = bev_theta_deg(local_path[-1, 0], local_path[-1, 1])
     intent = intent_from_theta(route_theta_deg, distance_m=float(np.linalg.norm(local_path[-1])))
@@ -303,14 +313,18 @@ def build_phase1_sample(
     overlay_path = overlay_dir / f"{record.frame_name}_debug.jpg"
 
     label_payload = {
-        "schema_version": "sidewalk_phase1_trajectory_v1",
+        "schema_version": "sidewalk_phase1_trajectory_v2",
         "clip_id": record.clip_id,
         "frame_idx": record.frame_idx,
         "frame_name": record.frame_name,
         "image_size": {"width": image_width, "height": image_height},
         "trajectory_norm": trajectory_norm.tolist(),
+        "trajectory_fpv_t": trajectory_fpv_t,
+        "trajectory_fpv_tv": trajectory_fpv_tv,
         "trajectory_pixel": to_pixel_trajectory(trajectory_norm, image_width, image_height).tolist(),
         "local_path_m": local_path.astype(float).tolist(),
+        "trajectory_ego_t": trajectory_ego_t,
+        "trajectory_policy": trajectory_policy,
         "route_theta_deg": round(float(route_theta_deg), 3),
         "intent_gt": intent,
         "anchor": anchor,
@@ -325,6 +339,9 @@ def build_phase1_sample(
         image_width=image_width,
         image_height=image_height,
         trajectory_norm=trajectory_norm,
+        trajectory_fpv_t=trajectory_fpv_t,
+        trajectory_ego_t=trajectory_ego_t,
+        trajectory_policy=trajectory_policy,
         bev_meta=bev_meta,
         label_path=label_path,
         bev_meta_path=bev_meta_path,
@@ -366,6 +383,10 @@ def build_phase1_sample(
         "fpv_image_path": str(record.image_path),
         "bev_image_path": str(record.bev_image_path) if record.bev_image_path else None,
         "pixel_trajectory": trajectory_norm.astype(float).tolist(),
+        "trajectory_fpv_t": trajectory_fpv_t,
+        "trajectory_fpv_tv": trajectory_fpv_tv,
+        "trajectory_ego_t": trajectory_ego_t,
+        "trajectory_policy": trajectory_policy,
         "image_width": image_width,
         "image_height": image_height,
         "instruction": DEFAULT_INSTRUCTION,
@@ -417,9 +438,18 @@ def build_phase1_targets(
             local_path = resample_polyline(local_path, config.num_points)
         if record.camera_params is not None:
             trajectory_norm = calibrated_fpv_trajectory(record, sampled_future, config=config)
+            time_pack = build_time_conditioned_targets(
+                record,
+                sampled_future,
+                local_path=local_path,
+                trajectory_norm=trajectory_norm,
+                config=config,
+                trajectory_source="calibrated_pose_projection",
+            )
             return {
                 "local_path": local_path,
                 "trajectory_norm": trajectory_norm,
+                **time_pack,
                 "trajectory_source": "calibrated_pose_projection",
                 "projection": {
                     "coordinate_chain": "map_pose_to_robot_to_camera_to_fpv",
@@ -433,9 +463,19 @@ def build_phase1_targets(
                 },
             }
         if allow_heuristic_trajectory:
+            trajectory_norm = fpv_trajectory_from_local_path(local_path, config=config)
+            time_pack = build_time_conditioned_targets(
+                record,
+                sampled_future,
+                local_path=local_path,
+                trajectory_norm=trajectory_norm,
+                config=config,
+                trajectory_source="heuristic_pose_projection",
+            )
             return {
                 "local_path": local_path,
-                "trajectory_norm": fpv_trajectory_from_local_path(local_path, config=config),
+                "trajectory_norm": trajectory_norm,
+                **time_pack,
                 "trajectory_source": "heuristic_pose_projection",
                 "projection": {"coordinate_chain": "map_pose_to_robot_to_hfov_fpv"},
             }
@@ -443,13 +483,200 @@ def build_phase1_targets(
 
     if allow_heuristic_trajectory:
         local_path = legacy_gnss_local_path(record, future, config=config)
+        trajectory_norm = fpv_trajectory_from_local_path(local_path, config=config)
+        sampled_future = sample_future_records(future, config.num_points)
+        time_pack = build_time_conditioned_targets(
+            record,
+            sampled_future,
+            local_path=local_path,
+            trajectory_norm=trajectory_norm,
+            config=config,
+            trajectory_source="heuristic_gnss_projection",
+        )
         return {
             "local_path": local_path,
-            "trajectory_norm": fpv_trajectory_from_local_path(local_path, config=config),
+            "trajectory_norm": trajectory_norm,
+            **time_pack,
             "trajectory_source": "heuristic_gnss_projection",
             "projection": {"coordinate_chain": "gnss_heading_to_hfov_fpv"},
         }
     raise ValueError("InternNav pose/camera data required; pass --allow-heuristic-trajectory for debug fallback")
+
+
+def build_time_conditioned_targets(
+    record: FrameRecord,
+    sampled_future: list[FrameRecord],
+    *,
+    local_path: np.ndarray,
+    trajectory_norm: np.ndarray,
+    config: Phase1Config,
+    trajectory_source: str,
+) -> dict[str, Any]:
+    """Build time-conditioned trajectory labels without changing legacy XY GT.
+
+    ``pixel_trajectory`` remains the backward-compatible Phase1 target.  The
+    additional fields here make the label explicit about *when* the robot
+    reaches each waypoint, which is required to reason about dynamic obstacles:
+    a future executed path may cross the current location of a pedestrian only
+    after that pedestrian has moved.  Without dynamic masks/tracks this function
+    does not rewrite the path; it records that dynamic conflict auditing has not
+    been evaluated yet.
+    """
+
+    traj = np.asarray(trajectory_norm, dtype=np.float32).reshape(-1, 2)
+    local = np.asarray(local_path, dtype=np.float32).reshape(-1, 2)
+    target_n = int(config.num_points)
+    if traj.shape[0] != target_n:
+        traj = resample_polyline(traj, target_n)
+    if local.shape[0] != target_n:
+        local = resample_polyline(local, target_n)
+
+    dt_values = _trajectory_dt_seconds(record, sampled_future, target_n, config=config)
+    local_time = np.zeros((target_n, 2), dtype=np.float32)
+    if target_n > 1 and local.shape[0] > 1:
+        local_time[1:] = local[1:target_n]
+    speeds = _trajectory_speeds_mps(record, sampled_future, local_time, dt_values)
+
+    fpv_t = [
+        [_round_float(traj[i, 0]), _round_float(traj[i, 1]), _round_float(dt_values[i])]
+        for i in range(target_n)
+    ]
+    fpv_tv = [
+        [
+            _round_float(traj[i, 0]),
+            _round_float(traj[i, 1]),
+            _round_float(dt_values[i]),
+            _round_float(speeds[i]),
+        ]
+        for i in range(target_n)
+    ]
+    ego_t = [
+        [
+            _round_float(local_time[i, 0]),
+            _round_float(local_time[i, 1]),
+            _round_float(dt_values[i]),
+            _round_float(speeds[i]),
+        ]
+        for i in range(target_n)
+    ]
+    return {
+        "trajectory_fpv_t": fpv_t,
+        "trajectory_fpv_tv": fpv_tv,
+        "trajectory_ego_t": ego_t,
+        "trajectory_policy": {
+            "schema_version": "sidewalk_time_conditioned_policy_v1",
+            "primary_temporal_target": "trajectory_fpv_t",
+            "speed_target": "trajectory_fpv_tv",
+            "static_compatibility_target": "pixel_trajectory",
+            "trajectory_role": "executed_future_path_projected_to_current_fpv",
+            "trajectory_source": trajectory_source,
+            "time_unit": "seconds",
+            "speed_unit": "mps",
+            "frame_rate_hz_fallback": float(config.frame_rate_hz),
+            "speed_policy": speed_policy_from_profile(speeds),
+            "dynamic_obstacle_audit": {
+                "status": "not_evaluated_no_dynamic_masks",
+                "has_dynamic_masks": False,
+                "current_frame_conflict": "unknown",
+                "note": (
+                    "Future odom is an executed path, not a guaranteed current-frame "
+                    "free-space mask. Add dynamic masks/tracks before rewriting labels "
+                    "around moving obstacles."
+                ),
+            },
+        },
+    }
+
+
+def _trajectory_dt_seconds(
+    record: FrameRecord,
+    sampled_future: list[FrameRecord],
+    num_points: int,
+    *,
+    config: Phase1Config,
+) -> list[float]:
+    """Return monotonic arrival times for trajectory indices.
+
+    Index 0 is the current robot anchor.  Later indices are matched to the
+    corresponding future pose when possible.  If timestamps are unavailable, the
+    frame-index delta is converted with ``config.frame_rate_hz``.
+    """
+
+    dt_values = [0.0]
+    fallback_step = 1.0 / max(float(config.frame_rate_hz), 1e-6)
+    for i in range(1, int(num_points)):
+        item = sampled_future[min(i, len(sampled_future) - 1)] if sampled_future else None
+        dt = None
+        if item is not None:
+            dt = _record_delta_seconds(record, item, config=config)
+        if dt is None:
+            dt = float(i) * fallback_step
+        if dt <= dt_values[-1]:
+            dt = dt_values[-1] + fallback_step
+        dt_values.append(float(dt))
+    return dt_values
+
+
+def _record_delta_seconds(record: FrameRecord, item: FrameRecord, *, config: Phase1Config) -> float | None:
+    if record.timestamp is not None and item.timestamp is not None:
+        return _timestamp_delta_seconds(record.timestamp, item.timestamp)
+    frame_delta = int(item.frame_idx) - int(record.frame_idx)
+    if frame_delta > 0:
+        return float(frame_delta) / max(float(config.frame_rate_hz), 1e-6)
+    return None
+
+
+def _timestamp_delta_seconds(start: int, end: int) -> float:
+    """Convert timestamp deltas from common SideWalk units to seconds."""
+
+    delta = float(int(end) - int(start))
+    abs_delta = abs(delta)
+    if abs_delta >= 1_000_000.0:
+        return delta / 1e9  # nanoseconds, used by frame_times.npy
+    if abs_delta >= 1_000.0:
+        return delta / 1e3  # milliseconds
+    return delta  # seconds or small synthetic ticks
+
+
+def _trajectory_speeds_mps(
+    record: FrameRecord,
+    sampled_future: list[FrameRecord],
+    local_time: np.ndarray,
+    dt_values: list[float],
+) -> list[float]:
+    speeds: list[float] = []
+    for i in range(len(dt_values)):
+        item = sampled_future[min(i, len(sampled_future) - 1)] if sampled_future else None
+        if item is not None and item.speed_mps is not None:
+            speeds.append(max(float(item.speed_mps), 0.0))
+            continue
+        if i == 0:
+            speeds.append(max(float(record.speed_mps or 0.0), 0.0))
+            continue
+        dt = max(float(dt_values[i]) - float(dt_values[i - 1]), 1e-6)
+        distance = float(np.linalg.norm(local_time[i] - local_time[i - 1]))
+        speeds.append(max(distance / dt, 0.0))
+    if len(speeds) > 1 and speeds[0] <= 1e-6:
+        speeds[0] = speeds[1]
+    return speeds
+
+
+def speed_policy_from_profile(speeds: list[float]) -> str:
+    if not speeds:
+        return "unknown"
+    mean_speed = float(np.mean(np.asarray(speeds, dtype=np.float32)))
+    max_speed = float(np.max(np.asarray(speeds, dtype=np.float32)))
+    if max_speed < 0.15:
+        return "stop"
+    if mean_speed < 0.6:
+        return "slow"
+    if mean_speed < 1.5:
+        return "normal"
+    return "fast_or_unverified"
+
+
+def _round_float(value: Any, digits: int = 5) -> float:
+    return round(float(value), int(digits))
 
 
 def legacy_gnss_local_path(record: FrameRecord, future: list[FrameRecord], *, config: Phase1Config) -> np.ndarray:
@@ -611,6 +838,9 @@ def build_qa_bundle(
     image_width: int,
     image_height: int,
     trajectory_norm: np.ndarray,
+    trajectory_fpv_t: list[list[float]],
+    trajectory_ego_t: list[list[float]],
+    trajectory_policy: dict[str, Any],
     bev_meta: dict[str, Any],
     label_path: Path,
     bev_meta_path: Path,
@@ -768,9 +998,12 @@ def build_qa_bundle(
         "segmentation_context_ref": {},
         "som_context": {},
         "gt_pixel_trajectory": trajectory_norm.astype(float).tolist(),
+        "gt_trajectory_fpv_t": trajectory_fpv_t,
+        "gt_trajectory_ego_t": trajectory_ego_t,
         "metadata": {
             "source": "agent_phase1_dataset_builder",
             "trajectory_source": trajectory_source,
+            "trajectory_policy": trajectory_policy,
             "trajectory_label_path": str(label_path),
             "bev_patch_meta_path": str(bev_meta_path),
             "bev_mapping_source": record.bev_mapping_source,
@@ -836,6 +1069,7 @@ def _iter_legacy_trajectory_frame_records(
                 lng=float(row["lng"]),
                 heading_deg=float(row.get("heading_deg", 0.0) or 0.0),
                 timestamp=_optional_int(row.get("timestamp")),
+                speed_mps=_optional_float(row.get("speed_mps") if row.get("speed_mps") is not None else row.get("speed")),
                 roll_deg=_optional_float(row.get("roll_deg")),
                 pitch_deg=_optional_float(row.get("pitch_deg")),
             )
@@ -859,6 +1093,7 @@ def _iter_internnav_frame_records(
         raise ValueError(f"frame_orientations.npy must have shape [N, >=4]: {clip_dir}")
     camera_params = _load_camera_params(clip_dir)
     frame_times = _load_optional_array(clip_dir / "frame_times.npy")
+    frame_speeds = _load_optional_array(clip_dir / "frame_speeds.npy")
     frame_count = min(len(positions), len(orientations))
     fpv_video_path = (clip_dir / "front.mp4").resolve() if (clip_dir / "front.mp4").is_file() else None
     for frame_idx in range(frame_count):
@@ -891,6 +1126,11 @@ def _iter_internnav_frame_records(
             bev_time_delta_ms=bev_match.get("bev_time_delta_ms"),
             bev_mapping_source=bev_match.get("bev_mapping_source"),
             timestamp=timestamp,
+            speed_mps=(
+                float(frame_speeds[frame_idx])
+                if frame_speeds is not None and frame_idx < len(frame_speeds)
+                else None
+            ),
             position_xy=(float(positions[frame_idx, 0]), float(positions[frame_idx, 1])),
             orientation_wxyz=tuple(float(x) for x in orientations[frame_idx, :4]),
             camera_params=camera_params,
@@ -1375,8 +1615,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sidewalk-root", required=True, help="Root containing prepared SideWalk clips")
     parser.add_argument("--output-root", required=True, help="Output root for Phase1 artifacts")
     parser.add_argument("--split-name", default="train", help="Manifest split name")
-    parser.add_argument("--limit", type=int, default=None)
-    parser.add_argument("--frame-step", type=int, default=1, help="Generate one sample every N FPV frames. Default 1 keeps every FPV frame.")
+    parser.add_argument("--limit", type=int, default=None, help="Maximum number of source samples to write across all clips.")
+    parser.add_argument("--max-clips", type=int, default=None, help="Maximum number of discovered clips to process, after sorted discovery order.")
+    parser.add_argument("--frame-step", type=int, default=10, help="Generate one sample every N FPV frames. Default 10 gives about 2fps for 20Hz FPV clips.")
     parser.add_argument("--future-frames", type=int, default=50)
     parser.add_argument("--num-points", type=int, default=16)
     parser.add_argument("--side-extent-m", type=float, default=15.0)
@@ -1386,6 +1627,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hfov-deg", type=float, default=90.0)
     parser.add_argument("--min-future-distance-m", type=float, default=0.3)
     parser.add_argument("--trajectory-min-y-step", type=float, default=0.005)
+    parser.add_argument("--frame-rate-hz", type=float, default=20.0, help="Fallback FPV frame rate used to derive dt when frame_times.npy is missing.")
     parser.add_argument(
         "--max-bev-time-delta-ms",
         type=float,
@@ -1417,6 +1659,7 @@ def main() -> None:
         min_future_distance_m=float(args.min_future_distance_m),
         trajectory_min_y_step=float(args.trajectory_min_y_step),
         max_bev_time_delta_ms=float(args.max_bev_time_delta_ms),
+        frame_rate_hz=float(args.frame_rate_hz),
     )
     report = build_phase1_dataset(
         args.sidewalk_root,
@@ -1424,6 +1667,7 @@ def main() -> None:
         split_name=str(args.split_name),
         config=config,
         limit=args.limit,
+        max_clips=args.max_clips,
         allow_missing_bev=bool(args.allow_missing_bev),
         allow_heuristic_trajectory=bool(args.allow_heuristic_trajectory),
         write_overlays=bool(args.write_overlays),

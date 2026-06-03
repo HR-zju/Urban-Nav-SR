@@ -75,6 +75,7 @@ class SidewalkPhase1CotBaselineTest(unittest.TestCase):
         self.assertIn("The <FPVScene> section is mandatory", prompt)
         self.assertIn("navigable_support, conditional_support, and risk_objects", prompt)
         self.assertIn("Every point must stay on visible walkable ground support", prompt)
+        self.assertIn("near-field lower half", prompt)
         self.assertIn("Never extend trajectory points into sky", prompt)
 
     def test_phase1_source_samples_use_exported_bev_path(self) -> None:

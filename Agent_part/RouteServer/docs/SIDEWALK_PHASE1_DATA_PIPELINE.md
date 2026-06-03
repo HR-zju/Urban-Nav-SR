@@ -14,18 +14,20 @@ raw/prepared SideWalk clip
   -> phase1_source_*.jsonl
   -> LLM Teacher structured CoT + validator
   -> phase1_cot_*.jsonl
-  -> ms-swift dataset_builder / SidewalkSeq2SeqTrainer
+  -> Archive validator + ms-swift-ready train.jsonl
+  -> SidewalkSeq2SeqTrainer
 ```
 
 ms-swift 仓库只消费稳定 JSONL，不直接读取 Agent runtime、地图服务或 SAM 服务。
 
-Phase1 分成三段，不能混用职责：
+Phase1 分成四段，不能混用职责：
 
 | 阶段 | 输入 | 输出 | 说明 |
 | --- | --- | --- | --- |
 | Geometry Exporter | raw clip、FPV、BEV、pose、camera params | `phase1_source_*.jsonl`、trajectory label、BEV patch meta | 只生成可审计几何真值。 |
 | LLM Teacher | source JSONL、FPV/BEV 图、geometry evidence | `<think>{Scene/FPV/BEV/CrossView/Plan}</think><finish>` | CoT SFT 必需；LLM 只生成解释文本，不允许改写几何真值。 |
-| Validator + Manifest Builder | teacher answer、structured target | `phase1_cot_*.jsonl` | 校验 tags、JSON、intent、theta、trajectory 后写入 ms-swift 可消费行。 |
+| CoT Validator | teacher answer、structured target | `phase1_cot_*.jsonl` | 校验 tags、JSON、intent、theta、trajectory，保留 teacher 中间产物。 |
+| Archive Validator | `phase1_cot_*.jsonl`、FPV/BEV、sidecar | `archive/manifests/train.jsonl` | 再次判定样本合理性，通过样本才写入 ms-swift 直接训练 manifest。 |
 
 ## 2. 入口脚本
 
@@ -34,9 +36,11 @@ Phase1 分成三段，不能混用职责：
 | `tools/dataset_processing/process_sidewalk_dataset.py` | 从 `front.mp4`、pose npy 生成最简 2fps ego-aligned `bev_images/`、`bev_index.json`、`trajectory.json`；FPV JPG、north-up BEV、BEV mp4 均为显式 debug 选项。 |
 | `tools/model_processing/sidewalk_phase1_dataset.py` | 从 InternNav clip 或显式 fallback clip 生成 Phase1 source JSONL、trajectory label、BEV patch meta、QA bundle。 |
 | `tools/model_processing/sidewalk_phase1_cot_teacher.py` | 调用 Agent VLM/LLM，为 Phase1 source JSONL 生成强制校验的 structured CoT 监督。 |
+| `tools/model_processing/sidewalk_phase1_archive.py` | 校验 CoT/几何一致性，归档 FPV/BEV/sidecar，并生成 ms-swift 直接训练 JSONL。 |
 | `tools/model_processing/eval_sidewalk_phase1_artifacts.py` | 检查 source JSONL、sidecar 文件、trajectory shape、越界率、QA bundle schema；可选评估预测 ADE/FDE。 |
 | `tools/model_processing/run_sidewalk_phase1_dataset.sh` | 一键运行 Phase1 数据构建和数据评估。 |
 | `tools/model_processing/run_sidewalk_phase1_cot_teacher.sh` | 一键运行 Phase1 CoT teacher 和 validator。 |
+| `tools/model_processing/run_sidewalk_phase1_archive.sh` | 一键运行 CoT 合理性判定和训练数据归档。 |
 
 ## 3. 输入要求
 
@@ -58,6 +62,8 @@ clip/
 | `frame_positions.npy` | `[N, 2 or 3]` odom/map 位置，作为未来轨迹来源。 |
 | `frame_orientations.npy` | `[N, 4]` 四元数 `[w,x,y,z]`，用于当前机器人坐标系变换。 |
 | `camera_params.json` | `K`、`image_width`、`image_height`、`camera_height_meters`，用于 FPV 投影。 |
+| `frame_times.npy` | 可选 `[N]` 时间戳，优先用于生成 trajectory waypoint 的 `dt`。常见单位为 ns。 |
+| `frame_speeds.npy` | 可选 `[N]` 速度，优先用于生成 `trajectory_fpv_tv` 的速度监督；缺失时由 local path 差分估计。 |
 | `images/` / `front_images/` / `front.mp4` | FPV 输入。若只有 `front.mp4`，构建器会把访问到的帧抽到输出目录。 |
 | `bev_images/` | BEV 输入。 |
 
@@ -92,7 +98,47 @@ y_front = x_robot
 route_theta = atan2(x_right, y_front)
 ```
 
-### 3.1 Legacy fallback
+### 3.1 时间条件轨迹真值
+
+动态障碍物会让“未来 odom 轨迹”和“当前帧可通行区域”发生分叉：机器人未来可能在行人离开后通过该位置，但当前 FPV 上该位置仍被行人占据。因此 Phase1 exporter 不再只把 future pose 投影解释成静态 free-space GT，而是同时写入时间条件标签：
+
+```json
+{
+  "pixel_trajectory": [[0.50, 0.90], [0.49, 0.86]],
+  "trajectory_fpv_t": [[0.50, 0.90, 0.00], [0.49, 0.86, 0.10]],
+  "trajectory_fpv_tv": [[0.50, 0.90, 0.00, 0.40], [0.49, 0.86, 0.10, 0.50]],
+  "trajectory_ego_t": [[0.0, 0.0, 0.00, 0.40], [-0.1, 0.8, 0.10, 0.50]],
+  "trajectory_policy": {
+    "primary_temporal_target": "trajectory_fpv_t",
+    "static_compatibility_target": "pixel_trajectory",
+    "trajectory_role": "executed_future_path_projected_to_current_fpv",
+    "dynamic_obstacle_audit": {
+      "status": "not_evaluated_no_dynamic_masks",
+      "has_dynamic_masks": false,
+      "current_frame_conflict": "unknown"
+    }
+  }
+}
+```
+
+字段含义：
+
+| 字段 | 形状 | 含义 |
+| --- | --- | --- |
+| `pixel_trajectory` | `[N,2]` | 兼容旧 Phase0/Phase1 SFT 的归一化 FPV 轨迹。 |
+| `trajectory_fpv_t` | `[N,3]` | 主时间监督 `[x_norm, y_norm, dt_s]`。 |
+| `trajectory_fpv_tv` | `[N,4]` | 增强监督 `[x_norm, y_norm, dt_s, speed_mps]`。 |
+| `trajectory_ego_t` | `[N,4]` | ego/local meter 轨迹 `[x_right_m, y_front_m, dt_s, speed_mps]`。 |
+| `trajectory_policy` | object | 说明该轨迹是 future executed path，动态障碍审计是否可用，以及推荐的速度策略。 |
+
+生成规则：
+
+- 优先用 `frame_times.npy` 计算 `dt_s`；缺失时使用 `frame_idx / --frame-rate-hz`，默认 `20Hz`。
+- 优先用 `frame_speeds.npy` 填 `speed_mps`；缺失时用 `trajectory_ego_t` 相邻点距离除以 `dt` 估计。
+- 第 0 个点仍是当前机器人 FPV anchor `(0.5, 0.9, 0.0)`。
+- 没有动态 mask/tracking 时，`dynamic_obstacle_audit.status` 固定为 `not_evaluated_no_dynamic_masks`，不得自动把 future pose 改写成避障轨迹。
+
+### 3.2 Legacy fallback
 
 旧版 prepared clip 只有 `trajectory.json` 时，可以用于 smoke test，但必须显式允许：
 
@@ -133,6 +179,25 @@ sidewalk_phase1/
     phase1_dataset_report_train.json
     phase1_cot_report_train.json
     phase1_eval_train.json
+
+sidewalk_phase1_archive/
+  media/
+    clips/{clip_id}/
+      fpv/{frame}.jpg
+      bev/{frame}_bev.jpg
+  sidecars/
+    clips/{clip_id}/
+      trajectory_labels/{frame}.json
+      bev_patch_meta/{frame}.json
+      qa/{frame}_qa.json
+      cot_sections/{frame}.json
+  manifests/
+    train.jsonl
+    train.errors.jsonl
+    train.review.csv
+    train.stats.json
+  review/
+    index.html
 ```
 
 ### 4.1 source JSONL
@@ -147,6 +212,15 @@ sidewalk_phase1/
   "fpv_image_path": "/abs/clip/images/000100.jpg",
   "bev_image_path": "/abs/clip/bev_images/000100_bev.jpg",
   "pixel_trajectory": [[0.5, 0.9], [0.51, 0.72]],
+  "trajectory_fpv_t": [[0.5, 0.9, 0.0], [0.51, 0.72, 0.1]],
+  "trajectory_fpv_tv": [[0.5, 0.9, 0.0, 0.4], [0.51, 0.72, 0.1, 0.5]],
+  "trajectory_ego_t": [[0.0, 0.0, 0.0, 0.4], [0.1, 1.2, 0.1, 0.5]],
+  "trajectory_policy": {
+    "primary_temporal_target": "trajectory_fpv_t",
+    "dynamic_obstacle_audit": {
+      "status": "not_evaluated_no_dynamic_masks"
+    }
+  },
   "image_width": 1920,
   "image_height": 1080,
   "instruction": "Navigate safely on the sidewalk and follow the visible route.",
@@ -274,7 +348,7 @@ WRITE_OVERLAYS=1 \
 - `--bev-sample-fps` 默认 2fps。
 - 写 `bev_index.json`，用于 FPV 高帧率到 BEV 低帧率的 timestamp 最近邻匹配。
 - 默认把 `trajectory.json`、`samples.json`、`bev_images/`、`bev_index.json` 全部写入原始 clip 目录，便于后续直接扫 `/media/ubuntu/data1/SR-Nav Dataset/sidewalk` 制作数据集。
-- 默认在 BEV 上绘制完整 route/start/end。route 是训练输入条件，不是 debug overlay；其 GPS 点与 OSM raster 使用同一套 Web-Mercator -> PIL rotate -> crop -> resize 变换，保证起点、终点和路线相对地图不漂移。
+- 默认在 BEV 上绘制完整 route/start/end。route 是训练输入条件，不是 debug overlay；图例固定为蓝色路线、绿色圆形起点、红色方形终点、橙色圆形当前 ego。模型需要学会从这些标记判断自己处于路线的哪个阶段。其 GPS 点与 OSM raster 使用同一套 Web-Mercator -> PIL rotate -> crop -> resize 变换，保证起点、终点和路线相对地图不漂移。
 - 如需消融，可用 `--bev-route-scope local_future` 只画当前帧之后的局部路线，或用 `--no-bev-route-overlay` 关闭路线。
 - 不写 `bev_video*.mp4`，除非显式加 `--write-bev-videos`。
 - 不写 `bev_images_north_up/`，除非显式加 `--write-north-up-bev`。
@@ -302,7 +376,8 @@ python tools/model_processing/sidewalk_phase1_dataset.py \
   --split-name train \
   --frame-step 5 \
   --future-frames 50 \
-  --num-points 16
+  --num-points 16 \
+  --frame-rate-hz 20.0
 ```
 
 ### 5.3 数据审计
@@ -370,21 +445,53 @@ manifests/phase1_cot_train.jsonl
 manifests/phase1_cot_report_train.json
 ```
 
-### 5.5 转成 ms-swift manifest
+### 5.5 合理性判定与训练数据归档
 
-在 ms-swift 仓库中执行：
+CoT teacher 产物不是最终训练集。正式训练前必须运行 archive 阶段：它会再次校验 CoT/几何一致性、媒体路径和 trajectory 结构，只把通过校验的样本写入 ms-swift 可直接训练 JSONL。
 
 ```bash
-cd /home/ubuntu/WorkSpace/project/SR/Code/ms-swift
-
-python -m swift.sidewalk_nav.dataset_builder \
-  --input-format sidewalk \
-  --input-jsonl "/media/ubuntu/data1/SR-Nav Dataset/sidewalk_phase1/manifests/phase1_cot_train.jsonl" \
-  --output-jsonl "/media/ubuntu/data1/SR-Nav Dataset/sidewalk_phase1/manifests/ms_swift_phase1_cot_train.jsonl" \
-  --num-points 16
+OUTPUT_ROOT="/media/ubuntu/data1/SR-Nav Dataset/sidewalk_phase1" \
+ARCHIVE_ROOT="/media/ubuntu/data1/SR-Nav Dataset/sidewalk_phase1_archive" \
+SPLIT_NAME=train \
+MEDIA_MODE=hardlink \
+PATH_MODE=absolute \
+WRITE_REVIEW_HTML=1 \
+./tools/model_processing/run_sidewalk_phase1_archive.sh
 ```
 
-若只做 Phase1 trajectory baseline，可以把 `--input-jsonl` 换回 `phase1_source_train.jsonl`；若做 CoT SFT，应使用 `phase1_cot_train.jsonl`。
+归档阶段主要检查：
+
+- FPV/BEV 图片路径存在。
+- user prompt 的 `<image>` 数量与 `images` 数量一致。
+- `pixel_trajectory` 点数、shape、范围正确。
+- `trajectory_fpv_t / trajectory_fpv_tv / trajectory_ego_t` shape 正确，`dt` 单调。
+- assistant 输出包含 `<think>/<Scene>/<FPVScene>/<BEVContext>/<CrossView>/<Plan>/<finish>`。
+- 每个 CoT section 是合法 JSON。
+- `<BEVContext>` 和 `<finish>` 的 intent、route theta、trajectory 与几何真值一致。
+
+产物：
+
+```text
+sidewalk_phase1_archive/manifests/train.jsonl          # ms-swift 直接训练输入
+sidewalk_phase1_archive/manifests/train.errors.jsonl   # 被拒绝样本和原因
+sidewalk_phase1_archive/manifests/train.review.csv     # 人工审计索引
+sidewalk_phase1_archive/manifests/train.stats.json     # 接受率和分布统计
+```
+
+本地训练推荐 `MEDIA_MODE=hardlink PATH_MODE=absolute`；发布/上传推荐 `MEDIA_MODE=copy PATH_MODE=relative`。
+
+ms-swift 训练时直接使用：
+
+```bash
+swift sft \
+  --dataset "/media/ubuntu/data1/SR-Nav Dataset/sidewalk_phase1_archive/manifests/train.jsonl" \
+  --remove_unused_columns false \
+  ...
+```
+
+Archive manifest 已经是标准 ms-swift 多模态 JSONL，不需要再运行 `swift.sidewalk_nav.dataset_builder`。
+
+若只做 QA-only manifest，仍可在 ms-swift 仓库中执行：
 
 QA-only manifest：
 
@@ -397,7 +504,7 @@ python -m swift.sidewalk_nav.dataset_builder \
 
 ### 5.6 Agent baseline CoT 推理
 
-Agent baseline 不应再使用旧的 visual-prompt JSON schema。为了与数据标注、ms-swift SFT 和后续评估统一，baseline 的输入输出必须采用同一套 Phase1 CoT v2 格式：
+Agent baseline 不应再使用旧的 visual-prompt JSON schema。为了与数据标注、ms-swift SFT 和后续评估统一，baseline 的输入输出必须采用同一套 Phase1 CoT v4 格式：
 
 ```text
 FPV + BEV
@@ -421,7 +528,7 @@ python tools/model_processing/run_sidewalk_phase1_cot_baseline.py \
   --limit 200
 ```
 
-兼容模式可使用在线 OSM BEV，但仅 BEV 图来源不同，prompt 和输出仍保持 CoT v2：
+兼容模式可使用在线 OSM BEV，但仅 BEV 图来源不同，prompt 和输出仍保持 CoT v4：
 
 ```bash
 python tools/model_processing/run_sidewalk_phase1_cot_baseline.py \

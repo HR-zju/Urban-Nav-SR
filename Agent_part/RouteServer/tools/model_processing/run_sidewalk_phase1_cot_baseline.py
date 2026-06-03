@@ -107,6 +107,7 @@ def build_baseline_system_prompt() -> str:
         "then ensure the final trajectory stays on the listed navigable support and avoids the listed risks. "
         "Do not use markdown, prose outside tags, path_corridor fields, left/right boundaries, masks, or region ids. "
         "The trajectory is a short local FPV visual prompt. Every point must stay on visible walkable ground support. "
+        "The final point should normally remain in the near-field lower half of the FPV image unless the ground support is visibly continuous and unobstructed. "
         "Never extend trajectory points into sky, trees, walls, fences, building facades, vehicles, pedestrians, or far background. "
         "If the safe sidewalk support becomes occluded or blocked, shorten the path or stop before the unsafe region."
     )
@@ -470,6 +471,13 @@ async def run_sample(
         pred_norm=trajectory_norm,
         gt_norm=row.get("pixel_trajectory"),
     )
+    status = (
+        "ok"
+        if trajectory_norm is not None and not errors and not trajectory_warnings
+        else "parse_error"
+        if trajectory_norm is None
+        else "format_warning"
+    )
     frame_name = str(row.get("frame_name") or Path(str(row.get("fpv_image_path") or "")).stem or row.get("id"))
     json_path = output_dir / "json" / f"{frame_name}.json"
     overlay_path = output_dir / "overlay" / f"{frame_name}.svg"
@@ -482,6 +490,7 @@ async def run_sample(
     overlay_path.write_text(overlay_svg, encoding="utf-8")
     payload: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
+        "status": status,
         "input_mode": input_mode,
         "id": row.get("id"),
         "frame_name": frame_name,
@@ -532,13 +541,7 @@ async def run_sample(
         "frame_name": frame_name,
         "json_path": str(json_path),
         "overlay_path": str(overlay_path),
-        "status": (
-            "ok"
-            if trajectory_norm is not None and not errors and not trajectory_warnings
-            else "parse_error"
-            if trajectory_norm is None
-            else "format_warning"
-        ),
+        "status": status,
         "validation_errors": errors,
         "trajectory_warnings": trajectory_warnings,
         "metrics": metrics,

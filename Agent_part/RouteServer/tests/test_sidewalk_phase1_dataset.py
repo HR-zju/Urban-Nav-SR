@@ -81,10 +81,20 @@ class SidewalkPhase1DatasetTest(unittest.TestCase):
             rows = [json.loads(line) for line in source.read_text(encoding="utf-8").splitlines()]
             self.assertEqual(len(rows), 2)
             self.assertEqual(len(rows[0]["pixel_trajectory"]), 4)
+            self.assertEqual(len(rows[0]["trajectory_fpv_t"]), 4)
+            self.assertEqual(len(rows[0]["trajectory_fpv_tv"]), 4)
+            self.assertEqual(len(rows[0]["trajectory_ego_t"]), 4)
+            self.assertEqual(rows[0]["trajectory_fpv_t"][0][2], 0.0)
+            self.assertEqual(rows[0]["trajectory_policy"]["dynamic_obstacle_audit"]["status"], "not_evaluated_no_dynamic_masks")
             self.assertEqual(rows[0]["sidewalk_meta"]["trajectory_source"], "heuristic_gnss_projection")
             self.assertTrue(Path(rows[0]["qa_bundle_path"]).exists())
+            label = json.loads(Path(rows[0]["trajectory_label_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(label["schema_version"], "sidewalk_phase1_trajectory_v2")
+            self.assertIn("trajectory_fpv_t", label)
+            self.assertIn("trajectory_policy", label)
             qa = json.loads(Path(rows[0]["qa_bundle_path"]).read_text(encoding="utf-8"))
             self.assertEqual(qa["schema_version"], "sidewalk_bev_fpv_qa_v1")
+            self.assertIn("gt_trajectory_fpv_t", qa)
             task_types = {item["task_type"] for item in qa["samples"]}
             self.assertIn("bev_route_theta", task_types)
             self.assertIn("trajectory_intent_check", task_types)
@@ -102,6 +112,8 @@ class SidewalkPhase1DatasetTest(unittest.TestCase):
                 Image.new("RGB", (512, 512), (200, 200, 200)).save(bevs / f"{name}_bev.jpg")
             np.save(root / "frame_positions.npy", np.asarray([[float(i), 0.0] for i in range(6)], dtype=np.float32))
             np.save(root / "frame_orientations.npy", np.asarray([[1.0, 0.0, 0.0, 0.0] for _ in range(6)], dtype=np.float32))
+            np.save(root / "frame_times.npy", np.asarray([idx * 50_000_000 for idx in range(6)], dtype=np.int64))
+            np.save(root / "frame_speeds.npy", np.asarray([0.2 + idx * 0.1 for idx in range(6)], dtype=np.float32))
             camera = {
                 "K": [[100.0, 0.0, 320.0], [0.0, 100.0, 180.0], [0.0, 0.0, 1.0]],
                 "image_width": 640,
@@ -132,6 +144,10 @@ class SidewalkPhase1DatasetTest(unittest.TestCase):
             self.assertAlmostEqual(trajectory[1][1], 230.0 / 360.0, places=5)
             self.assertAlmostEqual(row["route_context"]["route_theta_deg"], 0.0, places=3)
             self.assertEqual(row["route_context"]["intent_gt"], "go_straight")
+            self.assertEqual(row["trajectory_fpv_t"][0][2], 0.0)
+            self.assertAlmostEqual(row["trajectory_fpv_t"][1][2], 0.1, places=5)
+            self.assertAlmostEqual(row["trajectory_fpv_tv"][1][3], 0.4, places=5)
+            self.assertEqual(row["trajectory_policy"]["primary_temporal_target"], "trajectory_fpv_t")
 
     def test_projection_matches_internnav_formula(self) -> None:
         camera = CameraParams(

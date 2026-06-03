@@ -14,16 +14,18 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SIDEWALK_ROOT="${SIDEWALK_ROOT:-/media/ubuntu/data1/SR-Nav Dataset/sidewalk/chunk_0}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-/media/ubuntu/data1/SR-Nav Dataset/sidewalk_phase1}"
 SPLIT_NAME="${SPLIT_NAME:-train}"
-FRAME_STEP="${FRAME_STEP:-1}"
+FRAME_STEP="${FRAME_STEP:-10}"
 FUTURE_FRAMES="${FUTURE_FRAMES:-50}"
 NUM_POINTS="${NUM_POINTS:-16}"
 LIMIT="${LIMIT:-}"
+MAX_CLIPS="${MAX_CLIPS:-}"
 WRITE_OVERLAYS="${WRITE_OVERLAYS:-0}"
 ALLOW_MISSING_BEV="${ALLOW_MISSING_BEV:-0}"
 ALLOW_HEURISTIC_TRAJECTORY="${ALLOW_HEURISTIC_TRAJECTORY:-0}"
 MIN_FUTURE_DISTANCE_M="${MIN_FUTURE_DISTANCE_M:-0.3}"
 TRAJECTORY_MIN_Y_STEP="${TRAJECTORY_MIN_Y_STEP:-0.005}"
 MAX_BEV_TIME_DELTA_MS="${MAX_BEV_TIME_DELTA_MS:-300.0}"
+FRAME_RATE_HZ="${FRAME_RATE_HZ:-20.0}"
 
 cmd=(
   python "${REPO_ROOT}/tools/model_processing/sidewalk_phase1_dataset.py"
@@ -36,10 +38,14 @@ cmd=(
   --min-future-distance-m "${MIN_FUTURE_DISTANCE_M}"
   --trajectory-min-y-step "${TRAJECTORY_MIN_Y_STEP}"
   --max-bev-time-delta-ms "${MAX_BEV_TIME_DELTA_MS}"
+  --frame-rate-hz "${FRAME_RATE_HZ}"
 )
 
 if [[ -n "${LIMIT}" ]]; then
   cmd+=(--limit "${LIMIT}")
+fi
+if [[ -n "${MAX_CLIPS}" ]]; then
+  cmd+=(--max-clips "${MAX_CLIPS}")
 fi
 if [[ "${WRITE_OVERLAYS}" == "1" || "${WRITE_OVERLAYS}" == "true" ]]; then
   cmd+=(--write-overlays)
