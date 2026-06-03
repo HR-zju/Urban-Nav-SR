@@ -33,18 +33,18 @@ tmux send-keys "cd ${policy_dir}" Enter
 tmux send-keys "python3 tools/ros2_gps_ntrip_node.py" Enter
 
 # VINS-fusion replacement ROS2 Python node
-tmux select-pane -t 2
-tmux send-keys "source /opt/ros/humble/setup.zsh" Enter
-tmux send-keys "source ${conda_setup} && conda activate foundation_nav" Enter
-tmux send-keys "cd ${policy_dir}" Enter
-tmux send-keys "python3 tools/ros2_vins_fusion_node.py" Enter
-
-
 # tmux select-pane -t 2
 # tmux send-keys "source /opt/ros/humble/setup.zsh" Enter
 # tmux send-keys "source ${conda_setup} && conda activate foundation_nav" Enter
 # tmux send-keys "cd ${policy_dir}" Enter
-# tmux send-keys "zsh tools/agilex_api/run_keyboard_mux_switch.sh" Enter
+# tmux send-keys "python3 tools/ros2_vins_fusion_node.py" Enter
+
+
+tmux select-pane -t 2
+tmux send-keys "source /opt/ros/humble/setup.zsh" Enter
+tmux send-keys "source ${conda_setup} && conda activate foundation_nav" Enter
+tmux send-keys "cd ${policy_dir}" Enter
+tmux send-keys "zsh tools/agilex_api/run_keyboard_mux_switch.sh" Enter
 
 # sub agilex odom_filter on Orin.
 tmux select-pane -t 3
@@ -82,7 +82,7 @@ tmux send-keys "python pd_controller_ros2_new2_agilex.py" Enter
 # Record ROS2 bag
 tmux select-pane -t 7
 tmux send-keys "source /opt/ros/humble/setup.zsh" Enter
-tmux send-keys "cd ${policy_dir}" Enter
-tmux send-keys "ros2 bag record -s mcap -o bags/staging/nav_\$(date +%Y%m%d_%H%M%S) /image_raw /gps/fix /agilex/odom_filtered /globalEstimator/global_odometry /navflow/overlay/image_raw/compressed"
+tmux send-keys "cd ${policy_dir}/bags/staging/" Enter
+tmux send-keys "ros2 bag record -s mcap -o nav_\$(date +%Y%m%d_%H%M%S) /image_raw /gps/fix /agilex/odom_filtered /globalEstimator/global_odometry /navflow/overlay/image_raw/compressed  " # 
 
 tmux -2 attach-session -t $session_name
