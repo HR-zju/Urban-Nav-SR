@@ -1,0 +1,15 @@
+alignment_type=arkit_yaw_translation_2d
+dataset_path=test
+aligned_samples=36401
+pose_horizontal_axes=x,-z
+pose_vertical_axis=y
+yaw_rad=3.052696502677
+yaw_deg=174.906625738
+translation_east=-64.613405885
+translation_north=-132.103747443
+rmse_m=582.265651222
+gps_origin_timestamp_ns=99108550476792
+gps_origin_latitude=30.233937400000
+gps_origin_longitude=120.042470750000
+gps_origin_altitude=11.318000000
+max_h_accuracy=20.000
