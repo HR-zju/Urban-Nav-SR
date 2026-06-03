@@ -3,6 +3,7 @@
 
 import argparse
 import asyncio
+import copy
 import inspect
 import json
 import math
@@ -23,6 +24,7 @@ except ModuleNotFoundError:
 DEFAULT_URI = "ws://192.168.1.102:9090"
 DEFAULT_ROS_TOPIC = "/agilex/odom_filtered"
 DEFAULT_HEARTBEAT_INTERVAL = 2.0
+DEFAULT_PUBLISH_RATE = 100.0
 DEFAULT_CLIENT_ID = f"agilex{uuid.uuid4().hex[:8]}"
 DEFAULT_SUB_TOPIC = "/odom_filtered"
 DEFAULT_SUB_TYPE = "nav_msgs/Odometry"
@@ -182,24 +184,50 @@ def summarize_json_message(data: dict[str, Any]) -> str:
 
 
 class AgileXOdomBridge(Node):
-    def __init__(self, ros_topic: str):
+    def __init__(self, ros_topic: str, restamp_published: bool = False):
         super().__init__("agilex_odom_bridge")
         self.publisher = self.create_publisher(Odometry, ros_topic, 10)
         self.ros_topic = ros_topic
+        self.restamp_published = restamp_published
+        self.latest_odom_msg: Odometry | None = None
+        self.receive_count = 0
         self.publish_count = 0
         self.get_logger().info(f"Publishing AgileX odometry to ROS2 topic: {ros_topic}")
+        self.get_logger().info(
+            "Published odometry keeps source header stamps"
+            if not restamp_published
+            else "Published odometry will be restamped with the ROS2 node clock"
+        )
+
+    def odom_from_json(self, data: dict[str, Any], sub_type: str) -> Odometry:
+        if sub_type == WEB_GLOBAL_SUB_TYPE:
+            return web_global_json_to_msg(data, self)
+        return odom_json_to_msg(data, self)
+
+    def update_latest_odom(self, data: dict[str, Any], sub_type: str, debug: bool = False) -> None:
+        self.latest_odom_msg = self.odom_from_json(data, sub_type)
+        self.receive_count += 1
+        if debug or self.receive_count == 1 or self.receive_count % 100 == 0:
+            self.get_logger().info(f"Received odom #{self.receive_count} from WebSocket")
 
     def publish_json_odom(self, data: dict[str, Any], sub_type: str, debug: bool = False) -> None:
-        if sub_type == WEB_GLOBAL_SUB_TYPE:
-            odom_msg = web_global_json_to_msg(data, self)
-        else:
-            odom_msg = odom_json_to_msg(data, self)
+        self.latest_odom_msg = self.odom_from_json(data, sub_type)
+        self.receive_count += 1
+        self.publish_latest_odom(debug)
 
+    def publish_latest_odom(self, debug: bool = False) -> bool:
+        if self.latest_odom_msg is None:
+            return False
+
+        odom_msg = self.latest_odom_msg
+        if self.restamp_published:
+            odom_msg = copy.deepcopy(self.latest_odom_msg)
+            odom_msg.header.stamp = self.get_clock().now().to_msg()
         pos = odom_msg.pose.pose.position
         twist = odom_msg.twist.twist
         self.publisher.publish(odom_msg)
         self.publish_count += 1
-        if debug or self.publish_count == 1 or self.publish_count % 50 == 0:
+        if debug or self.publish_count == 1 or self.publish_count % 100 == 0:
             self.get_logger().info(
                 f"Published odom #{self.publish_count}: "
                 f"topic={self.ros_topic}, "
@@ -207,6 +235,7 @@ class AgileXOdomBridge(Node):
                 f"x={pos.x:.3f}, y={pos.y:.3f}, z={pos.z:.3f}, "
                 f"linear_x={twist.linear.x:.3f}, angular_z={twist.angular.z:.3f}"
             )
+        return True
 
 
 async def heartbeat_loop(websocket: Any, interval: float, client_id: str, debug: bool) -> None:
@@ -225,12 +254,30 @@ async def heartbeat_loop(websocket: Any, interval: float, client_id: str, debug:
         debug_print(debug, pretty_json(heartbeat_msg))
 
 
+async def fixed_rate_publish_loop(node: AgileXOdomBridge, publish_rate: float, debug: bool) -> None:
+    if publish_rate <= 0.0:
+        return
+
+    period = 1.0 / publish_rate
+    next_publish = time.monotonic()
+    while True:
+        next_publish += period
+        node.publish_latest_odom(debug)
+        rclpy.spin_once(node, timeout_sec=0.0)
+        delay = next_publish - time.monotonic()
+        if delay < -period:
+            next_publish = time.monotonic()
+            delay = period
+        await asyncio.sleep(max(0.0, delay))
+
+
 async def subscribe_odom(
     uri: str,
     node: AgileXOdomBridge,
     sub_topic: str,
     sub_type: str,
     heartbeat_interval: float,
+    publish_rate: float,
     client_id: str,
     debug: bool,
 ) -> None:
@@ -257,6 +304,10 @@ async def subscribe_odom(
         await websocket.send(json.dumps(subscribe_msg))
         print(f"Subscribed WebSocket topic: {sub_topic} ({sub_type})")
         print(f"Publishing ROS2 odom topic: {node.ros_topic}")
+        if publish_rate > 0.0:
+            print(f"Republishing latest odom at fixed rate: {publish_rate:.1f} Hz")
+        else:
+            print("Publishing one ROS2 odom for each WebSocket odom message")
         debug_print(debug, "Sent subscribe message:")
         debug_print(debug, pretty_json(subscribe_msg))
 
@@ -271,6 +322,9 @@ async def subscribe_odom(
 
         heartbeat_task = asyncio.create_task(
             heartbeat_loop(websocket, heartbeat_interval, client_id, debug)
+        )
+        publish_task = asyncio.create_task(
+            fixed_rate_publish_loop(node, publish_rate, debug)
         )
         try:
             async for response in websocket:
@@ -299,7 +353,10 @@ async def subscribe_odom(
                     continue
 
                 if sub_type in (WEB_GLOBAL_SUB_TYPE, ODOM_SUB_TYPE):
-                    node.publish_json_odom(data, sub_type, debug)
+                    if publish_rate > 0.0:
+                        node.update_latest_odom(data, sub_type, debug)
+                    else:
+                        node.publish_json_odom(data, sub_type, debug)
                     rclpy.spin_once(node, timeout_sec=0.0)
                 else:
                     debug_print(
@@ -308,8 +365,13 @@ async def subscribe_odom(
                     )
         finally:
             heartbeat_task.cancel()
+            publish_task.cancel()
             try:
                 await heartbeat_task
+            except asyncio.CancelledError:
+                pass
+            try:
+                await publish_task
             except asyncio.CancelledError:
                 pass
 
@@ -352,6 +414,24 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--publish-rate",
+        type=float,
+        default=DEFAULT_PUBLISH_RATE,
+        help=(
+            "Fixed ROS2 odom publish rate in Hz using the latest WebSocket odom. "
+            "Set <= 0 to publish only when a WebSocket odom message arrives. "
+            f"Default: {DEFAULT_PUBLISH_RATE}"
+        ),
+    )
+    parser.add_argument(
+        "--restamp-published",
+        action="store_true",
+        help=(
+            "Replace each published odom header stamp with this node's current ROS2 time. "
+            "By default the source odom header stamp is preserved."
+        ),
+    )
+    parser.add_argument(
         "--client-id",
         default=DEFAULT_CLIENT_ID,
         help=f"Client id used in heartbeat ping messages, default: {DEFAULT_CLIENT_ID}",
@@ -367,7 +447,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     rclpy.init()
-    node = AgileXOdomBridge(args.ros_topic)
+    node = AgileXOdomBridge(args.ros_topic, args.restamp_published)
     try:
         asyncio.run(
             subscribe_odom(
@@ -376,6 +456,7 @@ def main() -> None:
                 args.sub_topic,
                 args.sub_type,
                 args.heartbeat_interval,
+                args.publish_rate,
                 args.client_id,
                 args.debug,
             )
