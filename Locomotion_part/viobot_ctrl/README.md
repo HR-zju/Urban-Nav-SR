@@ -28,7 +28,7 @@ The current implementation provides:
 - `algo_ctrl_node`: an interactive terminal tool that publishes Stereo3 control commands to `/baton/stereo3_ctrl` and displays `/baton/algo_status`.
 - `stereo3_auto_start_node`: a helper that waits for the first raw GNSS SPP fix and then sends one Stereo3 enable command.
 - `gnss_spp_node`: an SPP and Stereo3/GNSS fusion node that publishes raw GNSS fixes, fused fixes, GNSS fusion status, and heading.
-- `cam_pub`: a V4L2 MJPEG publisher for `/camera_x001/image_raw/compressed`.
+- `cam_pub`: a V4L2 MJPEG publisher for `/camera_x001/image_raw/compressed` using best-effort QoS and configurable framerate limiting.
 - `start_bag.sh` and systemd units for deployment-time camera startup and MCAP recording.
 
 ## Features
@@ -43,7 +43,7 @@ The current implementation provides:
 - **Heading Estimation**: Publishes heading derived from Stereo3 orientation after dynamic GNSS alignment.
 - **GNSS Status Export**: Publishes `/baton/gnss/status` as `gnss_idle`, `gnss_waiting_origin`, `gnss_aligning`, or `gnss_fusing`.
 - **KML Trajectory Export**: Optionally writes raw and fused trajectories for map visualization.
-- **MJPEG Camera Publishing**: Captures compressed frames from a V4L2 device and exits on repeated timeouts for systemd restart.
+- **MJPEG Camera Publishing**: Captures compressed frames from a V4L2 device with best-effort QoS, configurable framerate limiting, and timeout-based restart behavior.
 - **MCAP Recording Support**: Records GNSS, odometry, status, heading, and compressed image topics with Zstd compression.
 
 ## Core Parameters & Topics
@@ -94,11 +94,12 @@ The current implementation provides:
 - **`cam_pub`**
   - `topic_name` (string, default: `/camera_x001/image_raw/compressed`)
   - `frame_id` (string, default: `camera_link`)
-  - `video_device` (string, default: `/dev/video0`)
+  - `video_device` (string, default: `/dev/video40`)
   - `image_width` (int, default: `1920`)
   - `image_height` (int, default: `1080`)
+  - `framerate` (double, default: `20.0`; set `0.0` to disable framerate control)
   - `buffer_count` (int, default: `8`)
-  - `qos_depth` (int, default: `10`)
+  - `qos_depth` (int, default: `10`, best-effort publisher history depth)
   - `dqbuf_timeout_ms` (int, default: `2000`)
   - `max_consecutive_timeouts` (int, default: `5`)
 

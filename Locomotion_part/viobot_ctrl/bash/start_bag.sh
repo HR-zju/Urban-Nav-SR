@@ -218,6 +218,7 @@ ros2 bag record \
     /baton/gnss/ephem /baton/gnss/meas /baton/stereo3/odometry /baton/algo_status /camera_x001/image_raw/compressed /baton/gnss/status /baton/gnss/spp_fix_raw /baton/gnss/spp_fix /baton/gnss/heading\
     --storage mcap \
     --storage-config-file /root/viobot_ctrl/bash/mcap_config.yaml\
+    --qos-profile-overrides-path /root/viobot_ctrl/bash/qos_overrides.yaml \
     --max-bag-duration 60 \
     -o "$BAG_NAME" &
 BAG_RECORD_PID=$!

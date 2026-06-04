@@ -8,7 +8,10 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <algorithm>
+#include <chrono>
 #include <cerrno>
+#include <cmath>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -23,9 +26,10 @@ public:
     topic_name_ = this->declare_parameter<std::string>(
       "topic_name", "/camera_x001/image_raw/compressed");
     frame_id_ = this->declare_parameter<std::string>("frame_id", "camera_link");
-    video_device_ = this->declare_parameter<std::string>("video_device", "/dev/video0");
+    video_device_ = this->declare_parameter<std::string>("video_device", "/dev/video40");
     image_width_ = this->declare_parameter<int>("image_width", 1920);
     image_height_ = this->declare_parameter<int>("image_height", 1080);
+    framerate_ = this->declare_parameter<double>("framerate", 20.0);
     buffer_count_ = this->declare_parameter<int>("buffer_count", 8);
     qos_depth_ = this->declare_parameter<int>("qos_depth", 10);
     dqbuf_timeout_ms_ = this->declare_parameter<int>("dqbuf_timeout_ms", 2000);
@@ -37,7 +41,7 @@ public:
     }
 
     rclcpp::QoS qos_profile(static_cast<size_t>(qos_depth_));
-    qos_profile.reliable();
+    qos_profile.best_effort();
     publisher_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
       topic_name_, qos_profile);
 
@@ -79,6 +83,7 @@ private:
   int fd_ = -1;
   int image_width_ = 1920;
   int image_height_ = 1080;
+  double framerate_ = 30.0;
   int buffer_count_ = 8;
   int qos_depth_ = 10;
   int dqbuf_timeout_ms_ = 2000;
@@ -102,6 +107,10 @@ private:
     }
     if (image_width_ <= 0 || image_height_ <= 0) {
       RCLCPP_ERROR(this->get_logger(), "Invalid image size: %dx%d", image_width_, image_height_);
+      return false;
+    }
+    if (!std::isfinite(framerate_) || framerate_ < 0.0) {
+      RCLCPP_ERROR(this->get_logger(), "framerate must be a finite value >= 0.0.");
       return false;
     }
     if (buffer_count_ < 2) {
@@ -168,6 +177,8 @@ private:
         fmt.fmt.pix.width,
         fmt.fmt.pix.height);
     }
+
+    configure_camera_framerate();
 
     struct v4l2_requestbuffers req;
     memset(&req, 0, sizeof(req));
@@ -239,9 +250,57 @@ private:
     return true;
   }
 
+  void configure_camera_framerate()
+  {
+    if (framerate_ <= 0.0) {
+      RCLCPP_INFO(this->get_logger(), "Camera framerate control disabled.");
+      return;
+    }
+
+    struct v4l2_streamparm parm;
+    memset(&parm, 0, sizeof(parm));
+    parm.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    parm.parm.capture.timeperframe.numerator = 1000;
+    parm.parm.capture.timeperframe.denominator = static_cast<uint32_t>(
+      std::max(1.0, std::round(framerate_ * 1000.0)));
+
+    if (ioctl(fd_, VIDIOC_S_PARM, &parm) < 0) {
+      RCLCPP_WARN(
+        this->get_logger(),
+        "Failed to set camera framerate %.2f FPS via V4L2: %s. "
+        "Software publish limit will still be applied.",
+        framerate_,
+        strerror(errno));
+      return;
+    }
+
+    const auto numerator = parm.parm.capture.timeperframe.numerator;
+    const auto denominator = parm.parm.capture.timeperframe.denominator;
+    if (numerator > 0 && denominator > 0) {
+      const double actual_fps = static_cast<double>(denominator) / static_cast<double>(numerator);
+      RCLCPP_INFO(
+        this->get_logger(),
+        "Requested camera framerate %.2f FPS, driver reports %.2f FPS.",
+        framerate_,
+        actual_fps);
+    } else {
+      RCLCPP_WARN(
+        this->get_logger(),
+        "Requested camera framerate %.2f FPS, but driver returned an invalid timeperframe.",
+        framerate_);
+    }
+  }
+
   void capture_loop()
   {
+    using SteadyClock = std::chrono::steady_clock;
+
     int consecutive_timeouts = 0;
+    const auto publish_period = framerate_ > 0.0 ?
+      std::chrono::duration_cast<SteadyClock::duration>(
+        std::chrono::duration<double>(1.0 / framerate_)) :
+      SteadyClock::duration::zero();
+    auto next_publish_time = SteadyClock::time_point{};
 
     while (rclcpp::ok() && is_running_) {
       struct pollfd camera_poll;
@@ -294,15 +353,33 @@ private:
 
       consecutive_timeouts = 0;
 
-      sensor_msgs::msg::CompressedImage msg;
-      msg.header.stamp = this->now();
-      msg.header.frame_id = frame_id_;
-      msg.format = "jpeg";
+      bool should_publish = true;
+      if (publish_period > SteadyClock::duration::zero()) {
+        const auto now = SteadyClock::now();
+        if (next_publish_time == SteadyClock::time_point{}) {
+          next_publish_time = now;
+        }
 
-      msg.data.resize(buf.bytesused);
-      memcpy(msg.data.data(), buffers_[buf.index].start, buf.bytesused);
+        should_publish = now >= next_publish_time;
+        if (should_publish) {
+          next_publish_time += publish_period;
+          if (next_publish_time < now) {
+            next_publish_time = now + publish_period;
+          }
+        }
+      }
 
-      publisher_->publish(msg);
+      if (should_publish) {
+        sensor_msgs::msg::CompressedImage msg;
+        msg.header.stamp = this->now();
+        msg.header.frame_id = frame_id_;
+        msg.format = "jpeg";
+
+        msg.data.resize(buf.bytesused);
+        memcpy(msg.data.data(), buffers_[buf.index].start, buf.bytesused);
+
+        publisher_->publish(msg);
+      }
 
       if (ioctl(fd_, VIDIOC_QBUF, &buf) < 0) {
         fail_and_shutdown(std::string("VIDIOC_QBUF failed: ") + strerror(errno));

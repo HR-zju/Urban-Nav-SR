@@ -6,6 +6,7 @@ source /opt/ros/humble/setup.bash
 source /root/Baton/install/local_setup.bash  --extend
 source /root/viobot_ctrl/install/local_setup.bash  --extend
 eval $ros_domain_id_line
+CAMERA_FRAMERATE="${CAMERA_FRAMERATE:-20.0}"
 
 # ros2 run usb_cam usb_cam_node_exe --ros-args \
 # -r camera_info:=/camera_x001/camera_info \
@@ -19,4 +20,4 @@ eval $ros_domain_id_line
 # -p image_height:=1080 \
 # -p framerate:=30.0
 sleep 15
-ros2 run cam_pub cam_pub
+ros2 run cam_pub cam_pub --ros-args -p framerate:="$CAMERA_FRAMERATE"

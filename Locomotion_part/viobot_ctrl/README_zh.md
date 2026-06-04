@@ -28,7 +28,7 @@ Urban-Nav-SR 项目中的 ROS 2 工作区，用于 Viobot 算法控制、GNSS �
 - `algo_ctrl_node`：交互式终端控制工具，向 `/baton/stereo3_ctrl` 发布 Stereo3 控制命令，并显示 `/baton/algo_status`。
 - `stereo3_auto_start_node`：等待首个原始 GNSS SPP fix 后，自动发送一次 Stereo3 启用命令。
 - `gnss_spp_node`：SPP 与 Stereo3/GNSS 融合节点，发布原始 GNSS fix、融合 fix、GNSS 融合状态和航向角。
-- `cam_pub`：面向 `/camera_x001/image_raw/compressed` 的 V4L2 MJPEG 图像发布节点。
+- `cam_pub`：面向 `/camera_x001/image_raw/compressed` 的 V4L2 MJPEG 图像发布节点，使用 best-effort QoS，并支持帧率限制。
 - `start_bag.sh` 与 systemd 服务：用于部署环境中的相机启动和 MCAP 录包。
 
 ## 功能特性
@@ -43,7 +43,7 @@ Urban-Nav-SR 项目中的 ROS 2 工作区，用于 Viobot 算法控制、GNSS �
 - **航向估计**：动态 GNSS 对齐后，根据 Stereo3 姿态发布航向角。
 - **GNSS 状态导出**：在 `/baton/gnss/status` 发布 `gnss_idle`、`gnss_waiting_origin`、`gnss_aligning`、`gnss_fusing`。
 - **KML 轨迹导出**：可选导出原始和融合轨迹，便于地图可视化。
-- **MJPEG 相机发布**：从 V4L2 设备采集压缩图像，连续超时后退出以便 systemd 重启。
+- **MJPEG 相机发布**：从 V4L2 设备采集压缩图像，使用 best-effort QoS，支持帧率限制，连续超时后退出以便 systemd 重启。
 - **MCAP 录包支持**：使用 Zstd 压缩录制 GNSS、里程计、状态、航向和压缩图像话题。
 
 ## 核心参数与话题
@@ -94,11 +94,12 @@ Urban-Nav-SR 项目中的 ROS 2 工作区，用于 Viobot 算法控制、GNSS �
 - **`cam_pub`**
   - `topic_name`（string，默认：`/camera_x001/image_raw/compressed`）
   - `frame_id`（string，默认：`camera_link`）
-  - `video_device`（string，默认：`/dev/video0`）
+  - `video_device`（string，默认：`/dev/video40`）
   - `image_width`（int，默认：`1920`）
   - `image_height`（int，默认：`1080`）
+  - `framerate`（double，默认：`20.0`；设为 `0.0` 可关闭帧率控制）
   - `buffer_count`（int，默认：`8`）
-  - `qos_depth`（int，默认：`10`）
+  - `qos_depth`（int，默认：`10`，best-effort 发布端历史深度）
   - `dqbuf_timeout_ms`（int，默认：`2000`）
   - `max_consecutive_timeouts`（int，默认：`5`）
 
