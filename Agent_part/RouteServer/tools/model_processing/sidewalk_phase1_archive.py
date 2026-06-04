@@ -38,6 +38,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from sidewalk_phase1_cot_teacher import (  # noqa: E402
     TeacherConfig,
+    build_training_prompt,
     extract_tag,
     load_evidence,
     parse_json_object,
@@ -264,7 +265,7 @@ def process_one_row(
     train_row = {
         "messages": [
             {"role": "system", "content": row.get("system_prompt") or DEFAULT_SYSTEM_PROMPT},
-            {"role": "user", "content": row["prompt"]},
+            {"role": "user", "content": build_training_prompt(row)},
             {"role": "assistant", "content": response},
         ],
         "images": image_paths,

@@ -28,6 +28,7 @@ import json
 import math
 import re
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -40,6 +41,17 @@ THINK_SECTION_TAGS = ["Scene", "FPVScene", "BEVContext", "CrossView", "Plan"]
 REQUIRED_TAGS = ["think", *THINK_SECTION_TAGS, "finish"]
 COT_SCHEMA_VERSION = "sidewalk_phase1_cot_teacher_v5"
 COT_PROMPT_TEMPLATE = "phase1_structured_cot_v5"
+COT_BEV_GRID_CONVENTION = (
+    "BEV grid convention:\n"
+    "- BEV cells are [col,row] on a 16x16 ego-aligned local grid.\n"
+    "- The grid starts at the top-left cell [0,0], which represents the far-left/front corner of the local BEV window.\n"
+    "- The grid covers 15m left, 15m right, 30m front, and 10m back around the robot, so each cell is about 1.875m wide and 2.5m deep.\n"
+    "- Ego local position (0m,0m) maps to ego_cell [8,12].\n"
+    "- col increases toward the robot's right side.\n"
+    "- row decreases toward the robot's front direction; row increases toward the robot's back.\n"
+    "- In <BEVContext>, predict/copy grid_size, ego_cell, and target_cell as BEV cell coordinates, not pixel coordinates.\n"
+    "- target_cell may equal ego_cell when the route target is within the same coarse cell; still use route_theta_deg, route_polyline, and BEV markers for intent.\n"
+)
 NO_SEG_FORBIDDEN_PATTERNS = [
     r"\br\d{2,}\b",
     r"\bregion_id\b",
@@ -85,6 +97,102 @@ def write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
     with path.open("w", encoding="utf-8") as f:
         for row in rows:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def write_report(path: str | None, report: dict[str, Any]) -> None:
+    if not path:
+        return
+    report_path = Path(path)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def count_jsonl_rows(path: Path) -> int:
+    if not path.is_file():
+        return 0
+    with path.open("r", encoding="utf-8") as f:
+        return sum(1 for line in f if line.strip())
+
+
+def optional_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def telemetry_llm_metadata(telemetry: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(telemetry, dict):
+        return {}
+    llm_telemetry = telemetry.get("llm_telemetry")
+    if isinstance(llm_telemetry, dict):
+        return llm_telemetry
+    return telemetry
+
+
+def telemetry_usage(telemetry: dict[str, Any] | None) -> dict[str, Any]:
+    llm_telemetry = telemetry_llm_metadata(telemetry)
+    response = llm_telemetry.get("response")
+    if isinstance(response, dict) and isinstance(response.get("usage"), dict):
+        return response["usage"]
+    usage = llm_telemetry.get("usage")
+    return usage if isinstance(usage, dict) else {}
+
+
+def telemetry_cached_tokens(telemetry: dict[str, Any] | None) -> int | None:
+    llm_telemetry = telemetry_llm_metadata(telemetry)
+    for value in (
+        llm_telemetry.get("prompt_cached_tokens"),
+        llm_telemetry.get("cached_tokens"),
+    ):
+        parsed = optional_int(value)
+        if parsed is not None:
+            return parsed
+    response = llm_telemetry.get("response")
+    if isinstance(response, dict):
+        parsed = optional_int(response.get("cached_tokens"))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def add_usage_to_report(report: dict[str, Any], telemetry: dict[str, Any] | None) -> None:
+    usage = telemetry_usage(telemetry)
+    if not usage:
+        return
+    totals = report.setdefault(
+        "usage_totals",
+        {
+            "calls_with_usage": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "cached_tokens": 0,
+        },
+    )
+    prompt_tokens = optional_int(
+        usage.get("prompt_tokens")
+        or usage.get("input_tokens")
+        or usage.get("prompt_token_count")
+    )
+    completion_tokens = optional_int(
+        usage.get("completion_tokens")
+        or usage.get("output_tokens")
+        or usage.get("completion_token_count")
+    )
+    total_tokens = optional_int(usage.get("total_tokens") or usage.get("total_token_count"))
+    cached_tokens = telemetry_cached_tokens(telemetry)
+    totals["calls_with_usage"] = int(totals.get("calls_with_usage") or 0) + 1
+    if prompt_tokens is not None:
+        totals["prompt_tokens"] = int(totals.get("prompt_tokens") or 0) + prompt_tokens
+    if completion_tokens is not None:
+        totals["completion_tokens"] = int(totals.get("completion_tokens") or 0) + completion_tokens
+    if total_tokens is not None:
+        totals["total_tokens"] = int(totals.get("total_tokens") or 0) + total_tokens
+    if cached_tokens is not None:
+        totals["cached_tokens"] = int(totals.get("cached_tokens") or 0) + cached_tokens
 
 
 def load_json(path: str | Path) -> dict[str, Any]:
@@ -195,6 +303,7 @@ def build_teacher_question(row: dict[str, Any], evidence: dict[str, Any], *, pre
         "- The trajectory must be supported by <FPVScene>.navigable_support or conservative conditional_support.\n"
         "- Do not route through <FPVScene>.risk_objects or into sky/buildings/fences/trees/far background.\n"
         "- Do not add markdown or text outside the tags.\n\n"
+        f"{COT_BEV_GRID_CONVENTION}\n"
         "Evidence JSON:\n"
         f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
         f"{repair_block}"
@@ -222,6 +331,7 @@ def build_training_prompt(row: dict[str, Any]) -> str:
         f"{bev_line}"
         f"{image_size_line}"
         f"Instruction: {row.get('instruction') or 'Navigate safely on the sidewalk.'}\n\n"
+        f"{COT_BEV_GRID_CONVENTION}\n"
         "Output exactly this nested structured CoT format. Every section must be valid JSON:\n"
         "<think>\n"
         "<Scene>{\"summary\":\"urban sidewalk scene\",\"visibility\":\"clear|partial_occlusion|low_light|crowded|uncertain\",\"occlusion_sources\":[\"parked_vehicle\"],\"uncertainty\":\"low\"}</Scene>\n"
@@ -526,7 +636,21 @@ def validate_teacher_answer(answer: str, row: dict[str, Any], evidence: dict[str
         if str(bev.get("route_direction_bin") or "") != expected_direction_bin:
             errors.append(f"route_direction_bin_mismatch:{bev.get('route_direction_bin')}!={expected_direction_bin}")
     expected_topology_state = topology_state_from_intent(intent_gt)
-    if str(bev.get("topology_state") or "") != expected_topology_state:
+    topology_value = str(bev.get("topology_state") or "")
+    allowed_topology_states = {expected_topology_state}
+    scene_visibility = str(scene.get("visibility") or "")
+    fpv_visibility = str(fpv_scene.get("visibility") or "")
+    local_risk = str(fpv_scene.get("local_risk") or "")
+    allow_unknown_stop = (
+        scene_visibility in {"uncertain", "partial_occlusion", "low_light", "crowded"}
+        or fpv_visibility in {"uncertain", "partial_occlusion", "low_light", "crowded"}
+        or local_risk in {"unknown", "high"}
+    )
+    if intent_gt == "stop":
+        allowed_topology_states.update({"stopping", "stop", "stop_hold"})
+        if allow_unknown_stop:
+            allowed_topology_states.add("unknown")
+    if topology_value not in allowed_topology_states:
         errors.append(f"topology_state_mismatch:{bev.get('topology_state')}!={expected_topology_state}")
 
     try:
@@ -545,12 +669,36 @@ def validate_teacher_answer(answer: str, row: dict[str, Any], evidence: dict[str
         if max_delta > float(config.trajectory_tolerance):
             errors.append(f"trajectory_changed:max_delta={max_delta:.6f}")
         derived = trajectory_region_and_type(round_trajectory(target_traj.astype(float).tolist(), digits=5))
-        for field in ("fpv_route_region", "route_to_fpv_direction", "safe_corridor"):
-            if str(cross_view.get(field) or "") != derived[field]:
-                errors.append(f"crossview_{field}_mismatch:{cross_view.get(field)}!={derived[field]}")
-        if str((sections.get("Plan") or {}).get("lateral_preference") or "") != derived["lateral_preference"]:
-            errors.append(f"plan_lateral_preference_mismatch:{(sections.get('Plan') or {}).get('lateral_preference')}!={derived['lateral_preference']}")
-        if str((sections.get("Plan") or {}).get("speed_policy") or "") != derived["speed_policy"]:
+        is_stop_like = intent_gt == "stop" or derived["trajectory_type"] == "stop_hold"
+        if is_stop_like:
+            allowed_cross_values = {
+                "fpv_route_region": {derived["fpv_route_region"], "center", "stop"},
+                "route_to_fpv_direction": {derived["route_to_fpv_direction"], "forward_center", "stop"},
+                "safe_corridor": {derived["safe_corridor"], "center_corridor", "stop", "hold"},
+            }
+            if allow_unknown_stop:
+                for allowed_values in allowed_cross_values.values():
+                    allowed_values.add("unknown")
+            for field, allowed_values in allowed_cross_values.items():
+                if str(cross_view.get(field) or "") not in allowed_values:
+                    errors.append(f"crossview_{field}_mismatch:{cross_view.get(field)}!={derived[field]}")
+            allowed_lateral = {derived["lateral_preference"], "center", "hold"}
+            if allow_unknown_stop:
+                allowed_lateral.add("unknown")
+            if str((sections.get("Plan") or {}).get("lateral_preference") or "") not in allowed_lateral:
+                errors.append(f"plan_lateral_preference_mismatch:{(sections.get('Plan') or {}).get('lateral_preference')}!={derived['lateral_preference']}")
+        else:
+            for field in ("fpv_route_region", "route_to_fpv_direction", "safe_corridor"):
+                if str(cross_view.get(field) or "") != derived[field]:
+                    errors.append(f"crossview_{field}_mismatch:{cross_view.get(field)}!={derived[field]}")
+            if str((sections.get("Plan") or {}).get("lateral_preference") or "") != derived["lateral_preference"]:
+                errors.append(f"plan_lateral_preference_mismatch:{(sections.get('Plan') or {}).get('lateral_preference')}!={derived['lateral_preference']}")
+        allowed_speed = {derived["speed_policy"]}
+        if is_stop_like:
+            allowed_speed.update({"stop", "slow"})
+            if allow_unknown_stop:
+                allowed_speed.add("unknown")
+        if str((sections.get("Plan") or {}).get("speed_policy") or "") not in allowed_speed:
             errors.append(f"plan_speed_policy_mismatch:{(sections.get('Plan') or {}).get('speed_policy')}!={derived['speed_policy']}")
         if str(finish.get("trajectory_type") or "") != derived["trajectory_type"]:
             errors.append(f"trajectory_type_mismatch:{finish.get('trajectory_type')}!={derived['trajectory_type']}")
@@ -573,6 +721,7 @@ def build_cot_manifest_row(
     validation: ValidationResult,
     teacher_source: str,
     teacher_model: str | None = None,
+    teacher_usage: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     out = json.loads(json.dumps(row, ensure_ascii=False))
     out["prompt"] = build_training_prompt(row)
@@ -586,6 +735,8 @@ def build_cot_manifest_row(
     }
     if validation.errors:
         cot_teacher["validation_errors"] = validation.errors
+    if teacher_usage:
+        cot_teacher["usage"] = teacher_usage
     out["cot_teacher"] = cot_teacher
     meta = out.setdefault("sidewalk_meta", {})
     meta["cot_teacher_source"] = teacher_source
@@ -629,95 +780,164 @@ async def generate_cot_dataset(
     report_json: str | None = None,
     limit: int | None = None,
     config: TeacherConfig | None = None,
+    progress_interval: int = 25,
 ) -> dict[str, Any]:
     cfg = config or TeacherConfig()
     rows = list(read_jsonl(Path(source_jsonl)))
     if limit is not None:
         rows = rows[: int(limit)]
 
-    output_rows: list[dict[str, Any]] = []
+    output_path = Path(output_jsonl)
+    existing_rows = count_jsonl_rows(output_path)
+    if existing_rows > len(rows):
+        raise RuntimeError(f"Existing output has more rows than source: {output_jsonl}")
+
     report: dict[str, Any] = {
         "schema_version": f"{COT_SCHEMA_VERSION}_report",
         "source_jsonl": str(source_jsonl),
         "output_jsonl": str(output_jsonl),
         "input_rows": len(rows),
-        "written_rows": 0,
+        "written_rows": existing_rows,
         "dropped_rows": 0,
         "fallback_rows": 0,
+        "processed_rows": existing_rows,
+        "resumed_rows": existing_rows,
+        "status": "running",
         "error_counts": {},
     }
 
-    for index, row in enumerate(rows):
-        evidence = load_evidence(row)
-        answer = ""
-        validation = ValidationResult(False, ["not_started"], {})
-        telemetry: dict[str, Any] | None = None
-        for attempt in range(int(cfg.max_retries) + 1):
-            try:
-                answer, telemetry = await call_llm_teacher(
-                    row,
-                    evidence,
-                    cfg,
-                    previous_answer=answer if attempt else None,
-                    errors=validation.errors if attempt else None,
-                )
-            except RuntimeError as exc:
-                if "not configured" in str(exc).lower():
-                    raise
-                validation = ValidationResult(False, [f"teacher_call_failed:{type(exc).__name__}:{str(exc)[:200]}"], {})
-                continue
-            except Exception as exc:
-                validation = ValidationResult(False, [f"teacher_call_failed:{type(exc).__name__}:{str(exc)[:200]}"], {})
-                continue
-            validation = validate_teacher_answer(answer, row, evidence, cfg)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    started_at = time.monotonic()
+    progress_every = max(1, int(progress_interval))
+    print(
+        f"[cot-teacher] starting source={source_jsonl} rows={len(rows)} "
+        f"resume={existing_rows} output={output_jsonl}",
+        flush=True,
+    )
+
+    if existing_rows == len(rows):
+        report["status"] = "done"
+        report["eta_seconds"] = 0.0
+        write_report(report_json, report)
+        return report
+
+    with output_path.open("a" if existing_rows else "w", encoding="utf-8", buffering=1) as out_f:
+        for index, row in enumerate(rows[existing_rows:], start=existing_rows):
+            evidence = load_evidence(row)
+            answer = ""
+            validation = ValidationResult(False, ["not_started"], {})
+            telemetry: dict[str, Any] | None = None
+            for attempt in range(int(cfg.max_retries) + 1):
+                try:
+                    answer, telemetry = await call_llm_teacher(
+                        row,
+                        evidence,
+                        cfg,
+                        previous_answer=answer if attempt else None,
+                        errors=validation.errors if attempt else None,
+                    )
+                    add_usage_to_report(report, telemetry)
+                except RuntimeError as exc:
+                    if "not configured" in str(exc).lower():
+                        raise
+                    validation = ValidationResult(False, [f"teacher_call_failed:{type(exc).__name__}:{str(exc)[:200]}"], {})
+                    continue
+                except Exception as exc:
+                    validation = ValidationResult(False, [f"teacher_call_failed:{type(exc).__name__}:{str(exc)[:200]}"], {})
+                    continue
+                validation = validate_teacher_answer(answer, row, evidence, cfg)
+                if validation.valid:
+                    break
+
+            teacher_model = None
+            teacher_usage = telemetry_usage(telemetry)
+            if isinstance(telemetry, dict):
+                llm_telemetry = telemetry_llm_metadata(telemetry)
+                teacher_model = str(llm_telemetry.get("model") or telemetry.get("model") or "") or None
+
             if validation.valid:
-                break
-
-        teacher_model = None
-        if isinstance(telemetry, dict):
-            teacher_model = str(telemetry.get("model") or "") or None
-
-        if validation.valid:
-            output_rows.append(
-                build_cot_manifest_row(
+                out_row = build_cot_manifest_row(
                     row,
                     answer=answer,
                     validation=validation,
                     teacher_source="llm_teacher",
                     teacher_model=teacher_model,
+                    teacher_usage=teacher_usage,
                 )
-            )
-            continue
+                out_f.write(json.dumps(out_row, ensure_ascii=False) + "\n")
+                report["written_rows"] += 1
+                report["processed_rows"] = index + 1
+                if (index + 1) % progress_every == 0 or index + 1 == len(rows):
+                    elapsed = max(time.monotonic() - started_at, 1e-6)
+                    current_run_rows = max(int(report["processed_rows"]) - int(report["resumed_rows"]), 0)
+                    rate = float(current_run_rows) / elapsed
+                    remaining = max(len(rows) - int(report["processed_rows"]), 0)
+                    eta_seconds = remaining / rate if rate > 0 else None
+                    report["rate_rows_per_hour"] = rate * 3600.0
+                    report["eta_seconds"] = eta_seconds
+                    write_report(report_json, report)
+                    eta_text = f"{eta_seconds / 3600.0:.2f}h" if eta_seconds is not None else "unknown"
+                    print(
+                        "[cot-teacher] progress "
+                        f"{report['processed_rows']}/{len(rows)} "
+                        f"written={report['written_rows']} "
+                        f"dropped={report['dropped_rows']} "
+                        f"fallback={report['fallback_rows']} "
+                        f"rate={report['rate_rows_per_hour']:.1f}/h "
+                        f"eta={eta_text}",
+                        flush=True,
+                    )
+                continue
 
-        for error in validation.errors:
-            _inc(report["error_counts"], error.split(":", 1)[0])
+            for error in validation.errors:
+                _inc(report["error_counts"], error.split(":", 1)[0])
 
-        if cfg.fallback_policy == "template":
-            template_answer = render_template_answer(row, evidence)
-            template_validation = validate_teacher_answer(template_answer, row, evidence, cfg)
-            if not template_validation.valid:
-                raise RuntimeError(f"Template fallback failed for {row.get('id')}: {template_validation.errors}")
-            output_rows.append(
-                build_cot_manifest_row(
+            if cfg.fallback_policy == "template":
+                template_answer = render_template_answer(row, evidence)
+                template_validation = validate_teacher_answer(template_answer, row, evidence, cfg)
+                if not template_validation.valid:
+                    raise RuntimeError(f"Template fallback failed for {row.get('id')}: {template_validation.errors}")
+                out_row = build_cot_manifest_row(
                     row,
                     answer=template_answer,
                     validation=template_validation,
                     teacher_source="template_after_llm_failure",
                     teacher_model=teacher_model,
+                    teacher_usage=teacher_usage,
                 )
-            )
-            report["fallback_rows"] += 1
-        elif cfg.fallback_policy == "error":
-            raise RuntimeError(f"Teacher validation failed for row {index} ({row.get('id')}): {validation.errors}")
-        else:
-            report["dropped_rows"] += 1
+                out_f.write(json.dumps(out_row, ensure_ascii=False) + "\n")
+                report["written_rows"] += 1
+                report["fallback_rows"] += 1
+            elif cfg.fallback_policy == "error":
+                raise RuntimeError(f"Teacher validation failed for row {index} ({row.get('id')}): {validation.errors}")
+            else:
+                report["dropped_rows"] += 1
 
-    write_jsonl(Path(output_jsonl), output_rows)
-    report["written_rows"] = len(output_rows)
-    if report_json:
-        path = Path(report_json)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+            report["processed_rows"] = index + 1
+            if (index + 1) % progress_every == 0 or index + 1 == len(rows):
+                elapsed = max(time.monotonic() - started_at, 1e-6)
+                current_run_rows = max(int(report["processed_rows"]) - int(report["resumed_rows"]), 0)
+                rate = float(current_run_rows) / elapsed
+                remaining = max(len(rows) - int(report["processed_rows"]), 0)
+                eta_seconds = remaining / rate if rate > 0 else None
+                report["rate_rows_per_hour"] = rate * 3600.0
+                report["eta_seconds"] = eta_seconds
+                write_report(report_json, report)
+                eta_text = f"{eta_seconds / 3600.0:.2f}h" if eta_seconds is not None else "unknown"
+                print(
+                    "[cot-teacher] progress "
+                    f"{report['processed_rows']}/{len(rows)} "
+                    f"written={report['written_rows']} "
+                    f"dropped={report['dropped_rows']} "
+                    f"fallback={report['fallback_rows']} "
+                    f"rate={report['rate_rows_per_hour']:.1f}/h "
+                    f"eta={eta_text}",
+                    flush=True,
+                )
+
+    report["status"] = "done"
+    report["eta_seconds"] = 0.0
+    write_report(report_json, report)
     return report
 
 
@@ -835,6 +1055,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--theta-tolerance-deg", type=float, default=2.0)
     parser.add_argument("--image-detail", default="auto", choices=["auto", "low", "high"])
     parser.add_argument("--fallback-policy", default="drop", choices=["drop", "error", "template"])
+    parser.add_argument("--progress-interval", type=int, default=25)
     return parser.parse_args()
 
 
@@ -855,6 +1076,7 @@ def main() -> None:
             report_json=args.report_json,
             limit=args.limit,
             config=config,
+            progress_interval=int(args.progress_interval),
         )
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
