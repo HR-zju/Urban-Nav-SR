@@ -17,7 +17,9 @@ CAMERA_TOPIC="/camera_x001/image_raw/compressed"
 TOPIC_SAMPLE_SECONDS=12
 CAMERA_MONITOR_INTERVAL_SECONDS=30
 SYSTEM_MONITOR_INTERVAL_SECONDS=60
+ENABLE_TOPIC_HZ_SAMPLE="${ENABLE_TOPIC_HZ_SAMPLE:-0}"
 ENABLE_TOPIC_BW_SAMPLE="${ENABLE_TOPIC_BW_SAMPLE:-0}"
+BAG_MAX_CACHE_SIZE="${BAG_MAX_CACHE_SIZE:-536870912}"
 
 stop_monitoring()
 {
@@ -56,7 +58,9 @@ start_monitoring()
         echo "topic_sample_seconds=$TOPIC_SAMPLE_SECONDS"
         echo "camera_monitor_interval_seconds=$CAMERA_MONITOR_INTERVAL_SECONDS"
         echo "system_monitor_interval_seconds=$SYSTEM_MONITOR_INTERVAL_SECONDS"
+        echo "enable_topic_hz_sample=$ENABLE_TOPIC_HZ_SAMPLE"
         echo "enable_topic_bw_sample=$ENABLE_TOPIC_BW_SAMPLE"
+        echo "bag_max_cache_size=$BAG_MAX_CACHE_SIZE"
     } > "$MONITOR_LOG_DIR/monitor_info.log" 2>&1
 
     echo "[MONITOR] 录包监控日志目录: $MONITOR_LOG_DIR"
@@ -68,12 +72,16 @@ start_monitoring()
             ros2 topic info "$CAMERA_TOPIC" -v 2>&1 || true
 
             echo "[topic hz sample]"
-            hz_output=$(timeout "$TOPIC_SAMPLE_SECONDS" ros2 topic hz "$CAMERA_TOPIC" 2>&1)
-            echo "$hz_output"
-            if echo "$hz_output" | grep -q "average rate"; then
-                echo "[OK] camera topic is publishing"
+            if [ "$ENABLE_TOPIC_HZ_SAMPLE" = "1" ]; then
+                hz_output=$(timeout "$TOPIC_SAMPLE_SECONDS" ros2 topic hz "$CAMERA_TOPIC" 2>&1)
+                echo "$hz_output"
+                if echo "$hz_output" | grep -q "average rate"; then
+                    echo "[OK] camera topic is publishing"
+                else
+                    echo "[WARN] no camera hz sample within ${TOPIC_SAMPLE_SECONDS}s"
+                fi
             else
-                echo "[WARN] no camera hz sample within ${TOPIC_SAMPLE_SECONDS}s"
+                echo "[INFO] disabled by ENABLE_TOPIC_HZ_SAMPLE=$ENABLE_TOPIC_HZ_SAMPLE"
             fi
 
             echo "[topic bw sample]"
@@ -219,6 +227,7 @@ ros2 bag record \
     --storage mcap \
     --storage-config-file /root/viobot_ctrl/bash/mcap_config.yaml\
     --qos-profile-overrides-path /root/viobot_ctrl/bash/qos_overrides.yaml \
+    --max-cache-size "$BAG_MAX_CACHE_SIZE" \
     --max-bag-duration 60 \
     -o "$BAG_NAME" &
 BAG_RECORD_PID=$!

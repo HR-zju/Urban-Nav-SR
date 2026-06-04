@@ -1,6 +1,6 @@
 gnss_spp_node:
   ros__parameters:
-    enable_kml_export: true
+    enable_kml_export: false
     kml_directory: /home/symc/data/kml
     kml_raw_directory: /home/symc/data/kml_raw
 
