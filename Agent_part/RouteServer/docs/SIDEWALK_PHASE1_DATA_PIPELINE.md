@@ -290,7 +290,9 @@ FPV trajectory label 会在标定投影后执行一次近场修正：第一个�
 
 ### 4.3 QA bundle
 
-`qa/{frame}_qa.json` 使用 ms-swift SideWalk QA schema：
+`qa/{frame}_qa.json` 使用 ms-swift SideWalk QA schema。Phase1 QA 已和主线
+CoT v5 对齐：teacher answer 输出 `<BEVContext>/<FPVScene>/<CrossView>/<Plan>/<finish>`
+这些 CoT section tag，而不是旧的 `<BEVIntent>/<PointPrompt>/<TrajectorySupport>` 语法。
 
 ```json
 {
@@ -304,8 +306,16 @@ FPV trajectory label 会在标定投影后执行一次近场修正：第一个�
     {
       "task_family": "A_bev",
       "task_type": "bev_route_theta",
-      "teacher_answer": "<BEVIntent>...</BEVIntent>",
-      "structured_target": {"route_theta_deg": 0.0}
+      "teacher_answer": "<BEVContext>{...}</BEVContext>",
+      "structured_target": {
+        "navigation_state": "following_sidewalk",
+        "topology_state": "same_sidewalk_segment",
+        "route_theta_deg": 0.0,
+        "route_theta_bin": "[-5,5)",
+        "route_direction_bin": "front",
+        "intent": "go_straight",
+        "target_direction": "front"
+      }
     }
   ]
 }

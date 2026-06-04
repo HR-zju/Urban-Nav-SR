@@ -1,5 +1,16 @@
 # RouteServer 变更记录
 
+## 2026-06-04
+
+### Phase1 QA 与 CoT section 对齐
+
+- `tools/model_processing/sidewalk_phase1_dataset.py` 生成的 Phase1 QA bundle 不再默认输出旧 `<BEVIntent>/<PointPrompt>/<TrajectorySupport>` 语法。
+- QA teacher answer 已切换到与 ms-swift 主线 `structured_cot_trajectory` 一致的 section tag：
+  - `A_bev` -> `<BEVContext>{...}</BEVContext>`
+  - `X_crossview` -> `<CrossView>{...}</CrossView>`
+  - `P_prompt` -> `<finish>{...}</finish>`
+- 新 QA `structured_target` 与 teacher answer 使用同一组 CoT v5 字段，便于后续把 QA 样本混入 CoT SFT，而不会让模型学习两套不一致的标签语法。
+
 ## 2026-06-03
 
 

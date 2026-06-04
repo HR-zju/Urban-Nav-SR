@@ -852,7 +852,17 @@ def build_qa_bundle(
     target_cell = bev_meta["target_cell_gt"]
     ego_cell = bev_meta["ego_cell_gt"]
     qa_base = f"{record.clip_id}_{record.frame_name}"
-    terminal_point = trajectory_norm[-1].astype(float).tolist() if trajectory_norm.size else [0.5, 0.5]
+    bev_context = build_cot_bev_context(
+        bev_meta=bev_meta,
+        route_theta=route_theta,
+        intent=intent,
+        anchor=anchor,
+        ego_cell=ego_cell,
+        target_cell=target_cell,
+    )
+    fpv_scene = build_cot_fpv_scene()
+    cross_view = build_cot_cross_view(intent=intent, anchor=anchor)
+    finish = build_cot_finish(trajectory_norm=trajectory_norm, intent=intent)
     samples = [
         {
             "sample_id": f"{qa_base}_bev_route_theta",
@@ -860,19 +870,8 @@ def build_qa_bundle(
             "task_type": "bev_route_theta",
             "answer_type": "angle_deg_json",
             "question": "Estimate the route lookahead direction in the local BEV grid.",
-            "teacher_answer": (
-                "<BEVIntent>\n"
-                f"stage: {stage_from_intent(intent)}\n"
-                f"turn_type: {intent}\n"
-                f"route_theta: {route_theta:.3f}\n"
-                f"anchor: {anchor}\n"
-                "</BEVIntent>"
-            ),
-            "structured_target": {
-                "route_theta_deg": round(route_theta, 3),
-                "turn_type": intent,
-                "anchor": anchor,
-            },
+            "teacher_answer": json_tag("BEVContext", bev_context),
+            "structured_target": bev_context,
             "evidence": {"bev_patch_meta_path": str(bev_meta_path)},
             "valid": True,
             "confidence": 0.9,
@@ -884,19 +883,8 @@ def build_qa_bundle(
             "task_type": "bev_navigation_stage",
             "answer_type": "mcq",
             "question": "Classify the local navigation stage from the BEV route context.",
-            "teacher_answer": (
-                "<BEVIntent>\n"
-                f"stage: {stage_from_intent(intent)}\n"
-                f"turn_type: {intent}\n"
-                f"route_theta: {route_theta:.3f}\n"
-                f"anchor: {anchor}\n"
-                "</BEVIntent>"
-            ),
-            "structured_target": {
-                "stage": stage_from_intent(intent),
-                "turn_type": intent,
-                "route_theta": round(route_theta, 3),
-            },
+            "teacher_answer": json_tag("BEVContext", bev_context),
+            "structured_target": bev_context,
             "evidence": {"ego_cell_gt": ego_cell, "target_cell_gt": target_cell},
             "valid": True,
             "confidence": 0.86,
@@ -908,21 +896,8 @@ def build_qa_bundle(
             "task_type": "crossview_topology_grounding",
             "answer_type": "grounding_json",
             "question": "Does the FPV trajectory endpoint agree with the BEV route intent?",
-            "teacher_answer": (
-                "<CrossView>\n"
-                f"bev_intent: {intent}\n"
-                "alignment_status: aligned\n"
-                f"anchored_area: {anchor}\n"
-                "reason: FPV waypoint endpoint and BEV local route have the same coarse direction.\n"
-                "</CrossView>"
-            ),
-            "structured_target": {
-                "bev_intention": intent,
-                "bev_intent": intent,
-                "alignment_status": "aligned",
-                "anchored_area": anchor,
-                "source": "gt_trajectory_and_bev_topology",
-            },
+            "teacher_answer": json_tag("CrossView", cross_view),
+            "structured_target": cross_view,
             "evidence": {
                 "trajectory_label_path": str(label_path),
                 "bev_patch_meta_path": str(bev_meta_path),
@@ -937,18 +912,8 @@ def build_qa_bundle(
             "task_type": "point_prompt",
             "answer_type": "point_with_theta_json",
             "question": "What is the FPV target point implied by the GT trajectory?",
-            "teacher_answer": (
-                "<PointPrompt>\n"
-                f"target_point_norm: [{terminal_point[0]:.5f}, {terminal_point[1]:.5f}]\n"
-                f"intent: {intent}\n"
-                "source: gt_trajectory_label\n"
-                "</PointPrompt>"
-            ),
-            "structured_target": {
-                "target_point_norm": [round(float(terminal_point[0]), 5), round(float(terminal_point[1]), 5)],
-                "intent_gt": intent,
-                "source": "gt_trajectory_label",
-            },
+            "teacher_answer": json_tag("finish", finish),
+            "structured_target": finish,
             "evidence": {"trajectory_label_path": str(label_path)},
             "valid": True,
             "confidence": 0.9,
@@ -960,19 +925,8 @@ def build_qa_bundle(
             "task_type": "trajectory_intent_check",
             "answer_type": "structured_text",
             "question": "Check whether the FPV trajectory is consistent with the BEV route intent.",
-            "teacher_answer": (
-                "<TrajectorySupport>\n"
-                "support: unknown_without_segmentation\n"
-                "forbidden_overlap: false\n"
-                "bev_consistent: true\n"
-                f"reason: trajectory follows the {anchor} direction from BEV topology.\n"
-                "</TrajectorySupport>"
-            ),
-            "structured_target": {
-                "bev_consistent": True,
-                "intent_gt": intent,
-                "trajectory_points": int(trajectory_norm.shape[0]),
-            },
+            "teacher_answer": json_tag("finish", finish),
+            "structured_target": finish,
             "evidence": {"trajectory_label_path": str(label_path)},
             "valid": True,
             "confidence": 0.72,
@@ -1501,6 +1455,162 @@ def stage_from_intent(intent: str) -> str:
     if intent in {"turn_left", "turn_right"}:
         return "approach_turn"
     return "straight"
+
+
+def json_tag(tag: str, payload: dict[str, Any]) -> str:
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return f"<{tag}>{body}</{tag}>"
+
+
+def build_cot_bev_context(
+    *,
+    bev_meta: dict[str, Any],
+    route_theta: float,
+    intent: str,
+    anchor: str,
+    ego_cell: list[int],
+    target_cell: list[int],
+) -> dict[str, Any]:
+    return {
+        "scene_summary": "local BEV route context",
+        "route_summary": f"route continues from ego toward {anchor}",
+        "navigation_state": navigation_state_from_intent(intent),
+        "topology_state": topology_state_from_intent(intent),
+        "grid_size": bev_meta.get("grid_size") or [16, 16],
+        "ego_cell": ego_cell,
+        "target_cell": target_cell,
+        "route_theta_deg": round(float(route_theta), 3),
+        "route_theta_bin": route_theta_bin(route_theta),
+        "route_direction_bin": route_direction_bin(route_theta, intent, anchor),
+        "intent": intent,
+        "target_direction": anchor,
+        "bev_anchor": anchor,
+        "topology_evidence": "route, ego marker, and target cell define the local BEV intent",
+    }
+
+
+def build_cot_fpv_scene() -> dict[str, Any]:
+    return {
+        "navigable_support": ["visible_sidewalk_or_pedestrian_support"],
+        "conditional_support": [],
+        "risk_objects": [],
+        "visibility": "uncertain",
+        "local_risk": "unknown",
+    }
+
+
+def build_cot_cross_view(*, intent: str, anchor: str) -> dict[str, Any]:
+    region = fpv_region_from_direction(anchor)
+    return {
+        "bev_anchor": anchor,
+        "fpv_anchor": f"{region}_visible_navigation_support",
+        "near_reference": "trajectory_endpoint",
+        "blind_area_context": {
+            "left": "unknown without dense region evidence",
+            "right": "unknown without dense region evidence",
+            "front": "trajectory endpoint indicates visible support",
+        },
+        "fpv_route_region": region,
+        "route_to_fpv_direction": route_to_fpv_direction(anchor),
+        "safe_corridor": safe_corridor_from_region(region),
+        "alignment": "aligned",
+        "confidence": "medium",
+    }
+
+
+def build_cot_finish(*, trajectory_norm: np.ndarray, intent: str) -> dict[str, Any]:
+    trajectory = np.asarray(trajectory_norm, dtype=np.float32).reshape(-1, 2).astype(float).tolist()
+    return {
+        "trajectory": trajectory,
+        "intent": intent,
+        "confidence_level": "normal",
+        "trajectory_type": trajectory_type(trajectory),
+        "trajectory_validity": "valid",
+    }
+
+
+def route_theta_bin(theta_deg: float) -> str:
+    theta = max(-180.0, min(180.0, float(theta_deg)))
+    bins = [(-180, -45), (-45, -15), (-15, -5), (-5, 5), (5, 15), (15, 45), (45, 180)]
+    for lo, hi in bins:
+        if lo <= theta < hi:
+            return f"[{lo},{hi})"
+    return "[45,180]"
+
+
+def route_direction_bin(theta_deg: float, intent: str, target_direction: str) -> str:
+    if str(intent) == "stop" or str(target_direction) == "stop":
+        return "stop"
+    theta = float(theta_deg)
+    if theta <= -15.0:
+        return "left"
+    if theta < -5.0:
+        return "slight_left"
+    if theta <= 5.0:
+        return "front"
+    if theta <= 15.0:
+        return "slight_right"
+    return "right"
+
+
+def topology_state_from_intent(intent: str) -> str:
+    return {
+        "go_straight": "same_sidewalk_segment",
+        "turn_left": "approaching_left_turn",
+        "turn_right": "approaching_right_turn",
+        "stop": "stop_hold",
+    }.get(str(intent), "unknown")
+
+
+def navigation_state_from_intent(intent: str) -> str:
+    return {
+        "go_straight": "following_sidewalk",
+        "turn_left": "approaching_turn",
+        "turn_right": "approaching_turn",
+        "stop": "stopping",
+    }.get(str(intent), "unknown")
+
+
+def fpv_region_from_direction(direction: str) -> str:
+    if direction == "left_front":
+        return "left"
+    if direction == "right_front":
+        return "right"
+    if direction == "stop":
+        return "unknown"
+    return "center"
+
+
+def route_to_fpv_direction(direction: str) -> str:
+    return {
+        "left_front": "forward_left",
+        "right_front": "forward_right",
+        "front": "forward_center",
+        "stop": "stop",
+    }.get(direction, "unknown")
+
+
+def safe_corridor_from_region(region: str) -> str:
+    return {
+        "left": "left_corridor",
+        "right": "right_corridor",
+        "center": "center_corridor",
+        "unknown": "unknown",
+    }.get(region, "unknown")
+
+
+def trajectory_type(trajectory: list[list[float]]) -> str:
+    arr = np.asarray(trajectory or [], dtype=np.float32).reshape(-1, 2)
+    if arr.size == 0:
+        return "unknown"
+    if len(arr) > 1 and float(np.max(arr[:, 1]) - np.min(arr[:, 1])) < 0.08:
+        return "stop_hold"
+    delta_x = float(arr[-1, 0] - arr[0, 0]) if len(arr) > 1 else 0.0
+    if delta_x < -0.035:
+        return "slight_left_center"
+    if delta_x > 0.035:
+        return "slight_right_center"
+    return "straight_center"
 
 
 def local_xy_to_grid_cell(x_m: float, y_m: float, *, config: Phase1Config) -> list[int]:

@@ -98,6 +98,11 @@ class SidewalkPhase1DatasetTest(unittest.TestCase):
             task_types = {item["task_type"] for item in qa["samples"]}
             self.assertIn("bev_route_theta", task_types)
             self.assertIn("trajectory_intent_check", task_types)
+            answers_by_type = {item["task_type"]: item["teacher_answer"] for item in qa["samples"]}
+            self.assertIn("<BEVContext>", answers_by_type["bev_route_theta"])
+            self.assertIn("<finish>", answers_by_type["trajectory_intent_check"])
+            self.assertNotIn("<BEVIntent>", answers_by_type["bev_route_theta"])
+            self.assertNotIn("<TrajectorySupport>", answers_by_type["trajectory_intent_check"])
 
     def test_build_phase1_dataset_uses_calibrated_internnav_projection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

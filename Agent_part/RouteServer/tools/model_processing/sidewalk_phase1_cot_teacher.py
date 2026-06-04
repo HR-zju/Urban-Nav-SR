@@ -290,7 +290,7 @@ def build_teacher_question(row: dict[str, Any], evidence: dict[str, Any], *, pre
         "<CrossView>{\"bev_anchor\":\"...\",\"fpv_anchor\":\"...\",\"near_reference\":\"nearest stable visible reference\",\"blind_area_context\":{\"left\":\"occluded/visible risk statement\",\"right\":\"occluded/visible risk statement\",\"front\":\"visible support or occlusion statement\"},\"fpv_route_region\":\"left|center|right|unknown\",\"route_to_fpv_direction\":\"forward_left|forward_center|forward_right|stop|unknown\",\"safe_corridor\":\"left_corridor|center_corridor|right_corridor|stop|unknown\",\"alignment\":\"aligned|partially_aligned|uncertain\",\"confidence\":\"high|medium|low|unknown\"}</CrossView>\n"
         "<Plan>{\"motion_primitive\":\"go_straight|turn_left|turn_right|stop|unknown\",\"lateral_preference\":\"left|center|right|hold|unknown\",\"avoidance_side\":\"left|right|both|none|unknown\",\"speed_policy\":\"normal|slow|stop|unknown\",\"primary_route\":\"concise semantic route\",\"safety_policy\":\"concise safety policy\",\"contingency\":\"concise fallback behavior\"}</Plan>\n"
         "</think>\n"
-        "<finish>{\"trajectory\":[[0.5,0.9]],\"intent\":\"go_straight|turn_left|turn_right|stop|unknown\",\"confidence_level\":\"normal|conflict|low\",\"trajectory_type\":\"straight_center|slight_left_center|slight_right_center|stop_hold|unknown\",\"trajectory_validity\":\"valid|invalid\"}</finish>\n\n"
+        "<finish>{\"trajectory\":[[0.5,0.9]],\"intent\":\"go_straight|turn_left|turn_right|stop|unknown\",\"confidence_level\":\"normal|conflict|low\",\"trajectory_type\":\"straight_center|slight_left_center|slight_right_center|slight_left_left|slight_right_right|stop_hold|unknown\",\"trajectory_validity\":\"valid|invalid\"}</finish>\n\n"
         "Rules:\n"
         "- Do not write narrative prose inside <think>; it must contain only the five structured JSON sections.\n"
         "- <FPVScene>.navigable_support must list visible safe ground/support semantics, not route goals or distant background.\n"
@@ -340,7 +340,7 @@ def build_training_prompt(row: dict[str, Any]) -> str:
         "<CrossView>{\"bev_anchor\":\"...\",\"fpv_anchor\":\"...\",\"near_reference\":\"nearest stable visible reference\",\"blind_area_context\":{\"left\":\"...\",\"right\":\"...\",\"front\":\"...\"},\"fpv_route_region\":\"left|center|right|unknown\",\"route_to_fpv_direction\":\"forward_left|forward_center|forward_right|stop|unknown\",\"safe_corridor\":\"left_corridor|center_corridor|right_corridor|stop|unknown\",\"alignment\":\"aligned|partially_aligned|uncertain\",\"confidence\":\"high|medium|low|unknown\"}</CrossView>\n"
         "<Plan>{\"motion_primitive\":\"go_straight|turn_left|turn_right|stop|unknown\",\"lateral_preference\":\"left|center|right|hold|unknown\",\"avoidance_side\":\"left|right|both|none|unknown\",\"speed_policy\":\"normal|slow|stop|unknown\",\"primary_route\":\"...\",\"safety_policy\":\"...\",\"contingency\":\"...\"}</Plan>\n"
         "</think>\n"
-        "<finish>{\"trajectory\":[[0.5,0.9]],\"intent\":\"go_straight|turn_left|turn_right|stop|unknown\",\"confidence_level\":\"normal|conflict|low\",\"trajectory_type\":\"straight_center|slight_left_center|slight_right_center|stop_hold|unknown\",\"trajectory_validity\":\"valid|invalid\"}</finish>\n\n"
+        "<finish>{\"trajectory\":[[0.5,0.9]],\"intent\":\"go_straight|turn_left|turn_right|stop|unknown\",\"confidence_level\":\"normal|conflict|low\",\"trajectory_type\":\"straight_center|slight_left_center|slight_right_center|slight_left_left|slight_right_right|stop_hold|unknown\",\"trajectory_validity\":\"valid|invalid\"}</finish>\n\n"
         "Trajectory rules:\n"
         f"- Use exactly {num_points} normalized FPV trajectory points in [0, 1]. Do not output pixel coordinates.\n"
         "- Origin (0,0) is the top-left corner; x is horizontal, y is vertical. Convert to pixels only after parsing.\n"
@@ -571,6 +571,7 @@ def validate_teacher_answer(answer: str, row: dict[str, Any], evidence: dict[str
     route_context = evidence["route_context"]
     bev_meta = evidence["bev_patch_meta"]
     label = evidence["trajectory_label"]
+    row_meta = row.get("sidewalk_meta") or {}
     intent_gt = str(label.get("intent_gt") or bev_meta.get("intent_gt") or route_context.get("intent_gt") or "")
     theta_gt = optional_float(label.get("route_theta_deg") or bev_meta.get("route_theta_deg") or route_context.get("route_theta_deg"))
     try:
@@ -700,7 +701,16 @@ def validate_teacher_answer(answer: str, row: dict[str, Any], evidence: dict[str
                 allowed_speed.add("unknown")
         if str((sections.get("Plan") or {}).get("speed_policy") or "") not in allowed_speed:
             errors.append(f"plan_speed_policy_mismatch:{(sections.get('Plan') or {}).get('speed_policy')}!={derived['speed_policy']}")
-        if str(finish.get("trajectory_type") or "") != derived["trajectory_type"]:
+        finish_trajectory_type = str(finish.get("trajectory_type") or "")
+        reviewed_fixed_type = str(row_meta.get("fixed_trajectory_type") or "")
+        allow_reviewed_type_fix = (
+            bool(row_meta.get("readded_after_review"))
+            and reviewed_fixed_type
+            and finish_trajectory_type == reviewed_fixed_type
+            and intent_gt in {"turn_left", "turn_right"}
+            and str(row_meta.get("old_trajectory_type") or "") == "stop_hold"
+        )
+        if finish_trajectory_type != derived["trajectory_type"] and not allow_reviewed_type_fix:
             errors.append(f"trajectory_type_mismatch:{finish.get('trajectory_type')}!={derived['trajectory_type']}")
         if str(finish.get("trajectory_validity") or "") != "valid":
             errors.append(f"trajectory_validity_not_valid:{finish.get('trajectory_validity')}")
