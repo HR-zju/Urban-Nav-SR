@@ -600,13 +600,13 @@ class RealSenseNavflowNode(Node):
         # Odom subscriptions
         self.localodom_sub = self.create_subscription(
             Odometry,
-            "/agilex/odom",
+            "/globalEstimator/global_odometry",
             self.localodom_callback,
             20,
         )
         self.odom_sub = self.create_subscription(
             Odometry,
-            "/agilex/odom",
+            "/globalEstimator/global_odometry",
             self.odom_callback,
             100,
         )
@@ -864,7 +864,7 @@ class RealSenseNavflowNode(Node):
 
             # Only every ~6 Hz frame is preprocessed for the ONNX model; all
             # intermediate frames skip the heavy PIL/torch pipeline.
-            if time_since_last < 1.0 / 6.0:
+            if time_since_last < 1.0 / 30.0:
                 return
 
             # Pose sync (only needed when we actually feed the model).

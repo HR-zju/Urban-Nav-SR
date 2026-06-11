@@ -847,7 +847,7 @@ class RealSenseNavflowNode(Node):
 
             # Only every ~6 Hz frame is preprocessed for the ONNX model; all
             # intermediate frames skip the heavy PIL/torch pipeline.
-            if time_since_last < 1.0 / 6.0:
+            if time_since_last < 1.0 / 30.0:
                 return
 
             # Pose sync (only needed when we actually feed the model).

@@ -17,10 +17,12 @@ V4L2_CID_BACKLIGHT_COMPENSATION = 0x0098091C
 V4L2_CID_EXPOSURE_AUTO = 0x009A0901
 V4L2_CID_EXPOSURE_AUTO_PRIORITY = 0x009A0903
 VIDIOC_S_CTRL = 0xC008561C
-DEFAULT_USB_CAMERA_BY_ID_GLOB = "/dev/v4l/by-id/*USB_Camera*video-index0"
+DEFAULT_USB_CAMERA_BY_ID_GLOB = "/dev/v4l/by-id/usb-Generic_USB_Camera_200901010001-video-index0"
 DEFAULT_USB_CAMERA_ID_MODEL = "USB_Camera"
 DEFAULT_USB_CAMERA_ID_VENDOR_ID = "0bda"
 DEFAULT_USB_CAMERA_ID_MODEL_ID = "3035"
+DEFAULT_USB_CAMERA_ID_SERIAL = "Generic_USB_Camera_200901010001"
+DEFAULT_USB_CAMERA_ID_PATH = "platform-3610000.usb-usb-0:2.4:1.0"
 
 
 class UsbCameraNode(Node):
@@ -101,7 +103,8 @@ class UsbCameraNode(Node):
             "because those can open Insight or another camera when multiple cameras are connected. "
             "Set USB_CAMERA_DEVICE to the intended USB camera path, or adjust "
             "USB_CAMERA_BY_ID_GLOB / USB_CAMERA_ID_MODEL / USB_CAMERA_ID_VENDOR_ID / "
-            "USB_CAMERA_ID_MODEL_ID if the USB camera has a different ID.\n"
+            "USB_CAMERA_ID_MODEL_ID / USB_CAMERA_ID_SERIAL / USB_CAMERA_ID_PATH if "
+            "the USB camera has a different ID or is plugged into a different port.\n"
             f"Detected video devices:\n{self.format_detected_video_devices()}"
         )
 
@@ -158,6 +161,22 @@ class UsbCameraNode(Node):
         )
         actual_model_id = properties.get("ID_MODEL_ID", "")
         if expected_model_id and actual_model_id.lower() != expected_model_id.lower():
+            return False
+
+        expected_serial = os.environ.get(
+            "USB_CAMERA_ID_SERIAL",
+            DEFAULT_USB_CAMERA_ID_SERIAL,
+        )
+        actual_serial = properties.get("ID_SERIAL", "")
+        if expected_serial and actual_serial != expected_serial:
+            return False
+
+        expected_path = os.environ.get(
+            "USB_CAMERA_ID_PATH",
+            DEFAULT_USB_CAMERA_ID_PATH,
+        )
+        actual_path = properties.get("ID_PATH", "")
+        if expected_path and actual_path != expected_path:
             return False
 
         return True

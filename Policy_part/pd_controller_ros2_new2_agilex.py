@@ -25,10 +25,10 @@ RATE = 10
 EPS = 1e-8
 WAYPOINT_TIMEOUT = 1 # seconds # TODO: tune this
 FLIP_ANG_VEL = np.pi/4
-TURN_KP = 1.2
+TURN_KP = 1.4
 MIN_TURN_W = 0.18
 TURN_DEADBAND_ANGLE = 0.03
-MAX_DELTA_W = 0.12
+MAX_DELTA_W = 0.15
 TURN_SPEED_DECAY = 0.8
 
 # GLOBALS
@@ -90,7 +90,7 @@ def pd_controller(waypoint, current_v, current_w) -> Tuple[float, float]:
 
     target_idx = None
     for i, dist in enumerate(dists):
-        if 1.5 <= dist <= 2.0:
+        if 1.0 <= dist <= 1.5:
             target_idx = i
             break
 
@@ -101,7 +101,7 @@ def pd_controller(waypoint, current_v, current_w) -> Tuple[float, float]:
     dx, dy = waypoints[target_idx]
 
     # --- base control from lookahead point ---
-    v = dx / DT / 2.0
+    v = dx / DT  # / 2 changed here
     heading_error = np.arctan2(dy, dx)
     w = TURN_KP * heading_error / DT
 
