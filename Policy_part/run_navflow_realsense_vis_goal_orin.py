@@ -557,8 +557,10 @@ class RealSenseNavflowNode(Node):
         # Sliding window of image tensors + poses used for ONNX
         self.image_batch = deque(maxlen=self.frames)
 
-        self.pose_buffer = deque(maxlen=20)
-        self.localpose_buffer = deque(maxlen=20)
+        self.pose_buffer = deque(maxlen=300)
+        self.localpose_buffer = deque(maxlen=300)
+        self.base_pose_buffer = deque(maxlen=600)
+        self.global_pose_sync_tolerance_sec = 0.3
 
         self.lock = threading.Lock()
         self.last_image_time = 0.0
@@ -610,6 +612,12 @@ class RealSenseNavflowNode(Node):
             self.odom_callback,
             100,
         )
+        self.base_odom_sub = self.create_subscription(
+            Odometry,
+            "/base_odom",
+            self.base_odom_callback,
+            200,
+        )
 
         # RealSense image subscription. Raw is the Orin default to avoid JPEG decode.
         image_msg_type = CompressedImage if self.image_transport == "compressed" else Image
@@ -658,20 +666,7 @@ class RealSenseNavflowNode(Node):
             with self.lock:
                 self.localpose_buffer.append((msg.header.stamp, msg.pose))
 
-                if not self.goal_reached and len(self.target_xy) > 0:
-                    dx = self.target_xy[0][0] - msg.pose.pose.position.x
-                    dy = self.target_xy[0][1] - msg.pose.pose.position.y
-                    pose_diff = math.sqrt(dx ** 2 + dy ** 2)
-
-                    if pose_diff < self.distance_threshold:
-                        if len(self.target_xy) > 1:
-                            del self.target_xy[0]
-                            self.get_logger().info(
-                                f"Reached current target, {len(self.target_xy)} targets remaining"
-                            )
-                        else:
-                            self.goal_reached = True
-                            self.get_logger().info("Reached final target")
+                self.update_goal_progress_locked(msg.pose)
 
             reached_goal_msg = Bool()
             reached_goal_msg.data = bool(self.goal_reached)
@@ -686,37 +681,108 @@ class RealSenseNavflowNode(Node):
         except Exception as e:  # noqa: BLE001
             self.get_logger().error(f"Error in odom callback: {e}")
 
+    def base_odom_callback(self, msg: Odometry):
+        try:
+            with self.lock:
+                self.base_pose_buffer.append((msg.header.stamp, msg.pose))
+                self.update_goal_progress_locked(msg.pose)
+
+            reached_goal_msg = Bool()
+            reached_goal_msg.data = bool(self.goal_reached)
+            self.goal_pub.publish(reached_goal_msg)
+        except Exception as e:  # noqa: BLE001
+            self.get_logger().error(f"Error in base odom callback: {e}")
+
+    def update_goal_progress_locked(self, pose):
+        if self.goal_reached or len(self.target_xy) == 0:
+            return
+
+        dx = self.target_xy[0][0] - pose.pose.position.x
+        dy = self.target_xy[0][1] - pose.pose.position.y
+        pose_diff = math.sqrt(dx ** 2 + dy ** 2)
+
+        if pose_diff < self.distance_threshold:
+            if len(self.target_xy) > 1:
+                del self.target_xy[0]
+                self.get_logger().info(
+                    f"Reached current target, {len(self.target_xy)} targets remaining"
+                )
+            else:
+                self.goal_reached = True
+                self.get_logger().info("Reached final target")
+
+    @staticmethod
+    def stamp_to_nsec(stamp) -> int:
+        return int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
+
+    def find_closest_buffer_pose(self, buffer, image_stamp):
+        if not buffer:
+            return None, None
+
+        image_nsec = self.stamp_to_nsec(image_stamp)
+        pose_stamp, closest_pose = min(
+            buffer,
+            key=lambda item: abs(self.stamp_to_nsec(item[0]) - image_nsec),
+        )
+        dt_sec = (self.stamp_to_nsec(pose_stamp) - image_nsec) * 1e-9
+        return closest_pose, dt_sec
+
     def find_closest_localpose(self, image_stamp):
         with self.lock:
-            if not self.localpose_buffer:
-                return None
-            image_nsec = image_stamp.nanosec + image_stamp.sec * 1e9
-            closest_pose = None
-            for pose_stamp, pose in self.localpose_buffer:
-                pose_nsec = pose_stamp.nanosec + pose_stamp.sec * 1e9
-                time_diff = pose_nsec - image_nsec
-                if abs(time_diff) < 1e8 or time_diff > 0:
-                    closest_pose = pose
-                    break
-            if closest_pose is None:
-                closest_pose = self.localpose_buffer[-1][1]
-            return closest_pose
+            pose, _dt_sec = self.find_closest_buffer_pose(list(self.localpose_buffer), image_stamp)
+            return pose
 
     def find_closest_pose(self, image_stamp):
         with self.lock:
-            if not self.pose_buffer:
-                return None
-            image_nsec = image_stamp.nanosec + image_stamp.sec * 1e9
-            closest_pose = None
-            for pose_stamp, pose in self.pose_buffer:
-                pose_nsec = pose_stamp.nanosec + pose_stamp.sec * 1e9
-                time_diff = pose_nsec - image_nsec
-                if abs(time_diff) < 1e8 or time_diff > 0:
-                    closest_pose = pose
-                    break
-            if closest_pose is None:
-                closest_pose = self.pose_buffer[-1][1]
-            return closest_pose
+            pose, _dt_sec = self.find_closest_buffer_pose(list(self.pose_buffer), image_stamp)
+            return pose
+
+    def find_header_aligned_nav_pose(self, image_stamp):
+        with self.lock:
+            global_pose, global_dt = self.find_closest_buffer_pose(
+                list(self.pose_buffer),
+                image_stamp,
+            )
+            if (
+                global_pose is not None
+                and global_dt is not None
+                and abs(global_dt) <= self.global_pose_sync_tolerance_sec
+            ):
+                return global_pose, "global", global_dt
+
+            base_pose, base_dt = self.find_closest_buffer_pose(
+                list(self.base_pose_buffer),
+                image_stamp,
+            )
+            if base_pose is not None:
+                return base_pose, "base_fallback", base_dt
+
+            return global_pose, "global_stale", global_dt
+
+    @staticmethod
+    def pose_to_xyzw_array(pose):
+        return [
+            pose.pose.position.x,
+            pose.pose.position.y,
+            pose.pose.position.z,
+            pose.pose.orientation.x,
+            pose.pose.orientation.y,
+            pose.pose.orientation.z,
+            pose.pose.orientation.w,
+        ]
+
+    @staticmethod
+    def pose_to_wxyz_array(pose):
+        return [
+            pose.pose.position.x,
+            pose.pose.position.y,
+            pose.pose.position.z,
+            pose.pose.orientation.w,
+            pose.pose.orientation.x,
+            pose.pose.orientation.y,
+            pose.pose.orientation.z,
+        ]
+
 
     # ------------------------------------------------------------------
     # Image callback: capture, resize, push to batch, overlay, and record
@@ -868,17 +934,21 @@ class RealSenseNavflowNode(Node):
                 return
 
             # Pose sync (only needed when we actually feed the model).
-            pose = self.find_closest_pose(image_stamp)
+            pose, pose_source, pose_dt = self.find_header_aligned_nav_pose(image_stamp)
             localpose = self.find_closest_localpose(image_stamp)
             if pose is None or localpose is None:
                 self.get_logger().warning("No pose yet for current image")
                 return
+            if pose_source != "global":
+                self.get_logger().warning(
+                    f"Using {pose_source} pose for image stamp; dt={pose_dt:.3f}s"
+                )
 
             img_chw = self.preprocess_model_frame_rgb(image_rgb)
 
             # Push into sliding window batch for ONNX thread at ~6 Hz.
             with self.lock:
-                self.image_batch.append((img_chw, pose, localpose))
+                self.image_batch.append((img_chw, pose, localpose, image_stamp, pose_source, pose_dt))
                 # Mark that a new frame has been appended so the
                 # processing thread can trigger a fresh ONNX run.
                 self.update_counter += 1
@@ -1051,7 +1121,10 @@ class RealSenseNavflowNode(Node):
     def process_batch(self, batch_snapshot):
         """Run ONNX on the latest batch and publish / cache waypoints.
 
-        `batch_snapshot` is a list of (image_chw_float32, pose, localpose) tuples.
+        `batch_snapshot` is a list of
+        (image_chw_float32, nav_pose, localpose, image_stamp, pose_source,
+        pose_dt) tuples. `nav_pose` is selected by message header time from
+        global odom, with base odom as fallback when global is stale/missing.
         """
 
         self.get_logger().info(f"Processing batch of {len(batch_snapshot)} frames")
@@ -1059,33 +1132,17 @@ class RealSenseNavflowNode(Node):
             self.get_logger().warning("Empty batch snapshot, skip processing")
             return
 
-        snap_image_chw, snap_pose, snap_localpose = batch_snapshot[-1]
+        snap_image_chw, snap_pose, snap_localpose, _snap_stamp, snap_pose_source, snap_pose_dt = batch_snapshot[-1]
 
         image_list = []
         pose_list = []
-        for image_chw, pose, _localpose in batch_snapshot:
+        pose_sources = []
+        for image_chw, pose, _localpose, _image_stamp, pose_source, _pose_dt in batch_snapshot:
             image_list.append(image_chw)
-            pose_list.append(
-                [
-                    pose.pose.position.x,
-                    pose.pose.position.y,
-                    pose.pose.position.z,
-                    pose.pose.orientation.x,
-                    pose.pose.orientation.y,
-                    pose.pose.orientation.z,
-                    pose.pose.orientation.w,
-                ]
-            )
+            pose_list.append(self.pose_to_xyzw_array(pose))
+            pose_sources.append(pose_source)
 
-        last_localpose_snapshot = [
-            snap_localpose.pose.position.x,
-            snap_localpose.pose.position.y,
-            snap_localpose.pose.position.z,
-            snap_localpose.pose.orientation.w,
-            snap_localpose.pose.orientation.x,
-            snap_localpose.pose.orientation.y,
-            snap_localpose.pose.orientation.z,
-        ]
+        last_localpose_snapshot = self.pose_to_wxyz_array(snap_localpose)
 
         input_poses = np.array(pose_list)
         current_pose = input_poses[-1]
@@ -1217,7 +1274,10 @@ class RealSenseNavflowNode(Node):
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
             plt.subplots_adjust(wspace=0.3)
             
-            self.get_logger().info(f"DEBUG -> Global Robot Pos: {current_pose[:2]}")
+            self.get_logger().info(
+                f"DEBUG -> Header-aligned Robot Pos ({snap_pose_source}, dt={snap_pose_dt:.3f}s): "
+                f"{current_pose[:2]}"
+            )
             self.get_logger().info(f"DEBUG -> Relative Target (Local): {target_diff_temp[0]}")
 
             ax1.imshow(img_np)  # original RGB image
@@ -1245,21 +1305,15 @@ class RealSenseNavflowNode(Node):
             # output_path = os.path.join(folder_path, f"sample_{self.image_count}.png")
             # cv2.imwrite(output_path, img_np[..., ::-1])  # RGB->BGR
 
-            pose_snapshot_np = np.array(
-                [
-                    snap_pose.pose.position.x,
-                    snap_pose.pose.position.y,
-                    snap_pose.pose.position.z,
-                    snap_pose.pose.orientation.w,
-                    snap_pose.pose.orientation.x,
-                    snap_pose.pose.orientation.y,
-                    snap_pose.pose.orientation.z,
-                ]
-            )
+            pose_snapshot_np = np.array(self.pose_to_wxyz_array(snap_pose))
 
             np.save(os.path.join(folder_path, f"sample_{self.image_count}_traj.npy"), traj_raw)
             np.save(os.path.join(folder_path, f"sample_{self.image_count}_score.npy"), score_raw)
             np.save(os.path.join(folder_path, f"sample_{self.image_count}_pose.npy"), pose_snapshot_np)
+            np.save(
+                os.path.join(folder_path, f"sample_{self.image_count}_pose_source.npy"),
+                np.array(pose_sources[-1]),
+            )
             np.save(
                 os.path.join(folder_path, f"sample_{self.image_count}_pose_aligned.npy"),
                 np.array(last_localpose_snapshot),
