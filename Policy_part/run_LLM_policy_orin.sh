@@ -46,11 +46,7 @@ tmux send-keys "python3 tools/usb_camera_node.py" Enter
 tmux select-pane -t 1
 tmux send-keys "source ${conda_setup} && conda activate foundation_nav" Enter 
 tmux send-keys "cd ${policy_dir}" Enter
-tmux send-keys "python3 tools/sub_agilex_system_clock.py & clock_pid=\$!" Enter
-tmux send-keys "cleanup_clock(){ kill \${clock_pid} 2>/dev/null; wait \${clock_pid} 2>/dev/null; }" Enter
-tmux send-keys "trap cleanup_clock INT TERM EXIT" Enter
-tmux send-keys "python3 tools/ros2_gps_ntrip_node.py --ros-args -p use_sim_time:=true" Enter
-tmux send-keys "cleanup_clock; trap - INT TERM EXIT" Enter
+tmux send-keys "python3 tools/ros2_gps_ntrip_node.py --ros-args -p use_agilex_time:=false" Enter
 
 # VINS-fusion replacement ROS2 Python node
 tmux select-pane -t 2 
