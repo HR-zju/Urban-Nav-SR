@@ -145,6 +145,18 @@ class SidewalkBevVideoTimingTest(unittest.TestCase):
                 process_sidewalk_ride(root, root, bev_sample_fps=2.0, use_pose_ekf=True)
 
                 trajectory = json.loads((root / "trajectory.json").read_text(encoding="utf-8"))
+                samples = json.loads((root / "samples.json").read_text(encoding="utf-8"))
+                bev_sample_trajectory = json.loads((root / "bev_sample_trajectory.json").read_text(encoding="utf-8"))
+                bev_index = json.loads((root / "bev_index.json").read_text(encoding="utf-8"))
+
+                self.assertEqual(len(trajectory), frames)
+                self.assertLess(len(samples), frames)
+                self.assertEqual(len(bev_sample_trajectory), len(samples))
+                self.assertEqual(len(bev_index["entries"]), len(samples))
+                self.assertEqual(
+                    [row["frame_idx"] for row in bev_sample_trajectory],
+                    [row["frame_idx"] for row in bev_index["entries"]],
+                )
                 self.assertGreater(trajectory[-1]["lat"] - trajectory[0]["lat"], 0.00003)
                 self.assertEqual(trajectory[0]["position_source"], "gps_smoothed")
                 self.assertTrue(str(trajectory[0]["attitude_source"]).startswith("ekf_"))

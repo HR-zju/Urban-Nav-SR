@@ -48,16 +48,18 @@ python tools/dataset_processing/process_sidewalk_dataset.py \
 默认写回原始 clip 目录：
 
 ```text
-trajectory.json
-samples.json
+trajectory.json              # 全量 FPV 每帧 pose/GNSS/heading
+bev_sample_trajectory.json     # 与 2fps BEV 一一对应的稀疏轨迹视图
+samples.json                   # 2fps BEV sample 列表
 bev_images/
 bev_index.json
 ```
 
 说明：
 
+- `trajectory.json` 是全量 FPV 帧轨迹，不再按 BEV 频率降采样。
 - `bev_images/` 是 2fps ego-aligned BEV，默认画完整 route/start/end。
-- `bev_index.json` 记录 BEV 帧与原始 FPV timestamp 的映射。
+- `bev_sample_trajectory.json`、`samples.json` 和 `bev_index.json` 记录 BEV 稀疏帧与原始 FPV timestamp 的映射。
 - `--use-pose-ekf` 现在只用于 heading 平滑；BEV center 和 route overlay 仍使用 GPS-smoothed 位置，避免无平移里程计的 EKF 把路线距离压缩。
 - `--use-ekf-position` 仅用于诊断/复现旧行为，默认不要用于数据集生成。
 - 默认不生成 `bev_video*.mp4`、north-up BEV、重复 FPV 抽帧；这些只在 debug 参数显式打开。
@@ -76,6 +78,49 @@ python tools/dataset_processing/process_chunks_26_29.py \
 ```
 
 用途：批量从 chunk 生成 `front.mp4`、pose/GPS 中间文件和最简 BEV。若使用 `--skip-existing`，注意旧逻辑可能按 `bev_video.mp4` 判断已有产物；需要重生 Phase1 BEV 时，建议先清理对应 clip 下的 `bev_images/`、`bev_index.json` 或去掉 `--skip-existing`。
+
+### 3.1 只修复 MCAP odom pose，不重抽媒体
+
+当 clip 已经有 `images/`、`front.mp4`、`bev_images/`，但 `frame_positions.npy` 被错误写成全零时，使用专用 repair 脚本，只更新里程计相关文件：
+
+```bash
+python tools/dataset_processing/repair_sidewalk_odom_from_mcap.py \
+  --dataset-root "/media/ubuntu/Extreme SSD/data" \
+  --sidewalk-root "/media/ubuntu/data1/SR-Nav Dataset/sidewalk" \
+  --chunks 26 27 28 29 \
+  --num-workers 4 \
+  --only-static-positions \
+  --report-json "/media/ubuntu/data1/SR-Nav Dataset/sidewalk/odom_repair_chunks26_29.json"
+```
+
+该脚本会优先使用全量 `frame_times.npy` / `frame_gps.npy` 重建 FPV timeline，再把 `/odom` 同步到每一个 FPV timestamp；旧版 2fps `trajectory.json` 不再决定输出数组长度。它只会重写：
+
+```text
+trajectory.json              # 修复为全量 FPV timeline
+frames_manifest.json
+mcap_extract_meta.json
+frame_positions.npy          # 长度应等于 frame_times.npy
+frame_orientations.npy
+frame_linear_velocities.npy
+frame_angular_velocities.npy
+frame_speeds.npy
+```
+
+如果个别 FPV 帧没有同步到 odom，脚本不会写 `[0,0]` 位姿，而会用最近有效 odom 填充，并在 report 里记录 `missing_odom_frames` 和 `filled_missing_odom_frames`，便于后续过滤或抽查。
+
+不会重写：
+
+```text
+images/
+front.mp4
+bev_images/
+bev_index.json
+fpv_segmentation/
+phase1/
+phase1_archive/
+```
+
+修复后再运行 Phase1 source 生成即可重新得到 calibrated trajectory label；旧 CoT 标注需要用新的 source 做 repair 或重新跑 teacher。
 
 ### 4. 生成 Phase1 source JSONL 和几何真值
 
@@ -345,7 +390,7 @@ WRITE_OVERLAYS=1 \
 ./tools/model_processing/run_sidewalk_phase1_dataset.sh
 ```
 
-`FRAME_STEP=10` 是默认值，在 20Hz FPV clip 上约等于 2fps 训练采样；低频 BEV 由 `bev_index.json` 按 timestamp 最近邻匹配，默认允许的最大时间差为 `MAX_BEV_TIME_DELTA_MS=300.0`。若需要每帧样本，可显式设置 `FRAME_STEP=1`。
+`FRAME_STEP=10` 是默认值，在全量 20Hz `trajectory.json` 上约等于 2fps 训练采样；低频 BEV 由 `bev_index.json` 按 timestamp 最近邻匹配，默认允许的最大时间差为 `MAX_BEV_TIME_DELTA_MS=300.0`。旧版 `trajectory.json` 如果已经只有 2fps，会被二次降采样，应先重新运行 `process_sidewalk_dataset.py` 生成全量轨迹，或临时设置 `FRAME_STEP=1`。若需要每帧样本，可显式设置 `FRAME_STEP=1`。
 
 只生成排序后的前三个 clip，可使用 `MAX_CLIPS=3`，不要用 `LIMIT` 代替；`LIMIT` 表示最多写入多少条样本。
 
@@ -370,7 +415,7 @@ python tools/dataset_processing/process_sidewalk_dataset.py \
   --use-pose-ekf
 ```
 
-默认会把 `trajectory.json`、`samples.json`、`bev_images/`、`bev_index.json` 写回原始 clip 目录。`--output-root` 仅保留兼容旧流程；只有显式加 `--write-to-output-root` 才会写到外部输出目录。
+默认会把全量 `trajectory.json`、稀疏 `bev_sample_trajectory.json`、`samples.json`、`bev_images/`、`bev_index.json` 写回原始 clip 目录。`--output-root` 仅保留兼容旧流程；只有显式加 `--write-to-output-root` 才会写到外部输出目录。
 
 调试视频和额外视角必须显式开启：
 
@@ -480,7 +525,7 @@ python tools/model_processing/run_sidewalk_phase1_cot_baseline.py \
 - 默认不加 `--use-pose-ekf`：使用 GPS 轨迹点计算 compass heading，并跳过距离过近的点，避免 20 FPS 相邻帧 GPS 重复或抖动导致 0°/乱跳。
 - 加 `--use-pose-ekf`：只使用 EKF 平滑 `heading_deg`；BEV 的 `lat/lng` 仍来自 GPS-smoothed 轨迹。若四元数 yaw 近似常数或无效，EKF 会改用鲁棒 GPS bearing 作为 heading 观测。
 - 不要默认使用 `--use-ekf-position`：当前 EKF 没有平移速度/里程计输入，直接使用其 x/y 会让长 clip 的 BEV 位姿滞后或距离被压缩。
-- 产物 `trajectory.json` 的 `heading_deg` 是实际送入 BEV 渲染的朝向，`position_source` 是实际送入 BEV 渲染的位置来源；`bev_images/*.bevmeta.json` 里的 `used_heading_deg`、`position_source` 是每张 BEV 图实际使用的位姿元数据。
+- 产物 `trajectory.json` 的 `heading_deg` 是全量 FPV 每帧可用的朝向，`position_source` 是轨迹位置来源；`bev_images/*.bevmeta.json` 里的 `used_heading_deg`、`position_source` 是每张 BEV 图实际使用的位姿元数据。
 - Phase1 最简 BEV 默认只生成 `bev_images/` ego-aligned 图像和 `bev_index.json`，并绘制完整 route/start/end 作为任务输入条件。`bev_index.json` 记录每张 BEV 对应的原始 `frame_idx` 和 timestamp，ms-swift Phase1 exporter 会用它把每个高频 FPV 帧映射到最近的低频 BEV 帧，默认最大时间差 `300ms`。
 - `bev_images_north_up/`、`bev_video.mp4`、`bev_video_north_up.mp4`、`bev_video_ego_aligned.mp4` 仅在显式 debug 参数打开时生成。
 

@@ -101,6 +101,7 @@ def build_baseline_system_prompt() -> str:
     return (
         "You are a sidewalk navigation assistant for Phase1 structured CoT inference. "
         "Use the FPV image and the aligned BEV image to infer safe local navigation. "
+        "Fully use both FPV and BEV environmental information and understand their cross-view relationship. "
         "Return only the required XML-like tags. Put structured observation and planning JSON sections inside <think>; "
         "put only the executable normalized FPV trajectory JSON inside <finish>. "
         "The <FPVScene> section is mandatory: first identify navigable_support, conditional_support, and risk_objects, "

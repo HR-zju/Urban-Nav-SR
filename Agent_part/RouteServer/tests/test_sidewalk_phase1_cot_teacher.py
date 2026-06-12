@@ -51,10 +51,8 @@ def _make_source_row(root: Path) -> dict:
         meta_path,
         {
             "schema_version": "sidewalk_bev_patch_meta_v1",
-            "grid_size": [16, 16],
-            "ego_cell_gt": [8, 12],
-            "target_cell_gt": [8, 4],
-            "route_polyline_cells": [[8, 12], [8, 10], [8, 8], [8, 4]],
+            "route_polyline_local_m": [[0.0, 0.0], [0.0, 2.0], [0.0, 4.0], [0.0, 6.0]],
+            "route_target_local_m": [0.0, 6.0],
             "route_theta_deg": 0.0,
             "intent_gt": "go_straight",
             "target_direction": "front",
@@ -93,17 +91,17 @@ class SidewalkPhase1CotTeacherTest(unittest.TestCase):
             self.assertIn("</Plan>\n</think>\n<finish>", answer)
             self.assertIn("navigable_support", validation.sections["FPVScene"])
             self.assertEqual(validation.sections["BEVContext"]["intent"], "go_straight")
-            self.assertEqual(validation.sections["BEVContext"]["route_theta_bin"], "[-5,5)")
             self.assertEqual(validation.sections["BEVContext"]["route_direction_bin"], "front")
-            self.assertEqual(validation.sections["BEVContext"]["topology_state"], "same_sidewalk_segment")
-            self.assertEqual(validation.sections["BEVContext"]["ego_cell"], [8, 12])
-            self.assertEqual(validation.sections["BEVContext"]["target_cell"], [8, 4])
+            self.assertNotIn("route_theta_deg", validation.sections["BEVContext"])
+            self.assertNotIn("route_theta_bin", validation.sections["BEVContext"])
+            self.assertNotIn("ego_cell", validation.sections["BEVContext"])
+            self.assertNotIn("target_cell", validation.sections["BEVContext"])
+            self.assertNotIn("grid_size", validation.sections["BEVContext"])
             self.assertEqual(validation.sections["finish"]["trajectory"], row["pixel_trajectory"])
             self.assertEqual(validation.sections["finish"]["trajectory_type"], "straight_center")
             self.assertEqual(validation.sections["finish"]["trajectory_validity"], "valid")
             self.assertEqual(validation.sections["CrossView"]["fpv_route_region"], "center")
             self.assertEqual(validation.sections["Plan"]["speed_policy"], "normal")
-            self.assertEqual(validation.sections["BEVContext"]["route_theta_deg"], 0.0)
             self.assertNotIn("route_theta_deg", validation.sections["finish"])
 
     def test_validator_rejects_teacher_that_changes_gt(self) -> None:
@@ -135,7 +133,8 @@ class SidewalkPhase1CotTeacherTest(unittest.TestCase):
             self.assertIn("occlusion_sources", manifest_row["prompt"])
             self.assertIn('<FPVScene>{"navigable_support"', manifest_row["prompt"])
             self.assertIn('<BEVContext>{"scene_summary"', manifest_row["prompt"])
-            self.assertIn("route_theta_bin", manifest_row["prompt"])
+            self.assertNotIn("route_theta_deg", manifest_row["prompt"])
+            self.assertNotIn("route_theta_bin", manifest_row["prompt"])
             self.assertIn("fpv_route_region", manifest_row["prompt"])
             self.assertIn("motion_primitive", manifest_row["prompt"])
             self.assertIn("trajectory_validity", manifest_row["prompt"])
@@ -146,7 +145,10 @@ class SidewalkPhase1CotTeacherTest(unittest.TestCase):
             self.assertIn("final point should still be on near-field visible ground support", manifest_row["prompt"])
             self.assertIn("Every trajectory point must lie on visible walkable ground support", manifest_row["prompt"])
             self.assertIn("Do not place any point in sky", manifest_row["prompt"])
-            self.assertNotIn("route_theta_gt", manifest_row["prompt"])
+            self.assertNotIn("ego_cell", manifest_row["prompt"])
+            self.assertNotIn("target_cell", manifest_row["prompt"])
+            self.assertNotIn("grid_size", manifest_row["prompt"])
+            self.assertNotIn("BEV cells", manifest_row["prompt"])
             self.assertNotIn("trajectory_norm", manifest_row["prompt"])
             self.assertNotIn("[[0.5, 0.9]", manifest_row["prompt"])
             self.assertEqual(manifest_row["response"], answer)
@@ -162,15 +164,16 @@ class SidewalkPhase1CotTeacherTest(unittest.TestCase):
             self.assertFalse(validation.valid)
             self.assertIn("text_before_nested_tag:Scene", validation.errors)
 
-    def test_validator_rejects_bev_grid_cell_change(self) -> None:
+    def test_validator_does_not_require_bev_grid_cells(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             row = _make_source_row(Path(tmp))
             evidence = load_evidence(row)
-            answer = render_template_answer(row, evidence).replace('"target_cell":[8,4]', '"target_cell":[7,4]', 1)
+            answer = render_template_answer(row, evidence)
             validation = validate_teacher_answer(answer, row, evidence, TeacherConfig(expected_points=4))
 
-            self.assertFalse(validation.valid)
-            self.assertTrue(any(error.startswith("target_cell_mismatch") for error in validation.errors))
+            self.assertTrue(validation.valid, validation.errors)
+            self.assertNotIn("ego_cell", validation.sections["BEVContext"])
+            self.assertNotIn("target_cell", validation.sections["BEVContext"])
 
     def test_generate_cot_dataset_retries_and_writes_valid_rows(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

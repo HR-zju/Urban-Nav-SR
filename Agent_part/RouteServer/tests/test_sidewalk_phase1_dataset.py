@@ -22,7 +22,6 @@ _SPEC.loader.exec_module(_MODULE)
 Phase1Config = _MODULE.Phase1Config
 build_phase1_dataset = _MODULE.build_phase1_dataset
 local_xy_m = _MODULE.local_xy_m
-local_xy_to_grid_cell = _MODULE.local_xy_to_grid_cell
 project_pose_to_fpv = _MODULE.project_pose_to_fpv
 smooth_forward_fpv_trajectory = _MODULE.smooth_forward_fpv_trajectory
 CameraParams = _MODULE.CameraParams
@@ -38,11 +37,6 @@ class SidewalkPhase1DatasetTest(unittest.TestCase):
         x_east, y_east = local_xy_m(30.0, 120.0, 30.0, 120.0001, 90.0)
         self.assertAlmostEqual(x_east, 0.0, delta=0.1)
         self.assertGreater(y_east, 9.0)
-
-    def test_grid_cell_places_ego_in_lower_center(self) -> None:
-        cfg = Phase1Config(grid_width=16, grid_height=16, side_extent_m=15.0, front_extent_m=30.0, back_extent_m=10.0)
-        self.assertEqual(local_xy_to_grid_cell(0.0, 0.0, config=cfg), [8, 12])
-        self.assertEqual(local_xy_to_grid_cell(0.0, 30.0, config=cfg), [8, 0])
 
     def test_build_phase1_dataset_writes_source_and_qa(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -92,16 +86,25 @@ class SidewalkPhase1DatasetTest(unittest.TestCase):
             self.assertEqual(label["schema_version"], "sidewalk_phase1_trajectory_v2")
             self.assertIn("trajectory_fpv_t", label)
             self.assertIn("trajectory_policy", label)
+            bev_meta = json.loads(Path(rows[0]["bev_patch_meta_path"]).read_text(encoding="utf-8"))
+            self.assertIn("route_polyline_local_m", bev_meta)
+            self.assertIn("route_target_local_m", bev_meta)
+            self.assertNotIn("grid_size", bev_meta)
+            self.assertNotIn("ego_cell_gt", bev_meta)
+            self.assertNotIn("target_cell_gt", bev_meta)
+            self.assertNotIn("route_polyline_cells", bev_meta)
             qa = json.loads(Path(rows[0]["qa_bundle_path"]).read_text(encoding="utf-8"))
             self.assertEqual(qa["schema_version"], "sidewalk_bev_fpv_qa_v1")
             self.assertIn("gt_trajectory_fpv_t", qa)
             task_types = {item["task_type"] for item in qa["samples"]}
-            self.assertIn("bev_route_theta", task_types)
+            self.assertIn("bev_route_direction", task_types)
             self.assertIn("trajectory_intent_check", task_types)
             answers_by_type = {item["task_type"]: item["teacher_answer"] for item in qa["samples"]}
-            self.assertIn("<BEVContext>", answers_by_type["bev_route_theta"])
+            self.assertIn("<BEVContext>", answers_by_type["bev_route_direction"])
+            self.assertNotIn("route_theta_deg", answers_by_type["bev_route_direction"])
+            self.assertNotIn("route_theta_bin", answers_by_type["bev_route_direction"])
             self.assertIn("<finish>", answers_by_type["trajectory_intent_check"])
-            self.assertNotIn("<BEVIntent>", answers_by_type["bev_route_theta"])
+            self.assertNotIn("<BEVIntent>", answers_by_type["bev_route_direction"])
             self.assertNotIn("<TrajectorySupport>", answers_by_type["trajectory_intent_check"])
 
     def test_build_phase1_dataset_uses_calibrated_internnav_projection(self) -> None:
@@ -153,6 +156,46 @@ class SidewalkPhase1DatasetTest(unittest.TestCase):
             self.assertAlmostEqual(row["trajectory_fpv_t"][1][2], 0.1, places=5)
             self.assertAlmostEqual(row["trajectory_fpv_tv"][1][3], 0.4, places=5)
             self.assertEqual(row["trajectory_policy"]["primary_temporal_target"], "trajectory_fpv_t")
+
+    def test_future_horizon_uses_timestamp_window_before_frame_count(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "sidewalk" / "chunk_0" / "clip_a"
+            images = root / "images"
+            bevs = root / "bev_images"
+            images.mkdir(parents=True)
+            bevs.mkdir(parents=True)
+            frame_count = 70
+            # 80ms spacing is 12.5fps.  The old fixed future_frames=50 path
+            # would produce a ~4s horizon; the timestamp horizon should keep it
+            # near 2.5s to match chunk0's 20Hz/50-frame target.
+            for idx in range(frame_count):
+                name = f"{idx:06d}"
+                Image.new("RGB", (640, 360), (20, 20, 20)).save(images / f"{name}.jpg")
+                Image.new("RGB", (512, 512), (200, 200, 200)).save(bevs / f"{name}_bev.jpg")
+            np.save(root / "frame_positions.npy", np.asarray([[float(i), 0.0] for i in range(frame_count)], dtype=np.float32))
+            np.save(root / "frame_orientations.npy", np.asarray([[1.0, 0.0, 0.0, 0.0] for _ in range(frame_count)], dtype=np.float32))
+            np.save(root / "frame_times.npy", np.asarray([idx * 80_000_000 for idx in range(frame_count)], dtype=np.int64))
+            camera = {
+                "K": [[100.0, 0.0, 320.0], [0.0, 100.0, 180.0], [0.0, 0.0, 1.0]],
+                "image_width": 640,
+                "image_height": 360,
+                "camera_height_meters": 1.0,
+            }
+            (root.parent / "camera_params.json").write_text(json.dumps(camera), encoding="utf-8")
+
+            out = Path(tmp) / "phase1"
+            report = build_phase1_dataset(
+                str(root),
+                str(out),
+                config=Phase1Config(num_points=4, frame_step=1, future_frames=50, future_horizon_sec=2.5),
+                limit=1,
+            )
+
+            self.assertEqual(report["frames_written"], 1)
+            row = json.loads((out / "manifests" / "phase1_source_train.jsonl").read_text(encoding="utf-8").splitlines()[0])
+            last_dt = row["trajectory_fpv_t"][-1][2]
+            self.assertLessEqual(last_dt, 2.5)
+            self.assertGreater(last_dt, 2.3)
 
     def test_projection_matches_internnav_formula(self) -> None:
         camera = CameraParams(

@@ -45,6 +45,18 @@ def _should_use_pose_ekf_from_meta(meta: Optional[dict[str, Any]]) -> bool:
     return False
 
 
+def _quat_xyzw_from_euler(roll: float, pitch: float, yaw: float) -> tuple[float, float, float, float]:
+    qx = np.sin(roll / 2) * np.cos(pitch / 2) * np.cos(yaw / 2) - np.cos(roll / 2) * np.sin(pitch / 2) * np.sin(yaw / 2)
+    qy = np.cos(roll / 2) * np.sin(pitch / 2) * np.cos(yaw / 2) + np.sin(roll / 2) * np.cos(pitch / 2) * np.sin(yaw / 2)
+    qz = np.cos(roll / 2) * np.cos(pitch / 2) * np.sin(yaw / 2) - np.sin(roll / 2) * np.sin(pitch / 2) * np.cos(yaw / 2)
+    qw = np.cos(roll / 2) * np.cos(pitch / 2) * np.cos(yaw / 2) + np.sin(roll / 2) * np.sin(pitch / 2) * np.sin(yaw / 2)
+    return float(qx), float(qy), float(qz), float(qw)
+
+
+def _has_odom_pose(frame: dict[str, Any]) -> bool:
+    return str(frame.get("odom_source") or "").lower() == "odom"
+
+
 def process_single_mcap(
     args_tuple: tuple,
 ) -> tuple[bool, str, Optional[str]]:
@@ -255,30 +267,44 @@ def mcap_to_sidewalk_format(
         frame_gps[i, 4] = 0.0
     np.save(output_dir / "frame_gps.npy", frame_gps)
 
-    # frame_orientations.npy (float64, shape [N, 4] - x, y, z, w quaternion)
+    # frame_orientations.npy stores ROS quaternion order: x, y, z, w.
     frame_orientations = np.zeros((num_frames, 4), dtype=np.float64)
+    frame_orientations[:, 3] = 1.0
     for i, f in enumerate(trajectory):
-        if "roll_deg" in f and "pitch_deg" in f and "attitude_yaw_deg" in f:
-            # Convert euler back to quaternion (approximate, just for compatibility)
+        if _has_odom_pose(f):
+            frame_orientations[i, 0] = float(f.get("odom_orientation_x", 0.0) or 0.0)
+            frame_orientations[i, 1] = float(f.get("odom_orientation_y", 0.0) or 0.0)
+            frame_orientations[i, 2] = float(f.get("odom_orientation_z", 0.0) or 0.0)
+            frame_orientations[i, 3] = float(f.get("odom_orientation_w", 1.0) or 1.0)
+        elif "roll_deg" in f and "pitch_deg" in f and "attitude_yaw_deg" in f:
             roll = np.radians(f["roll_deg"])
             pitch = np.radians(f["pitch_deg"])
             yaw = np.radians(f["attitude_yaw_deg"])
-            qx = np.sin(roll/2) * np.cos(pitch/2) * np.cos(yaw/2) - np.cos(roll/2) * np.sin(pitch/2) * np.sin(yaw/2)
-            qy = np.cos(roll/2) * np.sin(pitch/2) * np.cos(yaw/2) + np.sin(roll/2) * np.cos(pitch/2) * np.sin(yaw/2)
-            qz = np.cos(roll/2) * np.cos(pitch/2) * np.sin(yaw/2) - np.sin(roll/2) * np.sin(pitch/2) * np.cos(yaw/2)
-            qw = np.cos(roll/2) * np.cos(pitch/2) * np.cos(yaw/2) + np.sin(roll/2) * np.sin(pitch/2) * np.sin(yaw/2)
+            qx, qy, qz, qw = _quat_xyzw_from_euler(roll, pitch, yaw)
             frame_orientations[i, 0] = qx
             frame_orientations[i, 1] = qy
             frame_orientations[i, 2] = qz
             frame_orientations[i, 3] = qw
     np.save(output_dir / "frame_orientations.npy", frame_orientations)
 
-    # frame_positions.npy (float64, shape [N, 3])
+    # frame_positions.npy (float64, shape [N, 3]) from nearest /odom pose.
     frame_positions = np.zeros((num_frames, 3), dtype=np.float64)
+    for i, f in enumerate(trajectory):
+        if not _has_odom_pose(f):
+            continue
+        frame_positions[i, 0] = float(f.get("odom_position_x", 0.0) or 0.0)
+        frame_positions[i, 1] = float(f.get("odom_position_y", 0.0) or 0.0)
+        frame_positions[i, 2] = float(f.get("odom_position_z", 0.0) or 0.0)
     np.save(output_dir / "frame_positions.npy", frame_positions)
 
     # frame_angular_velocities.npy (float64, shape [N, 3])
     frame_angular_velocities = np.zeros((num_frames, 3), dtype=np.float64)
+    for i, f in enumerate(trajectory):
+        if not _has_odom_pose(f):
+            continue
+        frame_angular_velocities[i, 0] = float(f.get("odom_angular_velocity_x", 0.0) or 0.0)
+        frame_angular_velocities[i, 1] = float(f.get("odom_angular_velocity_y", 0.0) or 0.0)
+        frame_angular_velocities[i, 2] = float(f.get("odom_angular_velocity_z", 0.0) or 0.0)
     extracted_imu_motion = extract_dir / "frame_angular_velocities.npy"
     if extracted_imu_motion.exists():
         imu_motion = np.load(extracted_imu_motion)
@@ -301,10 +327,16 @@ def mcap_to_sidewalk_format(
 
     # frame_linear_velocities.npy (float64, shape [N, 3])
     frame_linear_velocities = np.zeros((num_frames, 3), dtype=np.float64)
+    for i, f in enumerate(trajectory):
+        if not _has_odom_pose(f):
+            continue
+        frame_linear_velocities[i, 0] = float(f.get("odom_linear_velocity_x", 0.0) or 0.0)
+        frame_linear_velocities[i, 1] = float(f.get("odom_linear_velocity_y", 0.0) or 0.0)
+        frame_linear_velocities[i, 2] = float(f.get("odom_linear_velocity_z", 0.0) or 0.0)
     np.save(output_dir / "frame_linear_velocities.npy", frame_linear_velocities)
 
     # frame_speeds.npy (float64, shape [N])
-    frame_speeds = np.zeros(num_frames, dtype=np.float64)
+    frame_speeds = np.linalg.norm(frame_linear_velocities[:, :2], axis=1).astype(np.float64)
     np.save(output_dir / "frame_speeds.npy", frame_speeds)
 
     if not quiet:

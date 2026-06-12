@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import subprocess
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterable
@@ -40,12 +41,8 @@ DEFAULT_INSTRUCTION = "Navigate safely on the sidewalk and follow the visible ro
 class Phase1Config:
     num_points: int = 16
     future_frames: int = 50
+    future_horizon_sec: float | None = 2.5
     frame_step: int = 1
-    side_extent_m: float = 15.0
-    front_extent_m: float = 30.0
-    back_extent_m: float = 10.0
-    grid_width: int = 16
-    grid_height: int = 16
     hfov_deg: float = 90.0
     min_future_distance_m: float = 0.3
     trajectory_min_y_step: float = 0.005
@@ -76,7 +73,7 @@ class CameraParams:
             K=K,
             image_width=int(data.get("image_width") or data.get("width")),
             image_height=int(data.get("image_height") or data.get("height")),
-            camera_height_meters=float(data.get("camera_height_meters", 0.41)),
+            camera_height_meters=float(data.get("camera_height_meters", 0.6)),
         )
 
 
@@ -103,6 +100,8 @@ class FrameRecord:
     position_xy: tuple[float, float] | None = None
     orientation_wxyz: tuple[float, float, float, float] | None = None
     camera_params: CameraParams | None = None
+    pose_source: str | None = None
+    pose_fallback_reason: str | None = None
 
 
 def discover_clip_dirs(root: Path) -> list[Path]:
@@ -135,6 +134,36 @@ def _is_internnav_clip(path: Path) -> bool:
     return (path / "frame_positions.npy").is_file() and (path / "frame_orientations.npy").is_file()
 
 
+def _positions_are_static(
+    positions: np.ndarray,
+    *,
+    max_displacement_m: float = 0.5,
+    max_path_length_m: float = 1.0,
+) -> bool:
+    """Return true when odom/map positions cannot support trajectory labels.
+
+    Some prepared SideWalk chunks contain valid ``frame_gps.npy`` and
+    ``trajectory.json`` but have ``frame_positions.npy`` filled with zeros.
+    Treating those zeros as calibrated map poses produces a fake stop-hold
+    trajectory for every frame.  This guard keeps the calibrated path for
+    normal InternNav clips while forcing static-pose clips onto the explicit
+    GNSS fallback path.
+    """
+
+    arr = np.asarray(positions, dtype=np.float64)
+    if arr.ndim != 2 or arr.shape[0] < 2 or arr.shape[1] < 2:
+        return True
+    xy = arr[:, :2]
+    finite_mask = np.all(np.isfinite(xy), axis=1)
+    xy = xy[finite_mask]
+    if xy.shape[0] < 2:
+        return True
+    deltas = np.diff(xy, axis=0)
+    path_length = float(np.sum(np.linalg.norm(deltas, axis=1)))
+    displacement = float(np.linalg.norm(xy[-1] - xy[0]))
+    return displacement <= float(max_displacement_m) and path_length <= float(max_path_length_m)
+
+
 def _load_camera_params(clip_dir: Path) -> CameraParams | None:
     for path in (clip_dir / "camera_params.json", clip_dir.parent / "camera_params.json"):
         if path.is_file():
@@ -149,6 +178,45 @@ def _load_optional_array(path: Path) -> np.ndarray | None:
         return np.load(path)
     except Exception:
         return None
+
+
+def _load_frame_orientation_order(clip_dir: Path) -> str | None:
+    """Read the on-disk quaternion order when the MCAP extractor records it."""
+
+    meta_path = clip_dir / "mcap_extract_meta.json"
+    if not meta_path.is_file():
+        return None
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    order = str(meta.get("frame_orientations_order") or "").strip().lower()
+    return order if order in {"xyzw", "wxyz"} else None
+
+
+def _orientation_row_to_wxyz(row: np.ndarray, *, order: str | None) -> tuple[float, float, float, float]:
+    """Convert stored quaternion rows into the builder's internal wxyz order.
+
+    RouteServer/ROS extraction stores quaternions as ``xyzw``.  Older unit
+    tests and some prepared InternNav clips used ``wxyz``.  The extractor now
+    records the order in ``mcap_extract_meta.json``; for legacy clips without
+    metadata we use a conservative identity-quaternion heuristic.
+    """
+
+    q = np.asarray(row[:4], dtype=np.float64)
+    if str(order or "").lower() == "xyzw":
+        x, y, z, w = q
+        return float(w), float(x), float(y), float(z)
+    if str(order or "").lower() == "wxyz":
+        w, x, y, z = q
+        return float(w), float(x), float(y), float(z)
+
+    # Identity in ROS xyzw is [0, 0, 0, 1], while old wxyz is [1, 0, 0, 0].
+    if abs(float(q[0])) < 0.25 and abs(float(q[1])) < 0.25 and (abs(float(q[2])) > 0.25 or abs(float(q[3])) > 0.25):
+        x, y, z, w = q
+        return float(w), float(x), float(y), float(z)
+    w, x, y, z = q
+    return float(w), float(x), float(y), float(z)
 
 
 def build_phase1_dataset(
@@ -219,7 +287,7 @@ def build_phase1_dataset(
             if limit is not None and len(source_rows) >= limit:
                 break
             record = frame_records[local_idx]
-            future = frame_records[local_idx + 1 : local_idx + 1 + max(int(cfg.future_frames), 1)]
+            future = select_future_records(frame_records, local_idx, config=cfg)
             if not future:
                 report["frames_skipped"] += 1
                 _inc(report["skip_reasons"], "no_future_frames")
@@ -247,6 +315,7 @@ def build_phase1_dataset(
         if len(source_rows) > clip_rows_before:
             report["clips_used"] += 1
 
+
     _write_jsonl(source_jsonl, source_rows)
     _write_jsonl(qa_index_jsonl, qa_index_rows)
     report["frames_written"] = len(source_rows)
@@ -256,6 +325,46 @@ def build_phase1_dataset(
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     report["report_path"] = str(report_path)
     return report
+
+
+def select_future_records(frame_records: list[FrameRecord], current_index: int, *, config: Phase1Config) -> list[FrameRecord]:
+    """Select future FPV/odom records for trajectory supervision.
+
+    The production target is a fixed time horizon, not a fixed number of
+    already-decimated records.  Chunk0 is 20Hz, so the historical
+    ``future_frames=50`` naturally spans about 2.5s.  Some later chunks have
+    irregular or lower effective FPV rates after decoding; using 50 records
+    there stretches the trajectory to 4s+.  When timestamps are available, use
+    ``future_horizon_sec`` first and keep all future records whose arrival time
+    is inside that horizon.  ``future_frames`` remains the fallback for clips
+    without timestamps or for explicit legacy runs with horizon <= 0.
+    """
+
+    if current_index < 0 or current_index >= len(frame_records):
+        return []
+    current = frame_records[current_index]
+    candidates = frame_records[current_index + 1 :]
+    if not candidates:
+        return []
+
+    horizon = config.future_horizon_sec
+    if horizon is not None and float(horizon) > 0.0 and current.timestamp is not None:
+        selected: list[FrameRecord] = []
+        for item in candidates:
+            if item.timestamp is None:
+                selected = []
+                break
+            dt = _timestamp_delta_seconds(current.timestamp, item.timestamp)
+            if dt <= 0.0:
+                continue
+            if dt <= float(horizon) + 1e-9:
+                selected.append(item)
+                continue
+            break
+        if selected:
+            return selected
+
+    return candidates[: max(int(config.future_frames), 1)]
 
 
 def build_phase1_sample(
@@ -295,7 +404,6 @@ def build_phase1_sample(
         route_theta_deg=route_theta_deg,
         intent=intent,
         anchor=anchor,
-        config=config,
     )
 
     clip_output = output_root / "clips" / record.clip_id
@@ -329,8 +437,11 @@ def build_phase1_sample(
         "intent_gt": intent,
         "anchor": anchor,
         "trajectory_source": trajectory_source,
+        "pose_source": record.pose_source,
+        "pose_fallback_reason": record.pose_fallback_reason,
         "projection": target_pack.get("projection", {}),
     }
+    _drop_none_fields(label_payload)
     label_path.write_text(json.dumps(label_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     bev_meta_path.write_text(json.dumps(bev_meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -369,6 +480,8 @@ def build_phase1_sample(
         "intent_gt": intent,
         "route_theta_deg": round(float(route_theta_deg), 3),
         "trajectory_source": trajectory_source,
+        "pose_source": record.pose_source,
+        "pose_fallback_reason": record.pose_fallback_reason,
         "bev_patch_meta_path": str(bev_meta_path),
         "trajectory_label_path": str(label_path),
         "qa_bundle_path": str(qa_path),
@@ -782,33 +895,25 @@ def build_bev_patch_meta(
     route_theta_deg: float,
     intent: str,
     anchor: str,
-    config: Phase1Config,
 ) -> dict[str, Any]:
-    """Build local metric BEV grid labels used by Stage1 topology QA."""
+    """Build local BEV route metadata used by Stage1 topology QA.
+
+    Earlier versions also emitted coarse BEV grid cells.  Those cells were
+    derived from arbitrary exporter extents rather than external annotation, so
+    they are no longer used as CoT/SFT targets.  Keep the continuous local route
+    polyline instead; it is directly derived from the same future trajectory as
+    the FPV visual prompt target.
+    """
 
     target_xy = local_path[-1]
-    ego_cell = local_xy_to_grid_cell(0.0, 0.0, config=config)
-    target_cell = local_xy_to_grid_cell(float(target_xy[0]), float(target_xy[1]), config=config)
-    route_polyline_cells = [
-        local_xy_to_grid_cell(float(x), float(y), config=config) for x, y in local_path
-    ]
     meta = {
         "schema_version": "sidewalk_bev_patch_meta_v1",
         "clip_id": record.clip_id,
         "frame_idx": record.frame_idx,
         "frame_name": record.frame_name,
         "coordinate_frame": "ego_aligned_local_meters",
-        "grid_size": [int(config.grid_width), int(config.grid_height)],
-        "extent_m": {
-            "left": float(config.side_extent_m),
-            "right": float(config.side_extent_m),
-            "front": float(config.front_extent_m),
-            "back": float(config.back_extent_m),
-        },
-        "ego_cell_gt": ego_cell,
-        "target_cell_gt": target_cell,
-        "route_polyline_cells": route_polyline_cells,
         "route_polyline_local_m": local_path.astype(float).tolist(),
+        "route_target_local_m": [float(target_xy[0]), float(target_xy[1])],
         "route_theta_deg": round(float(route_theta_deg), 3),
         "intent_gt": intent,
         "target_direction": anchor,
@@ -849,27 +954,23 @@ def build_qa_bundle(
     route_theta = float(bev_meta["route_theta_deg"])
     intent = str(bev_meta["intent_gt"])
     anchor = str(bev_meta["target_direction"])
-    target_cell = bev_meta["target_cell_gt"]
-    ego_cell = bev_meta["ego_cell_gt"]
     qa_base = f"{record.clip_id}_{record.frame_name}"
     bev_context = build_cot_bev_context(
         bev_meta=bev_meta,
         route_theta=route_theta,
         intent=intent,
         anchor=anchor,
-        ego_cell=ego_cell,
-        target_cell=target_cell,
     )
     fpv_scene = build_cot_fpv_scene()
     cross_view = build_cot_cross_view(intent=intent, anchor=anchor)
     finish = build_cot_finish(trajectory_norm=trajectory_norm, intent=intent)
     samples = [
         {
-            "sample_id": f"{qa_base}_bev_route_theta",
+            "sample_id": f"{qa_base}_bev_route_direction",
             "task_family": "A_bev",
-            "task_type": "bev_route_theta",
-            "answer_type": "angle_deg_json",
-            "question": "Estimate the route lookahead direction in the local BEV grid.",
+            "task_type": "bev_route_direction",
+            "answer_type": "direction_json",
+            "question": "Estimate the route lookahead direction from the top-down BEV route context.",
             "teacher_answer": json_tag("BEVContext", bev_context),
             "structured_target": bev_context,
             "evidence": {"bev_patch_meta_path": str(bev_meta_path)},
@@ -885,7 +986,7 @@ def build_qa_bundle(
             "question": "Classify the local navigation stage from the BEV route context.",
             "teacher_answer": json_tag("BEVContext", bev_context),
             "structured_target": bev_context,
-            "evidence": {"ego_cell_gt": ego_cell, "target_cell_gt": target_cell},
+            "evidence": {"bev_patch_meta_path": str(bev_meta_path)},
             "valid": True,
             "confidence": 0.86,
             "difficulty": "normal",
@@ -976,6 +1077,21 @@ def _iter_clip_frame_records(
     max_bev_time_delta_ms: float | None,
 ) -> Iterable[FrameRecord]:
     if _is_internnav_clip(clip_dir):
+        positions = np.asarray(np.load(clip_dir / "frame_positions.npy"), dtype=np.float64)
+        if _positions_are_static(positions) and (clip_dir / "trajectory.json").is_file():
+            if not allow_heuristic_trajectory:
+                raise ValueError(
+                    "static frame_positions.npy requires --allow-heuristic-trajectory "
+                    f"to use trajectory.json GNSS fallback: {clip_dir}"
+                )
+            trajectory = load_trajectory(clip_dir / "trajectory.json")
+            yield from _iter_legacy_trajectory_frame_records(
+                clip_dir,
+                trajectory,
+                allow_missing_bev=allow_missing_bev,
+                pose_fallback_reason="static_frame_positions",
+            )
+            return
         yield from _iter_internnav_frame_records(
             clip_dir,
             output_root=output_root,
@@ -1000,16 +1116,36 @@ def _iter_legacy_trajectory_frame_records(
     trajectory: list[dict[str, Any]],
     *,
     allow_missing_bev: bool,
+    pose_fallback_reason: str | None = None,
 ) -> Iterable[FrameRecord]:
     clip_id = clip_dir.name
     images_dir = clip_dir / "images"
     bev_dir = clip_dir / "bev_images"
+    fpv_video_path = (clip_dir / "front.mp4").resolve() if (clip_dir / "front.mp4").is_file() else None
     for fallback_idx, row in enumerate(trajectory):
         try:
-            image_path = _resolve_image_path(row, images_dir)
-            frame_name = image_path.stem
-            frame_idx = int(frame_name) if frame_name.isdigit() else int(fallback_idx)
-            bev_path = _resolve_bev_path(row, bev_dir, frame_name)
+            frame_idx = _optional_int(row.get("frame_idx"))
+            if frame_idx is None:
+                frame_idx = int(fallback_idx)
+            frame_name = str(row.get("frame_name") or f"{int(frame_idx):06d}")
+            try:
+                image_path = _resolve_image_path(row, images_dir)
+                frame_name = image_path.stem
+                frame_idx = int(frame_name) if frame_name.isdigit() else int(frame_idx)
+            except FileNotFoundError:
+                if fpv_video_path is None:
+                    continue
+                image_path = None
+            timestamp = _optional_int(row.get("timestamp"))
+            bev_path, bev_match = _resolve_internnav_bev_match(clip_dir, frame_idx, frame_name, timestamp)
+            if bev_path is None:
+                bev_path = _resolve_bev_path(row, bev_dir, frame_name)
+                bev_match = {
+                    "bev_frame_idx": None,
+                    "bev_timestamp": None,
+                    "bev_time_delta_ms": None,
+                    "bev_mapping_source": "exact_legacy_frame_name" if bev_path is not None else None,
+                }
             if bev_path is None and not allow_missing_bev:
                 continue
             yield FrameRecord(
@@ -1019,13 +1155,20 @@ def _iter_legacy_trajectory_frame_records(
                 frame_idx=frame_idx,
                 image_path=image_path,
                 bev_image_path=bev_path,
+                fpv_video_path=fpv_video_path,
+                bev_frame_idx=bev_match.get("bev_frame_idx"),
+                bev_timestamp=bev_match.get("bev_timestamp"),
+                bev_time_delta_ms=bev_match.get("bev_time_delta_ms"),
+                bev_mapping_source=bev_match.get("bev_mapping_source"),
                 lat=float(row["lat"]),
                 lng=float(row["lng"]),
                 heading_deg=float(row.get("heading_deg", 0.0) or 0.0),
-                timestamp=_optional_int(row.get("timestamp")),
+                timestamp=timestamp,
                 speed_mps=_optional_float(row.get("speed_mps") if row.get("speed_mps") is not None else row.get("speed")),
                 roll_deg=_optional_float(row.get("roll_deg")),
                 pitch_deg=_optional_float(row.get("pitch_deg")),
+                pose_source="trajectory_json_gnss",
+                pose_fallback_reason=pose_fallback_reason,
             )
         except Exception:
             continue
@@ -1046,6 +1189,7 @@ def _iter_internnav_frame_records(
     if orientations.ndim != 2 or orientations.shape[1] < 4:
         raise ValueError(f"frame_orientations.npy must have shape [N, >=4]: {clip_dir}")
     camera_params = _load_camera_params(clip_dir)
+    orientation_order = _load_frame_orientation_order(clip_dir)
     frame_times = _load_optional_array(clip_dir / "frame_times.npy")
     frame_speeds = _load_optional_array(clip_dir / "frame_speeds.npy")
     frame_count = min(len(positions), len(orientations))
@@ -1086,8 +1230,9 @@ def _iter_internnav_frame_records(
                 else None
             ),
             position_xy=(float(positions[frame_idx, 0]), float(positions[frame_idx, 1])),
-            orientation_wxyz=tuple(float(x) for x in orientations[frame_idx, :4]),
+            orientation_wxyz=_orientation_row_to_wxyz(orientations[frame_idx, :4], order=orientation_order),
             camera_params=camera_params,
+            pose_source="frame_positions",
         )
 
 
@@ -1362,6 +1507,28 @@ def _extract_video_frame(video_path: Path, frame_idx: int, output_dir: Path) -> 
             image.save(output_path, quality=95)
             return output_path.resolve()
     except Exception:
+        pass
+    try:
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                str(video_path),
+                "-vf",
+                f"select=eq(n\\,{int(frame_idx)})",
+                "-vframes",
+                "1",
+                str(output_path),
+            ],
+            check=True,
+        )
+        if output_path.is_file():
+            return output_path.resolve()
+    except Exception:
         return None
     return None
 
@@ -1468,24 +1635,14 @@ def build_cot_bev_context(
     route_theta: float,
     intent: str,
     anchor: str,
-    ego_cell: list[int],
-    target_cell: list[int],
 ) -> dict[str, Any]:
     return {
         "scene_summary": "local BEV route context",
         "route_summary": f"route continues from ego toward {anchor}",
-        "navigation_state": navigation_state_from_intent(intent),
-        "topology_state": topology_state_from_intent(intent),
-        "grid_size": bev_meta.get("grid_size") or [16, 16],
-        "ego_cell": ego_cell,
-        "target_cell": target_cell,
-        "route_theta_deg": round(float(route_theta), 3),
-        "route_theta_bin": route_theta_bin(route_theta),
         "route_direction_bin": route_direction_bin(route_theta, intent, anchor),
         "intent": intent,
         "target_direction": anchor,
-        "bev_anchor": anchor,
-        "topology_evidence": "route, ego marker, and target cell define the local BEV intent",
+        "bev_anchor": anchor
     }
 
 
@@ -1529,15 +1686,6 @@ def build_cot_finish(*, trajectory_norm: np.ndarray, intent: str) -> dict[str, A
     }
 
 
-def route_theta_bin(theta_deg: float) -> str:
-    theta = max(-180.0, min(180.0, float(theta_deg)))
-    bins = [(-180, -45), (-45, -15), (-15, -5), (-5, 5), (5, 15), (15, 45), (45, 180)]
-    for lo, hi in bins:
-        if lo <= theta < hi:
-            return f"[{lo},{hi})"
-    return "[45,180]"
-
-
 def route_direction_bin(theta_deg: float, intent: str, target_direction: str) -> str:
     if str(intent) == "stop" or str(target_direction) == "stop":
         return "stop"
@@ -1552,23 +1700,6 @@ def route_direction_bin(theta_deg: float, intent: str, target_direction: str) ->
         return "slight_right"
     return "right"
 
-
-def topology_state_from_intent(intent: str) -> str:
-    return {
-        "go_straight": "same_sidewalk_segment",
-        "turn_left": "approaching_left_turn",
-        "turn_right": "approaching_right_turn",
-        "stop": "stop_hold",
-    }.get(str(intent), "unknown")
-
-
-def navigation_state_from_intent(intent: str) -> str:
-    return {
-        "go_straight": "following_sidewalk",
-        "turn_left": "approaching_turn",
-        "turn_right": "approaching_turn",
-        "stop": "stopping",
-    }.get(str(intent), "unknown")
 
 
 def fpv_region_from_direction(direction: str) -> str:
@@ -1611,14 +1742,6 @@ def trajectory_type(trajectory: list[list[float]]) -> str:
     if delta_x > 0.035:
         return "slight_right_center"
     return "straight_center"
-
-
-def local_xy_to_grid_cell(x_m: float, y_m: float, *, config: Phase1Config) -> list[int]:
-    col_f = (float(x_m) + config.side_extent_m) / max(2.0 * config.side_extent_m, 1e-6)
-    row_f = (config.front_extent_m - float(y_m)) / max(config.front_extent_m + config.back_extent_m, 1e-6)
-    col = int(np.clip(math.floor(col_f * config.grid_width), 0, config.grid_width - 1))
-    row = int(np.clip(math.floor(row_f * config.grid_height), 0, config.grid_height - 1))
-    return [col, row]
 
 
 def _drop_none_fields(data: dict[str, Any]) -> dict[str, Any]:
@@ -1728,12 +1851,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=None, help="Maximum number of source samples to write across all clips.")
     parser.add_argument("--max-clips", type=int, default=None, help="Maximum number of discovered clips to process, after sorted discovery order.")
     parser.add_argument("--frame-step", type=int, default=10, help="Generate one sample every N FPV frames. Default 10 gives about 2fps for 20Hz FPV clips.")
-    parser.add_argument("--future-frames", type=int, default=50)
+    parser.add_argument("--future-frames", type=int, default=50, help="Fallback number of future frames when timestamps are unavailable or --future-horizon-sec <= 0.")
+    parser.add_argument(
+        "--future-horizon-sec",
+        type=float,
+        default=2.5,
+        help="Preferred future trajectory time horizon in seconds. Use <=0 to fall back to --future-frames.",
+    )
     parser.add_argument("--num-points", type=int, default=16)
-    parser.add_argument("--side-extent-m", type=float, default=15.0)
-    parser.add_argument("--front-extent-m", type=float, default=30.0)
-    parser.add_argument("--back-extent-m", type=float, default=10.0)
-    parser.add_argument("--grid-size", type=int, nargs=2, default=[16, 16], metavar=("W", "H"))
     parser.add_argument("--hfov-deg", type=float, default=90.0)
     parser.add_argument("--min-future-distance-m", type=float, default=0.3)
     parser.add_argument("--trajectory-min-y-step", type=float, default=0.005)
@@ -1759,12 +1884,8 @@ def main() -> None:
     config = Phase1Config(
         num_points=int(args.num_points),
         future_frames=int(args.future_frames),
+        future_horizon_sec=(float(args.future_horizon_sec) if float(args.future_horizon_sec) > 0.0 else None),
         frame_step=int(args.frame_step),
-        side_extent_m=float(args.side_extent_m),
-        front_extent_m=float(args.front_extent_m),
-        back_extent_m=float(args.back_extent_m),
-        grid_width=int(args.grid_size[0]),
-        grid_height=int(args.grid_size[1]),
         hfov_deg=float(args.hfov_deg),
         min_future_distance_m=float(args.min_future_distance_m),
         trajectory_min_y_step=float(args.trajectory_min_y_step),

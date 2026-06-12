@@ -2,6 +2,29 @@
 
 ## 2026-06-04
 
+### 移除 Phase1 BEV grid 伪监督
+
+- `tools/model_processing/sidewalk_phase1_dataset.py` 不再生成 `grid_size`、`ego_cell_gt`、`target_cell_gt` 和 `route_polyline_cells`。
+- `bev_patch_meta/{frame}.json` 只保留连续局部米制路线 `route_polyline_local_m` / `route_target_local_m`，以及 `route_theta_deg`、`intent_gt`、`target_direction` 等可解释导航标签。
+- `tools/model_processing/sidewalk_phase1_cot_teacher.py` 的 teacher prompt、student prompt、fallback answer 和 validator 不再要求 `<BEVContext>.ego_cell/target_cell`。
+- 这是对早期 Phase1 grid 设计的修正：旧 grid 由 exporter 局部窗口配置推导，不是外部标注真值，不应作为 CoT/SFT 监督目标。
+
+### 增加 MCAP odom 原地修复脚本
+
+- 新增 `tools/dataset_processing/repair_sidewalk_odom_from_mcap.py`。
+- 该脚本只读取原始 MCAP `/odom`，按现有 `trajectory.json` timestamp 最近邻同步 odom sample。
+- 原地更新 `trajectory.json`、`frames_manifest.json`、`mcap_extract_meta.json` 和 `frame_positions/orientations/velocities/speeds.npy`。
+- 不重抽 `images/`、不重建 `front.mp4`、不重建 `bev_images/`，适合修复 chunk26-29 已生成媒体但 odom npy 全零的问题。
+- `frame_orientations.npy` 统一写 ROS `xyzw`，并在 `mcap_extract_meta.json.frame_orientations_order` 中记录，供 Phase1 exporter 转换为内部 `wxyz`。
+
+### 修复静止 frame_positions 的 Phase1 source fallback
+
+- `tools/model_processing/sidewalk_phase1_dataset.py` 增加 `frame_positions.npy` 静止检测。
+- 当 InternNav clip 的 `frame_positions.npy` 全零或近似静止、且存在 `trajectory.json` 时，不再继续走 `calibrated_pose_projection`，避免把整段轨迹错误生成为 `stop_hold`。
+- 该场景必须显式开启 `--allow-heuristic-trajectory`，才会回退到 `trajectory.json` / GNSS heading 生成 `heuristic_gnss_projection` 标签。
+- trajectory label 和 source metadata 新增 `pose_source`、`pose_fallback_reason`，用于审计哪些样本来自 `trajectory_json_gnss` fallback。
+- 已用 chunk26 单 clip probe 验证：`local_path_m` 不再全零，`intent_gt` 从全 `stop` 恢复为真实前向导航标签。
+
 ### Phase1 QA 与 CoT section 对齐
 
 - `tools/model_processing/sidewalk_phase1_dataset.py` 生成的 Phase1 QA bundle 不再默认输出旧 `<BEVIntent>/<PointPrompt>/<TrajectorySupport>` 语法。
@@ -11,6 +34,13 @@
   - `P_prompt` -> `<finish>{...}</finish>`
 - 新 QA `structured_target` 与 teacher answer 使用同一组 CoT v5 字段，便于后续把 QA 样本混入 CoT SFT，而不会让模型学习两套不一致的标签语法。
 
+
+## 2026-06-05: Phase1 CoT 状态字段精简
+
+- 移除 `<BEVContext>` 中重复的动作态/结构态字段，避免与 `intent`、`route_direction_bin`、`target_direction` 表达重叠。
+- CoT teacher、dataset builder、baseline runner 测试和 ms-swift prompt/QA/eval 已同步到精简 schema。
+- 当前 `<BEVContext>` 只保留场景/路线摘要、粗方向、意图、目标方向和 BEV anchor。
+
 ## 2026-06-03
 
 
@@ -19,7 +49,7 @@
 - CoT schema 升级为 `sidewalk_phase1_cot_teacher_v5` / `phase1_structured_cot_v5`。
 - `Scene` 新增 `occlusion_sources`，`visibility` 改为 `clear/partial_occlusion/low_light/crowded/uncertain` 离散标签。
 - `FPVScene.risk_objects` 从自然语言字符串列表升级为 `{name, side, risk}` 结构化对象。
-- `BEVContext` 新增 `topology_state`、`route_theta_bin`、`route_direction_bin`，保留 `route_theta_deg` 作为几何审计数值。
+- `BEVContext` 保留 `route_direction_bin`，早期精确角度与重复状态字段已废弃，不再进入 CoT 监督。
 - `CrossView` 新增 `fpv_route_region`、`route_to_fpv_direction`、`safe_corridor`，用于监督 BEV route 到 FPV 安全走廊的对齐。
 - `Plan` 新增 `motion_primitive`、`lateral_preference`、`avoidance_side`、`speed_policy` 动作级标签，减少模板化长句对训练的干扰。
 - `<finish>` 新增 `trajectory_type` 和 `trajectory_validity`，不再放置 `route_theta_deg`。
@@ -40,13 +70,12 @@
 ## 2026-06-03: BEV Route Marker Legend 写入 Prompt
 
 - Phase1 CoT teacher prompt 和 ms-swift 训练 prompt 增加 BEV 图例说明：蓝色路线、绿色圆形起点、红色方形终点、橙色圆形当前 ego。
-- `<BEVContext>.topology_evidence` 要求模型显式利用 route/start/end/ego 标记判断当前导航阶段。
 - 文档补充说明：这些标记是训练输入条件，不是 debug overlay；模型应学习从 BEV 标记中读取路线进度和局部意图。
 
 ## 2026-06-03: Phase1 CoT v4 与 Review GT 轨迹审计
 
 - CoT schema 升级为 `sidewalk_phase1_cot_teacher_v4` / `phase1_structured_cot_v4`。
-- `<BEVContext>` 增加 `scene_summary`、`route_summary`、`navigation_state`、`bev_anchor`、`topology_evidence`，用于表达 BEV 场景、全局 route 描述和当前导航阶段。
+- `<BEVContext>` 增加 `scene_summary`、`route_summary`、`bev_anchor`；早期单独导航状态字段已在后续 schema 中移除。
 - `<CrossView>` 增加 `near_reference` 和 `blind_area_context`，用于记录最近可见参考物，以及 FPV 外左右/前方盲区的 BEV 语义补充。
 - `<finish>` 不再要求 `route_theta_deg`；该角度只保留在 `<BEVContext>`，作为 Stage 1 topology / intent 评估字段。
 - Archive review HTML 增加 `FPV + GT trajectory` 视图，直接用 `pixel_trajectory` 叠加 GT 轨迹，便于人工检查轨迹是否落在可通行区域。

@@ -125,6 +125,16 @@ class ImuSample:
 @dataclass(frozen=True)
 class OdometrySample:
     timestamp_ns: int
+    position_x: float | None
+    position_y: float | None
+    position_z: float | None
+    orientation_x: float | None
+    orientation_y: float | None
+    orientation_z: float | None
+    orientation_w: float | None
+    linear_velocity_x: float | None
+    linear_velocity_y: float | None
+    linear_velocity_z: float | None
     angular_velocity_x: float | None
     angular_velocity_y: float | None
     angular_velocity_z: float | None
@@ -849,24 +859,34 @@ def _parse_odometry_motion(payload: bytes, *, timestamp_ns: int, source_topic: s
     _ = reader.string()  # header.frame_id
     _ = reader.string()  # child_frame_id
     # pose: geometry_msgs/PoseWithCovariance
-    _ = reader.float64()  # position.x
-    _ = reader.float64()  # position.y
-    _ = reader.float64()  # position.z
-    _ = reader.float64()  # orientation.x
-    _ = reader.float64()  # orientation.y
-    _ = reader.float64()  # orientation.z
-    _ = reader.float64()  # orientation.w
+    position_x = reader.float64()
+    position_y = reader.float64()
+    position_z = reader.float64()
+    orientation_x = reader.float64()
+    orientation_y = reader.float64()
+    orientation_z = reader.float64()
+    orientation_w = reader.float64()
     for _ in range(36):
         _ = reader.float64()
     # twist: geometry_msgs/TwistWithCovariance
-    _ = reader.float64()  # linear.x
-    _ = reader.float64()  # linear.y
-    _ = reader.float64()  # linear.z
+    linear_velocity_x = reader.float64()
+    linear_velocity_y = reader.float64()
+    linear_velocity_z = reader.float64()
     angular_velocity_x = reader.float64()
     angular_velocity_y = reader.float64()
     angular_velocity_z = reader.float64()
     return OdometrySample(
         timestamp_ns=int(timestamp_ns),
+        position_x=float(position_x),
+        position_y=float(position_y),
+        position_z=float(position_z),
+        orientation_x=float(orientation_x),
+        orientation_y=float(orientation_y),
+        orientation_z=float(orientation_z),
+        orientation_w=float(orientation_w),
+        linear_velocity_x=float(linear_velocity_x),
+        linear_velocity_y=float(linear_velocity_y),
+        linear_velocity_z=float(linear_velocity_z),
         angular_velocity_x=float(angular_velocity_x),
         angular_velocity_y=float(angular_velocity_y),
         angular_velocity_z=float(angular_velocity_z),
@@ -1167,6 +1187,7 @@ def extract_mcap_inputs(
     gps_timestamps = [sample.timestamp_ns for sample in gps_samples]
     heading_timestamps = [sample.timestamp_ns for sample in heading_samples]
     attitude_timestamps = [sample.timestamp_ns for sample in attitude_samples]
+    odom_timestamps = [sample.timestamp_ns for sample in odom_motion_samples]
 
     trajectory: list[dict[str, Any]] = []
     frame_records: list[dict[str, Any]] = []
@@ -1190,6 +1211,7 @@ def extract_mcap_inputs(
         gps, gps_delta_ns = _nearest_sample(gps_samples, gps_timestamps, image.timestamp_ns)
         heading, heading_delta_ns = _nearest_sample(heading_samples, heading_timestamps, image.timestamp_ns)
         attitude, attitude_delta_ns = _nearest_sample(attitude_samples, attitude_timestamps, image.timestamp_ns)
+        odom, odom_delta_ns = _nearest_sample(odom_motion_samples, odom_timestamps, image.timestamp_ns)
         if gps is None or heading is None or gps_delta_ns is None or heading_delta_ns is None:
             skipped_records.append({"timestamp": image.timestamp_ns, "reason": "missing_nearest_pose"})
             continue
@@ -1229,6 +1251,28 @@ def extract_mcap_inputs(
             skipped_records.append({"timestamp": image.timestamp_ns, "reason": "missing_nearest_attitude"})
             continue
 
+        odom_payload: dict[str, Any] = {"odom_source": "missing"}
+        if odom is not None and odom_delta_ns is not None and odom_delta_ns <= max_delta_ns:
+            odom_payload = {
+                "odom_source": "odom",
+                "odom_topic": odom.source_topic,
+                "odom_schema": odom.source_schema,
+                "odom_sync_delta_s": round(float(odom_delta_ns) / 1e9, 6),
+                "odom_position_x": float(odom.position_x or 0.0),
+                "odom_position_y": float(odom.position_y or 0.0),
+                "odom_position_z": float(odom.position_z or 0.0),
+                "odom_orientation_x": float(odom.orientation_x or 0.0),
+                "odom_orientation_y": float(odom.orientation_y or 0.0),
+                "odom_orientation_z": float(odom.orientation_z or 0.0),
+                "odom_orientation_w": float(odom.orientation_w if odom.orientation_w is not None else 1.0),
+                "odom_linear_velocity_x": float(odom.linear_velocity_x or 0.0),
+                "odom_linear_velocity_y": float(odom.linear_velocity_y or 0.0),
+                "odom_linear_velocity_z": float(odom.linear_velocity_z or 0.0),
+                "odom_angular_velocity_x": float(odom.angular_velocity_x or 0.0),
+                "odom_angular_velocity_y": float(odom.angular_velocity_y or 0.0),
+                "odom_angular_velocity_z": float(odom.angular_velocity_z or 0.0),
+            }
+
         image_path = images_dir / f"{frame_index:06d}.jpg"
         image_path.write_bytes(image.data)
         trajectory_row = {
@@ -1238,6 +1282,7 @@ def extract_mcap_inputs(
             "heading_deg": float(heading.heading_deg),
             "image_path": str(image_path),
             **attitude_payload,
+            **odom_payload,
         }
         trajectory.append(trajectory_row)
         frame_records.append(
@@ -1259,6 +1304,7 @@ def extract_mcap_inputs(
                     "sync_delta_s": round(float(heading_delta_ns) / 1e9, 6),
                 },
                 "attitude": attitude_payload,
+                "odom": odom_payload,
             }
         )
         frame_index += 1
@@ -1342,12 +1388,14 @@ def extract_mcap_inputs(
         "images_dir": str(images_dir),
         "trajectory_json": str(trajectory_path),
         "frames_manifest_path": str(frames_manifest_path),
-        "imu_motion_path": str(imu_motion_path) if imu_motion_samples else None,
+        "imu_motion_path": str(imu_motion_path) if motion_source_samples else None,
         "image_topic": image_channel.topic,
         "gps_topic": gps_channel.topic,
         "heading_topic": heading_channel.topic if heading_channel is not None else None,
         "imu_topic": imu_channel.topic if imu_channel is not None else None,
+        "odom_topic": odom_channel.topic if odom_channel is not None else None,
         "pose_topic": pose_channel.topic if pose_channel is not None else None,
+        "frame_orientations_order": "xyzw",
         "attitude_policy": attitude_policy,
         "sample_fps": float(sample_fps),
         "max_sync_delta_s": float(max_sync_delta_s),
