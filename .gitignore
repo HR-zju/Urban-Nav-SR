@@ -90,3 +90,4 @@ coverage/
 Agent_part/RouteServer/apps/nav-assistant/.build/
 
 /docker/
+key.txt

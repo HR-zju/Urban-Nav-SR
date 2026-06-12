@@ -28,6 +28,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cot-glob", action="append", required=True, help="Glob for CoT JSONL files. Can be repeated.")
     parser.add_argument("--output-jsonl", required=True)
     parser.add_argument("--report-json", required=True)
+    parser.add_argument("--allow-missing", action="store_true", help="Allow dropped teacher rows and exit successfully.")
     return parser.parse_args()
 
 
@@ -85,7 +86,7 @@ def main() -> None:
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False, indent=2))
-    if missing_ids:
+    if missing_ids and not bool(args.allow_missing):
         raise SystemExit(2)
 
 

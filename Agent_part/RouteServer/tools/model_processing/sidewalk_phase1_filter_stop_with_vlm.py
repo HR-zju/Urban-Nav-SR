@@ -15,8 +15,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 from collections import Counter
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -99,6 +101,37 @@ def load_existing_decisions(path: Path) -> dict[str, dict[str, Any]]:
     return decisions
 
 
+def split_api_keys(value: str) -> list[str]:
+    keys: list[str] = []
+    for raw in str(value or "").replace("\n", ",").split(","):
+        key = raw.strip()
+        if key and key not in keys:
+            keys.append(key)
+    return keys
+
+
+def load_api_key_pool(api_key_pool: str | None, api_key_file: Path | None) -> list[str]:
+    keys: list[str] = []
+    for value in (
+        api_key_pool,
+        os.getenv("ARK_API_KEYS", ""),
+        os.getenv("LLM_API_KEYS", ""),
+    ):
+        for key in split_api_keys(value or ""):
+            if key not in keys:
+                keys.append(key)
+
+    if api_key_file is not None and api_key_file.is_file():
+        for line in api_key_file.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            for key in split_api_keys(stripped):
+                if key not in keys:
+                    keys.append(key)
+    return keys
+
+
 def build_stop_filter_system_prompt() -> str:
     return (
         "You are a strict sidewalk-navigation dataset quality reviewer. "
@@ -168,11 +201,18 @@ def load_agent_llm_helpers():
     return VisionAnalyzer, local_image_path_to_data_url
 
 
-async def call_vlm_stop_filter(row: dict[str, Any], *, image_detail: str) -> tuple[dict[str, Any], dict[str, Any]]:
+async def call_vlm_stop_filter(
+    row: dict[str, Any],
+    *,
+    image_detail: str,
+    api_key: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     VisionAnalyzer, local_image_path_to_data_url = load_agent_llm_helpers()
     analyzer = VisionAnalyzer()
+    if api_key:
+        analyzer.settings = replace(analyzer.settings, api_key=api_key)
     if not analyzer.is_available():
-        raise RuntimeError("VLM stop filter is not configured. Set ARK_API_KEY or LLM_API_KEY.")
+        raise RuntimeError("VLM stop filter is not configured. Set ARK_API_KEY, LLM_API_KEY, ARK_API_KEYS, or LLM_API_KEYS.")
 
     fpv_url = local_image_path_to_data_url(str(row["fpv_image_path"]))
     extra_urls: list[str] = []
@@ -225,6 +265,38 @@ def should_keep_decision(decision: dict[str, Any]) -> bool:
     return str(decision.get("decision") or "").lower() == "keep"
 
 
+async def evaluate_stop_row(
+    row: dict[str, Any],
+    *,
+    image_detail: str,
+    api_key: str | None,
+    unsure_policy: str,
+    min_keep_confidence: str,
+    semaphore: asyncio.Semaphore,
+) -> tuple[str, dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]:
+    async with semaphore:
+        parsed, telemetry = await call_vlm_stop_filter(row, image_detail=image_detail, api_key=api_key)
+    decision = normalize_decision(
+        parsed,
+        unsure_policy=unsure_policy,
+        min_keep_confidence=min_keep_confidence,
+    )
+    usage = telemetry_usage(telemetry)
+    sample_id = row_id(row)
+    decision_row = {
+        "id": sample_id,
+        "clip_id": row.get("clip_id") or (row.get("sidewalk_meta") or {}).get("clip_id"),
+        "frame_idx": row.get("frame_idx") or (row.get("sidewalk_meta") or {}).get("frame_idx"),
+        "fpv_image_path": row.get("fpv_image_path"),
+        "bev_image_path": row.get("bev_image_path"),
+        "route_theta_deg": route_theta(row),
+        "stop_filter": decision,
+    }
+    if usage:
+        decision_row["usage"] = usage
+    return sample_id, decision, decision_row, telemetry
+
+
 async def filter_stop_samples(
     *,
     source_jsonl: Path,
@@ -238,6 +310,9 @@ async def filter_stop_samples(
     min_keep_confidence: str,
     keep_non_stop: bool,
     progress_interval: int,
+    concurrency: int,
+    api_key_pool: str | None,
+    api_key_file: Path | None,
 ) -> dict[str, Any]:
     rows = list(read_jsonl(source_jsonl))
     if limit is not None:
@@ -262,6 +337,9 @@ async def filter_stop_samples(
         "keep_non_stop": bool(keep_non_stop),
         "unsure_policy": unsure_policy,
         "min_keep_confidence": min_keep_confidence,
+        "concurrency": max(1, int(concurrency)),
+        "effective_concurrency": max(1, int(concurrency)),
+        "api_key_count": 0,
         "counts": {},
         "decision_counts": {},
         "reason_type_counts": {},
@@ -269,12 +347,67 @@ async def filter_stop_samples(
     counts: Counter[str] = Counter()
     decision_counts: Counter[str] = Counter()
     reason_counts: Counter[str] = Counter()
+    decisions_by_id: dict[str, dict[str, Any]] = {}
+    pending_stop_rows: list[dict[str, Any]] = []
+    api_keys = load_api_key_pool(api_key_pool, api_key_file)
+    report["api_key_count"] = len(api_keys)
 
-    for idx, row in enumerate(rows, start=1):
+    for row in rows:
         sample_id = row_id(row)
         intent = row_intent(row)
         counts[f"input:{intent}"] += 1
 
+        if intent != "stop":
+            continue
+
+        cached = existing_decisions.get(sample_id)
+        if cached is not None:
+            decisions_by_id[sample_id] = dict(cached.get("stop_filter") or {})
+            counts["stop_cached_decision"] += 1
+        else:
+            pending_stop_rows.append(row)
+
+    if pending_stop_rows:
+        effective_concurrency = max(1, int(concurrency))
+        if api_keys:
+            effective_concurrency = min(effective_concurrency, len(api_keys))
+        report["effective_concurrency"] = effective_concurrency
+        semaphore = asyncio.Semaphore(effective_concurrency)
+        tasks = [
+            asyncio.create_task(
+                evaluate_stop_row(
+                    row,
+                    image_detail=image_detail,
+                    api_key=api_keys[(index - 1) % len(api_keys)] if api_keys else None,
+                    unsure_policy=unsure_policy,
+                    min_keep_confidence=min_keep_confidence,
+                    semaphore=semaphore,
+                )
+            )
+            for index, row in enumerate(pending_stop_rows, start=1)
+        ]
+        for completed, task in enumerate(asyncio.as_completed(tasks), start=1):
+            sample_id, decision, decision_row, telemetry = await task
+            decisions_by_id[sample_id] = decision
+            add_usage_to_report(report, telemetry)
+            append_jsonl(decisions_jsonl, decision_row)
+            counts["stop_new_vlm_decision"] += 1
+            if progress_interval > 0 and (completed % progress_interval == 0 or completed == len(tasks)):
+                print(
+                    json.dumps(
+                        {
+                            "vlm_progress": f"{completed}/{len(tasks)}",
+                            "cached": counts.get("stop_cached_decision", 0),
+                            "new_vlm": counts.get("stop_new_vlm_decision", 0),
+                        },
+                        ensure_ascii=False,
+                    ),
+                    flush=True,
+                )
+
+    for idx, row in enumerate(rows, start=1):
+        sample_id = row_id(row)
+        intent = row_intent(row)
         if intent != "stop":
             if keep_non_stop:
                 out = dict(row)
@@ -283,33 +416,16 @@ async def filter_stop_samples(
                 counts[f"kept:{intent}"] += 1
             continue
 
-        cached = existing_decisions.get(sample_id)
-        if cached is not None:
-            decision = dict(cached.get("stop_filter") or {})
-            counts["stop_cached_decision"] += 1
-        else:
-            parsed, telemetry = await call_vlm_stop_filter(row, image_detail=image_detail)
-            add_usage_to_report(report, telemetry)
-            usage = telemetry_usage(telemetry)
-            decision = normalize_decision(
-                parsed,
-                unsure_policy=unsure_policy,
-                min_keep_confidence=min_keep_confidence,
-            )
-            decision_row = {
-                "id": sample_id,
-                "clip_id": row.get("clip_id") or (row.get("sidewalk_meta") or {}).get("clip_id"),
-                "frame_idx": row.get("frame_idx") or (row.get("sidewalk_meta") or {}).get("frame_idx"),
-                "fpv_image_path": row.get("fpv_image_path"),
-                "bev_image_path": row.get("bev_image_path"),
-                "route_theta_deg": route_theta(row),
-                "stop_filter": decision,
+        decision = decisions_by_id.get(sample_id)
+        if decision is None:
+            decision = {
+                "decision": "keep" if unsure_policy == "keep" else "drop",
+                "reason_type": "ambiguous",
+                "confidence": "low",
+                "visible_stop_cue": "missing_decision",
+                "near_field_blocked": False,
+                "review_note": "No VLM decision was available for this stop sample.",
             }
-            if usage:
-                decision_row["usage"] = usage
-            append_jsonl(decisions_jsonl, decision_row)
-            counts["stop_new_vlm_decision"] += 1
-
         decision_counts[str(decision.get("decision") or "unknown")] += 1
         reason_counts[str(decision.get("reason_type") or "unknown")] += 1
 
@@ -326,7 +442,7 @@ async def filter_stop_samples(
             print(
                 json.dumps(
                     {
-                        "progress": f"{idx}/{len(rows)}",
+                        "write_progress": f"{idx}/{len(rows)}",
                         "kept_stop": counts.get("kept:stop", 0),
                         "rejected_stop": counts.get("rejected:stop", 0),
                         "new_vlm": counts.get("stop_new_vlm_decision", 0),
@@ -357,6 +473,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-keep-confidence", default="medium", choices=["low", "medium", "high"])
     parser.add_argument("--drop-non-stop", action="store_true", help="Only write kept stop rows to output.")
     parser.add_argument("--progress-interval", type=int, default=25)
+    parser.add_argument("--concurrency", type=int, default=1, help="Concurrent VLM calls for uncached stop rows.")
+    parser.add_argument(
+        "--api-key-pool",
+        default=None,
+        help="Comma-separated API keys. Also supports ARK_API_KEYS or LLM_API_KEYS env vars.",
+    )
+    parser.add_argument(
+        "--api-key-file",
+        default=None,
+        help="Text file containing one API key per line. Blank lines and # comments are ignored.",
+    )
     return parser.parse_args()
 
 
@@ -375,6 +502,9 @@ def main() -> None:
             min_keep_confidence=str(args.min_keep_confidence),
             keep_non_stop=not bool(args.drop_non_stop),
             progress_interval=int(args.progress_interval),
+            concurrency=int(args.concurrency),
+            api_key_pool=args.api_key_pool,
+            api_key_file=Path(args.api_key_file) if args.api_key_file else None,
         )
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
