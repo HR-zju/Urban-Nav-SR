@@ -966,6 +966,17 @@ class RealSenseNavflowNode(Node):
     # Processing thread: run ONNX on full window and publish waypoints
     # ------------------------------------------------------------------
 
+    def _refresh_inference_event(self):
+        with self.lock:
+            has_pending_frames = (
+                len(self.image_batch) == self.frames
+                and self.update_counter > self.last_processed_counter
+            )
+        if has_pending_frames:
+            self.inference_event.set()
+        else:
+            self.inference_event.clear()
+
     def process_frames(self):
         while rclpy.ok():
             if not self.inference_event.wait(timeout=0.1):
@@ -984,14 +995,15 @@ class RealSenseNavflowNode(Node):
                     batch_snapshot = None
 
             if batch_snapshot is None:
-                self.inference_event.clear()
+                self._refresh_inference_event()
                 continue
 
             try:
                 self.process_batch(batch_snapshot)
+                self._refresh_inference_event()
             except Exception as e:  # noqa: BLE001
                 self.get_logger().error(f"Error in process_batch: {e}")
-                self.inference_event.clear()
+                self._refresh_inference_event()
 
     def build_onnx_feed(self, observation: np.ndarray, goal_point: Optional[np.ndarray] = None):
         """Build ONNX feed dict based on actual model input names."""
@@ -1157,7 +1169,7 @@ class RealSenseNavflowNode(Node):
             reached_goal_msg = Bool()
             reached_goal_msg.data = bool(goal_reached_snapshot)
             self.goal_pub.publish(reached_goal_msg)
-            self.inference_event.clear()
+            self._refresh_inference_event()
             return
 
         # Keep target semantics consistent with sequential deletion logic:
@@ -1349,15 +1361,6 @@ class RealSenseNavflowNode(Node):
         reached_goal_msg = Bool()
         reached_goal_msg.data = bool(self.goal_reached)
         self.goal_pub.publish(reached_goal_msg)
-        with self.lock:
-            has_pending_frames = (
-                len(self.image_batch) == self.frames
-                and self.update_counter > self.last_processed_counter
-            )
-        if has_pending_frames:
-            self.inference_event.set()
-        else:
-            self.inference_event.clear()
 
 
 # -----------------------------------------------------------------------------
