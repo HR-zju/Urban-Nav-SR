@@ -6,6 +6,15 @@ session_name="LLM_foundation_policy_orin"
 repo_root="/home/orin26/code/Urban-Nav-SR"
 policy_dir="${repo_root}/Policy_part"
 conda_setup="/home/orin26/miniforge3/etc/profile.d/conda.sh"
+usb_camera_device="/dev/v4l/by-id/usb-Generic_USB_Camera_200901010001-video-index0"
+usb_camera_id_path="platform-3610000.usb-usb-0:2.4:1.0"
+
+if [[ ! -e "${usb_camera_device}" ]]; then
+    echo "[ERROR] USB camera device not found: ${usb_camera_device}"
+    echo "[INFO] Available video devices:"
+    ls -l /dev/video* /dev/v4l/by-id /dev/v4l/by-path 2>/dev/null
+    exit 1
+fi
 
 tmux kill-session -t $session_name 2>/dev/null
 tmux new-session -d -s $session_name
@@ -23,17 +32,21 @@ tmux select-pane -t 0
 tmux send-keys "tmux set -g mouse on" Enter
 tmux send-keys "source ${conda_setup} && conda activate foundation_nav" Enter
 tmux send-keys "cd ${policy_dir}" Enter
+# Insight 9 publishes through its CDC/NCM network device and ROS node; this
+# policy camera node must only open the Realtek UVC USB camera.
+tmux send-keys "export USB_CAMERA_DEVICE=${usb_camera_device}" Enter
+tmux send-keys "export USB_CAMERA_ID_MODEL=USB_Camera" Enter
+tmux send-keys "export USB_CAMERA_ID_VENDOR_ID=0bda" Enter
+tmux send-keys "export USB_CAMERA_ID_MODEL_ID=3035" Enter
+tmux send-keys "export USB_CAMERA_ID_SERIAL=Generic_USB_Camera_200901010001" Enter
+tmux send-keys "export USB_CAMERA_ID_PATH=${usb_camera_id_path}" Enter
 tmux send-keys "python3 tools/usb_camera_node.py" Enter
 
 # GPS / NTRIP ROS2 node
 tmux select-pane -t 1
 tmux send-keys "source ${conda_setup} && conda activate foundation_nav" Enter
 tmux send-keys "cd ${policy_dir}" Enter
-tmux send-keys "python3 tools/sub_agilex_system_clock.py & clock_pid=\$!" Enter
-tmux send-keys "cleanup_clock(){ kill \${clock_pid} 2>/dev/null; wait \${clock_pid} 2>/dev/null; }" Enter
-tmux send-keys "trap cleanup_clock INT TERM EXIT" Enter
-tmux send-keys "python3 tools/ros2_gps_ntrip_node.py --ros-args -p use_sim_time:=true" Enter
-tmux send-keys "cleanup_clock; trap - INT TERM EXIT" Enter
+tmux send-keys "python3 tools/ros2_gps_ntrip_node.py --ros-args -p use_agilex_time:=false" Enter
 
 # VINS-fusion replacement ROS2 Python node
 tmux select-pane -t 2

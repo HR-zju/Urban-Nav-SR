@@ -41,7 +41,7 @@ class GpsNtripNode(Node):
         self.declare_parameter('ntrip_mountpoint', 'RTCM33_GRCEJ')
         self.declare_parameter('serial_timeout', 0.0)
         self.declare_parameter('connect_ntrip_on_start', True)
-        self.declare_parameter('use_agilex_time', True)
+        self.declare_parameter('use_agilex_time', False)
         self.declare_parameter('agilex_time_uri', 'ws://192.168.1.102:9090')
         self.declare_parameter('agilex_time_topic', '/system_timestamp')
 
