@@ -37,6 +37,7 @@ import rclpy
 import torch
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from scipy.spatial.transform import Rotation as R
 from sensor_msgs.msg import CompressedImage, Image
 from nav_msgs.msg import Odometry
@@ -543,6 +544,9 @@ class RealSenseNavflowNode(Node):
         self.image_transport = str(image_transport)
         self.video_writer = video_writer
         self.window_name = "navflow_realsense_overlay"
+        self.overlay_queue = None
+        self.overlay_stop_event = threading.Event()
+        self.overlay_thread = None
         # Zero-overhead bypass when both recording and save_vis are disabled.
         self.enable_visualization = bool(
             self.video_writer is not None
@@ -596,6 +600,13 @@ class RealSenseNavflowNode(Node):
                 f"Publishing overlay image topic: {self.overlay_topic} "
                 f"({self.overlay_transport})"
             )
+        if self.overlay_pub is not None or self.show_window:
+            self.overlay_queue = queue.Queue(maxsize=1)
+            self.overlay_thread = threading.Thread(
+                target=self.overlay_publish_loop,
+                daemon=True,
+            )
+            self.overlay_thread.start()
 
         self.goal_reached = False
 
@@ -621,11 +632,16 @@ class RealSenseNavflowNode(Node):
 
         # RealSense image subscription. Raw is the Orin default to avoid JPEG decode.
         image_msg_type = CompressedImage if self.image_transport == "compressed" else Image
+        image_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+        )
         self.image_sub = self.create_subscription(
             image_msg_type,
             self.image_topic,
             self.image_callback,
-            10,
+            image_qos,
         )
         self.get_logger().info(
             f"Subscribing image topic: {self.image_topic} ({self.image_transport})"
@@ -842,20 +858,23 @@ class RealSenseNavflowNode(Node):
         )
         return np.ascontiguousarray(img_np.transpose(2, 0, 1), dtype=np.float32) / 255.0
 
-    def render_overlay_frame(self, frame_bgr: np.ndarray):
-        frame_resized = cv2.resize(
-            frame_bgr,
-            (1920, 1080),
-            interpolation=cv2.INTER_LINEAR,
-        )
-        if self.last_wp_np is None:
-            return frame_resized
+    def overlay_intrinsics_for_frame(self, frame_bgr: np.ndarray):
+        h, w = frame_bgr.shape[:2]
+        base_f, _base_cx, _base_cy, k = self.intrinsic_params
+        scale = min(float(w) / 1920.0, float(h) / 1080.0)
+        return [base_f * scale, float(w) / 2.0, float(h) / 2.0, k]
 
-        rgb_img = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
+    def render_overlay_frame(self, frame_bgr: np.ndarray, wp_np: Optional[np.ndarray] = None):
+        if wp_np is None:
+            wp_np = self.last_wp_np
+        if wp_np is None:
+            return frame_bgr
+
+        rgb_img = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         try:
             frame_out = project_waypoints_to_fisheye_image_with_polygon_new(
-                self.last_wp_np,
-                self.intrinsic_params,
+                wp_np,
+                self.overlay_intrinsics_for_frame(frame_bgr),
                 rgb_img,
                 save_fig=False,
                 camera_pitch_deg=self.overlay_camera_pitch_deg,
@@ -863,7 +882,7 @@ class RealSenseNavflowNode(Node):
             return frame_out
         except Exception as e:  # noqa: BLE001
             self.get_logger().warning(f"Overlay render failed: {e}")
-            return frame_resized
+            return frame_bgr
 
     @staticmethod
     def bgr_to_image_msg(frame_bgr: np.ndarray, header) -> Image:
@@ -889,6 +908,64 @@ class RealSenseNavflowNode(Node):
         msg.data = encoded.tobytes()
         return msg
 
+    def enqueue_overlay_frame(self, frame_bgr: np.ndarray, header) -> None:
+        if self.overlay_queue is None or self.overlay_stop_event.is_set():
+            return
+        wp_copy = None
+        if self.last_wp_np is not None:
+            wp_copy = np.array(self.last_wp_np, copy=True)
+        item = (frame_bgr.copy(), wp_copy, header)
+        try:
+            self.overlay_queue.put_nowait(item)
+        except queue.Full:
+            try:
+                self.overlay_queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self.overlay_queue.put_nowait(item)
+            except queue.Full:
+                pass
+
+    def overlay_publish_loop(self) -> None:
+        while rclpy.ok() and not self.overlay_stop_event.is_set():
+            try:
+                item = self.overlay_queue.get(timeout=0.1) if self.overlay_queue is not None else None
+            except queue.Empty:
+                continue
+            if item is None:
+                continue
+
+            frame_bgr, wp_np, header = item
+            display_frame = self.render_overlay_frame(frame_bgr, wp_np)
+            try:
+                if self.overlay_pub is not None:
+                    if self.overlay_transport == "compressed":
+                        overlay_msg = self.bgr_to_compressed_image_msg(display_frame, header)
+                    else:
+                        overlay_msg = self.bgr_to_image_msg(display_frame, header)
+                    if overlay_msg is not None:
+                        self.overlay_pub.publish(overlay_msg)
+                if self.show_window:
+                    cv2.imshow(self.window_name, display_frame)
+                    cv2.waitKey(1)
+            except Exception as e:  # noqa: BLE001
+                self.get_logger().warning(f"Overlay publish failed: {e}")
+
+    def close_overlay_thread(self) -> None:
+        self.overlay_stop_event.set()
+        if self.overlay_queue is not None:
+            try:
+                self.overlay_queue.put_nowait(None)
+            except Exception:  # noqa: BLE001
+                pass
+        if self.overlay_thread is not None and self.overlay_thread.is_alive():
+            self.overlay_thread.join(timeout=1.0)
+
+    def destroy_node(self):
+        self.close_overlay_thread()
+        return super().destroy_node()
+
     def image_callback(self, msg):
         try:
             image_bgr = None
@@ -904,17 +981,7 @@ class RealSenseNavflowNode(Node):
             if self.show_window or self.overlay_pub is not None:
                 if image_bgr is None:
                     image_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
-                display_frame = self.render_overlay_frame(image_bgr)
-                if self.overlay_pub is not None:
-                    if self.overlay_transport == "compressed":
-                        overlay_msg = self.bgr_to_compressed_image_msg(display_frame, msg.header)
-                    else:
-                        overlay_msg = self.bgr_to_image_msg(display_frame, msg.header)
-                    if overlay_msg is not None:
-                        self.overlay_pub.publish(overlay_msg)
-                if self.show_window:
-                    cv2.imshow(self.window_name, display_frame)
-                    cv2.waitKey(1)
+                self.enqueue_overlay_frame(image_bgr, msg.header)
 
             # Timestamp for rate control of ONNX enqueue (video itself runs at
             # full input frame rate).
@@ -1379,7 +1446,7 @@ def parse_args():
     parser.add_argument(
         "--distance_threshold",
         type=float,
-        default=2.0,
+        default=10.0,
         help="Distance threshold used in odom-based logic (default: 10)",
     )
     parser.add_argument(
