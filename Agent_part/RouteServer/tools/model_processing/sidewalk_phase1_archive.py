@@ -49,7 +49,8 @@ from sidewalk_phase1_cot_teacher import (  # noqa: E402
 ARCHIVE_SCHEMA_VERSION = "sidewalk_phase1_archive_v1"
 DEFAULT_SYSTEM_PROMPT = (
     "You are a sidewalk navigation assistant. Infer local navigation intent from "
-    "FPV and BEV observations and output feasible FPV visual prompt trajectories."
+    "FPV and BEV observations and output feasible FPV visual prompt trajectories. "
+    "Fully use both FPV and BEV environmental information and understand their cross-view relationship."
 )
 REQUIRED_COT_SECTIONS = ("Scene", "FPVScene", "BEVContext", "CrossView", "Plan")
 SIDECAR_KEYS = (
@@ -264,7 +265,7 @@ def process_one_row(
 
     train_row = {
         "messages": [
-            {"role": "system", "content": row.get("system_prompt") or DEFAULT_SYSTEM_PROMPT},
+            {"role": "system", "content": normalize_system_prompt(row.get("system_prompt"))},
             {"role": "user", "content": build_training_prompt(row)},
             {"role": "assistant", "content": response},
         ],
@@ -285,6 +286,20 @@ def process_one_row(
         }
     )
     return train_row, review, [], warnings, media_ops
+
+
+def normalize_system_prompt(value: Any) -> str:
+    """Keep archived training prompts aligned with the current SideWalk CoT contract."""
+
+    text = str(value or "").strip()
+    if not text:
+        return DEFAULT_SYSTEM_PROMPT
+    cross_view_sentence = (
+        "Fully use both FPV and BEV environmental information and understand their cross-view relationship."
+    )
+    if cross_view_sentence in text:
+        return text
+    return f"{text} {cross_view_sentence}"
 
 
 def validate_row_basics(row: dict[str, Any], *, expected_points: int) -> list[str]:
@@ -377,6 +392,9 @@ def archive_sidecars(row: dict[str, Any], *, clip_id: str, frame_name: str, side
             continue
         dest = sidecar_root / clip_id / dirname / f"{frame_name}{source.suffix or '.json'}"
         dest.parent.mkdir(parents=True, exist_ok=True)
+        if dest.exists():
+            archived[key] = dest
+            continue
         if source.resolve() != dest.resolve():
             shutil.copy2(source, dest)
         archived[key] = dest
@@ -393,7 +411,8 @@ def write_cot_sections(response: str, path: Path, *, validation_sections: dict[s
             value = parse_json_object(body or "") if body else None
         sections[tag] = value
     sections["finish"] = validation_sections.get("finish") or parse_json_object(extract_tag(response, "finish") or "")
-    path.write_text(json.dumps(sections, ensure_ascii=False, indent=2), encoding="utf-8")
+    if not path.exists():
+        path.write_text(json.dumps(sections, ensure_ascii=False, indent=2), encoding="utf-8")
     return path
 
 

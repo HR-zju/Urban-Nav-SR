@@ -424,13 +424,13 @@ class RealSenseNavflowNode(Node):
         # Odom subscriptions
         self.localodom_sub = self.create_subscription(
             Odometry,
-            "/agilex/odom",
+            "/globalEstimator/global_odometry",
             self.localodom_callback,
             20,
         )
         self.odom_sub = self.create_subscription(
             Odometry,
-            "/agilex/odom",
+            "/globalEstimator/global_odometry",
             self.odom_callback,
             100,
         )

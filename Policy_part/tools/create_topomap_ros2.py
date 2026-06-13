@@ -71,7 +71,7 @@ class CreateTopomapNode(Node):
         # 创建订阅者
         self.odom_sub = self.create_subscription(
             Odometry,
-            '/agilex/odom',
+            '/globalEstimator/global_odometry',
             self.odom_callback,
             100
         )

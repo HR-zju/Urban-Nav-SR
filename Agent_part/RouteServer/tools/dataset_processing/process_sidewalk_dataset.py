@@ -274,6 +274,22 @@ def _select_indices_by_fps(times_arr: np.ndarray, sample_fps: float) -> list[int
     return selected
 
 
+def _estimate_fps_from_timestamps(times_arr: np.ndarray, default_fps: float = 20.0) -> float:
+    """Estimate the source frame rate from monotonic timestamps."""
+
+    arr = np.asarray(times_arr).reshape(-1)
+    if len(arr) < 2:
+        return float(default_fps)
+    diffs = np.diff(arr.astype(np.int64))
+    valid = diffs[diffs > 0]
+    if len(valid) == 0:
+        return float(default_fps)
+    median_dt_s = float(np.median(valid)) / 1e9
+    if median_dt_s <= 0:
+        return float(default_fps)
+    return 1.0 / median_dt_s
+
+
 def _route_path_for_bev_frame(
     route_points: list[tuple[float, float]],
     frame_pos: int,
@@ -480,12 +496,17 @@ def process_sidewalk_ride(
         f"selected {len(selected_indices)} BEV frames at {bev_sample_fps:g}fps"
     )
 
-    # Step 2: Build trajectory
+    all_indices = list(range(num_frames_total))
+    trajectory_sample_fps = _estimate_fps_from_timestamps(times_arr, default_fps=float(sample_fps))
+
+    # Step 2: Build a full per-FPV-frame trajectory.  BEV images are sampled
+    # below, but trajectory.json must stay dense so downstream Phase1 builders
+    # can choose their own FPV sampling rate and then timestamp-match BEV.
     trajectory = []
 
     # Smooth GPS positions first so the BEV center does not jitter with raw point noise.
     raw_positions: list[tuple[float, float]] = []
-    for data_idx in selected_indices:
+    for data_idx in all_indices:
         raw_positions.append((float(gps_arr[data_idx, 0]), float(gps_arr[data_idx, 1])))
 
     window_size = 7
@@ -504,12 +525,11 @@ def process_sidewalk_ride(
 
     default_heading = raw_headings[0] if raw_headings else 0.0
 
-    # Apply sliding window smoothing to headings
+    # Apply sliding window smoothing to headings.
     smoothed_headings = raw_headings.copy()
-    window_size = 7  # 7-point window
+    window_size = 7
 
     for i in range(len(raw_headings)):
-        # Collect nearby headings
         window = []
         for j in range(max(0, i - window_size // 2), min(len(raw_headings), i + window_size // 2 + 1)):
             h = raw_headings[j]
@@ -524,16 +544,15 @@ def process_sidewalk_ride(
     # BEV position and route overlay must stay tied to the measured GNSS path.
     # The current PoseEKF has no translational odometry input, so using its x/y
     # state can shrink long clips and make FPV frames appear behind the BEV route
-    # stage.  Keep EKF position opt-in for diagnostics, but use it for heading
+    # stage. Keep EKF position opt-in for diagnostics, but use it for heading
     # smoothing only in the normal dataset path.
     position_source = "gps_smoothed"
     heading_source = "gps_robust"
 
     if use_pose_ekf:
         print("Using Pose EKF for heading smoothing; BEV position remains GPS-smoothed.")
-        # build yaw list from quaternion orientations for selected indices
         yaw_list = []
-        for data_idx in selected_indices:
+        for data_idx in all_indices:
             qx = float(ori_arr[data_idx, 0])
             qy = float(ori_arr[data_idx, 1])
             qz = float(ori_arr[data_idx, 2])
@@ -544,8 +563,8 @@ def process_sidewalk_ride(
             compass_yaw = (90.0 - float(yaw_deg)) % 360.0
             yaw_list.append(compass_yaw)
 
-        first_idx = selected_indices[0]
-        use_yaw_obs, yaw_reason = _is_yaw_observation_reliable(yaw_list, ori_arr, selected_indices)
+        first_idx = all_indices[0]
+        use_yaw_obs, yaw_reason = _is_yaw_observation_reliable(yaw_list, ori_arr, all_indices)
         heading_obs = yaw_list if use_yaw_obs else smoothed_headings
         heading_obs_source = "quaternion" if use_yaw_obs else "gps"
         init_heading = heading_obs[0] if heading_obs else default_heading
@@ -557,7 +576,7 @@ def process_sidewalk_ride(
         fused_positions = []
         fused_headings = []
         prev_time_ns = int(times_arr[first_idx])
-        for i, data_idx in enumerate(selected_indices):
+        for i, data_idx in enumerate(all_indices):
             t_ns = int(times_arr[data_idx])
             dt = (t_ns - prev_time_ns) / 1e9 if i > 0 else 0.0
             if imu_omega_arr is not None and data_idx < len(imu_omega_arr):
@@ -589,26 +608,19 @@ def process_sidewalk_ride(
             position_source = "gps_smoothed"
         smoothed_headings = fused_headings
         heading_source = f"ekf_{heading_obs_source}"
-        # Print a quick comparison for the first few frames: quaternion yaw, gps heading, ekf heading
         print(f"[DEBUG] First 5 frame heading comparisons (quaternion_yaw_deg | gps_heading_deg | ekf_heading_deg, obs={heading_obs_source}):")
-        for k in range(min(5, len(selected_indices))):
+        for k in range(min(5, len(all_indices))):
             qyaw = yaw_list[k]
             gps_h = raw_headings[k] if k < len(raw_headings) else None
             ekf_h = smoothed_headings[k]
-            print(f"  frame {k}: {qyaw:.6f} | {gps_h:.6f} | {ekf_h:.6f}")
+            print(f"  frame {all_indices[k]}: {qyaw:.6f} | {gps_h:.6f} | {ekf_h:.6f}")
 
-    for img_idx, data_idx in enumerate(selected_indices):
-        # GPS format looks like: [lat, lng, alt, ?, ?]
-        lat, lng = smoothed_positions[img_idx]
-
-        # Use smoothed heading
-        heading_deg = smoothed_headings[img_idx]
-
-        # Fallback if heading is NaN
+    for traj_pos, data_idx in enumerate(all_indices):
+        lat, lng = smoothed_positions[traj_pos]
+        heading_deg = smoothed_headings[traj_pos]
         if math.isnan(heading_deg):
             heading_deg = default_heading
 
-        # Still get roll/pitch from quaternion (though they're 0)
         qx = float(ori_arr[data_idx, 0])
         qy = float(ori_arr[data_idx, 1])
         qz = float(ori_arr[data_idx, 2])
@@ -619,7 +631,6 @@ def process_sidewalk_ride(
         if extract_fpv_images:
             image_path = _extract_video_frame_by_index(mp4_path, data_idx, output_dir / "images" / f"{data_idx:06d}.jpg")
 
-        # Add to trajectory
         item = {
             "frame_idx": int(data_idx),
             "frame_name": f"{int(data_idx):06d}",
@@ -637,10 +648,16 @@ def process_sidewalk_ride(
             item["image_path"] = str(image_path.resolve())
         trajectory.append(item)
 
-    # Save trajectory.json
+    # Save dense trajectory.json for every FPV frame. BEV-only sampling is saved
+    # separately below so downstream dataset builders do not double-downsample.
     traj_path = output_dir / "trajectory.json"
     traj_path.write_text(json.dumps(trajectory, indent=2), encoding="utf-8")
-    print(f"Saved trajectory: {traj_path}")
+    print(f"Saved full trajectory: {traj_path} ({len(trajectory)} frames)")
+
+    bev_trajectory = [trajectory[int(idx)] for idx in selected_indices if int(idx) < len(trajectory)]
+    bev_sample_traj_path = output_dir / "bev_sample_trajectory.json"
+    bev_sample_traj_path.write_text(json.dumps(bev_trajectory, indent=2), encoding="utf-8")
+    print(f"Saved BEV-sampled trajectory: {bev_sample_traj_path} ({len(bev_trajectory)} frames)")
 
     # Step 3: Generate minimal BEV maps in the original sidewalk dir. Phase1
     # keeps one ego-aligned BEV by default, and the BEV training input includes
@@ -675,14 +692,15 @@ def process_sidewalk_ride(
             bev_alignment="north_up",
         )
 
-    # Global trajectory - all GPS points
+    # Global trajectory - all FPV frame GPS points. BEV images are sparse, but
+    # the route overlay should still represent the complete clip path.
     global_nav_path = smoothed_positions
 
     samples = []
     bev_index_entries = []
     mode_text = str(bev_alignment) if north_up_options is None else f"{bev_alignment} and north-up"
-    print(f"Generating {mode_text} BEV maps for {len(trajectory)} frames...")
-    for i, frame in enumerate(tqdm(trajectory, desc="Generating BEV")):
+    print(f"Generating {mode_text} BEV maps for {len(bev_trajectory)} sampled frames...")
+    for i, frame in enumerate(tqdm(bev_trajectory, desc="Generating BEV")):
         lat = frame["lat"]
         lng = frame["lng"]
         heading_deg = frame["heading_deg"]
@@ -690,10 +708,10 @@ def process_sidewalk_ride(
         fpv_image_path = Path(frame["image_path"]) if frame.get("image_path") else None
         route_overlay_path, route_overlay_meta = _route_path_for_bev_frame(
             global_nav_path,
-            i,
+            int(frame.get("frame_idx", i)),
             route_scope=str(bev_route_scope) if draw_bev_trajectory else "none",
             lookahead_s=float(bev_route_lookahead_s),
-            bev_sample_fps=float(bev_sample_fps),
+            bev_sample_fps=float(trajectory_sample_fps),
         )
 
         try:
@@ -821,8 +839,8 @@ def process_sidewalk_ride(
     if samples and write_bev_videos:
         try:
             print("Generating BEV videos...")
-            bev_timestamps_ns = [int(frame["timestamp"]) for frame in trajectory if frame.get("timestamp") is not None]
-            if len(bev_timestamps_ns) != len(trajectory):
+            bev_timestamps_ns = [int(frame["timestamp"]) for frame in bev_trajectory if frame.get("timestamp") is not None]
+            if len(bev_timestamps_ns) != len(bev_trajectory):
                 bev_timestamps_ns = None
             generate_bev_mp4(bev_images_dir, sidewalk_dir, bev_sample_fps, timestamps_ns=bev_timestamps_ns)
             generate_bev_mp4(

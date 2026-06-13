@@ -9,7 +9,7 @@ Agent 仓库负责离线生成可审计数据：
 ```text
 raw/prepared SideWalk clip
   -> frame_positions.npy + frame_orientations.npy + camera_params.json + FPV/BEV images
-  -> 2fps ego-aligned bev_images + bev_index.json
+  -> full-FPV trajectory.json + 2fps ego-aligned bev_images/bev_index.json
   -> trajectory label + BEV topology meta + QA bundle
   -> phase1_source_*.jsonl
   -> LLM Teacher structured CoT + validator
@@ -33,7 +33,7 @@ Phase1 分成四段，不能混用职责：
 
 | 脚本 | 职责 |
 | --- | --- |
-| `tools/dataset_processing/process_sidewalk_dataset.py` | 从 `front.mp4`、pose npy 生成最简 2fps ego-aligned `bev_images/`、`bev_index.json`、`trajectory.json`；FPV JPG、north-up BEV、BEV mp4 均为显式 debug 选项。 |
+| `tools/dataset_processing/process_sidewalk_dataset.py` | 从 `front.mp4`、pose npy 生成全量 FPV `trajectory.json`，同时生成最简 2fps ego-aligned `bev_images/`、`bev_index.json`、`bev_sample_trajectory.json`；FPV JPG、north-up BEV、BEV mp4 均为显式 debug 选项。 |
 | `tools/model_processing/sidewalk_phase1_dataset.py` | 从 InternNav clip 或显式 fallback clip 生成 Phase1 source JSONL、trajectory label、BEV patch meta、QA bundle。 |
 | `tools/model_processing/sidewalk_phase1_cot_teacher.py` | 调用 Agent VLM/LLM，为 Phase1 source JSONL 生成强制校验的 structured CoT 监督。 |
 | `tools/model_processing/sidewalk_phase1_archive.py` | 校验 CoT/几何一致性，归档 FPV/BEV/sidecar，并生成 ms-swift 直接训练 JSONL。 |
@@ -41,6 +41,7 @@ Phase1 分成四段，不能混用职责：
 | `tools/model_processing/run_sidewalk_phase1_dataset.sh` | 一键运行 Phase1 数据构建和数据评估。 |
 | `tools/model_processing/run_sidewalk_phase1_cot_teacher.sh` | 一键运行 Phase1 CoT teacher 和 validator。 |
 | `tools/model_processing/run_sidewalk_phase1_archive.sh` | 一键运行 CoT 合理性判定和训练数据归档。 |
+| `tools/dataset_processing/repair_sidewalk_odom_from_mcap.py` | 只从原始 MCAP `/odom` 修复已处理 clip 的 odom pose/velocity，不重抽 FPV/BEV 媒体。 |
 
 ## 3. 输入要求
 
@@ -66,6 +67,41 @@ clip/
 | `frame_speeds.npy` | 可选 `[N]` 速度，优先用于生成 `trajectory_fpv_tv` 的速度监督；缺失时由 local path 差分估计。 |
 | `images/` / `front_images/` / `front.mp4` | FPV 输入。若只有 `front.mp4`，构建器会把访问到的帧抽到输出目录。 |
 | `bev_images/` | BEV 输入。 |
+
+如果原始 MCAP 中存在 `/odom`，推荐先用 `repair_sidewalk_odom_from_mcap.py` 原地修复
+prepared clip 的 odom 产物：
+
+```bash
+python tools/dataset_processing/repair_sidewalk_odom_from_mcap.py \
+  --dataset-root "/media/ubuntu/Extreme SSD/data" \
+  --sidewalk-root "/media/ubuntu/data1/SR-Nav Dataset/sidewalk" \
+  --chunks 26 27 28 29 \
+  --num-workers 4 \
+  --only-static-positions
+```
+
+该脚本优先使用全量 `frame_times.npy` / `frame_gps.npy` 重建 FPV timeline，再同步 `/odom`；旧版 2fps `trajectory.json` 不再决定输出数组长度。它只更新 `trajectory.json`、`frames_manifest.json`、`mcap_extract_meta.json` 和
+`frame_positions/orientations/velocities/speeds.npy`，不会重抽 `images/`、`front.mp4` 或
+`bev_images/`。若个别 FPV 帧缺 odom，同步结果会用最近有效 odom 填充并在 report 记录 `filled_missing_odom_frames`，避免写入 `[0,0]` 跳变。`frame_orientations.npy` 的磁盘约定为 ROS `xyzw`，并通过
+`mcap_extract_meta.json.frame_orientations_order = "xyzw"` 告诉 Phase1 exporter 在内部转换成
+`wxyz`。
+
+例外情况：部分 prepared chunk 的 `frame_positions.npy` 可能全零或近似静止，但
+`trajectory.json` / `frame_gps.npy` 中仍有真实 GNSS 轨迹。Phase1 exporter 会检测这类静止
+pose；如果同时显式传入 `--allow-heuristic-trajectory`，则回退到 `trajectory.json` /
+GNSS heading 生成标签，并在 metadata 中写入：
+
+```json
+{
+  "trajectory_source": "heuristic_gnss_projection",
+  "pose_source": "trajectory_json_gnss",
+  "pose_fallback_reason": "static_frame_positions"
+}
+```
+
+该 fallback 仅用于修复无效 pose 的 prepared 数据，不等同于标定投影。生成后必须检查
+`local_path_m`、`intent_gt`、`route_theta_deg` 和 `trajectory_norm`，确认不再出现全零路径或
+全量 `stop_hold`。
 
 标定投影链路：
 
@@ -254,7 +290,7 @@ sidewalk_phase1_archive/
 }
 ```
 
-这样可以只保存 2fps BEV，同时默认对每一个 20fps FPV/pose 帧生成训练样本；每个 FPV 样本会匹配 timestamp 最近、且默认时间差不超过 `300ms` 的 BEV。若要降采样训练样本，可显式设置 `FRAME_STEP` 或 `--frame-step`。
+这样可以只保存 2fps BEV，同时让 `trajectory.json` 保持 20fps FPV/pose 全量帧；Phase1 exporter 可按 `FRAME_STEP` 自行采样 FPV 样本，并为每个样本匹配 timestamp 最近、且默认时间差不超过 `300ms` 的 BEV。若输入来自旧版稀疏 `trajectory.json`，需要先重新运行 `process_sidewalk_dataset.py`，或临时把 `FRAME_STEP` 设为 `1` 避免二次降采样。
 
 FPV trajectory label 会在标定投影后执行一次近场修正：第一个点固定为 bottom-center anchor `(0.5, 0.9)`，后续点必须沿图像 y 方向单调向前移动。过近 future pose 投影到图像底部时，会被插值平滑到下一个有效前向点，避免训练目标出现“先往下再往前”的回折。
 
@@ -264,21 +300,20 @@ FPV trajectory label 会在标定投影后执行一次近场修正：第一个�
 | --- | --- | --- |
 | `calibrated_pose_projection` | InternNav pose + camera 标定投影。 | 是 |
 | `heuristic_pose_projection` | 有 pose 但缺 camera params，用 HFOV 启发式生成。 | 否 |
-| `heuristic_gnss_projection` | 旧 `trajectory.json` GNSS/heading fallback。 | 否 |
+| `heuristic_gnss_projection` | `trajectory.json` GNSS/heading fallback；用于旧格式或静止 `frame_positions.npy` 修复。 | 条件使用 |
 
 ### 4.2 BEV patch meta
 
-`bev_patch_meta/{frame}.json` 是 Stage1 拓扑 QA 和审计目标：
+`bev_patch_meta/{frame}.json` 是 Stage1 拓扑 QA 和审计目标。这里不再输出
+`ego_cell_gt`、`target_cell_gt` 或 `grid_size`：这些字段来自 exporter 的局部窗口配置，
+不是外部标注真值，不适合作为 CoT/SFT 监督目标。Phase1 保留连续局部米制路线和语义导航状态。
 
 ```json
 {
   "schema_version": "sidewalk_bev_patch_meta_v1",
   "coordinate_frame": "ego_aligned_local_meters",
-  "grid_size": [16, 16],
-  "extent_m": {"left": 15.0, "right": 15.0, "front": 30.0, "back": 10.0},
-  "ego_cell_gt": [8, 12],
-  "target_cell_gt": [8, 4],
-  "route_polyline_cells": [[8, 12], [8, 10], [8, 8]],
+  "route_polyline_local_m": [[0.0, 0.0], [0.2, 2.0], [0.5, 4.0]],
+  "route_target_local_m": [0.5, 4.0],
   "route_theta_deg": 0.0,
   "intent_gt": "go_straight",
   "target_direction": "front",
@@ -286,7 +321,8 @@ FPV trajectory label 会在标定投影后执行一次近场修正：第一个�
 }
 ```
 
-注意：当前 grid 是 local metric grid，不是直接从 BEV raster 像素反推的语义分割网格。这样做的好处是可复现、无需地图语义服务，适合 Phase1。
+`route_polyline_local_m` 和 `route_target_local_m` 只用于离线 teacher/validator 约束
+`route_theta_deg`、`intent_gt`、`target_direction` 和最终 FPV trajectory，不会作为学生 prompt 中的输入泄露。
 
 ### 4.3 QA bundle
 
@@ -308,8 +344,6 @@ CoT v5 对齐：teacher answer 输出 `<BEVContext>/<FPVScene>/<CrossView>/<Plan
       "task_type": "bev_route_theta",
       "teacher_answer": "<BEVContext>{...}</BEVContext>",
       "structured_target": {
-        "navigation_state": "following_sidewalk",
-        "topology_state": "same_sidewalk_segment",
         "route_theta_deg": 0.0,
         "route_theta_bin": "[-5,5)",
         "route_direction_bin": "front",
@@ -356,8 +390,9 @@ WRITE_OVERLAYS=1 \
 
 - 只写 `bev_images/` ego-aligned BEV。
 - `--bev-sample-fps` 默认 2fps。
-- 写 `bev_index.json`，用于 FPV 高帧率到 BEV 低帧率的 timestamp 最近邻匹配。
-- 默认把 `trajectory.json`、`samples.json`、`bev_images/`、`bev_index.json` 全部写入原始 clip 目录，便于后续直接扫 `/media/ubuntu/data1/SR-Nav Dataset/sidewalk` 制作数据集。
+- 写 `trajectory.json`，包含每个原始 FPV frame 的 pose/GNSS/heading；它不再按 BEV 频率降采样。
+- 写 `bev_index.json` 和 `bev_sample_trajectory.json`，用于 FPV 高帧率到 BEV 低帧率的 timestamp 最近邻匹配。
+- 默认把 `trajectory.json`、`bev_sample_trajectory.json`、`samples.json`、`bev_images/`、`bev_index.json` 全部写入原始 clip 目录，便于后续直接扫 `/media/ubuntu/data1/SR-Nav Dataset/sidewalk` 制作数据集。
 - `--use-pose-ekf` 只平滑 BEV heading，不再覆盖 BEV center/route 的 GPS 位置；如需诊断旧行为才显式加 `--use-ekf-position`。
 - 默认在 BEV 上绘制完整 route/start/end。route 是训练输入条件，不是 debug overlay；图例固定为蓝色路线、绿色圆形起点、红色方形终点、橙色圆形当前 ego。模型需要学会从这些标记判断自己处于路线的哪个阶段。其 GPS 点与 OSM raster 使用同一套 Web-Mercator -> PIL rotate -> crop -> resize 变换，保证起点、终点和路线相对地图不漂移。
 - 如需消融，可用 `--bev-route-scope local_future` 只画当前帧之后的局部路线，或用 `--no-bev-route-overlay` 关闭路线。
@@ -376,7 +411,7 @@ python tools/dataset_processing/process_sidewalk_dataset.py \
   --use-pose-ekf
 ```
 
-注意：只要 agent 固定在中心，连续播放时 OSM 背景就会随 agent 位移发生平移；这是 ego-centered/local-centered 坐标系的必然结果。固定 OSM 背景、agent 在地图上移动属于 global debug map，不应作为 Phase1 默认训练输入。若 FPV 已经过路口但 BEV 仍明显滞后，优先检查 `trajectory.json` 的 `position_source` 和 raw GPS/`frame_positions.npy` 位移；不要用无平移里程计的 EKF x/y 作为 BEV 位置。
+注意：只要 agent 固定在中心，连续播放时 OSM 背景就会随 agent 位移发生平移；这是 ego-centered/local-centered 坐标系的必然结果。固定 OSM 背景、agent 在地图上移动属于 global debug map，不应作为 Phase1 默认训练输入。若 FPV 已经过路口但 BEV 仍明显滞后，优先检查 `trajectory.json` 是否为全量 FPV 帧、`bev_index.json` 是否按 2fps timestamp 对齐，以及 raw GPS/`frame_positions.npy` 位移；不要用无平移里程计的 EKF x/y 作为 BEV 位置。
 
 ### 5.2 只运行构建器
 
@@ -435,10 +470,9 @@ Validator 会检查：
 - 所有 tag 是否存在，且没有 tag 外说明文字。
 - `<think>` 内是否只包含 `Scene/FPVScene/BEVContext/CrossView/Plan` 五个结构化 JSON section，不允许额外叙述性文本。
 - `Scene/FPVScene/BEVContext/CrossView/Plan/finish` 是否为可解析 JSON。
-- `<BEVContext>.ego_cell` 和 `<BEVContext>.target_cell` 是否等于 `bev_patch_meta.ego_cell_gt/target_cell_gt`。
 - `<BEVContext>.intent` 和 `<finish>.intent` 是否等于 `intent_gt`。
 - `route_theta_deg` 是否在容差内等于几何真值。
-- `<BEVContext>.route_theta_bin`、`route_direction_bin`、`topology_state` 是否与几何真值派生标签一致。
+- `<BEVContext>.route_direction_bin`、`intent`、`target_direction` 是否与几何真值派生标签一致。
 - `<FPVScene>.risk_objects` 是否为 `{name, side, risk}` 结构化对象。
 - `<CrossView>.fpv_route_region`、`route_to_fpv_direction`、`safe_corridor` 是否与轨迹区域派生标签一致。
 - `<Plan>.motion_primitive/lateral_preference/avoidance_side/speed_policy` 是否存在。

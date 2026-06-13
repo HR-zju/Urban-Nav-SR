@@ -66,10 +66,8 @@ def _make_cot_row(root: Path) -> dict:
         meta_path,
         {
             "schema_version": "sidewalk_bev_patch_meta_v1",
-            "grid_size": [16, 16],
-            "ego_cell_gt": [8, 12],
-            "target_cell_gt": [8, 4],
-            "route_polyline_cells": [[8, 12], [8, 10], [8, 8], [8, 4]],
+            "route_polyline_local_m": [[0.0, 0.0], [0.0, 2.0], [0.0, 4.0], [0.0, 6.0]],
+            "route_target_local_m": [0.0, 6.0],
             "route_theta_deg": 0.0,
             "intent_gt": "go_straight",
             "target_direction": "front",

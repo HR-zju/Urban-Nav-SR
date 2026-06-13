@@ -15,7 +15,7 @@ assistant answer with strict tags:
     <finish>{...}</finish>
 
 Geometry targets remain authoritative.  The VLM may explain the sample, but it
-must not change ``intent_gt``, BEV ``route_theta_deg``, or ``pixel_trajectory``.
+must not change ``intent_gt``, target direction, or ``pixel_trajectory``.
 Rows that fail validation are retried; after that they are dropped, rejected, or
 explicitly downgraded to a deterministic template according to ``--fallback-policy``.
 """
@@ -41,16 +41,17 @@ THINK_SECTION_TAGS = ["Scene", "FPVScene", "BEVContext", "CrossView", "Plan"]
 REQUIRED_TAGS = ["think", *THINK_SECTION_TAGS, "finish"]
 COT_SCHEMA_VERSION = "sidewalk_phase1_cot_teacher_v5"
 COT_PROMPT_TEMPLATE = "phase1_structured_cot_v5"
-COT_BEV_GRID_CONVENTION = (
-    "BEV grid convention:\n"
-    "- BEV cells are [col,row] on a 16x16 ego-aligned local grid.\n"
-    "- The grid starts at the top-left cell [0,0], which represents the far-left/front corner of the local BEV window.\n"
-    "- The grid covers 15m left, 15m right, 30m front, and 10m back around the robot, so each cell is about 1.875m wide and 2.5m deep.\n"
-    "- Ego local position (0m,0m) maps to ego_cell [8,12].\n"
-    "- col increases toward the robot's right side.\n"
-    "- row decreases toward the robot's front direction; row increases toward the robot's back.\n"
-    "- In <BEVContext>, predict/copy grid_size, ego_cell, and target_cell as BEV cell coordinates, not pixel coordinates.\n"
-    "- target_cell may equal ego_cell when the route target is within the same coarse cell; still use route_theta_deg, route_polyline, and BEV markers for intent.\n"
+COT_BEV_VISUAL_CONVENTION = (
+    "BEV visual convention:\n"
+    "- Use the BEV image as static top-down route context for direction and topology.\n"
+    "- Ground local obstacle avoidance, sidewalk boundaries, and spatial maneuvering in the FPV image.\n"
+    "- Blue polyline = planned route; green circle = route start; red square = route end; orange circle = current ego pose.\n"
+)
+COT_TRAJECTORY_TYPE_ENUM = (
+    "straight_left|straight_center|straight_right|"
+    "slight_left_left|slight_left_center|slight_left_right|"
+    "slight_right_left|slight_right_center|slight_right_right|"
+    "stop_hold|unknown"
 )
 NO_SEG_FORBIDDEN_PATTERNS = [
     r"\br\d{2,}\b",
@@ -219,9 +220,10 @@ def build_teacher_system_prompt() -> str:
         "You are a careful sidewalk navigation dataset teacher. "
         "Generate one structured chain-of-thought annotation for supervised fine-tuning. "
         "Use the provided FPV image, BEV image, and geometry evidence. "
-        "The geometry evidence is ground truth: do not alter intent, route_theta_deg, target cells, or trajectory. "
+        "Fully use both FPV and BEV environmental information and understand their cross-view relationship. "
+        "The geometry evidence is ground truth: do not alter intent, target direction, or trajectory. "
         "Return only the required XML-like tags. Put structured observation and planning JSON sections inside <think>; "
-        "put only the executable trajectory JSON inside <finish>; do not repeat route_theta_deg in <finish>."
+        "put only the executable trajectory JSON inside <finish>."
     )
 
 
@@ -250,26 +252,13 @@ def build_teacher_question(row: dict[str, Any], evidence: dict[str, Any], *, pre
         "instruction": row.get("instruction"),
         "image_size": {"width": row.get("image_width"), "height": row.get("image_height")},
         "route_context": route_context,
-        "bev_visual_legend": {
-            "route_polyline": "blue line",
-            "route_start": "green circle marker",
-            "route_end": "red square marker",
-            "ego_pose": "orange circle near the BEV center",
-            "model_task": "Infer the current route stage by visually locating the ego marker relative to the start/end markers and route polyline.",
-        },
         "bev_patch_meta": {
-            "grid_size": bev_meta.get("grid_size"),
-            "ego_cell_gt": bev_meta.get("ego_cell_gt"),
-            "target_cell_gt": bev_meta.get("target_cell_gt"),
-            "route_polyline_cells": bev_meta.get("route_polyline_cells"),
-            "route_theta_deg": bev_meta.get("route_theta_deg"),
             "intent_gt": bev_meta.get("intent_gt"),
             "target_direction": bev_meta.get("target_direction"),
             "confidence_level_gt": bev_meta.get("confidence_level_gt"),
         },
         "trajectory_label": {
             "trajectory_source": label.get("trajectory_source"),
-            "route_theta_deg": label.get("route_theta_deg"),
             "intent_gt": label.get("intent_gt"),
             "anchor": label.get("anchor"),
             "trajectory_norm": target_traj,
@@ -281,29 +270,27 @@ def build_teacher_question(row: dict[str, Any], evidence: dict[str, Any], *, pre
         },
     }
     return (
-        "Create a Phase1 single-shot structured CoT assistant target for this sidewalk navigation sample.\n"
+        "Create a structured CoT assistant target for this sidewalk navigation sample.\n"
         "Output exactly this nested tag structure in this order. Prefer compact machine-learnable labels over decorative prose:\n"
         "<think>\n"
         "<Scene>{\"summary\":\"...\",\"visibility\":\"clear|partial_occlusion|low_light|crowded|uncertain\",\"occlusion_sources\":[\"parked_vehicle|tree|fence|pedestrian|vehicle|none|unknown\"],\"uncertainty\":\"...\"}</Scene>\n"
         "<FPVScene>{\"navigable_support\":[\"stable semantic names for visible safe navigation support\"],\"conditional_support\":[\"stable semantic names for conditionally usable connectors\"],\"risk_objects\":[{\"name\":\"stable object name\",\"side\":\"left|center|right|front|unknown\",\"risk\":\"boundary|avoid|occlusion|dynamic|low\"}],\"visibility\":\"clear|partial_occlusion|low_light|crowded|uncertain\",\"local_risk\":\"low|medium|high|unknown\"}</FPVScene>\n"
-        "<BEVContext>{\"scene_summary\":\"local BEV route context\",\"route_summary\":\"route continues from ego toward target\",\"navigation_state\":\"following_sidewalk|approaching_turn|turning|stopping|unknown\",\"topology_state\":\"same_sidewalk_segment|approaching_left_turn|approaching_right_turn|stop_hold|unknown\",\"grid_size\":[16,16],\"ego_cell\":[8,12],\"target_cell\":[8,9],\"route_theta_deg\":0.0,\"route_theta_bin\":\"[-5,5)\",\"route_direction_bin\":\"front|slight_left|slight_right|left|right|stop|unknown\",\"intent\":\"go_straight|turn_left|turn_right|stop\",\"target_direction\":\"front\",\"bev_anchor\":\"front route segment\",\"topology_evidence\":\"Use the blue route line, green start marker, red end marker, and orange ego marker.\"}</BEVContext>\n"
+        "<BEVContext>{\"scene_summary\":\"local BEV route context\",\"route_summary\":\"route continues from ego toward target\",\"route_direction_bin\":\"front|slight_left|slight_right|left|right|stop|unknown\",\"intent\":\"go_straight|turn_left|turn_right|stop\",\"target_direction\":\"front\",\"bev_anchor\":\"front route segment\"}</BEVContext>\n"
         "<CrossView>{\"bev_anchor\":\"...\",\"fpv_anchor\":\"...\",\"near_reference\":\"nearest stable visible reference\",\"blind_area_context\":{\"left\":\"occluded/visible risk statement\",\"right\":\"occluded/visible risk statement\",\"front\":\"visible support or occlusion statement\"},\"fpv_route_region\":\"left|center|right|unknown\",\"route_to_fpv_direction\":\"forward_left|forward_center|forward_right|stop|unknown\",\"safe_corridor\":\"left_corridor|center_corridor|right_corridor|stop|unknown\",\"alignment\":\"aligned|partially_aligned|uncertain\",\"confidence\":\"high|medium|low|unknown\"}</CrossView>\n"
         "<Plan>{\"motion_primitive\":\"go_straight|turn_left|turn_right|stop|unknown\",\"lateral_preference\":\"left|center|right|hold|unknown\",\"avoidance_side\":\"left|right|both|none|unknown\",\"speed_policy\":\"normal|slow|stop|unknown\",\"primary_route\":\"concise semantic route\",\"safety_policy\":\"concise safety policy\",\"contingency\":\"concise fallback behavior\"}</Plan>\n"
         "</think>\n"
-        "<finish>{\"trajectory\":[[0.5,0.9]],\"intent\":\"go_straight|turn_left|turn_right|stop|unknown\",\"confidence_level\":\"normal|conflict|low\",\"trajectory_type\":\"straight_center|slight_left_center|slight_right_center|slight_left_left|slight_right_right|stop_hold|unknown\",\"trajectory_validity\":\"valid|invalid\"}</finish>\n\n"
+        f"<finish>{{\"trajectory\":[[0.5,0.9]],\"intent\":\"go_straight|turn_left|turn_right|stop|unknown\",\"confidence_level\":\"normal|conflict|low\",\"trajectory_type\":\"{COT_TRAJECTORY_TYPE_ENUM}\",\"trajectory_validity\":\"valid|invalid\"}}</finish>\n\n"
         "Rules:\n"
         "- Do not write narrative prose inside <think>; it must contain only the five structured JSON sections.\n"
         "- <FPVScene>.navigable_support must list visible safe ground/support semantics, not route goals or distant background.\n"
         "- <FPVScene>.risk_objects must list visible obstacles, occlusions, non-ground surfaces, or regions to avoid.\n"
-        "- <BEVContext>.ego_cell and <BEVContext>.target_cell must exactly copy ego_cell_gt and target_cell_gt.\n"
         "- The <finish>.trajectory must exactly copy trajectory_label.trajectory_norm.\n"
         "- <BEVContext>.intent and <finish>.intent must equal intent_gt.\n"
-        "- <BEVContext>.route_theta_deg must equal the evidence route_theta_deg; do not put route_theta_deg in <finish>.\n"
         "- Use normalized FPV coordinates in [0, 1].\n"
         "- The trajectory must be supported by <FPVScene>.navigable_support or conservative conditional_support.\n"
         "- Do not route through <FPVScene>.risk_objects or into sky/buildings/fences/trees/far background.\n"
         "- Do not add markdown or text outside the tags.\n\n"
-        f"{COT_BEV_GRID_CONVENTION}\n"
+        f"{COT_BEV_VISUAL_CONVENTION}\n"
         "Evidence JSON:\n"
         f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
         f"{repair_block}"
@@ -315,7 +302,11 @@ def build_training_prompt(row: dict[str, Any]) -> str:
 
     num_points = len(row.get("pixel_trajectory") or [])
     image_tokens = "<image><image>" if row.get("bev_image_path") else "<image>"
-    bev_line = "Input 2: BEV map aligned to the FPV time\n" if row.get("bev_image_path") else ""
+    bev_line = (
+        "Input 2 (BEV): static topological map aligned to the FPV time for route direction and context\n"
+        if row.get("bev_image_path")
+        else ""
+    )
     image_width = row.get("image_width")
     image_height = row.get("image_height")
     image_size_line = ""
@@ -327,20 +318,20 @@ def build_training_prompt(row: dict[str, Any]) -> str:
     return (
         f"{image_tokens}\n"
         "Task: Sidewalk navigation structured reasoning and trajectory prediction\n"
-        "Input 1: First-person view (FPV) from the robot\n"
+        "Input 1 (FPV): real-time robot camera view with visible walkable support, local boundaries, and dynamic obstacles\n"
         f"{bev_line}"
         f"{image_size_line}"
         f"Instruction: {row.get('instruction') or 'Navigate safely on the sidewalk.'}\n\n"
-        f"{COT_BEV_GRID_CONVENTION}\n"
+        f"{COT_BEV_VISUAL_CONVENTION}\n"
         "Output exactly this nested structured CoT format. Every section must be valid JSON:\n"
         "<think>\n"
         "<Scene>{\"summary\":\"urban sidewalk scene\",\"visibility\":\"clear|partial_occlusion|low_light|crowded|uncertain\",\"occlusion_sources\":[\"parked_vehicle\"],\"uncertainty\":\"low\"}</Scene>\n"
         "<FPVScene>{\"navigable_support\":[\"sidewalk\"],\"conditional_support\":[\"curb_cut\"],\"risk_objects\":[{\"name\":\"pedestrian\",\"side\":\"left|center|right|front|unknown\",\"risk\":\"boundary|avoid|occlusion|dynamic|low\"}],\"visibility\":\"clear|partial_occlusion|low_light|crowded|uncertain\",\"local_risk\":\"low|medium|high|unknown\"}</FPVScene>\n"
-        "<BEVContext>{\"scene_summary\":\"local BEV route context\",\"route_summary\":\"route continues from ego toward target\",\"navigation_state\":\"following_sidewalk|approaching_turn|turning|stopping|unknown\",\"topology_state\":\"same_sidewalk_segment|approaching_left_turn|approaching_right_turn|stop_hold|unknown\",\"grid_size\":[16,16],\"ego_cell\":[8,12],\"target_cell\":[8,9],\"route_theta_deg\":0.0,\"route_theta_bin\":\"[-5,5)\",\"route_direction_bin\":\"front|slight_left|slight_right|left|right|stop|unknown\",\"intent\":\"go_straight|turn_left|turn_right|stop|unknown\",\"target_direction\":\"left_front|right_front|front|stop|unknown\",\"bev_anchor\":\"front route segment\",\"topology_evidence\":\"Use the blue route line, green start marker, red end marker, and orange ego marker.\"}</BEVContext>\n"
+        "<BEVContext>{\"scene_summary\":\"local BEV route context\",\"route_summary\":\"route continues from ego toward target\",\"route_direction_bin\":\"front|slight_left|slight_right|left|right|stop|unknown\",\"intent\":\"go_straight|turn_left|turn_right|stop|unknown\",\"target_direction\":\"left_front|right_front|front|stop|unknown\",\"bev_anchor\":\"front route segment\"}</BEVContext>\n"
         "<CrossView>{\"bev_anchor\":\"...\",\"fpv_anchor\":\"...\",\"near_reference\":\"nearest stable visible reference\",\"blind_area_context\":{\"left\":\"...\",\"right\":\"...\",\"front\":\"...\"},\"fpv_route_region\":\"left|center|right|unknown\",\"route_to_fpv_direction\":\"forward_left|forward_center|forward_right|stop|unknown\",\"safe_corridor\":\"left_corridor|center_corridor|right_corridor|stop|unknown\",\"alignment\":\"aligned|partially_aligned|uncertain\",\"confidence\":\"high|medium|low|unknown\"}</CrossView>\n"
         "<Plan>{\"motion_primitive\":\"go_straight|turn_left|turn_right|stop|unknown\",\"lateral_preference\":\"left|center|right|hold|unknown\",\"avoidance_side\":\"left|right|both|none|unknown\",\"speed_policy\":\"normal|slow|stop|unknown\",\"primary_route\":\"...\",\"safety_policy\":\"...\",\"contingency\":\"...\"}</Plan>\n"
         "</think>\n"
-        "<finish>{\"trajectory\":[[0.5,0.9]],\"intent\":\"go_straight|turn_left|turn_right|stop|unknown\",\"confidence_level\":\"normal|conflict|low\",\"trajectory_type\":\"straight_center|slight_left_center|slight_right_center|slight_left_left|slight_right_right|stop_hold|unknown\",\"trajectory_validity\":\"valid|invalid\"}</finish>\n\n"
+        f"<finish>{{\"trajectory\":[[0.5,0.9]],\"intent\":\"go_straight|turn_left|turn_right|stop|unknown\",\"confidence_level\":\"normal|conflict|low\",\"trajectory_type\":\"{COT_TRAJECTORY_TYPE_ENUM}\",\"trajectory_validity\":\"valid|invalid\"}}</finish>\n\n"
         "Trajectory rules:\n"
         f"- Use exactly {num_points} normalized FPV trajectory points in [0, 1]. Do not output pixel coordinates.\n"
         "- Origin (0,0) is the top-left corner; x is horizontal, y is vertical. Convert to pixels only after parsing.\n"
@@ -358,21 +349,6 @@ def build_training_prompt(row: dict[str, Any]) -> str:
 
 
 
-def route_theta_bin(theta_deg: float) -> str:
-    """Return a stable text bin for route heading supervision.
-
-    Exact decimal angles are retained for audit, but bins are a more stable
-    language target for Stage-1 topology learning.
-    """
-
-    theta = max(-180.0, min(180.0, float(theta_deg)))
-    bins = [(-180, -45), (-45, -15), (-15, -5), (-5, 5), (5, 15), (15, 45), (45, 180)]
-    for lo, hi in bins:
-        if lo <= theta < hi:
-            return f"[{lo},{hi})"
-    return "[45,180]"
-
-
 def route_direction_bin(theta_deg: float, intent: str, target_direction: str) -> str:
     intent = str(intent or "unknown")
     if intent == "stop" or str(target_direction or "") == "stop":
@@ -388,17 +364,6 @@ def route_direction_bin(theta_deg: float, intent: str, target_direction: str) ->
         return "slight_right"
     return "right"
 
-
-def topology_state_from_intent(intent: str) -> str:
-    if intent == "stop":
-        return "stop_hold"
-    if intent == "turn_left":
-        return "approaching_left_turn"
-    if intent == "turn_right":
-        return "approaching_right_turn"
-    if intent == "go_straight":
-        return "same_sidewalk_segment"
-    return "unknown"
 
 
 def trajectory_region_and_type(trajectory: list[list[float]]) -> dict[str, str]:
@@ -444,14 +409,6 @@ def trajectory_region_and_type(trajectory: list[list[float]]) -> dict[str, str]:
     }
 
 
-def navigation_state_from_intent(intent: str) -> str:
-    if intent == "stop":
-        return "stopping"
-    if intent in {"turn_left", "turn_right"}:
-        return "approaching_turn"
-    if intent == "go_straight":
-        return "following_sidewalk"
-    return "unknown"
 
 def render_template_answer(row: dict[str, Any], evidence: dict[str, Any]) -> str:
     """Deterministic fallback used only after an attempted teacher failure."""
@@ -463,9 +420,7 @@ def render_template_answer(row: dict[str, Any], evidence: dict[str, Any]) -> str
     anchor = str(label.get("anchor") or bev_meta.get("target_direction") or "front")
     trajectory = round_trajectory(evidence["target_trajectory"], digits=5)
     traj_labels = trajectory_region_and_type(trajectory)
-    theta_bin = route_theta_bin(route_theta)
     direction_bin = route_direction_bin(route_theta, intent, anchor)
-    topology_state = topology_state_from_intent(intent)
     sections = {
         "Scene": {
             "summary": "The FPV and BEV inputs provide local sidewalk navigation context.",
@@ -482,19 +437,11 @@ def render_template_answer(row: dict[str, Any], evidence: dict[str, Any]) -> str
         },
         "BEVContext": {
             "scene_summary": "The BEV shows the local top-down sidewalk context around the robot.",
-            "route_summary": f"The blue route line goes from the green start marker toward the red end marker; the ego marker should continue {anchor} with a heading offset of {round(route_theta, 3)} degrees.",
-            "navigation_state": navigation_state_from_intent(intent),
-            "topology_state": topology_state,
-            "grid_size": bev_meta.get("grid_size"),
-            "ego_cell": bev_meta.get("ego_cell_gt"),
-            "target_cell": bev_meta.get("target_cell_gt"),
-            "route_theta_deg": round(route_theta, 3),
-            "route_theta_bin": theta_bin,
+            "route_summary": f"local route context indicates movement toward {anchor}.",
             "route_direction_bin": direction_bin,
             "intent": intent,
             "target_direction": anchor,
-            "bev_anchor": anchor,
-            "topology_evidence": "Use the blue route line, green start marker, red end marker, orange ego marker, ego cell, and target cell to infer local intent.",
+            "bev_anchor": anchor
         },
         "CrossView": {
             "bev_anchor": anchor,
@@ -591,7 +538,7 @@ def validate_teacher_answer(answer: str, row: dict[str, Any], evidence: dict[str
     for field in ("navigable_support", "conditional_support", "risk_objects", "visibility", "local_risk"):
         if field not in fpv_scene:
             errors.append(f"missing_fpv_scene_field:{field}")
-    for field in ("scene_summary", "route_summary", "navigation_state", "topology_state", "route_theta_bin", "route_direction_bin", "bev_anchor", "topology_evidence"):
+    for field in ("scene_summary", "route_summary", "route_direction_bin", "bev_anchor"):
         if field not in bev:
             errors.append(f"missing_bev_context_field:{field}")
     for field in ("bev_anchor", "fpv_anchor", "near_reference", "blind_area_context", "fpv_route_region", "route_to_fpv_direction", "safe_corridor"):
@@ -615,30 +562,15 @@ def validate_teacher_answer(answer: str, row: dict[str, Any], evidence: dict[str
                     errors.append(f"risk_object_missing_{field}:{index}")
     elif risk_objects is not None:
         errors.append("risk_objects_not_list")
-    if _normalize_cell(bev.get("ego_cell")) != _normalize_cell(bev_meta.get("ego_cell_gt")):
-        errors.append(f"ego_cell_mismatch:{bev.get('ego_cell')}!={bev_meta.get('ego_cell_gt')}")
-    if _normalize_cell(bev.get("target_cell")) != _normalize_cell(bev_meta.get("target_cell_gt")):
-        errors.append(f"target_cell_mismatch:{bev.get('target_cell')}!={bev_meta.get('target_cell_gt')}")
     if str(bev.get("intent") or "") != intent_gt:
         errors.append(f"bev_intent_mismatch:{bev.get('intent')}!={intent_gt}")
     if str(finish.get("intent") or "") != intent_gt:
         errors.append(f"finish_intent_mismatch:{finish.get('intent')}!={intent_gt}")
 
-    theta = optional_float(bev.get("route_theta_deg"))
-    if theta_gt is not None and theta is not None and abs(theta - theta_gt) > float(config.theta_tolerance_deg):
-        errors.append(f"theta_mismatch:BEVContext:{theta}!={theta_gt}")
-    elif theta_gt is not None and theta is None:
-        errors.append("missing_theta:BEVContext")
     if theta_gt is not None:
-        expected_theta_bin = route_theta_bin(theta_gt)
-        if str(bev.get("route_theta_bin") or "") != expected_theta_bin:
-            errors.append(f"theta_bin_mismatch:{bev.get('route_theta_bin')}!={expected_theta_bin}")
         expected_direction_bin = route_direction_bin(theta_gt, intent_gt, str(bev_meta.get("target_direction") or route_context.get("target_direction") or "front"))
         if str(bev.get("route_direction_bin") or "") != expected_direction_bin:
             errors.append(f"route_direction_bin_mismatch:{bev.get('route_direction_bin')}!={expected_direction_bin}")
-    expected_topology_state = topology_state_from_intent(intent_gt)
-    topology_value = str(bev.get("topology_state") or "")
-    allowed_topology_states = {expected_topology_state}
     scene_visibility = str(scene.get("visibility") or "")
     fpv_visibility = str(fpv_scene.get("visibility") or "")
     local_risk = str(fpv_scene.get("local_risk") or "")
@@ -647,12 +579,6 @@ def validate_teacher_answer(answer: str, row: dict[str, Any], evidence: dict[str
         or fpv_visibility in {"uncertain", "partial_occlusion", "low_light", "crowded"}
         or local_risk in {"unknown", "high"}
     )
-    if intent_gt == "stop":
-        allowed_topology_states.update({"stopping", "stop", "stop_hold"})
-        if allow_unknown_stop:
-            allowed_topology_states.add("unknown")
-    if topology_value not in allowed_topology_states:
-        errors.append(f"topology_state_mismatch:{bev.get('topology_state')}!={expected_topology_state}")
 
     try:
         traj = np.asarray(finish.get("trajectory") or [], dtype=np.float32).reshape(-1, 2)
@@ -989,15 +915,6 @@ def validate_tag_layout(text: str) -> list[str]:
     if think_body[pos:].strip():
         errors.append("text_after_nested_tags")
     return errors
-
-
-def _normalize_cell(value: Any) -> list[int] | None:
-    if not isinstance(value, (list, tuple)) or len(value) != 2:
-        return None
-    try:
-        return [int(value[0]), int(value[1])]
-    except Exception:
-        return None
 
 
 def parse_json_object(text: str) -> dict[str, Any] | None:
