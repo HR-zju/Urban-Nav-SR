@@ -20,6 +20,7 @@ from sensor_msgs.msg import NavSatFix
 
 WGS84_A = 6378137.0
 WGS84_E2 = 6.69437999014e-3
+POLICY_PART_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 @dataclass
@@ -183,9 +184,20 @@ def parse_waypoints_from_json(data, default_altitude):
 
 
 class Ros1GlobalFusionEstimator:
-    def __init__(self, max_optimization_poses=0):
+    def __init__(
+        self,
+        max_optimization_poses=0,
+        optimization_mode='alignment',
+        alignment_min_gps_constraints=10,
+        alignment_min_baseline_m=5.0,
+        freeze_alignment_after_init=True,
+    ):
         self.lock = Lock()
         self.max_optimization_poses = int(max_optimization_poses)
+        self.optimization_mode = str(optimization_mode).lower()
+        self.alignment_min_gps_constraints = int(alignment_min_gps_constraints)
+        self.alignment_min_baseline_m = float(alignment_min_baseline_m)
+        self.freeze_alignment_after_init = bool(freeze_alignment_after_init)
         self.local_pose_map = {}
         self.global_pose_map = {}
         self.gps_position_map = {}
@@ -197,6 +209,7 @@ class Ros1GlobalFusionEstimator:
         self.last_q = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
         self.new_gps = False
         self.has_alignment = False
+        self.alignment_status = 'waiting for matched GPS/VIO constraints'
         self.path_msg = Path()
 
     def gps_to_xyz(self, latitude, longitude, altitude):
@@ -222,7 +235,8 @@ class Ros1GlobalFusionEstimator:
             self.global_pose_map[t] = np.concatenate((global_p, global_q))
             self.last_p = global_p
             self.last_q = global_q
-            self._append_path_pose_locked(t, global_p, global_q)
+            if self.has_alignment:
+                self._append_path_pose_locked(t, global_p, global_q)
 
     def input_gps(self, t, latitude, longitude, altitude, pos_accuracy):
         xyz = self.gps_to_xyz(latitude, longitude, altitude)
@@ -234,6 +248,91 @@ class Ros1GlobalFusionEstimator:
             self.new_gps = True
 
     def optimize(self):
+        if self.optimization_mode == 'pose_graph':
+            return self._optimize_pose_graph()
+        return self._optimize_alignment()
+
+    @staticmethod
+    def _estimate_planar_alignment(local_points, gps_points, weights):
+        local_points = np.asarray(local_points, dtype=float)
+        gps_points = np.asarray(gps_points, dtype=float)
+        weights = np.asarray(weights, dtype=float)
+        weights = np.maximum(weights, 1e-6)
+        weights = weights / np.sum(weights)
+
+        local_centroid = np.sum(local_points * weights[:, None], axis=0)
+        gps_centroid = np.sum(gps_points * weights[:, None], axis=0)
+        local_xy = local_points[:, :2] - local_centroid[:2]
+        gps_xy = gps_points[:, :2] - gps_centroid[:2]
+
+        cross = np.sum(weights * (local_xy[:, 0] * gps_xy[:, 1] - local_xy[:, 1] * gps_xy[:, 0]))
+        dot = np.sum(weights * (local_xy[:, 0] * gps_xy[:, 0] + local_xy[:, 1] * gps_xy[:, 1]))
+        yaw = math.atan2(cross, dot)
+        cos_yaw = math.cos(yaw)
+        sin_yaw = math.sin(yaw)
+        rotation = np.array([
+            [cos_yaw, -sin_yaw, 0.0],
+            [sin_yaw, cos_yaw, 0.0],
+            [0.0, 0.0, 1.0],
+        ], dtype=float)
+        translation = gps_centroid - rotation @ local_centroid
+
+        transform = np.eye(4, dtype=float)
+        transform[:3, :3] = rotation
+        transform[:3, 3] = translation
+        return transform
+
+    def _optimize_alignment(self):
+        with self.lock:
+            if not self.new_gps:
+                return False
+            self.new_gps = False
+            if self.has_alignment and self.freeze_alignment_after_init:
+                return False
+
+            times = sorted(t for t in self.gps_position_map.keys() if t in self.local_pose_map)
+            if len(times) < self.alignment_min_gps_constraints:
+                self.alignment_status = (
+                    'waiting for alignment: matched_gps=%d/%d'
+                    % (len(times), self.alignment_min_gps_constraints)
+                )
+                return False
+
+            local_points = np.array([self.local_pose_map[t][:3] for t in times], dtype=float)
+            gps_points = np.array([self.gps_position_map[t][:3] for t in times], dtype=float)
+            accuracies = np.array([self.gps_position_map[t][3] for t in times], dtype=float)
+            gps_xy_span = np.linalg.norm(
+                np.max(gps_points[:, :2], axis=0) - np.min(gps_points[:, :2], axis=0)
+            )
+            if gps_xy_span < self.alignment_min_baseline_m:
+                self.alignment_status = (
+                    'waiting for alignment baseline: matched_gps=%d baseline=%.2fm/%.2fm'
+                    % (len(times), gps_xy_span, self.alignment_min_baseline_m)
+                )
+                return False
+
+            weights = 1.0 / np.maximum(accuracies, 1e-6)
+            self.wgps_t_wvio = self._estimate_planar_alignment(local_points, gps_points, weights)
+
+            for t, local_pose in self.local_pose_map.items():
+                local_t = pose_to_matrix(local_pose[:3], local_pose[3:7])
+                global_t = self.wgps_t_wvio @ local_t
+                global_p, global_q = matrix_to_pose(global_t)
+                self.global_pose_map[t] = np.concatenate((global_p, global_q))
+
+            latest_t = max(self.local_pose_map.keys())
+            latest = self.global_pose_map[latest_t]
+            self.last_p = latest[:3].copy()
+            self.last_q = latest[3:7].copy()
+            self.has_alignment = True
+            self.alignment_status = (
+                'aligned: matched_gps=%d baseline=%.2fm'
+                % (len(times), gps_xy_span)
+            )
+            self._update_path_locked()
+        return True
+
+    def _optimize_pose_graph(self):
         with self.lock:
             if not self.new_gps:
                 return False
@@ -337,6 +436,10 @@ class Ros1GlobalFusionEstimator:
         with self.lock:
             return self.last_p.copy(), self.last_q.copy(), self.has_alignment
 
+    def get_alignment_status(self):
+        with self.lock:
+            return self.alignment_status
+
     def _make_path_pose(self, t, p, q):
         pose = PoseStamped()
         pose.header.stamp = sec_to_msg_time(t)
@@ -370,14 +473,25 @@ class CppLogicFusionNode(Node):
         super().__init__('globalEstimator')
         self.declare_parameter('gps_topic', '/gps/fix')
         self.declare_parameter('vio_topic', '/base_odom')
-        self.declare_parameter('sync_tolerance_sec', 0.01)
+        self.declare_parameter('sync_tolerance_sec', 0.2)
         self.declare_parameter('optimization_period_sec', 2.0)
-        self.declare_parameter('publish_before_alignment', True)
-        self.declare_parameter('max_optimization_poses', 0)
+        self.declare_parameter('publish_before_alignment', False)
+        self.declare_parameter('max_optimization_poses', 50)
+        self.declare_parameter('optimization_mode', 'alignment')
+        self.declare_parameter('alignment_min_gps_constraints', 10)
+        self.declare_parameter('alignment_min_baseline_m', 5.0)
+        self.declare_parameter('freeze_alignment_after_init', True)
         self.declare_parameter('record_vio_global_csv', True)
         self.declare_parameter(
             'vio_global_csv_path',
-            '/home/orin26/code/Urban-Nav-SR/Policy_part/topomaps/LLM_Policy/gkj/output/vio_global.csv',
+            os.path.join(
+                POLICY_PART_DIR,
+                'topomaps',
+                'LLM_Policy',
+                'gkj',
+                'output',
+                'vio_global.csv',
+            ),
         )
         self.declare_parameter('enable_route_json_conversion', False)
         self.declare_parameter(
@@ -391,13 +505,18 @@ class CppLogicFusionNode(Node):
         self.declare_parameter('route_default_altitude', 33.0)
         self.declare_parameter('route_poll_sec', 1.0)
         self.estimator = Ros1GlobalFusionEstimator(
-            max_optimization_poses=int(self.get_parameter('max_optimization_poses').value)
+            max_optimization_poses=int(self.get_parameter('max_optimization_poses').value),
+            optimization_mode=str(self.get_parameter('optimization_mode').value),
+            alignment_min_gps_constraints=int(self.get_parameter('alignment_min_gps_constraints').value),
+            alignment_min_baseline_m=float(self.get_parameter('alignment_min_baseline_m').value),
+            freeze_alignment_after_init=bool(self.get_parameter('freeze_alignment_after_init').value),
         )
         self.gps_queue = deque()
         self.gps_lock = Lock()
         self.stop_event = Event()
         self.last_route_signature = ''
         self.route_waiting_origin_warned = False
+        self.last_alignment_wait_log = ''
         self.sub_gps = self.create_subscription(
             NavSatFix,
             self.get_parameter('gps_topic').value,
@@ -427,14 +546,24 @@ class CppLogicFusionNode(Node):
                 )
             )
         self.get_logger().info(
-            'ros1-global-fusion python port: vio_topic=%s gps_topic=%s sync=%.3f max_optimization_poses=%d'
+            'ros1-global-fusion python port: vio_topic=%s gps_topic=%s sync=%.3f mode=%s max_optimization_poses=%d'
             % (
                 self.get_parameter('vio_topic').value,
                 self.get_parameter('gps_topic').value,
                 float(self.get_parameter('sync_tolerance_sec').value),
+                self.get_parameter('optimization_mode').value,
                 int(self.get_parameter('max_optimization_poses').value),
             )
         )
+        if str(self.get_parameter('optimization_mode').value).lower() == 'alignment':
+            self.get_logger().info(
+                'alignment gate: min_gps_constraints=%d min_baseline=%.2f freeze_after_init=%s'
+                % (
+                    int(self.get_parameter('alignment_min_gps_constraints').value),
+                    float(self.get_parameter('alignment_min_baseline_m').value),
+                    bool(self.get_parameter('freeze_alignment_after_init').value),
+                )
+            )
         if bool(self.get_parameter('record_vio_global_csv').value):
             self.get_logger().info(
                 'recording vio global csv: %s'
@@ -451,7 +580,22 @@ class CppLogicFusionNode(Node):
         period = float(self.get_parameter('optimization_period_sec').value)
         while rclpy.ok() and not self.stop_event.wait(max(0.0, period)):
             if self.estimator.optimize():
-                self.get_logger().info('global optimization (ros1 python logic)')
+                self.get_logger().info(
+                    'global optimization (ros1 python logic): %s'
+                    % self.estimator.get_alignment_status()
+                )
+                self.last_alignment_wait_log = ''
+            elif (
+                str(self.get_parameter('optimization_mode').value).lower() == 'alignment'
+                and not self.estimator.has_alignment
+            ):
+                status = self.estimator.get_alignment_status()
+                if status != self.last_alignment_wait_log:
+                    self.last_alignment_wait_log = status
+                    self.get_logger().info(
+                        f'{status}; global_odometry is not published yet',
+                        throttle_duration_sec=5.0,
+                    )
 
     def gps_callback(self, msg):
         with self.gps_lock:
@@ -591,22 +735,28 @@ class CppLogicFusionNode(Node):
         csv_path = str(self.get_parameter('vio_global_csv_path').value)
         if not csv_path:
             return
-        output_dir = os.path.dirname(csv_path)
-        if output_dir:
-            os.makedirs(output_dir, exist_ok=True)
         timestamp_ns = int(stamp.sec) * 1000000000 + int(stamp.nanosec)
-        with open(csv_path, 'a', newline='', encoding='utf-8') as fout:
-            writer = csv.writer(fout)
-            writer.writerow([
-                str(timestamp_ns),
-                f'{global_p[0]:.5f}',
-                f'{global_p[1]:.5f}',
-                f'{global_p[2]:.5f}',
-                f'{global_q[0]:.5f}',
-                f'{global_q[1]:.5f}',
-                f'{global_q[2]:.5f}',
-                f'{global_q[3]:.5f}',
-            ])
+        try:
+            output_dir = os.path.dirname(csv_path)
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
+            with open(csv_path, 'a', newline='', encoding='utf-8') as fout:
+                writer = csv.writer(fout)
+                writer.writerow([
+                    str(timestamp_ns),
+                    f'{global_p[0]:.5f}',
+                    f'{global_p[1]:.5f}',
+                    f'{global_p[2]:.5f}',
+                    f'{global_q[0]:.5f}',
+                    f'{global_q[1]:.5f}',
+                    f'{global_q[2]:.5f}',
+                    f'{global_q[3]:.5f}',
+                ])
+        except OSError as exc:
+            self.get_logger().warn(
+                f'Failed to append vio global csv {csv_path}: {exc}',
+                throttle_duration_sec=5.0,
+            )
 
 
 def main(args=None):

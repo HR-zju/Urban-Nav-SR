@@ -46,7 +46,7 @@ tmux send-keys "python3 tools/usb_camera_node.py" Enter
 tmux select-pane -t 1
 tmux send-keys "source ${conda_setup} && conda activate foundation_nav" Enter 
 tmux send-keys "cd ${policy_dir}" Enter
-tmux send-keys "python3 tools/ros2_gps_ntrip_node.py --ros-args -p use_agilex_time:=false" Enter
+tmux send-keys "python3 tools/ros2_gps_ntrip_node.py --ros-args -p use_agilex_time:=true" Enter
 
 # VINS-fusion replacement ROS2 Python node
 tmux select-pane -t 2 
@@ -54,11 +54,8 @@ tmux send-keys "source ${conda_setup} && conda activate foundation_nav" Enter
 tmux send-keys "cd ${policy_dir}" Enter
 # tmux send-keys "python3 tools/ros2_vins_fusion_node.py --ros-args -p use_sim_time:=true" Enter
 tmux send-keys "python3 tools/ros2_cpp_logic_fusion_node.py --ros-args \
-    -p vio_topic:=/base_odom \
-    -p gps_topic:=/gps/fix \
-    -p sync_tolerance_sec:=0.01 \
-    -p optimization_period_sec:=2.0 \
-    -p publish_before_alignment:=true" Enter
+      -p vio_topic:=/base_odom \
+      -p gps_topic:=/gps/fix" Enter
 
 
 tmux select-pane -t 3 
