@@ -9,6 +9,7 @@ robot-side rosbridge/ROS graph.
 import argparse
 import asyncio
 import base64
+import fcntl
 import hashlib
 import inspect
 import json
@@ -38,6 +39,7 @@ DEFAULT_WS_TOPIC = "/navflow_cmd_vel"
 DEFAULT_WS_TYPE = "geometry_msgs/Twist"
 DEFAULT_ENABLE_FILE = "/tmp/navflow_cmd_vel_bridge_enabled"
 MUX_ADD_SERVICE = "/mux_vel/add"
+DEFAULT_INTERFACE = "wlP1p1s0"
 
 
 def clamp(value: float, limit: float) -> float:
@@ -78,10 +80,33 @@ def bridge_enabled(enable_file: str) -> bool:
         return False
 
 
+def ipv4_for_interface(interface: str) -> str:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        request = struct.pack("256s", interface[:15].encode("utf-8"))
+        response = fcntl.ioctl(sock.fileno(), 0x8915, request)  # SIOCGIFADDR
+        return socket.inet_ntoa(response[20:24])
+    finally:
+        sock.close()
+
+
+def resolve_source_ip(interface: str | None, source_ip: str | None) -> str | None:
+    if source_ip:
+        return source_ip
+    if interface:
+        return ipv4_for_interface(interface)
+    return None
+
+
 class StdlibWebSocket:
     """Small ws:// text-frame sender used when python-websockets is unavailable."""
 
-    def __init__(self, uri: str):
+    def __init__(
+        self,
+        uri: str,
+        source_ip: str | None = None,
+        interface: str | None = None,
+    ):
         parsed = urlparse(uri)
         if parsed.scheme not in ("ws", "wss"):
             raise ValueError(f"Unsupported WebSocket URI scheme: {parsed.scheme}")
@@ -93,7 +118,21 @@ class StdlibWebSocket:
         if parsed.query:
             self.path += f"?{parsed.query}"
 
-        raw_sock = socket.create_connection((self.host, self.port), timeout=5.0)
+        raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        raw_sock.settimeout(5.0)
+        try:
+            if interface:
+                raw_sock.setsockopt(
+                    socket.SOL_SOCKET,
+                    socket.SO_BINDTODEVICE,
+                    interface.encode("utf-8") + b"\0",
+                )
+            if source_ip:
+                raw_sock.bind((source_ip, 0))
+            raw_sock.connect((self.host, self.port))
+        except Exception:
+            raw_sock.close()
+            raise
         if parsed.scheme == "wss":
             raw_sock = ssl.create_default_context().wrap_socket(raw_sock, server_hostname=self.host)
         self.sock = raw_sock
@@ -191,23 +230,31 @@ async def websocket_publish_loop(
     timeout_sec: float,
     debug: bool,
     enable_file: str | None,
+    interface: str | None,
+    source_ip: str | None,
 ) -> None:
     period = 1.0 / max(rate_hz, 1e-6)
+    source_ip = resolve_source_ip(interface, source_ip)
     advertise_msg = {
         "op": "advertise",
         "topic": ws_topic,
         "type": ws_type,
     }
 
-    if websockets is None:
-        websocket = StdlibWebSocket(uri)
+    if websockets is None or interface:
+        websocket = StdlibWebSocket(uri, source_ip=source_ip, interface=interface)
         send_text = websocket.send_text
         close_websocket = websocket.close
-        node.get_logger().info("Using stdlib WebSocket sender; python-websockets is not installed.")
+        if interface:
+            node.get_logger().info("Using stdlib WebSocket sender for interface-bound socket.")
+        else:
+            node.get_logger().info("Using stdlib WebSocket sender; python-websockets is not installed.")
     else:
         connect_kwargs: dict[str, Any] = {}
         if "proxy" in inspect.signature(websockets.connect).parameters:
             connect_kwargs["proxy"] = None
+        if source_ip:
+            connect_kwargs["local_addr"] = (source_ip, 0)
         websocket = await websockets.connect(uri, ping_interval=None, **connect_kwargs)
         send_text = websocket.send
         close_websocket = websocket.close
@@ -226,6 +273,8 @@ async def websocket_publish_loop(
         if inspect.isawaitable(maybe_awaitable):
             await maybe_awaitable
         node.get_logger().info(f"Connected AgileX WebSocket: {uri}")
+        if source_ip:
+            node.get_logger().info(f"WebSocket source binding: {source_ip} ({interface or 'source-ip'})")
         node.get_logger().info(f"Publishing rosbridge Twist topic: {ws_topic} ({ws_type})")
         node.get_logger().info(f"Requested mux add for {ws_topic} via {MUX_ADD_SERVICE}")
 
@@ -319,6 +368,8 @@ async def run_bridge(args: argparse.Namespace) -> None:
                         timeout_sec=args.timeout,
                         debug=args.debug,
                         enable_file=None,
+                        interface=args.interface,
+                        source_ip=args.source_ip,
                     )
                 else:
                     if bridge_enabled(args.enable_file):
@@ -331,6 +382,8 @@ async def run_bridge(args: argparse.Namespace) -> None:
                             timeout_sec=args.timeout,
                             debug=args.debug,
                             enable_file=args.enable_file,
+                            interface=args.interface,
+                            source_ip=args.source_ip,
                         )
                     else:
                         await dry_run_loop(
@@ -367,6 +420,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-linear", type=float, default=0.8, help="Absolute linear component clamp. Set <=0 to disable")
     parser.add_argument("--max-angular", type=float, default=0.4, help="Absolute angular component clamp. Set <=0 to disable")
     parser.add_argument("--debug", action="store_true", help="Log every forwarded WebSocket publish")
+    parser.add_argument(
+        "--interface",
+        default=None,
+        help=f"Bind WebSocket TCP source address to this interface's IPv4 address, e.g. {DEFAULT_INTERFACE}",
+    )
+    parser.add_argument(
+        "--source-ip",
+        default=None,
+        help="Bind WebSocket TCP source address to this explicit local IPv4 address.",
+    )
     parser.add_argument(
         "--publish",
         action="store_true",
