@@ -493,7 +493,7 @@ class CppLogicFusionNode(Node):
                 'vio_global.csv',
             ),
         )
-        self.declare_parameter('enable_route_json_conversion', False)
+        self.declare_parameter('enable_route_json_conversion', True)
         self.declare_parameter(
             'route_json_path',
             '/home/orin26/code/Urban-Nav-SR/Policy_part/topomaps/LLM_Policy/route_waypoints.json',

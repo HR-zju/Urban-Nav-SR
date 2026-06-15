@@ -2,4 +2,6 @@
 set -euo pipefail
 
 cd /home/orin26/code/Urban-Nav-SR/Policy_part
-python3 tools/agilex_api/keyboard_mux_switch.py "$@"
+python3 tools/agilex_api/keyboard_mux_switch.py \
+  --interface "${AGILEX_WS_INTERFACE:-wlP1p1s0}" \
+  "$@"

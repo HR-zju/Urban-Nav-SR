@@ -420,7 +420,9 @@ def load_target_positions_from_file(filename: str = "odom_poses.txt"):
     default = [[3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]]
     try:
         if not os.path.exists(filename):
-            return default
+            reason = f"target file not found: {filename}; using default {default}"
+            print(f"[target][WARN] {reason}", flush=True)
+            return default, True, reason
 
         targets = []
         with open(filename, "r", encoding="utf-8") as f:
@@ -444,10 +446,15 @@ def load_target_positions_from_file(filename: str = "odom_poses.txt"):
                     continue
                 targets.append([x, y, z, qx, qy, qz, qw])
 
-        return targets or default
+        if not targets:
+            reason = f"target file has no valid poses: {filename}; using default {default}"
+            print(f"[target][WARN] {reason}", flush=True)
+            return default, True, reason
+        return targets, False, ""
     except Exception as e:  # noqa: BLE001
-        print(f"[target] error loading target positions: {e}, using default {default}")
-        return default
+        reason = f"error loading target positions: {e}; using default {default}"
+        print(f"[target][WARN] {reason}", flush=True)
+        return default, True, reason
 
 
 def trajectory_nms(trajectory_raw: torch.Tensor, score_raw: torch.Tensor,
@@ -510,6 +517,7 @@ class RealSenseNavflowNode(Node):
         session: ort.InferenceSession,
         device: torch.device,
         target_xy,
+        target_warning: Optional[str],
         distance_threshold: float,
         frames: int = 21,
         output_fps: float = 30.0,
@@ -530,6 +538,7 @@ class RealSenseNavflowNode(Node):
         self.model_input_names = [inp.name for inp in self.session.get_inputs()]
         self.model_image_h, self.model_image_w = self.resolve_model_image_shape()
         self.target_xy = target_xy
+        self.target_warning = target_warning
         self.distance_threshold = distance_threshold
         self.frames = frames
         self.output_fps = float(output_fps) if float(output_fps) > 0.0 else 30.0
@@ -585,6 +594,16 @@ class RealSenseNavflowNode(Node):
         self.image_count = 0
         self.save_vis_interval_sec = 3.0
         self.last_save_vis_time = 0.0
+        self.status_log_interval_sec = float(os.environ.get("NAVFLOW_STATUS_LOG_INTERVAL_SEC", "1.0"))
+        self.warn_log_interval_sec = float(os.environ.get("NAVFLOW_WARN_LOG_INTERVAL_SEC", "2.0"))
+        self._last_log_times = {}
+        self.target_warning_timer = None
+        if self.target_warning:
+            self.get_logger().warning(f"[target] {self.target_warning}")
+            self.target_warning_timer = self.create_timer(
+                10.0,
+                lambda: self.warning_throttled("target_default_active", f"[target] {self.target_warning}", 10.0),
+            )
 
         # Publishers
         self.waypoint_pub = self.create_publisher(Float32MultiArray, "waypoint", 1)
@@ -708,6 +727,25 @@ class RealSenseNavflowNode(Node):
             self.goal_pub.publish(reached_goal_msg)
         except Exception as e:  # noqa: BLE001
             self.get_logger().error(f"Error in base odom callback: {e}")
+
+    def should_log_throttled(self, key: str, interval_sec: float) -> bool:
+        interval = self.status_log_interval_sec if interval_sec is None else float(interval_sec)
+        now = time.monotonic()
+        last = self._last_log_times.get(key)
+        if last is not None and now - last < interval:
+            return False
+        self._last_log_times[key] = now
+        return True
+
+    def info_throttled(self, key: str, message: str, interval_sec: Optional[float] = None):
+        interval = self.status_log_interval_sec if interval_sec is None else float(interval_sec)
+        if self.should_log_throttled(f"info:{key}", interval):
+            self.get_logger().info(message)
+
+    def warning_throttled(self, key: str, message: str, interval_sec: Optional[float] = None):
+        interval = self.warn_log_interval_sec if interval_sec is None else float(interval_sec)
+        if self.should_log_throttled(f"warning:{key}", interval):
+            self.get_logger().warning(message)
 
     def update_goal_progress_locked(self, pose):
         if self.goal_reached or len(self.target_xy) == 0:
@@ -1004,10 +1042,11 @@ class RealSenseNavflowNode(Node):
             pose, pose_source, pose_dt = self.find_header_aligned_nav_pose(image_stamp)
             localpose = self.find_closest_localpose(image_stamp)
             if pose is None or localpose is None:
-                self.get_logger().warning("No pose yet for current image")
+                self.warning_throttled("no_pose_for_image", "No pose yet for current image")
                 return
             if pose_source != "global":
-                self.get_logger().warning(
+                self.warning_throttled(
+                    f"pose_fallback_{pose_source}",
                     f"Using {pose_source} pose for image stamp; dt={pose_dt:.3f}s"
                 )
 
@@ -1206,7 +1245,7 @@ class RealSenseNavflowNode(Node):
         global odom, with base odom as fallback when global is stale/missing.
         """
 
-        self.get_logger().info(f"Processing batch of {len(batch_snapshot)} frames")
+        self.info_throttled("processing_batch", f"Processing batch of {len(batch_snapshot)} frames")
         if not batch_snapshot:
             self.get_logger().warning("Empty batch snapshot, skip processing")
             return
@@ -1251,7 +1290,7 @@ class RealSenseNavflowNode(Node):
         target_diff[:, 0] = -target_diff_temp[:, 1]
         target_diff[:, 1] = target_diff_temp[:, 0]
 
-        self.get_logger().info(f"delta (x,y) = {target_diff[0][0], target_diff[0][1]}")
+        self.info_throttled("target_delta", f"delta (x,y) = {target_diff[0][0], target_diff[0][1]}")
 
         transformed_input_positions = np.concatenate([post_odom, target_diff], axis=0)
         transformed_input_positions /= 0.25
@@ -1281,7 +1320,8 @@ class RealSenseNavflowNode(Node):
             t1 = time.perf_counter()
             infer_dt = max(t1 - t0, 1e-8)
             infer_fps = 1.0 / infer_dt
-            self.get_logger().info(
+            self.info_throttled(
+                "onnx_perf",
                 f"[perf] onnx inference: {infer_dt*1000:.2f} ms, fps={infer_fps:.2f}"
             )
 
@@ -1353,11 +1393,12 @@ class RealSenseNavflowNode(Node):
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
             plt.subplots_adjust(wspace=0.3)
             
-            self.get_logger().info(
+            self.info_throttled(
+                "save_vis_robot_pos",
                 f"DEBUG -> Header-aligned Robot Pos ({snap_pose_source}, dt={snap_pose_dt:.3f}s): "
                 f"{current_pose[:2]}"
             )
-            self.get_logger().info(f"DEBUG -> Relative Target (Local): {target_diff_temp[0]}")
+            self.info_throttled("save_vis_relative_target", f"DEBUG -> Relative Target (Local): {target_diff_temp[0]}")
 
             ax1.imshow(img_np)  # original RGB image
             ax1.axis('off')
@@ -1408,7 +1449,8 @@ class RealSenseNavflowNode(Node):
 
         # Publish waypoint message (same format as original script)
         wp_list = wp_pred_np.tolist()
-        self.get_logger().info(
+        self.info_throttled(
+            "waypoint_xy",
             f"waypoint (x,y) = {wp_list[0][-1][1], -wp_list[0][-1][0]}"
         )
         if wp_list[0][-1][1] > 0.12:
@@ -1550,7 +1592,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[device] using {device}")
 
-    target_xy = load_target_positions_from_file(args.targets)
+    target_xy, target_used_default, target_warning = load_target_positions_from_file(args.targets)
     print(f"[target] loaded {len(target_xy)} target positions: {target_xy}")
 
     # Async video writer: record overlay MP4 unless explicitly disabled.
@@ -1578,6 +1620,7 @@ def main():
         session=session,
         device=device,
         target_xy=target_xy,
+        target_warning=target_warning if target_used_default else None,
         distance_threshold=args.distance_threshold,
         frames=args.frames,
         output_fps=args.output_fps,

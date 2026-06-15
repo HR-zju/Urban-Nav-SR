@@ -84,9 +84,9 @@ tmux send-keys "export NAVFLOW_DISABLE_TRT=0" Enter
 tmux send-keys "export NAVFLOW_TRT_FP16=1" Enter
 tmux send-keys "export NAVFLOW_TRT_BUILDER_OPT_LEVEL=0" Enter
 tmux send-keys "export NAVFLOW_TRT_ENGINE_CACHE=/home/orin26/.cache/navflow_ort_trt_static224_fp16" Enter
-tmux send-keys "python run_navflow_realsense_vis_orin.py --onnx onnx_ckpts/test_mask90_goal_orin_static224_goal_free.onnx  --image_topic /image_raw --image_transport raw --overlay_transport compressed --no_show_window --no_publish_overlay" Enter
-# tmux send-keys "python run_navflow_realsense_vis_goal_orin.py --onnx onnx_ckpts/vint_goal_conditioned_orin_static224.onnx --targets ./topomaps/LLM_Policy/LLM_UTM_odom_poses.txt --image_topic /image_raw --image_transport raw --overlay_transport raw --no_show_window --no_publish_overlay" Enter
-# tmux send-keys "python run_navflow_realsense_vis_goal_orin.py --onnx onnx_ckpts/vint_goal_conditioned_orin_static224.onnx --targets ./topomaps/odom_poses.txt --image_topic /image_raw --image_transport raw --overlay_transport raw --no_show_window --no_publish_overlay --save_vis" Enter
+# tmux send-keys "python run_navflow_realsense_vis_orin.py --onnx onnx_ckpts/test_mask90_goal_orin_static224_goal_free.onnx  --image_topic /image_raw --image_transport raw --overlay_transport compressed --no_show_window " Enter # --no_publish_overlay
+tmux send-keys "python run_navflow_realsense_vis_goal_orin.py --onnx onnx_ckpts/test_mixed_mask80_goal_orin_static224_goal_conditioned.onnx --targets ./topomaps/LLM_Policy/LLM_UTM_odom_poses.txt --image_topic /image_raw --image_transport raw --overlay_transport raw --no_show_window " Enter
+# tmux send-keys "python run_navflow_realsense_vis_goal_orin.py --onnx onnx_ckpts/test_mixed_mask80_goal_orin_static224_goal_conditioned.onnx --targets ./topomaps/odom_poses.txt --image_topic /image_raw --image_transport raw --overlay_transport raw --no_show_window  --save_vis" Enter
 
 
 # PD controller

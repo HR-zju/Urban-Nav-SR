@@ -9,6 +9,7 @@ Keys:
 
 import argparse
 import base64
+import fcntl
 import hashlib
 import json
 import os
@@ -25,6 +26,7 @@ from urllib.parse import urlparse
 
 
 DEFAULT_URI = "ws://192.168.1.102:9090"
+DEFAULT_INTERFACE = "wlP1p1s0"
 AUTO_TOPIC = "/navflow_cmd_vel"
 AUTO_TYPE = "geometry_msgs/Twist"
 MANUAL_TOPIC = "/run_management/virtual_joy"
@@ -35,8 +37,32 @@ HEARTBEAT_INTERVAL = 2.0
 DEFAULT_BRIDGE_ENABLE_FILE = "/tmp/navflow_cmd_vel_bridge_enabled"
 
 
+def ipv4_for_interface(interface: str) -> str:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        request = struct.pack("256s", interface[:15].encode("utf-8"))
+        response = fcntl.ioctl(sock.fileno(), 0x8915, request)  # SIOCGIFADDR
+        return socket.inet_ntoa(response[20:24])
+    finally:
+        sock.close()
+
+
+def resolve_source_ip(interface: str | None, source_ip: str | None) -> str | None:
+    if source_ip:
+        return source_ip
+    if interface:
+        return ipv4_for_interface(interface)
+    return None
+
+
 class StdlibWebSocket:
-    def __init__(self, uri: str, timeout: float = 5.0):
+    def __init__(
+        self,
+        uri: str,
+        timeout: float = 5.0,
+        source_ip: str | None = None,
+        interface: str | None = None,
+    ):
         parsed = urlparse(uri)
         if parsed.scheme not in ("ws", "wss"):
             raise ValueError(f"Unsupported WebSocket URI scheme: {parsed.scheme}")
@@ -48,7 +74,21 @@ class StdlibWebSocket:
         if parsed.query:
             self.path += f"?{parsed.query}"
 
-        sock = socket.create_connection((self.host, self.port), timeout=timeout)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        try:
+            if interface:
+                sock.setsockopt(
+                    socket.SOL_SOCKET,
+                    socket.SO_BINDTODEVICE,
+                    interface.encode("utf-8") + b"\0",
+                )
+            if source_ip:
+                sock.bind((source_ip, 0))
+            sock.connect((self.host, self.port))
+        except Exception:
+            sock.close()
+            raise
         if parsed.scheme == "wss":
             sock = ssl.create_default_context().wrap_socket(sock, server_hostname=self.host)
         sock.settimeout(timeout)
@@ -229,14 +269,20 @@ def publish_zero_twist(ws: StdlibWebSocket, topic: str = AUTO_TOPIC) -> None:
     print(f"published zero Twist to {topic}")
 
 
-def select_source_with_retry(ws: StdlibWebSocket, uri: str, topic: str) -> StdlibWebSocket:
+def select_source_with_retry(
+    ws: StdlibWebSocket,
+    uri: str,
+    topic: str,
+    source_ip: str | None,
+    interface: str | None,
+) -> StdlibWebSocket:
     for attempt in range(2):
         try:
             select_source(ws, topic)
-            return reconnect(uri, ws, quiet=True)
+            return reconnect(uri, ws, quiet=True, source_ip=source_ip, interface=interface)
         except Exception as exc:  # noqa: BLE001
             print(f"select {topic} failed: {exc}")
-            ws = reconnect(uri, ws, quiet=False)
+            ws = reconnect(uri, ws, quiet=False, source_ip=source_ip, interface=interface)
             if attempt == 0:
                 print("retrying select once...")
     return ws
@@ -256,25 +302,37 @@ def set_bridge_enabled(enable_file: str, enabled: bool) -> None:
     print(f"bridge disabled: {enable_file}")
 
 
-def switch_manual(ws: StdlibWebSocket, uri: str, enable_file: str) -> StdlibWebSocket:
+def switch_manual(
+    ws: StdlibWebSocket,
+    uri: str,
+    enable_file: str,
+    source_ip: str | None,
+    interface: str | None,
+) -> StdlibWebSocket:
     try:
         publish_zero_twist(ws)
     except Exception as exc:  # noqa: BLE001
         print(f"publish zero {AUTO_TOPIC} failed: {exc}")
-        ws = reconnect(uri, ws, quiet=False)
-    ws = select_source_with_retry(ws, uri, MANUAL_TOPIC)
+        ws = reconnect(uri, ws, quiet=False, source_ip=source_ip, interface=interface)
+    ws = select_source_with_retry(ws, uri, MANUAL_TOPIC, source_ip, interface)
     set_bridge_enabled(enable_file, False)
     return ws
 
 
-def switch_auto(ws: StdlibWebSocket, uri: str, enable_file: str) -> StdlibWebSocket:
+def switch_auto(
+    ws: StdlibWebSocket,
+    uri: str,
+    enable_file: str,
+    source_ip: str | None,
+    interface: str | None,
+) -> StdlibWebSocket:
     try:
         add_source(ws, AUTO_TOPIC)
     except Exception as exc:  # noqa: BLE001
         print(f"mux add {AUTO_TOPIC} failed: {exc}")
-        ws = reconnect(uri, ws, quiet=False)
+        ws = reconnect(uri, ws, quiet=False, source_ip=source_ip, interface=interface)
     set_bridge_enabled(enable_file, True)
-    return select_source_with_retry(ws, uri, AUTO_TOPIC)
+    return select_source_with_retry(ws, uri, AUTO_TOPIC, source_ip, interface)
 
 
 def subscribe_selected(ws: StdlibWebSocket) -> None:
@@ -293,20 +351,34 @@ def poll_selected(ws: StdlibWebSocket, timeout: float = 0.1) -> str | None:
     return None
 
 
-def connect(uri: str) -> StdlibWebSocket:
-    ws = StdlibWebSocket(uri)
+def connect(
+    uri: str,
+    source_ip: str | None = None,
+    interface: str | None = None,
+) -> StdlibWebSocket:
+    ws = StdlibWebSocket(uri, source_ip=source_ip, interface=interface)
     subscribe_selected(ws)
     print(f"Connected: {uri}")
+    if source_ip:
+        print(f"WebSocket source binding: {source_ip}")
+    if interface:
+        print(f"WebSocket device binding: {interface}")
     return ws
 
 
-def reconnect(uri: str, old_ws: StdlibWebSocket | None = None, quiet: bool = False) -> StdlibWebSocket:
+def reconnect(
+    uri: str,
+    old_ws: StdlibWebSocket | None = None,
+    quiet: bool = False,
+    source_ip: str | None = None,
+    interface: str | None = None,
+) -> StdlibWebSocket:
     if old_ws is not None:
         old_ws.close()
     if not quiet:
         print("reconnecting...")
     time.sleep(0.3)
-    return connect(uri)
+    return connect(uri, source_ip=source_ip, interface=interface)
 
 
 def send_heartbeat(ws: StdlibWebSocket, client_id: str) -> None:
@@ -332,19 +404,30 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Keyboard switch for AgileX mux source.")
     parser.add_argument("--uri", default=DEFAULT_URI, help=f"AgileX WebSocket URI, default: {DEFAULT_URI}")
     parser.add_argument(
+        "--interface",
+        default=None,
+        help=f"Bind WebSocket TCP source address to this interface's IPv4 address, e.g. {DEFAULT_INTERFACE}",
+    )
+    parser.add_argument(
+        "--source-ip",
+        default=None,
+        help="Bind WebSocket TCP source address to this explicit local IPv4 address.",
+    )
+    parser.add_argument(
         "--bridge-enable-file",
         default=DEFAULT_BRIDGE_ENABLE_FILE,
         help=f"Bridge runtime enable file, default: {DEFAULT_BRIDGE_ENABLE_FILE}",
     )
     args = parser.parse_args()
 
-    ws = connect(args.uri)
+    source_ip = resolve_source_ip(args.interface, args.source_ip)
+    ws = connect(args.uri, source_ip=source_ip, interface=args.interface)
     client_id = f"keyboard_mux_{uuid.uuid4().hex[:8]}"
     last_heartbeat = 0.0
     try:
         print_help()
         print("defaulting to MANUAL mode...")
-        ws = switch_manual(ws, args.uri, args.bridge_enable_file)
+        ws = switch_manual(ws, args.uri, args.bridge_enable_file, source_ip, args.interface)
 
         with TerminalRawMode():
             while True:
@@ -357,7 +440,7 @@ def main() -> None:
                         print(f"heartbeat failed: {exc}; reconnecting...")
                         ws.close()
                         time.sleep(1.0)
-                        ws = connect(args.uri)
+                        ws = connect(args.uri, source_ip=source_ip, interface=args.interface)
                         last_heartbeat = 0.0
                         continue
 
@@ -365,11 +448,11 @@ def main() -> None:
                 if readable:
                     key = sys.stdin.read(1).lower()
                     if key == "a":
-                        ws = switch_auto(ws, args.uri, args.bridge_enable_file)
+                        ws = switch_auto(ws, args.uri, args.bridge_enable_file, source_ip, args.interface)
                         last_heartbeat = 0.0
                         continue
                     if key == "j":
-                        ws = switch_manual(ws, args.uri, args.bridge_enable_file)
+                        ws = switch_manual(ws, args.uri, args.bridge_enable_file, source_ip, args.interface)
                         last_heartbeat = 0.0
                         continue
                     elif key == "q":
@@ -384,7 +467,7 @@ def main() -> None:
                     print(f"connection closed: {exc}; reconnecting...")
                     ws.close()
                     time.sleep(1.0)
-                    ws = connect(args.uri)
+                    ws = connect(args.uri, source_ip=source_ip, interface=args.interface)
                     last_heartbeat = 0.0
                     continue
                 if selected:
