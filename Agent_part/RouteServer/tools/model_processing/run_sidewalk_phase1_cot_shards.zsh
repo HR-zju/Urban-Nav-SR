@@ -144,9 +144,9 @@ for idx in {1..${SHARD_COUNT}}; do
       --image-detail "${image_detail}" \
       --fallback-policy "${fallback_policy}" \
       --progress-interval "${progress_interval}"
-    status=$?
-    print "[cot-shards-worker] exit shard=${shard_num} status=${status} at $(date "+%Y-%m-%d %H:%M:%S")"
-    exit ${status}
+    exit_code=$?
+    print "[cot-shards-worker] exit shard=${shard_num} status=${exit_code} at $(date "+%Y-%m-%d %H:%M:%S")"
+    exit ${exit_code}
   ' -- "${shard_num}" "${MODEL_PROVIDER}" "${LLM_MODEL_NAME}" "${key}" "${FALLBACK_POLICY}" "${PYTHON_BIN}" "${REPO_ROOT}" "${PROGRESS_INTERVAL}" "${shard}" "${output_jsonl}" "${report_json}" "${MAX_RETRIES}" "${IMAGE_DETAIL}" \
     > "${log}" 2>&1 &
 
