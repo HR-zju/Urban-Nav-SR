@@ -79,6 +79,7 @@ BEV proposal / PoV candidates 仍然保留，但定位为：
 更详细的数学与模块关系见：
 
 - [docs/architecture.md](docs/architecture.md)
+- [docs/FRAMEWORK_MATH_MODEL.md](docs/FRAMEWORK_MATH_MODEL.md)
 
 调试工具、测试建议和性能参数见：
 

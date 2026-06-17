@@ -17,6 +17,7 @@ Agent_part/
 ```text
 Agent_part/RouteServer/README.md        # RouteServer 能力和 examples
 Agent_part/RouteServer/tools/README.md  # SideWalk 数据处理与模型处理命令速查
+Agent_part/RouteServer/docs/FRAMEWORK_MATH_MODEL.md  # 当前框架数学模型和 Street View/Panorama 接入边界
 Agent_part/SideWalkNav/README.md        # Phase1 数据、CoT、baseline 和指标口径
 ```
 
@@ -773,4 +774,3 @@ FPV/BEV 图片路径是否存在
 ### 6. SAM3 不是 Phase1 必需项
 
 Phase1 source、CoT teacher、archive、baseline 都可以不跑 SAM3。只有 Visual Prompt segmentation overlay 或 Phase2 dense grounding 需要 SAM3 环境和 checkpoint。
-
