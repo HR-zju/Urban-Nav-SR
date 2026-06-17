@@ -18,6 +18,8 @@ Agent_part/
 Agent_part/RouteServer/README.md        # RouteServer 能力和 examples
 Agent_part/RouteServer/tools/README.md  # SideWalk 数据处理与模型处理命令速查
 Agent_part/RouteServer/docs/FRAMEWORK_MATH_MODEL.md  # 当前框架数学模型和 Street View/Panorama 接入边界
+Agent_part/RouteServer/docs/MCP_SERVER_PIPELINE.md  # MCP Server 从指令理解到 waypoints 的流程图
+Agent_part/RouteServer/docs/EVALUATION.md  # 目的地推荐和路线规划评估指标
 Agent_part/SideWalkNav/README.md        # Phase1 数据、CoT、baseline 和指标口径
 ```
 
@@ -258,7 +260,120 @@ bev_index.json
 
 如果还没有 `bev_images/` 和 `bev_index.json`，按下一节生成。
 
-## 五、生成基础输入和 BEV
+## 五、从街景/全景 API 生成 FPV 输入
+
+如果没有真实相机或 MCAP 数据，可以用 Google Street View Static API 或百度地图全景静态图生成 `images/ + trajectory.json`，然后直接接现有 Visual Prompt pipeline。
+
+进入 RouteServer：
+
+```bash
+conda activate UrbanNav
+cd /home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer
+```
+
+### 1. Google Street View 单点拉取
+
+```bash
+export GOOGLE_MAPS_API_KEY="<your-google-maps-api-key>"
+
+python tools/dataset_processing/fetch_streetview_images.py \
+  --provider google \
+  --lat 30.2645 \
+  --lng 120.1180 \
+  --heading-deg 35 \
+  --pitch-deg 0 \
+  --fov-deg 90 \
+  --size 512x512 \
+  --output-dir /tmp/urbannav_google_streetview_smoke
+```
+
+### 2. Baidu Panorama 单点拉取
+
+```bash
+export BAIDU_AK="<your-baidu-ak>"
+
+python tools/dataset_processing/fetch_streetview_images.py \
+  --provider baidu \
+  --lat 30.2645 \
+  --lng 120.1180 \
+  --heading-deg 35 \
+  --pitch-deg 0 \
+  --fov-deg 90 \
+  --size 512x512 \
+  --coordinate-system WGS84 \
+  --baidu-coordtype wgs84ll \
+  --output-dir /tmp/urbannav_baidu_panorama_smoke
+```
+
+### 3. 从现有 trajectory.json 批量拉取
+
+输入 `trajectory.json` 每行至少需要 `lat`、`lng`、`heading_deg`：
+
+```bash
+python tools/dataset_processing/fetch_streetview_images.py \
+  --provider google \
+  --trajectory-json "${CLIP}/trajectory.json" \
+  --frame-start 0 \
+  --frame-end 100 \
+  --frame-step 10 \
+  --size 512x512 \
+  --sleep-s 0.1 \
+  --output-dir "${CLIP}/streetview_google"
+```
+
+输出结构：
+
+```text
+streetview_google/
+  images/000001.jpg
+  trajectory.json
+  frames_manifest.json
+  streetview_manifest.json
+  streetview_failures.json
+  metadata/*.json
+```
+
+其中 `trajectory.json` 可以直接传给：
+
+```bash
+python tools/model_processing/run_sidewalk_images_visual_prompt_pipeline.py \
+  --images-dir "${CLIP}/streetview_google/images" \
+  --trajectory-json "${CLIP}/streetview_google/trajectory.json" \
+  --output-dir "${CLIP}/streetview_visual_prompt" \
+  --sequence-name "$(basename "${CLIP}")_streetview" \
+  --camera-view camera_front \
+  --segmentation-policy optional \
+  --mode foot
+```
+
+### 4. 一个 pano 生成多视角网格
+
+下面命令会围绕每个点生成 4 个水平视角：
+
+```bash
+python tools/dataset_processing/fetch_streetview_images.py \
+  --provider google \
+  --trajectory-json "${CLIP}/trajectory.json" \
+  --frame-start 0 \
+  --frame-end 1 \
+  --grid-x 4 \
+  --grid-y 1 \
+  --grid-selection all \
+  --size 512x512 \
+  --output-dir "${CLIP}/streetview_grid4"
+```
+
+默认第一列中心对齐输入 `heading_deg`，后续按 `360 / grid_x` 展开。如果要严格指定网格起始 yaw，可加 `--grid-yaw0-deg`。
+
+说明：
+
+- `--provider auto` 会读取 `MAP_PROVIDER`，但只有 `google` 和 `baidu` 能拉 FPV 静态图。
+- `osm` 和 `amap` 在当前仓库中是地图/路线 provider，不提供第一视角街景静态图下载。
+- Google 可选 `--use-signed-google-url` 和 `GOOGLE_STREETVIEW_SIGNING_SECRET`。
+- 百度经纬度顺序由脚本处理：输入仍写 `lat/lng`，请求会转成 `location=lng,lat`。
+- 跨 Google/Baidu/AMap 数据混用时要在 manifest 中检查 `coordinate_system`、`baidu_coordtype`、`pano_id`。
+
+## 六、生成基础输入和 BEV
 
 进入 RouteServer：
 
@@ -325,7 +440,7 @@ python tools/dataset_processing/process_chunks_26_29.py \
 
 如果用 `--skip-existing`，旧产物可能被跳过。需要重生 BEV 时，先删除对应 clip 下的 `bev_images/` 和 `bev_index.json`，或不要加 `--skip-existing`。
 
-## 六、生成 Phase1 source 数据
+## 七、生成 Phase1 source 数据
 
 Phase1 不依赖 SAM/SoM。它会把 FPV、BEV、pose/camera 标定投影和 QA bundle 转成训练前的 source JSONL。
 
@@ -388,7 +503,7 @@ MAX_BEV_TIME_DELTA_MS=300.0   # FPV 帧匹配最近 BEV 的最大时间差
 ALLOW_HEURISTIC_TRAJECTORY=1  # 只用于旧 GNSS/trajectory smoke fallback
 ```
 
-## 七、生成 CoT teacher 标注并归档为 ms-swift 数据
+## 八、生成 CoT teacher 标注并归档为 ms-swift 数据
 
 这一步需要可用的 LLM/VLM provider。正式构建推荐 `FALLBACK_POLICY=drop`，失败样本不进入训练集。
 
@@ -460,7 +575,7 @@ WRITE_REVIEW_HTML=1 \
 ${ARCHIVE_ROOT}/manifests/${SPLIT_NAME}.jsonl
 ```
 
-## 八、使用 ms-swift 训练
+## 九、使用 ms-swift 训练
 
 ms-swift 不在本目录内，假设已经放在：
 
@@ -501,7 +616,7 @@ ${DATASET_ROOT}/sidewalk_phase1_archive/manifests/train.jsonl
 
 `--remove_unused_columns false` 必须保留，否则 `pixel_trajectory` 等额外字段可能被 trainer 丢掉。
 
-## 九、运行 Agent CoT baseline
+## 十、运行 Agent CoT baseline
 
 baseline 用同样的 Phase1 CoT v5 输入格式，让模型真实预测 `<finish>.trajectory`，再转成 overlay 和指标。不要用规则 fallback 补轨迹。
 
@@ -542,7 +657,7 @@ metrics.normalized_fde
 trajectory_warnings
 ```
 
-## 十、运行 SideWalk Visual Prompt pipeline
+## 十一、运行 SideWalk Visual Prompt pipeline
 
 如果你已经有 `images/`、`trajectory.json`，并希望逐帧输出 visual prompt overlay/json：
 
@@ -613,7 +728,7 @@ python tools/model_processing/run_sidewalk_images_visual_prompt_pipeline.py \
   --mode foot
 ```
 
-## 十一、可选 Phase2 SAM/SoM
+## 十二、可选 Phase2 SAM/SoM
 
 Phase1 数据、CoT teacher、archive、baseline 都不强制依赖 SAM/SoM。只有需要 dense grounding、segmentation、SoM 或 Phase2 artifact 时再跑。
 
@@ -642,7 +757,7 @@ SIDEWALK_ROOT 或 SIDEWALK_DIR
 
 确保路径指向真实数据和真实 checkpoint。
 
-## 十二、Docker 可选路径
+## 十三、Docker 可选路径
 
 Docker 文件在：
 
@@ -681,7 +796,7 @@ docker run -it --rm \
 Agent_part/RouteServer/tools/docker/README-DOCKER.md
 ```
 
-## 十三、复现检查清单
+## 十四、复现检查清单
 
 按顺序确认：
 

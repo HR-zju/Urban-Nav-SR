@@ -80,6 +80,8 @@ BEV proposal / PoV candidates 仍然保留，但定位为：
 
 - [docs/architecture.md](docs/architecture.md)
 - [docs/FRAMEWORK_MATH_MODEL.md](docs/FRAMEWORK_MATH_MODEL.md)
+- [docs/MCP_SERVER_PIPELINE.md](docs/MCP_SERVER_PIPELINE.md)
+- [docs/EVALUATION.md](docs/EVALUATION.md)
 
 调试工具、测试建议和性能参数见：
 

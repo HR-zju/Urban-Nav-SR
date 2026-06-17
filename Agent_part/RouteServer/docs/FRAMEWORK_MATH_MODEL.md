@@ -97,7 +97,8 @@ I_t, \kappa_t =
 
 ```text
 仓库支持 Google/Baidu 地图路线能力；
-仓库尚未实现 Google Street View / 百度全景静态图下载器；
+仓库已有 Google Street View / 百度全景静态图的最小下载脚本；
+仓库尚未接入 Google Maps JS StreetViewService 的 pano graph links；
 接入时应该新增 image provider，而不是塞进现有 route provider。
 ```
 
@@ -712,23 +713,35 @@ TubeIoU=
 - 用 MAP_PROVIDER=google 做 geocode / places / routes。
 - 用 MAP_PROVIDER=baidu 做 geocode / POI / directionlite routes。
 - 消费已有 FPV images + trajectory.json 运行 visual prompt pipeline。
+- 用 tools/dataset_processing/fetch_streetview_images.py 调用 Google Street View Static API。
+- 用 tools/dataset_processing/fetch_streetview_images.py 调用 Baidu panorama/v2 静态图 API。
+- 把下载结果写成 images/trajectory.json/frames_manifest.json/streetview_manifest.json。
 
-不可以直接：
-- 批量调用 Google Street View Static API 下载图像。
-- 批量调用 Baidu panorama/v2 下载图像。
-- 根据 route polyline 自动采样街景点并生成 streetview_manifest.json。
+尚未实现：
+- 根据 route polyline 自动采样街景点。
+- 通过 Google Maps JS StreetViewService 拉取 pano graph links。
 - 统一处理 WGS84/GCJ-02/BD-09 坐标转换和 provider metadata。
 ```
 
-最小新增模块建议：
+当前新增入口：
 
 ```text
 tools/dataset_processing/fetch_streetview_images.py
-src/mcp_server/image_providers/streetview.py
-src/mcp_server/image_providers/panorama.py
 ```
 
-建议接口：
+该脚本支持：
+
+```text
+--provider google
+--provider baidu
+--provider auto  # 读取 MAP_PROVIDER，但只接受 google/baidu
+--trajectory-json
+--locations-csv
+--lat/--lng
+--grid-x/--grid-y
+```
+
+后续如果要把下载能力服务化，可抽成接口：
 
 ```python
 class FPVImageProvider:
@@ -756,4 +769,3 @@ streetview_manifest.json
 ```
 
 这样 Street View/Panorama 只替换 \(I_t\) 的来源，不改变 RouteContext、BEV、VisualPromptAgent 和 Phase1 训练框架。
-

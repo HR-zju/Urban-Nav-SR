@@ -331,6 +331,7 @@ cd /home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer/to
 
 | 文件 | 说明 |
 |------|------|
+| `dataset_processing/fetch_streetview_images.py` | 调用 Google Street View Static API 或百度 panorama/v2，把经纬度/heading 批量下载成 `images/trajectory.json/frames_manifest.json/streetview_manifest.json`，可直接接 Visual Prompt pipeline |
 | `dataset_processing/process_chunks_26_29.py` | 批量处理 chunk，支持 `--chunks 0 26 27 ...`、并行、BEV、Phase2 |
 | `dataset_processing/mcap_to_sidewalk_inputs.py` | 单个 MCAP 抽帧并生成中间轨迹 |
 | `dataset_processing/process_sidewalk_dataset.py` | 从 sidewalk 格式生成 Phase1 最简 2fps ego-aligned BEV、`bev_index.json` 和轨迹索引；debug 时可显式写 FPV JPG、north-up BEV 和 BEV mp4 |
@@ -528,6 +529,23 @@ python tools/model_processing/run_sidewalk_phase1_cot_baseline.py \
 - 产物 `trajectory.json` 的 `heading_deg` 是全量 FPV 每帧可用的朝向，`position_source` 是轨迹位置来源；`bev_images/*.bevmeta.json` 里的 `used_heading_deg`、`position_source` 是每张 BEV 图实际使用的位姿元数据。
 - Phase1 最简 BEV 默认只生成 `bev_images/` ego-aligned 图像和 `bev_index.json`，并绘制完整 route/start/end 作为任务输入条件。`bev_index.json` 记录每张 BEV 对应的原始 `frame_idx` 和 timestamp，ms-swift Phase1 exporter 会用它把每个高频 FPV 帧映射到最近的低频 BEV 帧，默认最大时间差 `300ms`。
 - `bev_images_north_up/`、`bev_video.mp4`、`bev_video_north_up.mp4`、`bev_video_ego_aligned.mp4` 仅在显式 debug 参数打开时生成。
+
+### 评估工具
+
+| 文件 | 说明 |
+|------|------|
+| `evaluation/eval_destination_route.py` | 离线评估目的地推荐和路线规划；兼容 CitySeeker 风格 `complete_route/total_weight/total_steps`，输出 destination success、Hit@K、MRR、route SPL、长度比、曲线 ADE/FDE/MDE |
+
+```bash
+python tools/evaluation/eval_destination_route.py \
+  --ground-truth /path/to/gt.json \
+  --predictions /path/to/pred.jsonl \
+  --destination-radius-m 50 \
+  --output-json /tmp/urbannav_eval_summary.json \
+  --output-jsonl /tmp/urbannav_eval_rows.jsonl
+```
+
+详细说明见 `docs/EVALUATION.md`。
 
 ## Docker
 
