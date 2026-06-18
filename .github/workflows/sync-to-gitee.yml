@@ -14,19 +14,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      # hub-mirror-action 的 src_token 只用于 API，HTTPS clone 不会带 token
-      - name: 配置 GitHub HTTPS 认证
-        run: git config --global url."https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
-      - name: 同步到Gitee
-        uses: Yikun/hub-mirror-action@master
-        with:
-          src: github/HR-zju
-          dst: gitee/csc105
-          dst_key: ${{ secrets.GITEE_PRIVATE_KEY }}
-          dst_token: ${{ secrets.GITEE_TOKEN }}
-          src_token: ${{ secrets.GITHUB_TOKEN }}
-          src_account_type: org
-          dst_account_type: user
-          static_list: Urban-Nav-SR
-          mappings: Urban-Nav-SR=>urbannav
-          debug: true
+
+      - name: 同步到 Gitee
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          git remote add gitee "https://oauth2:${GITEE_TOKEN}@gitee.com/csc105/urbannav.git" \
+            || git remote set-url gitee "https://oauth2:${GITEE_TOKEN}@gitee.com/csc105/urbannav.git"
+          git push gitee --all
+          git push gitee --tags
