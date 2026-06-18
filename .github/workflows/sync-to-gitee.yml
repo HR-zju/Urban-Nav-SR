@@ -4,7 +4,6 @@ on:
     branches: [ main, master ]
   delete:
     branches: [ main, master ]
-
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -13,11 +12,13 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: 同步到Gitee
         uses: Yikun/hub-mirror-action@master
         with:
-          src: github.github.HR-zju/Urban-Nav-SR
-          dst: gitee/csc105/urbannav
+          # 源仓库 固定写法 github.用户名/仓库
+          src: github.HR-zju/Urban-Nav-SR
+          # 目标仓库 固定写法 gitee.用户名/仓库
+          dst: gitee.csc105/urbannav
           dst_key: ${{ secrets.GITEE_TOKEN }}
-          static_branch: true
+          # 删除了不存在的 static_branch
+          debug: true
