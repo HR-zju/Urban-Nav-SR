@@ -1,0 +1,23 @@
+name: Sync To Gitee
+on:
+  push:
+    branches: [ main, master ]
+  delete:
+    branches: [ main, master ]
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 同步到Gitee
+        uses: Yikun/hub-mirror-action@master
+        with:
+          src: github/${{ github.repository }}
+          dst: gitee/csc105/urbannav
+          dst_key: ${{ secrets.GITEE_TOKEN }}
+          static_branch: true
