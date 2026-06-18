@@ -17,7 +17,7 @@ jobs:
       - name: 同步到Gitee
         uses: Yikun/hub-mirror-action@master
         with:
-          src: github/${{ github.repository }}
+          src: github.github.HR-zju/Urban-Nav-SR
           dst: gitee/csc105/urbannav
           dst_key: ${{ secrets.GITEE_TOKEN }}
           static_branch: true
