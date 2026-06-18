@@ -15,10 +15,12 @@ jobs:
       - name: 同步到Gitee
         uses: Yikun/hub-mirror-action@master
         with:
-          # 源仓库 固定写法 github.用户名/仓库
-          src: github.HR-zju/Urban-Nav-SR
-          # 目标仓库 固定写法 gitee.用户名/仓库
-          dst: gitee.csc105/urbannav
-          dst_key: ${{ secrets.GITEE_TOKEN }}
-          # 删除了不存在的 static_branch
+          src: github/HR-zju
+          dst: gitee/csc105
+          dst_key: ${{ secrets.GITEE_PRIVATE_KEY }}
+          dst_token: ${{ secrets.GITEE_TOKEN }}
+          src_account_type: org
+          dst_account_type: user
+          static_list: Urban-Nav-SR
+          mappings: Urban-Nav-SR=>urbannav
           debug: true
