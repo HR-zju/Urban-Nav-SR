@@ -37,6 +37,22 @@ from mcp_server.map_providers import (
     sample_route_coordinates,
 )
 from mcp_server.recommendation import DestinationRecommendationEngine
+from mcp_server.core.map_ops import (
+    geocode as core_geocode,
+    get_route as core_get_route,
+    reverse_geocode as core_reverse_geocode,
+    search_category as core_search_category,
+    search_poi as core_search_poi,
+)
+from mcp_server.core.route_session_ops import (
+    add_via_point as core_add_via_point,
+    create_route_session as core_create_route_session,
+    get_route_session_snapshot as core_get_route_session_snapshot,
+    list_route_sessions as core_list_route_sessions,
+    remove_via_point as core_remove_via_point,
+    replace_destination as core_replace_destination,
+    replan_route_session_from_origin as core_replan_route_session_from_origin,
+)
 from mcp_server.route_context import (
     build_local_bev_context,
     build_route_context,
@@ -416,18 +432,10 @@ async def geocode_address(address: str, ctx: Context) -> List[Dict]:
         - Bounding box (if applicable)
         - Importance ranking
     """
-    osm_client = ctx.request_context.lifespan_context.osm_client
-    results = await osm_client.geocode(address)
-    
-    # Enhance results with additional context
-    for result in results:
-        if "lat" in result and "lon" in result:
-            result["coordinates"] = {
-                "latitude": float(result["lat"]),
-                "longitude": float(result["lon"])
-            }
-    
-    return results
+    return await core_geocode(
+        app_context=ctx.request_context.lifespan_context,
+        address=address,
+    )
 
 @mcp.tool()
 async def reverse_geocode(latitude: float, longitude: float, ctx: Context) -> Dict:
@@ -451,8 +459,11 @@ async def reverse_geocode(latitude: float, longitude: float, ctx: Context) -> Di
         - OSM metadata
         - Postal code and other relevant identifiers
     """
-    osm_client = ctx.request_context.lifespan_context.osm_client
-    return await osm_client.reverse_geocode(latitude, longitude)
+    return await core_reverse_geocode(
+        app_context=ctx.request_context.lifespan_context,
+        latitude=latitude,
+        longitude=longitude,
+    )
 
 
 @mcp.tool()
@@ -549,25 +560,14 @@ async def search_nearby_pois(
     """
     app_context = ctx.request_context.lifespan_context
     await ctx.info(f"Semantic POI search: provider={app_context.provider}, keywords={keywords}, radius={radius}m")
-    results = await app_context.osm_client.search_semantic_pois(
+    return await core_search_poi(
+        app_context=app_context,
         location=location,
         keywords=keywords,
         radius=radius,
         sortrule=sortrule,
         limit=limit,
     )
-    return {
-        "provider": app_context.provider,
-        "query": {
-            "location": location,
-            "keywords": keywords,
-            "radius": radius,
-            "sortrule": sortrule,
-            "limit": limit,
-        },
-        "results": results,
-        "count": len(results),
-    }
 
 
 @mcp.tool()
@@ -709,34 +709,14 @@ async def create_route_session(
     replacing the destination, or replanning from a new current origin.
     """
     app_context = ctx.request_context.lifespan_context
-    normalized_via_points = _normalize_via_points(via_points)
-    route_plan = await _compute_combined_route_plan(
+    return await core_create_route_session(
         app_context=app_context,
         origin=origin,
         destination=destination,
-        via_points=normalized_via_points,
+        via_points=via_points,
         mode=mode,
+        session_name=session_name,
     )
-    session_id = f"route_{uuid4().hex[:10]}"
-    session_payload = {
-        "session_id": session_id,
-        "session_name": str(session_name or "").strip() or session_id,
-        "provider": app_context.provider,
-        "origin": origin,
-        "destination": destination,
-        "mode": mode,
-        "via_points": normalized_via_points,
-        "created_at": datetime.now().isoformat(),
-        "updated_at": datetime.now().isoformat(),
-    }
-    _cache_route_plan_on_session(session_payload, route_plan)
-    _save_persisted_route_session(session_payload)
-    return {
-        "session": session_payload,
-        "route_plan": route_plan,
-        "route_plan_cache_hit": False,
-        "session_store": _route_session_store_info(),
-    }
 
 
 @mcp.tool()
@@ -752,20 +732,11 @@ async def get_route_session(
     provider route. This avoids hitting provider QPS limits on frequent UI polls.
     """
     app_context = ctx.request_context.lifespan_context
-    session = _get_persisted_route_session(session_id)
-    if not session:
-        raise KeyError(f"Unknown route session: {session_id}")
-    route_plan, cache_hit = await _route_plan_for_session(
+    return await core_get_route_session_snapshot(
         app_context=app_context,
-        session=session,
+        session_id=session_id,
         force_replan=bool(force_replan),
     )
-    return {
-        "session": session,
-        "route_plan": route_plan,
-        "route_plan_cache_hit": cache_hit,
-        "session_store": _route_session_store_info(),
-    }
 
 
 @mcp.tool()
@@ -780,28 +751,10 @@ async def list_route_sessions(
     This is useful for UI recovery: after a page refresh or backend restart, the
     UI can show recoverable sessions or verify that a session_id is still valid.
     """
-    _load_route_sessions()
-    bounded_limit = max(1, min(int(limit), 100))
-    sessions = sorted(
-        ROUTE_SESSIONS.values(),
-        key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""),
-        reverse=True,
-    )[:bounded_limit]
-    if not include_route_plan_cache:
-        sessions = [
-            {
-                key: value
-                for key, value in session.items()
-                if key not in {"route_plan_cache"}
-            }
-            for session in sessions
-        ]
-    return {
-        "sessions": sessions,
-        "count": len(sessions),
-        "total_count": len(ROUTE_SESSIONS),
-        "session_store": _route_session_store_info(),
-    }
+    return core_list_route_sessions(
+        limit=limit,
+        include_route_plan_cache=include_route_plan_cache,
+    )
 
 
 @mcp.tool()
@@ -815,83 +768,12 @@ async def add_via_point_to_session(
     Insert or append a via point inside an existing route session.
     """
     app_context = ctx.request_context.lifespan_context
-    session = _get_persisted_route_session(session_id)
-    if not session:
-        raise KeyError(f"Unknown route session: {session_id}")
-    normalized_new = _normalize_via_points([new_via_point])
-    if not normalized_new:
-        raise ValueError("new_via_point must include a valid location")
-    old_via_points = _normalize_via_points(session.get("via_points"))
-    via_points = [dict(item) for item in old_via_points]
-    item = normalized_new[0]
-    same_as_destination = _locations_equivalent(item.get("location"), session.get("destination"))
-    duplicate_index = next(
-        (
-            index for index, via in enumerate(via_points)
-            if _locations_equivalent(via.get("location"), item.get("location"))
-        ),
-        None,
+    return await core_add_via_point(
+        app_context=app_context,
+        session_id=session_id,
+        new_via_point=new_via_point,
+        insert_before_index=insert_before_index,
     )
-    if same_as_destination or duplicate_index is not None:
-        route_plan, cache_hit = await _route_plan_for_session(
-            app_context=app_context,
-            session=session,
-            force_replan=False,
-        )
-        return {
-            "session": session,
-            "route_plan": route_plan,
-            "route_plan_cache_hit": cache_hit,
-            "session_changed": False,
-            "change_reason": "matches_destination" if same_as_destination else f"duplicate_via_point:{duplicate_index}",
-            "route_plan_update_mode": "cache_reuse_noop",
-            "session_store": _route_session_store_info(),
-        }
-    inserted_index = len(via_points)
-    if insert_before_index is None:
-        via_points.append(item)
-    else:
-        inserted_index = max(0, min(int(insert_before_index), len(via_points)))
-        via_points.insert(inserted_index, item)
-    for index, via in enumerate(via_points):
-        via["index"] = index
-    session["via_points"] = via_points
-    session["updated_at"] = datetime.now().isoformat()
-    cached_route_plan = session.get("route_plan_cache")
-    route_plan = None
-    route_plan_update_mode = "full_replan"
-    if isinstance(cached_route_plan, dict) and cached_route_plan:
-        route_plan = await _compute_incremental_route_plan_with_inserted_via(
-            app_context=app_context,
-            origin=session["origin"],
-            destination=session["destination"],
-            mode=session["mode"],
-            cached_route_plan=cached_route_plan,
-            old_via_points=old_via_points,
-            new_via_points=via_points,
-            insert_index=inserted_index,
-        )
-        if isinstance(route_plan, dict) and route_plan:
-            route_plan_update_mode = str(route_plan.get("replan_strategy") or "incremental_insert_via_split_leg")
-    if route_plan is None:
-        route_plan = await _compute_combined_route_plan(
-            app_context=app_context,
-            origin=session["origin"],
-            destination=session["destination"],
-            via_points=via_points,
-            mode=session["mode"],
-        )
-    _cache_route_plan_on_session(session, route_plan)
-    _save_persisted_route_session(session)
-    return {
-        "session": session,
-        "route_plan": route_plan,
-        "route_plan_cache_hit": False,
-        "session_changed": True,
-        "change_reason": "via_point_added",
-        "route_plan_update_mode": route_plan_update_mode,
-        "session_store": _route_session_store_info(),
-    }
 
 
 @mcp.tool()
@@ -905,41 +787,12 @@ async def remove_via_point_from_session(
     Remove one via point from an existing route session by index or by name.
     """
     app_context = ctx.request_context.lifespan_context
-    session = _get_persisted_route_session(session_id)
-    if not session:
-        raise KeyError(f"Unknown route session: {session_id}")
-    via_points = _normalize_via_points(session.get("via_points"))
-    removed = None
-    if via_point_index is not None and 0 <= int(via_point_index) < len(via_points):
-        removed = via_points.pop(int(via_point_index))
-    elif str(via_point_name or "").strip():
-        name = str(via_point_name).strip().lower()
-        for index, via in enumerate(via_points):
-            if str(via.get("name") or "").strip().lower() == name:
-                removed = via_points.pop(index)
-                break
-    if removed is None:
-        raise KeyError("No matching via point found to remove")
-    for index, via in enumerate(via_points):
-        via["index"] = index
-    session["via_points"] = via_points
-    session["updated_at"] = datetime.now().isoformat()
-    route_plan = await _compute_combined_route_plan(
+    return await core_remove_via_point(
         app_context=app_context,
-        origin=session["origin"],
-        destination=session["destination"],
-        via_points=via_points,
-        mode=session["mode"],
+        session_id=session_id,
+        via_point_index=via_point_index,
+        via_point_name=via_point_name,
     )
-    _cache_route_plan_on_session(session, route_plan)
-    _save_persisted_route_session(session)
-    return {
-        "session": session,
-        "removed_via_point": removed,
-        "route_plan": route_plan,
-        "route_plan_cache_hit": False,
-        "session_store": _route_session_store_info(),
-    }
 
 
 @mcp.tool()
@@ -952,26 +805,11 @@ async def replace_destination_in_session(
     Replace the final destination of an existing route session and replan.
     """
     app_context = ctx.request_context.lifespan_context
-    session = _get_persisted_route_session(session_id)
-    if not session:
-        raise KeyError(f"Unknown route session: {session_id}")
-    session["destination"] = destination
-    session["updated_at"] = datetime.now().isoformat()
-    route_plan = await _compute_combined_route_plan(
+    return await core_replace_destination(
         app_context=app_context,
-        origin=session["origin"],
-        destination=session["destination"],
-        via_points=session.get("via_points"),
-        mode=session["mode"],
+        session_id=session_id,
+        destination=destination,
     )
-    _cache_route_plan_on_session(session, route_plan)
-    _save_persisted_route_session(session)
-    return {
-        "session": session,
-        "route_plan": route_plan,
-        "route_plan_cache_hit": False,
-        "session_store": _route_session_store_info(),
-    }
 
 
 @mcp.tool()
@@ -984,26 +822,11 @@ async def replan_route_session_from_origin(
     Update the current origin of a route session and replan from the new location.
     """
     app_context = ctx.request_context.lifespan_context
-    session = _get_persisted_route_session(session_id)
-    if not session:
-        raise KeyError(f"Unknown route session: {session_id}")
-    session["origin"] = origin
-    session["updated_at"] = datetime.now().isoformat()
-    route_plan = await _compute_combined_route_plan(
+    return await core_replan_route_session_from_origin(
         app_context=app_context,
-        origin=session["origin"],
-        destination=session["destination"],
-        via_points=session.get("via_points"),
-        mode=session["mode"],
+        session_id=session_id,
+        origin=origin,
     )
-    _cache_route_plan_on_session(session, route_plan)
-    _save_persisted_route_session(session)
-    return {
-        "session": session,
-        "route_plan": route_plan,
-        "route_plan_cache_hit": False,
-        "session_store": _route_session_store_info(),
-    }
 
 
 @mcp.tool()
@@ -1875,8 +1698,6 @@ async def get_route_directions(
           "annotations": false
         }
     """
-    osm_client = ctx.request_context.lifespan_context.osm_client
-    
     # Validate transportation mode
     valid_modes = ["car", "bike", "foot"]
     if mode not in valid_modes:
@@ -1884,50 +1705,18 @@ async def get_route_directions(
         mode = "car"
     
     await ctx.info(f"Calculating {mode} route from ({from_latitude}, {from_longitude}) to ({to_latitude}, {to_longitude})")
-    
-    # Get route from OSRM
-    route_data = await osm_client.get_route(
-        from_latitude, from_longitude,
-        to_latitude, to_longitude,
-        mode,
+
+    return await core_get_route(
+        app_context=ctx.request_context.lifespan_context,
+        from_latitude=from_latitude,
+        from_longitude=from_longitude,
+        to_latitude=to_latitude,
+        to_longitude=to_longitude,
+        mode=mode,
         steps=steps,
         overview=overview,
-        annotations=annotations
+        annotations=annotations,
     )
-    
-    # Process and simplify the response
-    if "routes" in route_data and len(route_data["routes"]) > 0:
-        route = route_data["routes"][0]
-        
-        # Extract turn-by-turn directions
-        steps_list = []
-        if "legs" in route:
-            for leg in route["legs"]:
-                for step in leg.get("steps", []):
-                    maneuver = step.get("maneuver", {})
-                    waypoint = maneuver.get("location")
-                    if not waypoint and step.get("geometry", {}).get("coordinates"):
-                        waypoint = step["geometry"]["coordinates"][-1]
-                    steps_list.append({
-                        "instruction": maneuver.get("instruction", ""),
-                        "distance": step.get("distance"),
-                        "duration": step.get("duration"),
-                        "name": step.get("name", ""),
-                        "waypoint": waypoint
-                    })
-        
-        return {
-            "summary": {
-                "distance": route.get("distance"),  # meters
-                "duration": route.get("duration"),  # seconds
-                "mode": mode
-            },
-            "directions": steps_list,
-            "geometry": route.get("geometry"),
-            "waypoints": route_data.get("waypoints", [])
-        }
-    else:
-        raise Exception("No route found")
 
 @mcp.tool()
 async def search_category(
@@ -1961,58 +1750,16 @@ async def search_category(
         - Count of matching places
         - List of matching places with coordinates, names, and metadata
     """
-    osm_client = ctx.request_context.lifespan_context.osm_client
-    
-    bbox = (min_longitude, min_latitude, max_longitude, max_latitude)
-    
     await ctx.info(f"Searching for {category} in bounding box")
-    features = await osm_client.search_features_by_category(bbox, category, subcategories)
-    
-    # Process results
-    results = []
-    for feature in features:
-        tags = feature.get("tags", {})
-        
-        # Get coordinates based on feature type
-        coords = {}
-        if feature.get("type") == "node":
-            coords = {
-                "latitude": feature.get("lat"),
-                "longitude": feature.get("lon")
-            }
-        # For ways and relations, use center coordinates if available
-        elif "center" in feature:
-            coords = {
-                "latitude": feature.get("center", {}).get("lat"),
-                "longitude": feature.get("center", {}).get("lon")
-            }
-        
-        # Only include features with valid coordinates
-        if coords:
-            results.append({
-                "id": feature.get("id"),
-                "type": feature.get("type"),
-                "name": tags.get("name", "Unnamed"),
-                "coordinates": coords,
-                "category": category,
-                "subcategory": tags.get(category),
-                "tags": tags
-            })
-    
-    return {
-        "query": {
-            "category": category,
-            "subcategories": subcategories,
-            "bbox": {
-                "min_latitude": min_latitude,
-                "min_longitude": min_longitude,
-                "max_latitude": max_latitude,
-                "max_longitude": max_longitude
-            }
-        },
-        "results": results,
-        "count": len(results)
-    }
+    return await core_search_category(
+        app_context=ctx.request_context.lifespan_context,
+        category=category,
+        min_latitude=min_latitude,
+        min_longitude=min_longitude,
+        max_latitude=max_latitude,
+        max_longitude=max_longitude,
+        subcategories=subcategories,
+    )
 
 @mcp.tool()
 async def suggest_meeting_point(

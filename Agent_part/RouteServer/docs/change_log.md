@@ -1,5 +1,17 @@
 # RouteServer 变更记录
 
+## 2026-06-19
+
+### RouteServer core 层兼容重构
+
+- 新增 `src/mcp_server/core/`，开始把 APP HTTP、MCP tools 和后续 Agent evaluator 共用的确定性逻辑下沉到 core 层。
+- 新增 `core.route_session_ops`，并将 HTTP route-session handlers 与 MCP route-session tools 切到同一套 create/get/list/add/remove/replace/replan 实现。
+- 新增 `core.map_ops`，并将 deterministic MCP map tools `geocode_address`、`reverse_geocode`、`search_nearby_pois`、`get_route_directions`、`search_category` 切到 core wrapper。
+- APP 相关接口路径保持不变：`/api/health`、`/api/recommendations`、`/api/routes/plan`、`/api/route-sessions/*`、`/api/waypoints/push`、`/ws/route-sessions/*`。
+- MCP tool 名和参数保持不变；本次只改变内部调用路径，避免破坏现有 APP 和 MCP 客户端。
+- 新增 `tests/test_http_api_contract_and_core.py`，覆盖 APP route contract、route-session payload shape 和 deterministic map core payload shape。
+- 新增 `docs/ROUTESERVER_REFACTOR_PLAN.md`，记录后续 `core/teacher/eval` 分层计划。
+
 ## 2026-06-04
 
 ### 移除 Phase1 BEV grid 伪监督

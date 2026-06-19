@@ -14,6 +14,12 @@ from aiohttp import ClientSession, WSMsgType, web
 from mcp_server.map_providers import create_map_client
 from mcp_server.recommendation import DestinationRecommendationEngine
 from mcp_server import server as mcp_server
+from mcp_server.core.route_session_ops import (
+    add_via_point as core_add_via_point,
+    create_route_session as core_create_route_session,
+    get_route_session_snapshot,
+    replan_route_session_from_origin as core_replan_route_session_from_origin,
+)
 
 
 LOGGER = logging.getLogger("mcp_server.http_api")
@@ -133,20 +139,11 @@ def _extract_nav_payload_from_route_plan(route_plan: dict[str, Any]) -> dict[str
 
 
 async def _session_snapshot(state: HTTPAPIState, session_id: str, *, force_replan: bool = False) -> dict[str, Any]:
-    session = mcp_server._get_persisted_route_session(session_id)
-    if not session:
-        raise KeyError(f"Unknown route session: {session_id}")
-    route_plan, cache_hit = await mcp_server._route_plan_for_session(
+    return await get_route_session_snapshot(
         app_context=state.app_context,
-        session=session,
+        session_id=session_id,
         force_replan=force_replan,
     )
-    return {
-        "session": session,
-        "route_plan": route_plan,
-        "route_plan_cache_hit": cache_hit,
-        "session_store": mcp_server._route_session_store_info(),
-    }
 
 
 async def _handle_health(request: web.Request) -> web.Response:
@@ -223,37 +220,16 @@ async def _handle_create_route_session(request: web.Request) -> web.Response:
     except ValueError as exc:
         return _json_error(str(exc))
 
-    normalized_via_points = mcp_server._normalize_via_points(payload.get("via_points"))
     mode = str(payload.get("mode") or "foot").strip().lower() or "foot"
-    route_plan = await mcp_server._compute_combined_route_plan(
+    result = await core_create_route_session(
         app_context=state.app_context,
         origin=origin,
         destination=destination,
-        via_points=normalized_via_points,
+        via_points=payload.get("via_points"),
         mode=mode,
+        session_name=str(payload.get("session_name") or "").strip() or None,
     )
-    session_id = f"route_{uuid4().hex[:10]}"
-    session_payload = {
-        "session_id": session_id,
-        "session_name": str(payload.get("session_name") or "").strip() or session_id,
-        "provider": state.provider,
-        "origin": origin,
-        "destination": destination,
-        "mode": mode,
-        "via_points": normalized_via_points,
-        "created_at": datetime.now().isoformat(),
-        "updated_at": datetime.now().isoformat(),
-    }
-    mcp_server._cache_route_plan_on_session(session_payload, route_plan)
-    mcp_server._save_persisted_route_session(session_payload)
-    return web.json_response(
-        {
-            "session": session_payload,
-            "route_plan": route_plan,
-            "route_plan_cache_hit": False,
-            "session_store": mcp_server._route_session_store_info(),
-        }
-    )
+    return web.json_response(result)
 
 
 async def _handle_get_route_session(request: web.Request) -> web.Response:
@@ -274,121 +250,36 @@ async def _handle_add_via_point(request: web.Request) -> web.Response:
     state: HTTPAPIState = request.app["state"]
     session_id = request.match_info["session_id"]
     payload = await _read_json(request)
-    session = mcp_server._get_persisted_route_session(session_id)
-    if not session:
-        return _json_error(f"Unknown route session: {session_id}", status=404, code="not_found")
-
-    normalized_new = mcp_server._normalize_via_points([payload.get("new_via_point") or payload])
-    if not normalized_new:
-        return _json_error("new_via_point must include a valid location")
-
-    old_via_points = mcp_server._normalize_via_points(session.get("via_points"))
-    via_points = [dict(item) for item in old_via_points]
-    item = normalized_new[0]
-    insert_before_index = payload.get("insert_before_index")
-    same_as_destination = mcp_server._locations_equivalent(item.get("location"), session.get("destination"))
-    duplicate_index = next(
-        (
-            index for index, via in enumerate(via_points)
-            if mcp_server._locations_equivalent(via.get("location"), item.get("location"))
-        ),
-        None,
-    )
-    if same_as_destination or duplicate_index is not None:
-        snapshot = await _session_snapshot(state, session_id, force_replan=False)
-        snapshot.update(
-            {
-                "session_changed": False,
-                "change_reason": "matches_destination" if same_as_destination else f"duplicate_via_point:{duplicate_index}",
-                "route_plan_update_mode": "cache_reuse_noop",
-            }
-        )
-        return web.json_response(snapshot)
-
-    inserted_index = len(via_points)
-    if insert_before_index is None:
-        via_points.append(item)
-    else:
-        inserted_index = max(0, min(int(insert_before_index), len(via_points)))
-        via_points.insert(inserted_index, item)
-
-    for index, via in enumerate(via_points):
-        via["index"] = index
-    session["via_points"] = via_points
-    session["updated_at"] = datetime.now().isoformat()
-
-    cached_route_plan = session.get("route_plan_cache")
-    route_plan = None
-    route_plan_update_mode = "full_replan"
-    if isinstance(cached_route_plan, dict) and cached_route_plan:
-        route_plan = await mcp_server._compute_incremental_route_plan_with_inserted_via(
+    try:
+        result = await core_add_via_point(
             app_context=state.app_context,
-            origin=session["origin"],
-            destination=session["destination"],
-            mode=session["mode"],
-            cached_route_plan=cached_route_plan,
-            old_via_points=old_via_points,
-            new_via_points=via_points,
-            insert_index=inserted_index,
+            session_id=session_id,
+            new_via_point=payload.get("new_via_point") or payload,
+            insert_before_index=payload.get("insert_before_index"),
         )
-        if isinstance(route_plan, dict) and route_plan:
-            route_plan_update_mode = str(route_plan.get("replan_strategy") or "incremental_insert_via_split_leg")
-
-    if route_plan is None:
-        route_plan = await mcp_server._compute_combined_route_plan(
-            app_context=state.app_context,
-            origin=session["origin"],
-            destination=session["destination"],
-            via_points=via_points,
-            mode=session["mode"],
-        )
-
-    mcp_server._cache_route_plan_on_session(session, route_plan)
-    mcp_server._save_persisted_route_session(session)
-    return web.json_response(
-        {
-            "session": session,
-            "route_plan": route_plan,
-            "route_plan_cache_hit": False,
-            "session_changed": True,
-            "change_reason": "via_point_added",
-            "route_plan_update_mode": route_plan_update_mode,
-            "session_store": mcp_server._route_session_store_info(),
-        }
-    )
+    except KeyError as exc:
+        return _json_error(str(exc.args[0] if exc.args else exc), status=404, code="not_found")
+    except ValueError as exc:
+        return _json_error(str(exc))
+    return web.json_response(result)
 
 
 async def _handle_replan_route_session(request: web.Request) -> web.Response:
     state: HTTPAPIState = request.app["state"]
     session_id = request.match_info["session_id"]
     payload = await _read_json(request)
-    session = mcp_server._get_persisted_route_session(session_id)
-    if not session:
-        return _json_error(f"Unknown route session: {session_id}", status=404, code="not_found")
     try:
         origin = _required_str(payload, "origin")
+        result = await core_replan_route_session_from_origin(
+            app_context=state.app_context,
+            session_id=session_id,
+            origin=origin,
+        )
+    except KeyError as exc:
+        return _json_error(str(exc.args[0] if exc.args else exc), status=404, code="not_found")
     except ValueError as exc:
         return _json_error(str(exc))
-
-    session["origin"] = origin
-    session["updated_at"] = datetime.now().isoformat()
-    route_plan = await mcp_server._compute_combined_route_plan(
-        app_context=state.app_context,
-        origin=session["origin"],
-        destination=session["destination"],
-        via_points=session.get("via_points"),
-        mode=session["mode"],
-    )
-    mcp_server._cache_route_plan_on_session(session, route_plan)
-    mcp_server._save_persisted_route_session(session)
-    return web.json_response(
-        {
-            "session": session,
-            "route_plan": route_plan,
-            "route_plan_cache_hit": False,
-            "session_store": mcp_server._route_session_store_info(),
-        }
-    )
+    return web.json_response(result)
 
 
 async def _handle_push_waypoints(request: web.Request) -> web.Response:

@@ -61,6 +61,7 @@ class Case:
     category: str | None
     origin: Point | None
     gt_destination: Point | None
+    acceptable_destinations: list[Point]
     gt_route: list[Point]
     gt_distance_m: float | None
     gt_steps: int | None
@@ -214,6 +215,8 @@ def _route_distance_m(points: list[Point]) -> float | None:
 def _summary_distance(raw: dict[str, Any]) -> float | None:
     route_summary = raw.get("route_summary") if isinstance(raw.get("route_summary"), dict) else {}
     for value in (
+        raw.get("gt_distance_m"),
+        raw.get("pred_distance_m"),
         raw.get("total_weight"),
         raw.get("distance_m"),
         route_summary.get("distance_m"),
@@ -245,6 +248,9 @@ def parse_case(raw: dict[str, Any]) -> Case:
     gt_destination = point_from_any(_pick(raw, "gt_destination", "destination", "target"))
     if gt_destination is None and route:
         gt_destination = route[-1]
+    acceptable_destinations = route_from_any(raw.get("acceptable_destinations"))
+    if not acceptable_destinations and gt_destination is not None:
+        acceptable_destinations = [gt_destination]
     origin = point_from_any(_pick(raw, "origin", "start"))
     if origin is None and route:
         origin = route[0]
@@ -257,6 +263,7 @@ def parse_case(raw: dict[str, Any]) -> Case:
         category=_str_or_none(raw.get("category") or raw.get("service") or raw.get("folder")),
         origin=origin,
         gt_destination=gt_destination,
+        acceptable_destinations=acceptable_destinations,
         gt_route=route,
         gt_distance_m=distance,
         gt_steps=_summary_steps(raw, route),
@@ -333,11 +340,25 @@ def destination_match(pred: Point | None, gt: Point | None, *, radius_m: float) 
     return distance <= radius_m, distance
 
 
-def candidate_rank(pred: Prediction, gt: Point | None, *, radius_m: float) -> int | None:
-    if gt is None:
+def destination_match_any(pred: Point | None, gts: list[Point], *, radius_m: float) -> tuple[bool, float | None]:
+    if pred is None or not gts:
+        return False, None
+    best_ok = False
+    best_distance: float | None = None
+    for gt in gts:
+        ok, distance = destination_match(pred, gt, radius_m=radius_m)
+        if ok:
+            best_ok = True
+        if distance is not None and (best_distance is None or distance < best_distance):
+            best_distance = distance
+    return best_ok, best_distance
+
+
+def candidate_rank(pred: Prediction, gts: list[Point], *, radius_m: float) -> int | None:
+    if not gts:
         return None
     for idx, candidate in enumerate(pred.ranked_destinations, start=1):
-        ok, _dist = destination_match(candidate, gt, radius_m=radius_m)
+        ok, _dist = destination_match_any(candidate, gts, radius_m=radius_m)
         if ok:
             return idx
     return None
@@ -390,8 +411,9 @@ def curve_errors_m(pred_route: list[Point], gt_route: list[Point], *, samples: i
 
 
 def evaluate_pair(case: Case, pred: Prediction, *, destination_radius_m: float, route_samples: int) -> dict[str, Any]:
-    dest_success, dest_error_m = destination_match(pred.pred_destination, case.gt_destination, radius_m=destination_radius_m)
-    rank = candidate_rank(pred, case.gt_destination, radius_m=destination_radius_m)
+    gt_destinations = case.acceptable_destinations or ([case.gt_destination] if case.gt_destination else [])
+    dest_success, dest_error_m = destination_match_any(pred.pred_destination, gt_destinations, radius_m=destination_radius_m)
+    rank = candidate_rank(pred, gt_destinations, radius_m=destination_radius_m)
     endpoint_error_m = None
     if pred.route and case.gt_destination:
         endpoint_error_m = haversine_m(pred.route[-1], case.gt_destination)
@@ -453,6 +475,11 @@ def _round_value(value: Any) -> Any:
 
 
 def summarize(rows: list[dict[str, Any]], *, hit_ks: list[int]) -> dict[str, Any]:
+    successful_route_ratios = sorted(
+        float(r["route_distance_ratio"])
+        for r in rows
+        if r.get("route_success") and isinstance(r.get("route_distance_ratio"), (int, float))
+    )
     summary: dict[str, Any] = {
         "case_count": len(rows),
         "destination": {
@@ -466,12 +493,20 @@ def summarize(rows: list[dict[str, Any]], *, hit_ks: list[int]) -> dict[str, Any
             "success_rate": _rate(bool(r.get("route_success")) for r in rows),
             "mean_endpoint_error_m": _mean(r.get("route_endpoint_error_m") for r in rows),
             "mean_distance_ratio": _mean(r.get("route_distance_ratio") for r in rows),
+            "median_distance_ratio_success_only": median(successful_route_ratios) if successful_route_ratios else None,
             "mean_step_ratio": _mean(r.get("route_step_ratio") for r in rows),
             "spl": _mean(r.get("spl") for r in rows),
             "curve_ade_m": _mean(r.get("route_curve_ade_m") for r in rows),
             "curve_fde_m": _mean(r.get("route_curve_fde_m") for r in rows),
             "curve_mde_m": _mean(r.get("route_curve_mde_m") for r in rows),
         },
+    }
+    summary["core_metrics"] = {
+        "destination_success_at_radius": summary["destination"]["success_rate"],
+        "hit_at_5": None,
+        "route_success_at_radius": summary["route"]["success_rate"],
+        "median_route_ratio": summary["route"]["median_distance_ratio_success_only"],
+        "spl": summary["route"]["spl"],
     }
     errors = sorted(float(r["destination_error_m"]) for r in rows if isinstance(r.get("destination_error_m"), (int, float)))
     if errors:
@@ -480,6 +515,8 @@ def summarize(rows: list[dict[str, Any]], *, hit_ks: list[int]) -> dict[str, Any
         summary["destination"][f"hit_at_{k}"] = _rate(
             bool(r.get("destination_rank") and int(r["destination_rank"]) <= k) for r in rows
         )
+    if "hit_at_5" in summary["destination"]:
+        summary["core_metrics"]["hit_at_5"] = summary["destination"]["hit_at_5"]
     return _round_value(summary)
 
 
