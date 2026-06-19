@@ -14,6 +14,33 @@
 | `docker/` | Dockerfile、镜像构建、部署和服务器批处理脚本 |
 | `archive/legacy_tests/` | 旧的手动测试脚本，仅作参考，不作为主流程入口 |
 
+## 需求导航数据集工具
+
+### CitySeeker 转 UrbanNav instruction seed
+
+```bash
+cd /home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer
+
+export LLM_PROVIDER=ark
+export ARK_API_KEY="<your-key>"
+export LLM_MODEL="doubao-seed-2-0-pro-260215"
+
+python tools/dataset_processing/convert_cityseeker_to_urbannav.py \
+  --classification-mode hybrid \
+  --instruction-only \
+  --api-keys-file key.txt \
+  --llm-concurrency 8 \
+  --progress-interval 10 \
+  --input /home/ubuntu/WorkSpace/project/SR/Code/CitySeeker/example/final_all_QA_trajectory.json \
+  --output-jsonl /tmp/urbannav_cityseeker/task_instructions.accepted.jsonl \
+  --review-jsonl /tmp/urbannav_cityseeker/task_instructions.review.jsonl \
+  --reject-jsonl /tmp/urbannav_cityseeker/task_instructions.reject.jsonl \
+  --summary-json /tmp/urbannav_cityseeker/summary.json \
+  --llm-review-jsonl /tmp/urbannav_cityseeker/llm_review_prompts.jsonl
+```
+
+用途：只迁移 CitySeeker 的需求指令和 taxonomy 标签，不复用 CitySeeker 的 `to/complete_route`。默认推荐 `hybrid`：规则只提供先验，LVLM/LLM 负责审核规则不确定或原本会被拒绝的样本。若要完全交给模型分类，使用 `--classification-mode llm`；若没有 API key，只做离线复现，使用 `--classification-mode rule`。`--api-keys-file` 支持一行一个 key 或逗号分隔；`--llm-concurrency` 控制并发请求数；`--progress-interval` 控制进度日志频率。后续真值用本仓库的 POI provider 和 RouteServer 重新构建。
+
 ## SideWalk 主流程命令速查
 
 以下命令按实际开发顺序组织。默认原始数据根目录：
@@ -331,7 +358,6 @@ cd /home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer/to
 
 | 文件 | 说明 |
 |------|------|
-| `dataset_processing/fetch_streetview_images.py` | 调用 Google Street View Static API 或百度 panorama/v2，把经纬度/heading 批量下载成 `images/trajectory.json/frames_manifest.json/streetview_manifest.json`，可直接接 Visual Prompt pipeline |
 | `dataset_processing/process_chunks_26_29.py` | 批量处理 chunk，支持 `--chunks 0 26 27 ...`、并行、BEV、Phase2 |
 | `dataset_processing/mcap_to_sidewalk_inputs.py` | 单个 MCAP 抽帧并生成中间轨迹 |
 | `dataset_processing/process_sidewalk_dataset.py` | 从 sidewalk 格式生成 Phase1 最简 2fps ego-aligned BEV、`bev_index.json` 和轨迹索引；debug 时可显式写 FPV JPG、north-up BEV 和 BEV mp4 |

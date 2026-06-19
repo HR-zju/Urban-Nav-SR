@@ -1,0 +1,97 @@
+{
+  "version": "cityseeker_refactored_v2",
+  "description": "Refactored CitySeeker-style taxonomy for instruction-to-destination and route-ground-truth dataset construction.",
+  "ranking_policy": "nearest_satisfying_poi_by_route_distance",
+  "route_policy": "origin_to_gt_destination",
+  "categories": [
+    {
+      "category": "poi_navigation",
+      "category_zh": "POI/品牌导航",
+      "cityseeker_category": "question1+question4",
+      "description": "Merge basic POI navigation and brand-specific navigation. The target can be a generic POI type or a named commercial brand.",
+      "items": [
+        {"subcategory": "bank", "source_cityseeker_category": "question1", "target_types": ["bank"], "templates": ["Please find the nearest bank.", "请帮我找最近的银行。"]},
+        {"subcategory": "restaurant", "source_cityseeker_category": "question1", "target_types": ["restaurant"], "templates": ["Please find the nearest restaurant.", "请帮我找最近的餐厅。"]},
+        {"subcategory": "convenience_store", "source_cityseeker_category": "question1", "target_types": ["convenience_store"], "templates": ["Please find the nearest convenience store.", "请帮我找最近的便利店。"]},
+        {"subcategory": "healthcare_facility", "source_cityseeker_category": "question1", "target_types": ["hospital", "clinic", "pharmacy"], "templates": ["Please find the nearest healthcare facility.", "请帮我找最近的医疗设施。"]},
+        {"subcategory": "hotel", "source_cityseeker_category": "question1", "target_types": ["hotel"], "templates": ["Please find the nearest hotel.", "请帮我找最近的酒店。"]},
+        {"subcategory": "school", "source_cityseeker_category": "question1", "target_types": ["school"], "templates": ["Please find the nearest primary and secondary school.", "请帮我找最近的中小学。"]},
+        {"subcategory": "shopping_mall", "source_cityseeker_category": "question1", "target_types": ["shopping_mall", "mall"], "templates": ["Please find the nearest shopping mall.", "请帮我找最近的购物中心。"]},
+        {"subcategory": "starbucks", "source_cityseeker_category": "question4", "target_types": ["cafe"], "brand_aliases": ["Starbucks", "星巴克"], "templates": ["Please find the nearest Starbucks.", "我想喝杯星巴克，帮我找最近的一家。"]},
+        {"subcategory": "kfc_or_mcdonalds", "source_cityseeker_category": "question4", "target_types": ["fast_food", "restaurant"], "brand_aliases": ["KFC", "McDonald's", "肯德基", "麦当劳"], "templates": ["Please find the nearest KFC or McDonald's.", "附近有肯德基或麦当劳吗？"]},
+        {"subcategory": "bank_of_china", "source_cityseeker_category": "question4", "target_types": ["bank"], "brand_aliases": ["Bank of China", "中国银行"], "templates": ["Please find the nearest Bank of China.", "请帮我找最近的中国银行。"]},
+        {"subcategory": "apple_or_huawei", "source_cityseeker_category": "question4", "target_types": ["electronics_store", "mobile_phone_shop"], "brand_aliases": ["Apple", "Huawei", "苹果", "华为"], "templates": ["Please find the nearest Apple or Huawei store.", "请帮我找最近的苹果或华为门店。"]},
+        {"subcategory": "7_eleven_or_familymart", "source_cityseeker_category": "question4", "target_types": ["convenience_store"], "brand_aliases": ["7-Eleven", "FamilyMart", "Lawson", "Bianlifeng", "711", "全家", "罗森", "便利蜂"], "templates": ["Please find the nearest 7-Eleven, FamilyMart, Lawson, or Bianlifeng.", "请帮我找最近的 7-Eleven、全家、罗森或便利蜂。"]},
+        {"subcategory": "sportswear_store", "source_cityseeker_category": "question4", "target_types": ["sportswear_store", "shoe_store", "clothing_store"], "brand_aliases": ["Adidas", "Nike", "Lululemon", "New Balance", "Foot Locker", "阿迪达斯", "耐克"], "templates": ["Please find the nearest Adidas, Nike, Lululemon, New Balance, or Foot Locker.", "请帮我找最近的运动品牌门店。"]},
+        {"subcategory": "supermarket_chain", "source_cityseeker_category": "question4", "target_types": ["supermarket"], "brand_aliases": ["ParknShop", "百佳", "Wellcome", "惠康", "Tesco", "Sainsbury", "Sainsbury's"], "templates": ["Please find the nearest supermarket chain store.", "请帮我找最近的连锁超市。"]},
+        {"subcategory": "drugstore_chain", "source_cityseeker_category": "question4", "target_types": ["pharmacy", "drugstore", "health_and_beauty"], "brand_aliases": ["Watsons", "Mannings", "Duane Reade", "屈臣氏", "万宁"], "templates": ["Please find the nearest Watsons, Mannings, or drugstore chain.", "请帮我找最近的屈臣氏、万宁或药妆店。"]},
+        {"subcategory": "fashion_store", "source_cityseeker_category": "question4", "target_types": ["clothing_store", "fashion_store"], "brand_aliases": ["Zara", "H&M", "Chanel"], "templates": ["Please find the nearest Zara, H&M, or Chanel.", "请帮我找最近的服装品牌门店。"]},
+        {"subcategory": "electronics_store_chain", "source_cityseeker_category": "question4", "target_types": ["electronics_store"], "brand_aliases": ["Best Buy", "P.C. Richard & Son", "PC Richard"], "templates": ["Please find the nearest Best Buy or P.C. Richard & Son.", "请帮我找最近的电子产品连锁店。"]},
+        {"subcategory": "bank_chain", "source_cityseeker_category": "question4", "target_types": ["bank"], "brand_aliases": ["Lloyds Bank", "Barclays Bank", "Chase Bank"], "templates": ["Please find the nearest Lloyds, Barclays, or Chase bank.", "请帮我找最近的指定连锁银行。"]}
+      ]
+    },
+    {
+      "category": "implicit_need_navigation",
+      "category_zh": "隐式需求导航",
+      "cityseeker_category": "question6+question7",
+      "description": "Merge latent POI navigation and abstract needs. The instruction may name a latent facility or only express a human need.",
+      "items": [
+        {"subcategory": "restroom", "source_cityseeker_category": "question6", "target_types": ["toilets", "restroom", "shopping_mall", "fast_food", "public_facility"], "templates": ["Please find the nearest restroom.", "我想找个洗手间。"]},
+        {"subcategory": "atm", "source_cityseeker_category": "question6", "target_types": ["atm", "bank"], "templates": ["Please find the nearest ATM.", "我需要取点现金，帮我找附近可以取钱的地方。"]},
+        {"subcategory": "parking_lot", "source_cityseeker_category": "question6", "target_types": ["parking", "parking_lot"], "templates": ["Please find the nearest parking lot.", "我需要找个地方停车。"]},
+        {"subcategory": "gym", "source_cityseeker_category": "question6", "target_types": ["gym", "fitness_centre", "park"], "templates": ["Please find the nearest gym.", "我想锻炼，帮我找附近合适的地方。"]},
+        {"subcategory": "coffee_shop", "source_cityseeker_category": "question6", "target_types": ["cafe", "coffee_shop"], "templates": ["Please find the nearest coffee shop.", "我想找个地方喝咖啡。"]},
+        {"subcategory": "cinema", "source_cityseeker_category": "question6", "target_types": ["cinema", "movie_theater"], "templates": ["Please find the nearest cinema.", "我想看电影，帮我找附近合适的地方。"]},
+        {"subcategory": "hungry", "source_cityseeker_category": "question7", "target_types": ["restaurant", "fast_food", "food_court"], "templates": ["I'm feeling hungry and would like something to eat. Could you help me find a nearby place?", "我有点饿了。"]},
+        {"subcategory": "thirsty", "source_cityseeker_category": "question7", "target_types": ["convenience_store", "cafe", "beverage_shop"], "templates": ["I'm feeling thirsty and would like something to drink. Could you help me find a nearby place?", "我有点渴了。"]},
+        {"subcategory": "phone_battery_or_recharge", "source_cityseeker_category": "question7", "target_types": ["cafe", "library", "coworking_space", "convenience_store", "mobile_phone_shop"], "templates": ["I need a place to sit and charge my phone.", "手机没电了，找个地方坐着充会儿电。"]},
+        {"subcategory": "child_play", "source_cityseeker_category": "question7", "target_types": ["playground", "park", "children_activity_center"], "templates": ["I want to bring my child to play and need assistance finding a suitable place nearby. Could you help me?", "我想带孩子玩，帮我找附近合适的地方。"]},
+        {"subcategory": "not_feeling_well", "source_cityseeker_category": "question7", "target_types": ["clinic", "hospital", "pharmacy"], "templates": ["I'm not feeling well and need assistance finding a suitable place nearby. Could you help me?", "我身体不太舒服，帮我找附近合适的医疗点。"]},
+        {"subcategory": "work_with_wifi", "source_cityseeker_category": "question7", "target_types": ["cafe", "library", "coworking_space"], "templates": ["I want to work with Wi-Fi and need assistance finding a suitable place nearby. Could you help me?", "我想找个有 Wi-Fi 的地方办公。"]},
+        {"subcategory": "buy_fruits_vegetables", "source_cityseeker_category": "question7", "target_types": ["supermarket", "market", "greengrocer"], "templates": ["I want to buy fruits and vegetables and need assistance finding a suitable place nearby. Could you help me?", "我想买水果蔬菜。"]},
+        {"subcategory": "rest_and_read", "source_cityseeker_category": "question7", "target_types": ["library", "bookstore", "park", "cafe"], "templates": ["I want to rest and read and need help finding a suitable place nearby. Could you assist me?", "找个安静的地方让我看看书。"]}
+      ]
+    },
+    {
+      "category": "multi_stop_route",
+      "category_zh": "多目标导航",
+      "cityseeker_category": "question2+extension_multi_goal",
+      "description": "Plan an initial route containing multiple ordered destinations or activities.",
+      "runtime_tools": ["decompose_itinerary_goals", "recommend_itinerary_and_route", "plan_route_with_via_points"],
+      "items": [
+        {"subcategory": "restaurant_then_bank", "source_cityseeker_category": "question2", "ordered_target_types": [["restaurant"], ["bank"]], "templates": ["Please find the nearest restaurant and bank in order.", "请先带我去最近的餐厅，然后去最近的银行。"]},
+        {"subcategory": "restaurant_then_convenience_store", "source_cityseeker_category": "question2", "ordered_target_types": [["restaurant"], ["convenience_store"]], "templates": ["Please find the nearest restaurant and convenience store in order.", "请先带我去最近的餐厅，然后去最近的便利店。"]},
+        {"subcategory": "clinic_then_hotel", "source_cityseeker_category": "question2", "ordered_target_types": [["clinic", "hospital"], ["hotel"]], "templates": ["Please find the nearest clinic and hotel in order.", "请先带我去最近的诊所，然后去最近的酒店。"]},
+        {"subcategory": "eat_then_buy_daily_goods", "source_cityseeker_category": "extension_multi_goal", "ordered_target_types": [["restaurant", "fast_food"], ["convenience_store", "supermarket"]], "templates": ["Plan a route where I can eat first and then buy some daily goods.", "帮我规划一条路线，先找个地方吃饭，然后再去买点日用品。"]},
+        {"subcategory": "coffee_then_work", "source_cityseeker_category": "extension_multi_goal", "ordered_target_types": [["cafe", "coffee_shop"], ["library", "coworking_space", "cafe"]], "templates": ["Plan a route where I can get coffee first and then find a place to work.", "帮我规划一条路线，先买咖啡，然后找个适合办公的地方。"]},
+        {"subcategory": "atm_then_shopping", "source_cityseeker_category": "extension_multi_goal", "ordered_target_types": [["atm", "bank"], ["shopping_mall", "mall", "supermarket"]], "templates": ["Plan a route where I can withdraw cash first and then go shopping.", "帮我规划一条路线，先取钱，然后去购物。"]}
+      ]
+    },
+    {
+      "category": "semantic_preference",
+      "category_zh": "语义偏好导航",
+      "cityseeker_category": "question9",
+      "description": "Navigation with subjective atmosphere or semantic preference constraints.",
+      "items": [
+        {"subcategory": "comfortable_restaurant", "target_types": ["restaurant"], "semantic_tags": ["comfortable", "quiet", "good_environment"], "templates": ["Please find the nearest restaurant with a comfortable environment.", "请帮我找最近环境舒适的餐厅。"]},
+        {"subcategory": "family_friendly_restaurant", "target_types": ["restaurant"], "semantic_tags": ["family_friendly", "group_friendly"], "templates": ["Please find the nearest group or family-friendly restaurant.", "请帮我找最近适合家庭或多人聚餐的餐厅。"]},
+        {"subcategory": "restaurant_with_parking", "target_types": ["restaurant"], "semantic_tags": ["roadside_parking", "parking"], "templates": ["Please find the nearest restaurant with roadside parking.", "请帮我找最近方便路边停车的餐厅。"]},
+        {"subcategory": "upscale_restaurant", "target_types": ["restaurant"], "semantic_tags": ["upscale", "fine_dining"], "templates": ["Please find the nearest upscale restaurant.", "请帮我找最近的高档餐厅。"]},
+        {"subcategory": "outdoor_seating_restaurant", "target_types": ["restaurant"], "semantic_tags": ["outdoor_seating"], "templates": ["Please find the nearest restaurant with outdoor seating.", "请帮我找最近有户外座位的餐厅。"]},
+        {"subcategory": "romantic_restaurant", "target_types": ["restaurant"], "semantic_tags": ["romantic"], "templates": ["Please find the nearest romantic restaurant.", "我想找一家氛围浪漫的餐厅约会。"]}
+      ]
+    },
+    {
+      "category": "route_update_add_via",
+      "category_zh": "中途增加途经点",
+      "cityseeker_category": "extension_interactive_update",
+      "description": "Update an existing route session by inserting or appending a new via point requested mid-route.",
+      "runtime_tools": ["create_route_session", "add_via_point_to_session", "add_via_point_to_route_plan"],
+      "items": [
+        {"subcategory": "add_coffee_stop", "target_types": ["cafe", "coffee_shop"], "templates": ["Add a coffee shop stop before continuing to the destination.", "在去目的地之前，帮我中途加一个咖啡店。"]},
+        {"subcategory": "add_atm_stop", "target_types": ["atm", "bank"], "templates": ["Add a nearby ATM as a stop on the way.", "在当前路线中途加一个附近的 ATM。"]},
+        {"subcategory": "add_convenience_store_stop", "target_types": ["convenience_store"], "templates": ["Add a convenience store stop before the final destination.", "到最终目的地之前，帮我加一个便利店作为途经点。"]}
+      ]
+    }
+  ]
+}
