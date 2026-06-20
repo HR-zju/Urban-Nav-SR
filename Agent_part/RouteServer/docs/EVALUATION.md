@@ -1,10 +1,8 @@
 # Destination / Route Evaluation
 
-本文档定义当前 RouteServer 侧目的地推荐和路线规划的离线评估口径。设计参考 CitySeeker：
+本文档定义 UrbanNav 当前核心离线评估口径。我们不再把 CitySeeker 的 `from/to/complete_route` 离散图像节点格式作为主格式；CitySeeker 和 SpotAgent 只作为设计参考。
 
-- CitySeeker ground truth 记录 `from/to/complete_route/total_weight/total_steps`。
-- CitySeeker simulation 记录 `flag/round_success/total_weight/total_steps`。
-- 本仓库把这个思想拆成两层：目的地是否推荐对、路线是否可用且代价是否接近 GT。
+更完整的分层 benchmark 设计见 [TASK_INSTRUCTION_ROUTE_EVAL_DESIGN.md](/home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer/docs/TASK_INSTRUCTION_ROUTE_EVAL_DESIGN.md)。
 
 ## 1. 评估入口
 
@@ -12,190 +10,178 @@
 cd /home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer
 
 python tools/evaluation/eval_destination_route.py \
-  --ground-truth /path/to/gt.json \
+  --ground-truth /path/to/gt.jsonl \
   --predictions /path/to/pred.jsonl \
   --destination-radius-m 50 \
   --output-json /tmp/urbannav_eval_summary.json \
   --output-jsonl /tmp/urbannav_eval_rows.jsonl
 ```
 
-该脚本不调用地图 API、不调用 LLM，只比较已经保存好的预测结果。
+评估脚本只比较已经保存好的预测和真值，不调用 LLM，不调用地图 API。
 
 ## 2. Ground Truth 格式
 
-兼容 CitySeeker 风格 JSON：
-
-```json
-{
-  "question_idx": 0,
-  "idx": 2,
-  "question": "Please find the nearest convenience store.",
-  "from": "00001864.jpg",
-  "to": "00002415.jpg",
-  "total_weight": 131.16,
-  "total_steps": 10,
-  "complete_route": [
-    {"filename": "00001864.jpg", "latitude": 39.91933865, "longitude": 116.3535388},
-    {"filename": "00002415.jpg", "latitude": 39.91843821, "longitude": 116.3535685}
-  ]
-}
-```
-
-也支持 UrbanNav 风格 JSONL：
+主格式是 UrbanNav JSONL，每行一个任务：
 
 ```json
 {
   "id": "case-001",
-  "question": "我想找最近的便利店",
+  "category": "implicit_need_navigation",
+  "subcategory": "thirsty",
+  "instruction": "我有点渴了，帮我找附近合适的地方。",
   "origin": {"lat": 30.2645, "lng": 120.1180},
-  "gt_destination": {"lat": 30.2651, "lng": 120.1190, "name": "便利店"},
+  "gt_destination": {
+    "name": "便利店 A",
+    "type": "convenience_store",
+    "lat": 30.2651,
+    "lng": 120.1190,
+    "provider_poi_id": "amap_xxx"
+  },
+  "acceptable_destinations": [
+    {"lat": 30.2651, "lng": 120.1190, "provider_poi_id": "amap_xxx"}
+  ],
   "gt_route": [[120.1180, 30.2645], [120.1190, 30.2651]],
-  "total_weight": 135.0,
-  "total_steps": 8
+  "gt_distance_m": 135.0
 }
 ```
 
+说明：
+
+- `gt_destination` 是主真值目的地。
+- `acceptable_destinations` 用于隐式需求和语义偏好，因为这类任务可能有多个合理答案。
+- `gt_route` 是从 `origin` 到 `gt_destination` 的参考路线 polyline，坐标顺序为 `[lng, lat]`。
+- `gt_distance_m` 是参考路线长度；没有路线时可以为空，但路线指标会跳过该样本。
+
 ## 3. Prediction 格式
 
-RouteServer 输出保存后可直接作为 prediction：
+RouteServer 输出保存后可作为 prediction：
 
 ```json
 {
   "id": "case-001",
   "chosen_destination": {
     "id": "poi-123",
-    "name": "便利店",
+    "name": "便利店 A",
     "latitude": 30.2651,
     "longitude": 120.1190,
     "location": "120.1190,30.2651"
   },
   "candidate_destinations": [
-    {"name": "便利店", "latitude": 30.2651, "longitude": 120.1190}
+    {"name": "便利店 A", "latitude": 30.2651, "longitude": 120.1190}
   ],
   "route_polyline": [[120.1180, 30.2645], [120.1190, 30.2651]],
   "route_summary": {
-    "distance_m": 142.0,
-    "step_count": 8
+    "distance_m": 142.0
   }
 }
 ```
 
-case id 匹配优先级：
+case 通过 `id / case_id / sample_id / qid / question_id` 匹配。新数据集应统一使用 `id`。
+
+## 4. 核心指标
+
+### 4.1 Destination Success
+
+目的地是否推荐正确：
+
+\[
+DS@r = \mathbb{1}[\min_{d^* \in G} dist(\hat d, d^*) \le r]
+\]
+
+其中：
+
+- `G` 是 `acceptable_destinations`，如果为空则使用 `gt_destination`。
+- 默认 `r = 50m`。
+- 如果 `provider_poi_id` 完全一致，可直接视为命中。
+
+主报告指标：
 
 ```text
-id / case_id / sample_id / qid / question_id
-question_idx + idx + round
-question_idx + idx
-question + from
+destination_success@50m
 ```
 
-## 4. 目的地推荐指标
+### 4.2 Destination Ranking
 
-目的地命中：
-
-\[
-success_{dest} =
-\mathbb{1}[d(\hat d, d^*) \le r]
-\]
-
-默认：
+如果系统返回候选列表，评估 GT 是否出现在 Top-K：
 
 ```text
-r = 50m
+hit@1
+hit@5
 ```
 
-同时支持 `id` 或 `name` 完全一致直接命中。
+`hit@1` 等价于首选目的地命中；`hit@5` 衡量检索/候选生成是否把正确目标找出来。
 
-输出指标：
+### 4.3 Route Success
 
-| 指标 | 含义 |
-| --- | --- |
-| `destination.success_rate` | 预测目的地在半径内的比例 |
-| `destination.mean_error_m` | 预测目的地到 GT 目的地的平均球面距离 |
-| `destination.median_error_m` | 目的地距离误差中位数 |
-| `destination.hit_at_k` | GT 目的地是否出现在 Top-K 候选中 |
-| `destination.mrr` | 候选排序的 Mean Reciprocal Rank |
-
-## 5. 路线指标
-
-路线成功：
+路线是否到达正确目的地：
 
 \[
-success_{route} =
-success_{dest} \land |\hat P| > 0
+RS@r = DS@r \land route\_polyline \neq \emptyset
 \]
 
-路线长度比：
-
-\[
-ratio_{dist} =
-\frac{L(\hat P)}{L(P^*)}
-\]
-
-步数比：
-
-\[
-ratio_{steps} =
-\frac{\hat N}{N^*}
-\]
-
-SPL 风格效率：
-
-\[
-SPL =
-success_{route}
-\cdot
-\frac{L(P^*)}{\max(L(P^*), L(\hat P))}
-\]
-
-曲线误差会把 GT route 和 prediction route 按弦长重采样到同样点数：
-
-\[
-ADE =
-\frac{1}{K}\sum_i d(\hat p_i,p_i^*)
-\]
-
-\[
-FDE = d(\hat p_K,p_K^*)
-\]
-
-\[
-MDE = \max_i d(\hat p_i,p_i^*)
-\]
-
-输出指标：
-
-| 指标 | 含义 |
-| --- | --- |
-| `route.success_rate` | 目的地命中且有 route polyline 的比例 |
-| `route.mean_endpoint_error_m` | 预测路线终点到 GT 目的地的平均距离 |
-| `route.mean_distance_ratio` | 预测路线长度 / GT 路线长度 |
-| `route.mean_step_ratio` | 预测步数 / GT 步数 |
-| `route.spl` | 成功率和路径效率合成指标 |
-| `route.curve_ade_m` | 路线曲线平均误差 |
-| `route.curve_fde_m` | 路线终点误差 |
-| `route.curve_mde_m` | 路线最大偏差 |
-
-## 6. 和 CitySeeker 的对应关系
-
-| CitySeeker 字段/指标 | 本仓库对应 |
-| --- | --- |
-| `complete_route[-1]` | `gt_destination` |
-| `total_weight` | `gt_distance_m` |
-| `total_steps` | `gt_steps` |
-| `flag` / `round_success` | `route_success` / `destination_success` |
-| `sum(distance_container)` | `pred_distance_m` |
-| `shortestPath steps` | 可选 `gt_steps` / `pred_steps` |
-| topological distance progress | 后续可接 RouteSession runtime logs |
-
-当前脚本先覆盖离线推荐/路线结果；如果后续要评估在线逐步导航，可以在每步日志里加入：
+主报告指标：
 
 ```text
-current_distance_to_destination_m
-current_route_progress_m
-topological_distance_to_goal
-action_heading_error_deg
+route_success@50m
 ```
 
-再复用 CitySeeker 的 progress/backtracking 指标。
+### 4.4 Route Efficiency
 
+路线效率用预测路线长度与参考路线长度的比例：
+
+\[
+route\_ratio = \frac{L(\hat P)}{L(P^*)}
+\]
+
+只在 `route_success@50m = true` 的样本上汇总。推荐报告：
+
+```text
+median_route_ratio
+```
+
+相比平均值，中位数对极端绕路样本更鲁棒。
+
+### 4.5 SPL
+
+保留一个综合指标：
+
+\[
+SPL = RS \cdot \frac{L(P^*)}{\max(L(P^*), L(\hat P))}
+\]
+
+它同时惩罚不到达和绕路。
+
+## 5. 最小报告格式
+
+第一版 benchmark 只需要固定报告这 5 个指标：
+
+| 指标 | 作用 |
+| --- | --- |
+| `destination_success@50m` | 目的地推荐是否正确 |
+| `hit@5` | 候选检索是否召回正确目标 |
+| `route_success@50m` | 是否规划到正确目的地 |
+| `median_route_ratio` | 成功路线是否绕路 |
+| `spl` | 到达率和效率综合分 |
+
+按以下维度切分即可：
+
+```text
+overall
+by_category
+by_subcategory
+by_city_or_scene
+by_difficulty
+```
+
+## 6. 诊断指标
+
+以下指标不作为主排行榜，只在 debug 时使用：
+
+| 指标 | 用途 |
+| --- | --- |
+| `mean_destination_error_m` | 看错误目的地偏离多远 |
+| `mrr` | 分析候选排序质量 |
+| `curve_ade_m / curve_mde_m` | 比较路线形状是否贴近参考路线 |
+| `step_ratio` | 有 step 级导航时分析转向/步数效率 |
+
+如果主指标已经能解释系统差异，不需要在论文主表里堆这些指标。

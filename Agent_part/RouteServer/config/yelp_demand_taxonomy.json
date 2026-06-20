@@ -1,0 +1,2480 @@
+{
+  "version": "yelp_demand_taxonomy_v1",
+  "description": "Yelp-supported UrbanNav demand taxonomy. LLM/Yelp enrich language only; this config defines fixed task types and retrievable targets.",
+  "specs": [
+    {
+      "demand_group": "hungry",
+      "category": "implicit_need_navigation",
+      "category_zh": "隐式需求导航",
+      "subcategory": "hungry",
+      "target_types": [
+        "restaurant",
+        "fast_food",
+        "food_court"
+      ],
+      "semantic_tags": [
+        "food",
+        "meal"
+      ],
+      "templates_en": [
+        "I'm hungry and want to find a nearby place to eat.",
+        "Find somewhere close where I can get a meal."
+      ],
+      "templates_zh": [
+        "我有点饿了，帮我找附近能吃饭的地方。",
+        "附近哪里可以尽快吃点东西？"
+      ],
+      "yelp_categories_any": [
+        "Restaurants",
+        "Fast Food",
+        "Food"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(hungry|meal|lunch|dinner|food|eat|quick bite)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 220
+    },
+    {
+      "demand_group": "thirsty",
+      "category": "implicit_need_navigation",
+      "category_zh": "隐式需求导航",
+      "subcategory": "thirsty",
+      "target_types": [
+        "convenience_store",
+        "cafe",
+        "beverage_shop"
+      ],
+      "semantic_tags": [
+        "drink",
+        "beverage"
+      ],
+      "templates_en": [
+        "I'm thirsty and want to find somewhere nearby for a drink.",
+        "Find a nearby place to get something to drink."
+      ],
+      "templates_zh": [
+        "我有点渴了，帮我找附近能买饮料的地方。",
+        "附近哪里可以买点喝的？"
+      ],
+      "yelp_categories_any": [
+        "Coffee & Tea",
+        "Juice Bars & Smoothies",
+        "Food"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(thirsty|drink|tea|juice|smoothie|boba|beverage)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 180
+    },
+    {
+      "demand_group": "coffee_drink",
+      "category": "implicit_need_navigation",
+      "category_zh": "隐式需求导航",
+      "subcategory": "coffee_shop",
+      "target_types": [
+        "cafe",
+        "coffee_shop"
+      ],
+      "semantic_tags": [
+        "coffee",
+        "drink"
+      ],
+      "templates_en": [
+        "I want to get coffee nearby.",
+        "Find a nearby coffee shop."
+      ],
+      "templates_zh": [
+        "我想喝咖啡，帮我找附近的咖啡店。",
+        "附近有没有适合喝咖啡的地方？"
+      ],
+      "yelp_categories_any": [
+        "Coffee & Tea",
+        "Cafes"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(coffee|espresso|latte|cappuccino|cafe)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 160
+    },
+    {
+      "demand_group": "dessert_snack",
+      "category": "implicit_need_navigation",
+      "category_zh": "隐式需求导航",
+      "subcategory": "dessert_snack",
+      "target_types": [
+        "bakery",
+        "dessert_shop",
+        "ice_cream",
+        "cafe"
+      ],
+      "semantic_tags": [
+        "dessert",
+        "snack",
+        "sweet"
+      ],
+      "templates_en": [
+        "I want to find dessert or a snack nearby.",
+        "Find a nearby place for something sweet."
+      ],
+      "templates_zh": [
+        "我想吃点甜的，附近哪里合适？",
+        "帮我找附近可以买甜点或小吃的地方。"
+      ],
+      "yelp_categories_any": [
+        "Desserts",
+        "Bakeries",
+        "Ice Cream & Frozen Yogurt",
+        "Donuts"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(dessert|ice cream|cake|pastry|snack|sweet|bakery)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 150
+    },
+    {
+      "demand_group": "quiet_work_wifi",
+      "category": "implicit_need_navigation",
+      "category_zh": "隐式需求导航",
+      "subcategory": "work_with_wifi",
+      "target_types": [
+        "cafe",
+        "coffee_shop",
+        "library",
+        "coworking_space"
+      ],
+      "semantic_tags": [
+        "quiet",
+        "wifi",
+        "work_friendly",
+        "power_outlet"
+      ],
+      "templates_en": [
+        "I want to find a quiet place with Wi-Fi where I can work.",
+        "Find somewhere nearby where I can sit and work with Wi-Fi."
+      ],
+      "templates_zh": [
+        "我想找个安静、有 Wi-Fi、适合坐下办公的地方。",
+        "帮我找附近适合带电脑办公的地方，最好有 Wi-Fi。"
+      ],
+      "yelp_categories_any": [
+        "Coffee & Tea",
+        "Cafes"
+      ],
+      "attribute_any": [
+        "WiFi",
+        "NoiseLevel"
+      ],
+      "text_pattern": "\\b(quiet|study|work|laptop|wifi|wi[- ]?fi|outlet|plug|remote work|cowork)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 180
+    },
+    {
+      "demand_group": "family_kids",
+      "category": "implicit_need_navigation",
+      "category_zh": "隐式需求导航",
+      "subcategory": "family_kids",
+      "target_types": [
+        "restaurant",
+        "attraction",
+        "park"
+      ],
+      "semantic_tags": [
+        "family_friendly",
+        "kids_friendly"
+      ],
+      "templates_en": [
+        "I need a nearby place suitable for bringing kids.",
+        "Find a family-friendly place nearby."
+      ],
+      "templates_zh": [
+        "我带着孩子，帮我找附近适合家庭的地方。",
+        "附近有没有适合带孩子去的地方？"
+      ],
+      "yelp_categories_any": [
+        "Restaurants",
+        "Active Life",
+        "Parks"
+      ],
+      "attribute_any": [
+        "GoodForKids"
+      ],
+      "text_pattern": "\\b(kids?|children|family|families|stroller|play area|kid[- ]friendly)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 160
+    },
+    {
+      "demand_group": "parking",
+      "category": "implicit_need_navigation",
+      "category_zh": "隐式需求导航",
+      "subcategory": "parking_lot",
+      "target_types": [
+        "parking",
+        "parking_lot",
+        "restaurant",
+        "shopping_mall"
+      ],
+      "semantic_tags": [
+        "parking",
+        "garage",
+        "valet"
+      ],
+      "templates_en": [
+        "I need to find a nearby place where parking is convenient.",
+        "Find somewhere nearby with easy parking."
+      ],
+      "templates_zh": [
+        "我需要找个停车方便的地方。",
+        "帮我找附近好停车的地方。"
+      ],
+      "yelp_categories_any": [
+        "Restaurants",
+        "Shopping",
+        "Shopping Centers"
+      ],
+      "attribute_any": [
+        "BusinessParking"
+      ],
+      "text_pattern": "\\b(parking|parked|garage|valet|lot|street parking)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 180
+    },
+    {
+      "demand_group": "cheap_budget",
+      "category": "implicit_need_navigation",
+      "category_zh": "隐式需求导航",
+      "subcategory": "cheap_budget",
+      "target_types": [
+        "restaurant",
+        "fast_food",
+        "store"
+      ],
+      "semantic_tags": [
+        "affordable",
+        "budget_friendly"
+      ],
+      "templates_en": [
+        "Find an affordable nearby place.",
+        "I want somewhere nearby that is not expensive."
+      ],
+      "templates_zh": [
+        "我想找个附近不太贵的地方。",
+        "帮我找附近实惠一点的吃饭地方。"
+      ],
+      "yelp_categories_any": [
+        "Restaurants",
+        "Fast Food",
+        "Food"
+      ],
+      "attribute_any": [
+        "RestaurantsPriceRange2"
+      ],
+      "text_pattern": "\\b(cheap|affordable|inexpensive|budget|reasonable price|good value)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 140
+    },
+    {
+      "demand_group": "romantic_date",
+      "category": "semantic_preference",
+      "category_zh": "语义偏好导航",
+      "subcategory": "romantic_restaurant",
+      "target_types": [
+        "restaurant"
+      ],
+      "semantic_tags": [
+        "romantic",
+        "date_night",
+        "intimate"
+      ],
+      "templates_en": [
+        "I want to find a romantic restaurant for a date.",
+        "Find a nearby restaurant suitable for date night."
+      ],
+      "templates_zh": [
+        "我想找一家适合约会的餐厅。",
+        "帮我找附近氛围浪漫、适合约会的餐厅。"
+      ],
+      "yelp_categories_any": [
+        "Restaurants",
+        "Italian",
+        "French"
+      ],
+      "attribute_any": [
+        "Ambience"
+      ],
+      "text_pattern": "\\b(date night|romantic|anniversary|intimate|cozy|ambien[ct]e|candle|special occasion)\\b",
+      "ordered_target_types": null,
+      "review_by_default": true,
+      "quota_weight": 120
+    },
+    {
+      "demand_group": "outdoor_seating",
+      "category": "semantic_preference",
+      "category_zh": "语义偏好导航",
+      "subcategory": "outdoor_seating_restaurant",
+      "target_types": [
+        "restaurant",
+        "cafe"
+      ],
+      "semantic_tags": [
+        "outdoor_seating",
+        "patio"
+      ],
+      "templates_en": [
+        "Find a nearby restaurant or cafe with outdoor seating.",
+        "I want somewhere nearby with a patio or outdoor seating."
+      ],
+      "templates_zh": [
+        "帮我找最近有户外座位的餐厅或咖啡馆。",
+        "我想找个可以坐在户外的地方。"
+      ],
+      "yelp_categories_any": [
+        "Restaurants",
+        "Coffee & Tea",
+        "Cafes"
+      ],
+      "attribute_any": [
+        "OutdoorSeating"
+      ],
+      "text_pattern": "\\b(outdoor|patio|terrace|sidewalk seating|outside seating)\\b",
+      "ordered_target_types": null,
+      "review_by_default": true,
+      "quota_weight": 120
+    },
+    {
+      "demand_group": "family_kids_semantic",
+      "category": "semantic_preference",
+      "category_zh": "语义偏好导航",
+      "subcategory": "family_friendly_restaurant",
+      "target_types": [
+        "restaurant"
+      ],
+      "semantic_tags": [
+        "family_friendly",
+        "kids_friendly",
+        "group_friendly"
+      ],
+      "templates_en": [
+        "Find a family-friendly restaurant nearby.",
+        "I need a restaurant that works well for a family meal."
+      ],
+      "templates_zh": [
+        "请帮我找附近适合家庭聚餐的餐厅。",
+        "我带着孩子吃饭，找一家家庭友好的餐厅。"
+      ],
+      "yelp_categories_any": [
+        "Restaurants"
+      ],
+      "attribute_any": [
+        "GoodForKids",
+        "RestaurantsGoodForGroups"
+      ],
+      "text_pattern": "\\b(kids?|children|family|families|kid[- ]friendly)\\b",
+      "ordered_target_types": null,
+      "review_by_default": true,
+      "quota_weight": 120
+    },
+    {
+      "demand_group": "quiet_work_wifi_semantic",
+      "category": "semantic_preference",
+      "category_zh": "语义偏好导航",
+      "subcategory": "quiet_work_place",
+      "target_types": [
+        "cafe",
+        "coffee_shop",
+        "library",
+        "coworking_space"
+      ],
+      "semantic_tags": [
+        "quiet",
+        "wifi",
+        "work_friendly",
+        "power_outlet"
+      ],
+      "templates_en": [
+        "Find a quiet work-friendly place with Wi-Fi nearby.",
+        "I need a quiet nearby place where I can work on my laptop."
+      ],
+      "templates_zh": [
+        "找个安静一点、适合办公的咖啡馆或空间。",
+        "我需要附近有 Wi-Fi、适合电脑办公的安静地方。"
+      ],
+      "yelp_categories_any": [
+        "Coffee & Tea",
+        "Cafes"
+      ],
+      "attribute_any": [
+        "WiFi",
+        "NoiseLevel"
+      ],
+      "text_pattern": "\\b(quiet|study|work|laptop|wifi|wi[- ]?fi|outlet|plug)\\b",
+      "ordered_target_types": null,
+      "review_by_default": true,
+      "quota_weight": 140
+    },
+    {
+      "demand_group": "pet_dog_friendly",
+      "category": "semantic_preference",
+      "category_zh": "语义偏好导航",
+      "subcategory": "pet_friendly_place",
+      "target_types": [
+        "restaurant",
+        "cafe",
+        "hotel"
+      ],
+      "semantic_tags": [
+        "dog_friendly",
+        "pet_friendly"
+      ],
+      "templates_en": [
+        "Find a nearby place where I can bring my dog.",
+        "I need somewhere nearby that is pet friendly."
+      ],
+      "templates_zh": [
+        "帮我找附近可以带狗去的地方。",
+        "附近有没有宠物友好的餐厅或咖啡馆？"
+      ],
+      "yelp_categories_any": [
+        "Restaurants",
+        "Coffee & Tea",
+        "Hotels"
+      ],
+      "attribute_any": [
+        "DogsAllowed"
+      ],
+      "text_pattern": "\\b(dog friendly|dogs allowed|pet friendly|bring my dog|dog patio)\\b",
+      "ordered_target_types": null,
+      "review_by_default": true,
+      "quota_weight": 90
+    },
+    {
+      "demand_group": "healthy_vegan",
+      "category": "semantic_preference",
+      "category_zh": "语义偏好导航",
+      "subcategory": "healthy_vegan_place",
+      "target_types": [
+        "restaurant",
+        "salad",
+        "vegetarian_restaurant"
+      ],
+      "semantic_tags": [
+        "healthy",
+        "vegan",
+        "vegetarian"
+      ],
+      "templates_en": [
+        "Find a nearby healthy or vegan-friendly place to eat.",
+        "I want a nearby place with healthy or vegetarian options."
+      ],
+      "templates_zh": [
+        "帮我找附近健康一点或素食友好的餐厅。",
+        "我想吃得健康一点，附近哪里合适？"
+      ],
+      "yelp_categories_any": [
+        "Vegan",
+        "Vegetarian",
+        "Salad",
+        "Health Markets"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(healthy|vegan|vegetarian|gluten[- ]free|salad|organic)\\b",
+      "ordered_target_types": null,
+      "review_by_default": true,
+      "quota_weight": 120
+    },
+    {
+      "demand_group": "open_late_24h",
+      "category": "semantic_preference",
+      "category_zh": "语义偏好导航",
+      "subcategory": "late_night_place",
+      "target_types": [
+        "restaurant",
+        "convenience_store",
+        "pharmacy"
+      ],
+      "semantic_tags": [
+        "open_late",
+        "open_24h"
+      ],
+      "templates_en": [
+        "I need a nearby place that is still open late.",
+        "Find somewhere nearby that is open late at night."
+      ],
+      "templates_zh": [
+        "现在有点晚了，帮我找附近还营业的地方。",
+        "帮我找一个深夜还开的地方。"
+      ],
+      "yelp_categories_any": [
+        "Restaurants",
+        "Food",
+        "Convenience Stores"
+      ],
+      "attribute_any": [
+        "Open24Hours"
+      ],
+      "text_pattern": "\\b(open late|late night|24 hours?|24/7|midnight|after hours)\\b",
+      "ordered_target_types": null,
+      "review_by_default": true,
+      "quota_weight": 120
+    },
+    {
+      "demand_group": "coffee_then_work",
+      "category": "multi_stop_route",
+      "category_zh": "多目标导航",
+      "subcategory": "coffee_then_work",
+      "target_types": [],
+      "semantic_tags": [
+        "coffee",
+        "work_friendly",
+        "wifi"
+      ],
+      "templates_en": [
+        "Plan a route where I get coffee first and then find a place to work.",
+        "Take me to get coffee first, then to somewhere I can work."
+      ],
+      "templates_zh": [
+        "帮我规划一条路线，先买咖啡，然后找个适合办公的地方。",
+        "先带我去喝咖啡，再找个地方坐下办公。"
+      ],
+      "yelp_categories_any": [
+        "Coffee & Tea",
+        "Cafes"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(coffee|latte|work|wifi|laptop)\\b",
+      "ordered_target_types": [
+        [
+          "cafe",
+          "coffee_shop"
+        ],
+        [
+          "library",
+          "coworking_space",
+          "cafe"
+        ]
+      ],
+      "review_by_default": false,
+      "quota_weight": 160
+    },
+    {
+      "demand_group": "eat_then_drink",
+      "category": "multi_stop_route",
+      "category_zh": "多目标导航",
+      "subcategory": "eat_then_drink",
+      "target_types": [],
+      "semantic_tags": [
+        "meal",
+        "drink"
+      ],
+      "templates_en": [
+        "Plan a route where I eat first and then get a drink.",
+        "Take me to dinner first, then somewhere for drinks."
+      ],
+      "templates_zh": [
+        "帮我规划一条路线，先吃饭，然后再去喝点东西。",
+        "先找个地方吃饭，再带我去喝一杯。"
+      ],
+      "yelp_categories_any": [
+        "Restaurants",
+        "Bars",
+        "Nightlife"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(dinner|meal|eat|drink|bar|cocktail)\\b",
+      "ordered_target_types": [
+        [
+          "restaurant",
+          "fast_food"
+        ],
+        [
+          "bar",
+          "cafe",
+          "beverage_shop"
+        ]
+      ],
+      "review_by_default": false,
+      "quota_weight": 140
+    },
+    {
+      "demand_group": "parking_then_restaurant",
+      "category": "multi_stop_route",
+      "category_zh": "多目标导航",
+      "subcategory": "parking_then_restaurant",
+      "target_types": [],
+      "semantic_tags": [
+        "parking",
+        "meal"
+      ],
+      "templates_en": [
+        "Plan a route where I park first and then go to a restaurant.",
+        "Find parking first, then take me to eat nearby."
+      ],
+      "templates_zh": [
+        "帮我规划一条路线，先停车，然后去附近吃饭。",
+        "先找个停车方便的地方，再去吃饭。"
+      ],
+      "yelp_categories_any": [
+        "Restaurants"
+      ],
+      "attribute_any": [
+        "BusinessParking"
+      ],
+      "text_pattern": "\\b(parking|restaurant|dinner|lunch)\\b",
+      "ordered_target_types": [
+        [
+          "parking",
+          "parking_lot"
+        ],
+        [
+          "restaurant"
+        ]
+      ],
+      "review_by_default": false,
+      "quota_weight": 140
+    },
+    {
+      "demand_group": "dessert_then_coffee",
+      "category": "multi_stop_route",
+      "category_zh": "多目标导航",
+      "subcategory": "dessert_then_coffee",
+      "target_types": [],
+      "semantic_tags": [
+        "dessert",
+        "coffee"
+      ],
+      "templates_en": [
+        "Plan a route where I buy dessert first and then get coffee.",
+        "Take me to get something sweet first, then coffee."
+      ],
+      "templates_zh": [
+        "帮我规划一条路线，先买甜点，然后去喝咖啡。",
+        "先去买点甜的，再找个咖啡店坐一会儿。"
+      ],
+      "yelp_categories_any": [
+        "Desserts",
+        "Bakeries",
+        "Coffee & Tea"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(dessert|cake|pastry|coffee|latte)\\b",
+      "ordered_target_types": [
+        [
+          "bakery",
+          "dessert_shop",
+          "ice_cream"
+        ],
+        [
+          "cafe",
+          "coffee_shop"
+        ]
+      ],
+      "review_by_default": false,
+      "quota_weight": 120
+    },
+    {
+      "demand_group": "add_coffee_stop",
+      "category": "route_update_add_via",
+      "category_zh": "中途增加途经点",
+      "subcategory": "add_coffee_stop",
+      "target_types": [
+        "cafe",
+        "coffee_shop"
+      ],
+      "semantic_tags": [
+        "coffee"
+      ],
+      "templates_en": [
+        "Add a coffee shop stop before continuing to the destination.",
+        "Add a nearby coffee stop to my current route."
+      ],
+      "templates_zh": [
+        "在去目的地之前，帮我中途加一个咖啡店。",
+        "当前路线里帮我加一个附近的咖啡店。"
+      ],
+      "yelp_categories_any": [
+        "Coffee & Tea",
+        "Cafes"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(coffee|latte|espresso|cafe)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 110
+    },
+    {
+      "demand_group": "add_takeout_stop",
+      "category": "route_update_add_via",
+      "category_zh": "中途增加途经点",
+      "subcategory": "add_takeout_stop",
+      "target_types": [
+        "fast_food",
+        "restaurant",
+        "takeout"
+      ],
+      "semantic_tags": [
+        "quick_service",
+        "takeout"
+      ],
+      "templates_en": [
+        "Add a quick takeout stop before continuing.",
+        "Add somewhere I can pick up food to go on the way."
+      ],
+      "templates_zh": [
+        "当前路线中帮我加一个能外带吃的地方。",
+        "去目的地前先绕去买点外带。"
+      ],
+      "yelp_categories_any": [
+        "Fast Food",
+        "Restaurants"
+      ],
+      "attribute_any": [
+        "RestaurantsTakeOut"
+      ],
+      "text_pattern": "\\b(takeout|take out|to go|grab and go|quick)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 100
+    },
+    {
+      "demand_group": "add_dessert_stop",
+      "category": "route_update_add_via",
+      "category_zh": "中途增加途经点",
+      "subcategory": "add_dessert_stop",
+      "target_types": [
+        "bakery",
+        "dessert_shop",
+        "ice_cream"
+      ],
+      "semantic_tags": [
+        "dessert",
+        "snack"
+      ],
+      "templates_en": [
+        "Add a dessert stop before the final destination.",
+        "Add somewhere to pick up something sweet on the way."
+      ],
+      "templates_zh": [
+        "先绕去买点甜品，然后继续去原来的目的地。",
+        "帮我在当前路线中加一个甜品店。"
+      ],
+      "yelp_categories_any": [
+        "Desserts",
+        "Bakeries",
+        "Ice Cream & Frozen Yogurt"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(dessert|ice cream|cake|pastry|sweet)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 90
+    },
+    {
+      "demand_group": "add_parking_friendly_restaurant",
+      "category": "route_update_add_via",
+      "category_zh": "中途增加途经点",
+      "subcategory": "add_parking_friendly_restaurant",
+      "target_types": [
+        "restaurant"
+      ],
+      "semantic_tags": [
+        "parking",
+        "meal"
+      ],
+      "templates_en": [
+        "Add a restaurant with convenient parking to the route.",
+        "Add a parking-friendly restaurant stop before continuing."
+      ],
+      "templates_zh": [
+        "中途加一个停车方便的餐厅。",
+        "去目的地前帮我加一家好停车的餐厅。"
+      ],
+      "yelp_categories_any": [
+        "Restaurants"
+      ],
+      "attribute_any": [
+        "BusinessParking"
+      ],
+      "text_pattern": "\\b(parking|garage|valet|restaurant|dinner)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 90
+    },
+    {
+      "demand_group": "bank_service",
+      "category": "public_poi_navigation",
+      "category_zh": "公共场所导航",
+      "subcategory": "bank",
+      "target_types": [
+        "bank"
+      ],
+      "semantic_tags": [
+        "finance",
+        "cash",
+        "account"
+      ],
+      "templates_en": [
+        "Find a nearby bank.",
+        "I need to go to a bank nearby."
+      ],
+      "templates_zh": [
+        "帮我找附近的银行。",
+        "我需要去附近的银行办事。"
+      ],
+      "yelp_categories_any": [
+        "Banks & Credit Unions",
+        "Financial Services"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(bank|credit union|financial service|cashier)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 220
+    },
+    {
+      "demand_group": "atm_cash",
+      "category": "public_poi_navigation",
+      "category_zh": "公共场所导航",
+      "subcategory": "atm",
+      "target_types": [
+        "atm",
+        "bank"
+      ],
+      "semantic_tags": [
+        "cash",
+        "withdrawal"
+      ],
+      "templates_en": [
+        "Find a nearby ATM.",
+        "I need to withdraw cash nearby."
+      ],
+      "templates_zh": [
+        "帮我找附近的 ATM。",
+        "我想在附近取现金。"
+      ],
+      "yelp_categories_any": [
+        "Banks & Credit Unions",
+        "Financial Services"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(atm|cash|withdraw|withdrawal)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 200
+    },
+    {
+      "demand_group": "pharmacy_medicine",
+      "category": "public_poi_navigation",
+      "category_zh": "公共场所导航",
+      "subcategory": "pharmacy",
+      "target_types": [
+        "pharmacy",
+        "drugstore"
+      ],
+      "semantic_tags": [
+        "medicine",
+        "drugstore"
+      ],
+      "templates_en": [
+        "Find a nearby pharmacy.",
+        "I need somewhere nearby to buy medicine."
+      ],
+      "templates_zh": [
+        "帮我找附近的药店。",
+        "我需要在附近买药。"
+      ],
+      "yelp_categories_any": [
+        "Pharmacy",
+        "Drugstores"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(pharmacy|drugstore|medicine|medication|prescription)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 240
+    },
+    {
+      "demand_group": "clinic_healthcare",
+      "category": "public_poi_navigation",
+      "category_zh": "公共场所导航",
+      "subcategory": "clinic_healthcare",
+      "target_types": [
+        "clinic",
+        "hospital",
+        "medical_center",
+        "urgent_care"
+      ],
+      "semantic_tags": [
+        "healthcare",
+        "medical",
+        "not_feeling_well"
+      ],
+      "templates_en": [
+        "Find a nearby clinic or medical center.",
+        "I am not feeling well and need medical help nearby."
+      ],
+      "templates_zh": [
+        "帮我找附近的诊所或医疗点。",
+        "我有点不舒服，想找附近能看病的地方。"
+      ],
+      "yelp_categories_any": [
+        "Health & Medical",
+        "Medical Centers",
+        "Walk-in Clinics",
+        "Hospitals",
+        "Urgent Care",
+        "Doctors"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(clinic|hospital|medical|doctor|urgent care|not feeling well|sick)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 260
+    },
+    {
+      "demand_group": "library_read_study",
+      "category": "public_poi_navigation",
+      "category_zh": "公共场所导航",
+      "subcategory": "library",
+      "target_types": [
+        "library"
+      ],
+      "semantic_tags": [
+        "reading",
+        "study",
+        "quiet"
+      ],
+      "templates_en": [
+        "Find a nearby library.",
+        "I want a quiet public place to read or study."
+      ],
+      "templates_zh": [
+        "帮我找附近的图书馆。",
+        "我想找个安静的公共空间看书或学习。"
+      ],
+      "yelp_categories_any": [
+        "Libraries",
+        "Public Services & Government",
+        "Education"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(library|read|reading|study|quiet public place)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 220
+    },
+    {
+      "demand_group": "public_park_play",
+      "category": "public_poi_navigation",
+      "category_zh": "公共场所导航",
+      "subcategory": "public_park",
+      "target_types": [
+        "park",
+        "playground"
+      ],
+      "semantic_tags": [
+        "outdoor",
+        "play",
+        "green_space"
+      ],
+      "templates_en": [
+        "Find a nearby park.",
+        "I want to go to a public outdoor place nearby."
+      ],
+      "templates_zh": [
+        "帮我找附近的公园。",
+        "我想去附近的公共户外空间走走。"
+      ],
+      "yelp_categories_any": [
+        "Parks",
+        "Active Life",
+        "Playgrounds"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(park|playground|green space|outdoor|walk outside)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 220
+    },
+    {
+      "demand_group": "gym_exercise",
+      "category": "public_poi_navigation",
+      "category_zh": "公共场所导航",
+      "subcategory": "gym",
+      "target_types": [
+        "gym",
+        "fitness_center"
+      ],
+      "semantic_tags": [
+        "exercise",
+        "fitness"
+      ],
+      "templates_en": [
+        "Find a nearby gym.",
+        "I want to exercise nearby."
+      ],
+      "templates_zh": [
+        "帮我找附近的健身房。",
+        "我想找个附近可以运动的地方。"
+      ],
+      "yelp_categories_any": [
+        "Gyms",
+        "Fitness & Instruction",
+        "Active Life"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(gym|exercise|fitness|workout|train)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 180
+    },
+    {
+      "demand_group": "cinema_movie",
+      "category": "public_poi_navigation",
+      "category_zh": "公共场所导航",
+      "subcategory": "cinema",
+      "target_types": [
+        "cinema",
+        "movie_theater"
+      ],
+      "semantic_tags": [
+        "movie",
+        "entertainment"
+      ],
+      "templates_en": [
+        "Find a nearby cinema.",
+        "I want to watch a movie nearby."
+      ],
+      "templates_zh": [
+        "帮我找附近的电影院。",
+        "我想在附近看电影。"
+      ],
+      "yelp_categories_any": [
+        "Cinema",
+        "Arts & Entertainment"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(cinema|movie|film|theater|theatre)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 160
+    },
+    {
+      "demand_group": "hotel_lodging",
+      "category": "public_poi_navigation",
+      "category_zh": "公共场所导航",
+      "subcategory": "hotel",
+      "target_types": [
+        "hotel",
+        "lodging"
+      ],
+      "semantic_tags": [
+        "lodging",
+        "stay"
+      ],
+      "templates_en": [
+        "Find a nearby hotel.",
+        "I need somewhere nearby to stay."
+      ],
+      "templates_zh": [
+        "帮我找附近的酒店。",
+        "我需要找附近可以住的地方。"
+      ],
+      "yelp_categories_any": [
+        "Hotels",
+        "Hotels & Travel"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(hotel|lodging|place to stay|accommodation)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 170
+    },
+    {
+      "demand_group": "shopping_mall",
+      "category": "public_poi_navigation",
+      "category_zh": "公共场所导航",
+      "subcategory": "shopping_mall",
+      "target_types": [
+        "shopping_mall",
+        "shopping_center"
+      ],
+      "semantic_tags": [
+        "shopping",
+        "mall"
+      ],
+      "templates_en": [
+        "Find a nearby shopping mall.",
+        "I want to go to a shopping center nearby."
+      ],
+      "templates_zh": [
+        "帮我找附近的商场。",
+        "我想去附近的购物中心。"
+      ],
+      "yelp_categories_any": [
+        "Shopping Centers",
+        "Shopping"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(shopping mall|shopping center|mall|shopping)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 190
+    },
+    {
+      "demand_group": "school_education",
+      "category": "public_poi_navigation",
+      "category_zh": "公共场所导航",
+      "subcategory": "school",
+      "target_types": [
+        "school",
+        "education_center"
+      ],
+      "semantic_tags": [
+        "education",
+        "school"
+      ],
+      "templates_en": [
+        "Find a nearby school.",
+        "I need to locate a school nearby."
+      ],
+      "templates_zh": [
+        "帮我找附近的学校。",
+        "我需要找附近的学校。"
+      ],
+      "yelp_categories_any": [
+        "Education",
+        "Elementary Schools",
+        "Middle Schools & High Schools",
+        "Specialty Schools"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(school|education|campus|class)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 130
+    },
+    {
+      "demand_group": "airport_travel",
+      "category": "public_poi_navigation",
+      "category_zh": "公共场所导航",
+      "subcategory": "airport",
+      "target_types": [
+        "airport",
+        "airport_terminal"
+      ],
+      "semantic_tags": [
+        "airport",
+        "travel"
+      ],
+      "templates_en": [
+        "Find the nearest airport.",
+        "I need to get to an airport."
+      ],
+      "templates_zh": [
+        "帮我找最近的机场。",
+        "我需要去机场。"
+      ],
+      "yelp_categories_any": [
+        "Airports",
+        "Airport Terminals",
+        "Hotels & Travel"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(airport|terminal|flight)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 140
+    },
+    {
+      "demand_group": "bus_station",
+      "category": "public_poi_navigation",
+      "category_zh": "公共场所导航",
+      "subcategory": "bus_station",
+      "target_types": [
+        "bus_station",
+        "bus_stop"
+      ],
+      "semantic_tags": [
+        "transit",
+        "bus"
+      ],
+      "templates_en": [
+        "Find a nearby bus station.",
+        "I need to get to a bus stop nearby."
+      ],
+      "templates_zh": [
+        "帮我找附近的公交站。",
+        "我需要去附近的公交车站。"
+      ],
+      "yelp_categories_any": [
+        "Public Transportation",
+        "Buses",
+        "Bus Stations",
+        "Transportation"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(bus station|bus stop|public transportation|bus)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 130
+    },
+    {
+      "demand_group": "train_station",
+      "category": "public_poi_navigation",
+      "category_zh": "公共场所导航",
+      "subcategory": "train_station",
+      "target_types": [
+        "train_station",
+        "subway_station",
+        "metro_station"
+      ],
+      "semantic_tags": [
+        "transit",
+        "rail"
+      ],
+      "templates_en": [
+        "Find a nearby train or subway station.",
+        "I need to get to public rail transit nearby."
+      ],
+      "templates_zh": [
+        "帮我找附近的地铁站或火车站。",
+        "我需要去附近的轨道交通站点。"
+      ],
+      "yelp_categories_any": [
+        "Public Transportation",
+        "Train Stations",
+        "Trains",
+        "Transportation"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(train station|subway|metro|rail|transit)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 130
+    },
+    {
+      "demand_group": "public_restroom",
+      "category": "public_poi_navigation",
+      "category_zh": "公共场所导航",
+      "subcategory": "public_restroom",
+      "target_types": [
+        "restroom",
+        "public_toilet"
+      ],
+      "semantic_tags": [
+        "restroom",
+        "toilet"
+      ],
+      "templates_en": [
+        "Find a nearby public restroom.",
+        "I need to use the restroom nearby."
+      ],
+      "templates_zh": [
+        "帮我找附近的公共厕所。",
+        "我想找附近可以上厕所的地方。"
+      ],
+      "yelp_categories_any": [
+        "Public Services & Government",
+        "Parks",
+        "Shopping Centers",
+        "Libraries"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(restroom|toilet|bathroom|washroom)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 180
+    },
+    {
+      "demand_group": "government_service",
+      "category": "public_poi_navigation",
+      "category_zh": "公共场所导航",
+      "subcategory": "government_service",
+      "target_types": [
+        "government_office",
+        "public_service"
+      ],
+      "semantic_tags": [
+        "public_service",
+        "government"
+      ],
+      "templates_en": [
+        "Find a nearby public service office.",
+        "I need to go to a government service office nearby."
+      ],
+      "templates_zh": [
+        "帮我找附近的公共服务办事点。",
+        "我需要去附近的政府服务窗口。"
+      ],
+      "yelp_categories_any": [
+        "Public Services & Government"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(government|public service|municipal|city office)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 120
+    },
+    {
+      "demand_group": "grocery_fruits_vegetables",
+      "category": "public_poi_navigation",
+      "category_zh": "公共场所导航",
+      "subcategory": "grocery_market",
+      "target_types": [
+        "grocery_store",
+        "supermarket",
+        "market"
+      ],
+      "semantic_tags": [
+        "grocery",
+        "fruit",
+        "vegetable"
+      ],
+      "templates_en": [
+        "Find a nearby grocery store or market.",
+        "I want to buy fruits and vegetables nearby."
+      ],
+      "templates_zh": [
+        "帮我找附近的超市或菜市场。",
+        "我想在附近买水果蔬菜。"
+      ],
+      "yelp_categories_any": [
+        "Grocery",
+        "Farmers Market",
+        "Food",
+        "Fruits & Veggies"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(grocery|supermarket|market|fruit|vegetable|produce)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 200
+    },
+    {
+      "demand_group": "phone_recharge",
+      "category": "public_poi_navigation",
+      "category_zh": "公共场所导航",
+      "subcategory": "phone_recharge",
+      "target_types": [
+        "convenience_store",
+        "mobile_phone_store",
+        "electronics_store"
+      ],
+      "semantic_tags": [
+        "phone",
+        "recharge",
+        "top_up"
+      ],
+      "templates_en": [
+        "Find a nearby place to recharge my phone plan.",
+        "My phone balance is low and I need a top-up place nearby."
+      ],
+      "templates_zh": [
+        "帮我找附近能给手机充值的地方。",
+        "我手机余额不够了，想找附近能充值的地方。"
+      ],
+      "yelp_categories_any": [
+        "Mobile Phones",
+        "Electronics",
+        "Convenience Stores",
+        "Shopping"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(phone credit|phone balance|recharge|top[- ]?up|mobile phone)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 130
+    },
+    {
+      "demand_group": "bank_then_pharmacy",
+      "category": "multi_stop_route",
+      "category_zh": "多目的地路线",
+      "subcategory": "bank_then_pharmacy",
+      "target_types": [],
+      "semantic_tags": [
+        "multi_stop",
+        "finance",
+        "medicine"
+      ],
+      "templates_en": [
+        "Go to a bank first, then a pharmacy.",
+        "Plan a route to a bank and then a pharmacy."
+      ],
+      "templates_zh": [
+        "先去银行，再去药店。",
+        "帮我规划先银行后药店的路线。"
+      ],
+      "yelp_categories_any": [
+        "Banks & Credit Unions",
+        "Pharmacy",
+        "Drugstores"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(bank|pharmacy|drugstore|medicine)\\b",
+      "ordered_target_types": [
+        [
+          "bank"
+        ],
+        [
+          "pharmacy",
+          "drugstore"
+        ]
+      ],
+      "review_by_default": false,
+      "quota_weight": 120
+    },
+    {
+      "demand_group": "parking_then_hospital",
+      "category": "multi_stop_route",
+      "category_zh": "多目的地路线",
+      "subcategory": "parking_then_hospital",
+      "target_types": [],
+      "semantic_tags": [
+        "multi_stop",
+        "parking",
+        "medical"
+      ],
+      "templates_en": [
+        "Find parking first, then take me to a clinic or hospital.",
+        "Plan parking before the medical stop."
+      ],
+      "templates_zh": [
+        "先找停车点，再去医院或诊所。",
+        "帮我安排先停车后就医的路线。"
+      ],
+      "yelp_categories_any": [
+        "Parking",
+        "Hospitals",
+        "Medical Centers",
+        "Health & Medical"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(parking|hospital|clinic|medical)\\b",
+      "ordered_target_types": [
+        [
+          "parking",
+          "parking_lot"
+        ],
+        [
+          "clinic",
+          "hospital",
+          "medical_center"
+        ]
+      ],
+      "review_by_default": false,
+      "quota_weight": 110
+    },
+    {
+      "demand_group": "library_then_cafe",
+      "category": "multi_stop_route",
+      "category_zh": "多目的地路线",
+      "subcategory": "library_then_cafe",
+      "target_types": [],
+      "semantic_tags": [
+        "multi_stop",
+        "study",
+        "coffee"
+      ],
+      "templates_en": [
+        "Take me to a library first, then a cafe.",
+        "Plan a library stop before coffee."
+      ],
+      "templates_zh": [
+        "先去图书馆，再去咖啡店。",
+        "帮我安排先学习后喝咖啡的路线。"
+      ],
+      "yelp_categories_any": [
+        "Libraries",
+        "Coffee & Tea",
+        "Cafes"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(library|study|coffee|cafe)\\b",
+      "ordered_target_types": [
+        [
+          "library"
+        ],
+        [
+          "cafe",
+          "coffee_shop"
+        ]
+      ],
+      "review_by_default": false,
+      "quota_weight": 100
+    },
+    {
+      "demand_group": "add_atm_stop",
+      "category": "route_update_add_via",
+      "category_zh": "中途增加途经点",
+      "subcategory": "add_atm_stop",
+      "target_types": [
+        "atm",
+        "bank"
+      ],
+      "semantic_tags": [
+        "route_update",
+        "cash"
+      ],
+      "templates_en": [
+        "Add an ATM stop to my current route.",
+        "Insert a cash withdrawal stop on the way."
+      ],
+      "templates_zh": [
+        "在当前路线中加一个 ATM。",
+        "顺路加一个取现金的停靠点。"
+      ],
+      "yelp_categories_any": [
+        "Banks & Credit Unions",
+        "Financial Services"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(atm|cash|withdraw)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 100
+    },
+    {
+      "demand_group": "add_pharmacy_stop",
+      "category": "route_update_add_via",
+      "category_zh": "中途增加途经点",
+      "subcategory": "add_pharmacy_stop",
+      "target_types": [
+        "pharmacy",
+        "drugstore"
+      ],
+      "semantic_tags": [
+        "route_update",
+        "medicine"
+      ],
+      "templates_en": [
+        "Add a pharmacy stop to my current route.",
+        "Insert a medicine pickup stop on the way."
+      ],
+      "templates_zh": [
+        "在当前路线中加一个药店。",
+        "顺路加一个买药的地方。"
+      ],
+      "yelp_categories_any": [
+        "Pharmacy",
+        "Drugstores"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(pharmacy|drugstore|medicine)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 100
+    },
+    {
+      "demand_group": "add_restroom_stop",
+      "category": "route_update_add_via",
+      "category_zh": "中途增加途经点",
+      "subcategory": "add_restroom_stop",
+      "target_types": [
+        "restroom",
+        "public_toilet"
+      ],
+      "semantic_tags": [
+        "route_update",
+        "restroom"
+      ],
+      "templates_en": [
+        "Add a restroom stop to my current route.",
+        "Insert a bathroom stop before continuing."
+      ],
+      "templates_zh": [
+        "在当前路线中加一个厕所。",
+        "继续走之前顺路找个洗手间。"
+      ],
+      "yelp_categories_any": [
+        "Public Services & Government",
+        "Parks",
+        "Shopping Centers",
+        "Libraries"
+      ],
+      "attribute_any": [],
+      "text_pattern": "\\b(restroom|toilet|bathroom|washroom)\\b",
+      "ordered_target_types": null,
+      "review_by_default": false,
+      "quota_weight": 90
+    }
+  ],
+  "extra_templates": {
+    "hungry": {
+      "zh": [
+        "我现在想吃饭，帮我找附近合适的地方。",
+        "附近有没有能快速解决一餐的地方？",
+        "找个离我近、能吃点东西的地方。",
+        "我想先填饱肚子，附近哪里合适？",
+        "帮我找一家附近可以吃饭的店。",
+        "我有点饿，想找个不用走太远的吃饭地方。",
+        "附近哪里适合简单吃一顿？",
+        "帮我找一个现在过去方便的餐厅或快餐店。"
+      ],
+      "en": [
+        "I need a nearby place to eat.",
+        "Find a close place where I can grab a quick meal.",
+        "I want somewhere nearby for food.",
+        "Help me find a restaurant or fast food place close by.",
+        "I need to eat soon, preferably nearby.",
+        "Find a convenient place around here for a meal.",
+        "I want a simple nearby meal option.",
+        "Show me somewhere close where I can get food."
+      ]
+    },
+    "thirsty": {
+      "zh": [
+        "我想买点喝的，附近哪里方便？",
+        "帮我找附近可以买饮料的地方。",
+        "我有点口渴，想找个喝东西的地方。",
+        "附近有没有咖啡、奶茶或饮料店？",
+        "找个离我近、可以买水或饮料的地方。",
+        "我想喝点东西，帮我看看附近选择。",
+        "帮我找一个可以买冷饮或热饮的地方。",
+        "附近哪里适合停下来喝点东西？"
+      ],
+      "en": [
+        "I want something to drink nearby.",
+        "Find a nearby place where I can buy a drink.",
+        "I am thirsty and need a convenient drink option.",
+        "Show me a cafe or drink shop close by.",
+        "I need water, tea, coffee, or another drink nearby.",
+        "Find somewhere close for a beverage.",
+        "I want a nearby place to stop for a drink.",
+        "Help me find a drink option around here."
+      ]
+    },
+    "coffee_drink": {
+      "zh": [
+        "帮我找一家附近的咖啡馆。",
+        "我想买杯咖啡，哪里最近？",
+        "附近有没有适合喝咖啡的店？",
+        "找个可以坐下喝咖啡的地方。",
+        "我想喝拿铁或咖啡，帮我找附近的店。",
+        "附近哪里可以买咖啡？",
+        "帮我找一个步行方便的咖啡店。",
+        "我想找个咖啡馆休息一下。"
+      ],
+      "en": [
+        "Find a coffee shop close to me.",
+        "I want to grab a coffee nearby.",
+        "Show me somewhere nearby for coffee.",
+        "Find a cafe where I can sit with coffee.",
+        "I need a latte or coffee close by.",
+        "Help me find a convenient coffee place.",
+        "I want a nearby cafe for a short break.",
+        "Find a walkable coffee shop."
+      ]
+    },
+    "dessert_snack": {
+      "zh": [
+        "我想吃点甜品，附近哪里有？",
+        "帮我找附近的甜品店或面包店。",
+        "附近有没有可以买蛋糕或冰淇淋的地方？",
+        "我想买点小吃或甜的东西。",
+        "找个离我近的甜品选择。",
+        "帮我找一家可以吃点心的店。",
+        "我想吃冰淇淋、蛋糕或者糕点。",
+        "附近哪里适合吃点甜的？"
+      ],
+      "en": [
+        "Find a nearby dessert place.",
+        "I want something sweet close by.",
+        "Show me a bakery, dessert shop, or ice cream place nearby.",
+        "I want a snack or dessert around here.",
+        "Help me find a convenient place for sweets.",
+        "Find a nearby place for cake, pastry, or ice cream.",
+        "I want a small sweet treat nearby.",
+        "Show me a close snack or dessert option."
+      ]
+    },
+    "quiet_work_wifi": {
+      "zh": [
+        "我想找个能安静办公的地方，最好有 Wi-Fi。",
+        "帮我找附近适合带电脑坐一会儿的地方。",
+        "附近有没有有 Wi-Fi、适合工作的咖啡馆？",
+        "我需要一个安静点、能打开电脑的地方。",
+        "找个可以坐下处理工作的地方。",
+        "我想找个有插座或 Wi-Fi 的办公地点。",
+        "附近哪里适合远程办公？",
+        "帮我找个不太吵、能用电脑的地方。"
+      ],
+      "en": [
+        "Find a quiet nearby place where I can work.",
+        "I need Wi-Fi and a place to sit with my laptop.",
+        "Show me a work-friendly cafe nearby.",
+        "I want somewhere calm where I can work for a while.",
+        "Find a place with Wi-Fi that is good for remote work.",
+        "I need a quiet laptop-friendly spot close by.",
+        "Help me find a nearby place with Wi-Fi and seating.",
+        "Find somewhere not too noisy where I can work."
+      ]
+    },
+    "family_kids": {
+      "zh": [
+        "我带着孩子，找个附近合适的地方。",
+        "附近有没有适合亲子一起去的地方？",
+        "帮我找一个对孩子友好的地方。",
+        "我想找个适合家庭活动或吃饭的地方。",
+        "附近哪里适合带小朋友过去？",
+        "找个推婴儿车也比较方便的地方。",
+        "帮我找附近适合一家人去的地方。",
+        "我需要一个孩子不会无聊的地方。"
+      ],
+      "en": [
+        "Find a nearby place suitable for kids.",
+        "I need a family-friendly place close by.",
+        "Show me somewhere good for bringing children.",
+        "Find a place nearby that works for a family outing.",
+        "I want a kid-friendly option around here.",
+        "Help me find somewhere convenient with children.",
+        "I need a nearby family-friendly meal or activity option.",
+        "Find somewhere close where kids would be comfortable."
+      ]
+    },
+    "parking": {
+      "zh": [
+        "我需要先找个好停车的地方。",
+        "附近哪里停车比较方便？",
+        "帮我找附近带停车位的地方。",
+        "我想找个不用为停车发愁的地方。",
+        "找个附近有停车场或车位的地点。",
+        "帮我找一个开车过去方便的地方。",
+        "附近有没有停车条件比较好的店？",
+        "我需要一个停车方便、离我近的选择。"
+      ],
+      "en": [
+        "Find somewhere nearby with convenient parking.",
+        "I need a place where parking should be easy.",
+        "Show me a nearby option with parking.",
+        "Find a place close by with a lot or garage.",
+        "I want somewhere easy to drive to and park.",
+        "Help me avoid parking trouble nearby.",
+        "Find a nearby place with street, lot, or garage parking.",
+        "I need a parking-friendly option close to me."
+      ]
+    },
+    "cheap_budget": {
+      "zh": [
+        "我想找个便宜一点的地方。",
+        "附近有没有性价比高的吃饭地方？",
+        "帮我找个实惠、不太贵的选择。",
+        "我预算有限，找个附近合适的地方。",
+        "找一家价格合理的店。",
+        "附近哪里吃饭比较划算？",
+        "帮我找个便宜但还不错的地方。",
+        "我想省点钱，附近哪里合适？"
+      ],
+      "en": [
+        "Find an affordable place nearby.",
+        "I want a budget-friendly option close by.",
+        "Show me somewhere nearby that is good value.",
+        "I need a reasonably priced place around here.",
+        "Find a cheap but decent nearby option.",
+        "I am on a budget and need somewhere close.",
+        "Help me find a low-cost meal nearby.",
+        "Show me a nearby place that is not too expensive."
+      ]
+    },
+    "romantic_date": {
+      "zh": [
+        "我想找一家适合约会的餐厅。",
+        "帮我找附近氛围浪漫的吃饭地方。",
+        "附近有没有适合纪念日的餐厅？",
+        "找一家安静、有约会氛围的餐厅。",
+        "我想找个适合两个人聊天吃饭的地方。",
+        "帮我找一家环境比较亲密的餐厅。",
+        "附近哪里适合晚上约会吃饭？",
+        "找个氛围好一点的餐厅。"
+      ],
+      "en": [
+        "Find a romantic restaurant nearby.",
+        "I need a nearby restaurant for a date night.",
+        "Show me somewhere intimate for dinner.",
+        "Find a restaurant with a good atmosphere for a date.",
+        "I want a cozy place for two people to eat.",
+        "Help me find a special occasion restaurant nearby.",
+        "Find a quiet romantic dinner spot.",
+        "Show me a nearby restaurant with date-night ambience."
+      ]
+    },
+    "outdoor_seating": {
+      "zh": [
+        "我想找一家有户外座位的餐厅。",
+        "附近有没有可以坐在外面的咖啡馆？",
+        "帮我找个有露台或庭院座位的地方。",
+        "我想坐户外吃饭或喝东西。",
+        "找一家可以在外面用餐的店。",
+        "附近哪里有 patio 或露天座位？",
+        "帮我找个适合户外坐一会儿的地方。",
+        "我想找个通风、能坐外面的地方。"
+      ],
+      "en": [
+        "Find a nearby place with outdoor seating.",
+        "I want a restaurant or cafe with a patio.",
+        "Show me somewhere close where I can sit outside.",
+        "Find a place with terrace or sidewalk seating.",
+        "I want to eat or drink outdoors nearby.",
+        "Help me find a nearby patio option.",
+        "Find a restaurant with outside tables.",
+        "Show me a well-ventilated outdoor seating option."
+      ]
+    },
+    "family_kids_semantic": {
+      "zh": [
+        "请找一家适合家庭聚餐的餐厅。",
+        "我带孩子吃饭，找个家庭友好的餐厅。",
+        "附近有没有适合一家人吃饭的地方？",
+        "帮我找一家孩子也能舒服用餐的餐厅。",
+        "找个适合多人和小朋友的餐厅。",
+        "我需要一个对家庭友好的吃饭地点。",
+        "附近哪里适合带小朋友一起吃饭？",
+        "找一家不太吵、适合家庭用餐的地方。"
+      ],
+      "en": [
+        "Find a family-friendly restaurant nearby.",
+        "I need a restaurant that works well for kids.",
+        "Show me somewhere suitable for a family meal.",
+        "Find a restaurant where children would be comfortable.",
+        "I want a nearby place for a group or family dinner.",
+        "Help me find a kid-friendly restaurant.",
+        "Find a restaurant that is good for families.",
+        "Show me a comfortable family dining option nearby."
+      ]
+    },
+    "quiet_work_wifi_semantic": {
+      "zh": [
+        "找个安静、适合办公的地方。",
+        "我需要一个能用电脑工作的安静空间。",
+        "附近有没有有 Wi-Fi 且不太吵的咖啡馆？",
+        "帮我找一个适合远程办公的地方。",
+        "我想找个可以坐久一点处理工作的地方。",
+        "找个有网络、适合开电脑的地方。",
+        "附近哪里适合学习或办公？",
+        "帮我找个环境安静的工作地点。"
+      ],
+      "en": [
+        "Find a quiet work-friendly place nearby.",
+        "I need somewhere with Wi-Fi where I can work.",
+        "Show me a quiet cafe suitable for a laptop.",
+        "Find a nearby place for remote work.",
+        "I want a calm place where I can stay and work.",
+        "Help me find a place with internet and seating.",
+        "Find somewhere good for studying or working.",
+        "Show me a quiet workspace-like option nearby."
+      ]
+    },
+    "pet_dog_friendly": {
+      "zh": [
+        "帮我找附近可以带狗去的地方。",
+        "附近有没有宠物友好的餐厅或咖啡馆？",
+        "我带着狗，找个合适的地方。",
+        "找个允许带宠物的店。",
+        "帮我找一个狗狗也能一起去的地方。",
+        "附近哪里可以带宠物坐一会儿？",
+        "我想找个 dog-friendly 的地方。",
+        "找一家可以带狗的餐厅或咖啡店。"
+      ],
+      "en": [
+        "Find a dog-friendly place nearby.",
+        "I need somewhere close where I can bring my dog.",
+        "Show me a pet-friendly restaurant or cafe.",
+        "Find a nearby place that allows dogs.",
+        "I want somewhere my dog can come with me.",
+        "Help me find a dog-friendly patio or cafe.",
+        "Find a pet-friendly option around here.",
+        "Show me a nearby place suitable with a dog."
+      ]
+    },
+    "healthy_vegan": {
+      "zh": [
+        "我想吃得健康一点，附近哪里合适？",
+        "帮我找附近健康或素食友好的餐厅。",
+        "附近有没有沙拉、轻食或素食选择？",
+        "我想找个健康餐。",
+        "找一家有素食选项的店。",
+        "帮我找一个不太油腻的吃饭地方。",
+        "附近哪里适合吃轻食？",
+        "我想找有 vegan 或 vegetarian 选择的地方。"
+      ],
+      "en": [
+        "Find a healthy place to eat nearby.",
+        "I want a nearby vegan or vegetarian-friendly option.",
+        "Show me a place with salads or healthy food.",
+        "Find a lighter meal option close by.",
+        "I need somewhere with vegetarian options.",
+        "Help me find a nearby healthy restaurant.",
+        "Find a place that has vegan-friendly food.",
+        "Show me a nearby organic or healthy food option."
+      ]
+    },
+    "open_late_24h": {
+      "zh": [
+        "现在有点晚了，帮我找附近还开的地方。",
+        "附近有没有深夜还营业的店？",
+        "帮我找一个现在还没关门的地方。",
+        "我想找个晚上还能去的地方。",
+        "找个 late-night 的吃饭或购物选择。",
+        "附近哪里 24 小时或营业到很晚？",
+        "帮我找现在还能买东西或吃饭的地方。",
+        "我需要一个夜里还能去的地点。"
+      ],
+      "en": [
+        "Find a nearby place that is open late.",
+        "I need somewhere that is still open now.",
+        "Show me a late-night option nearby.",
+        "Find a place open at night around here.",
+        "I want somewhere open after hours.",
+        "Help me find a 24-hour or late-night place.",
+        "Find somewhere I can still eat or shop tonight.",
+        "Show me a nearby option that has not closed yet."
+      ]
+    },
+    "bank_service": {
+      "zh": [
+        "找最近的银行网点。",
+        "附近有没有银行？",
+        "帮我找一个从这里过去方便的银行。",
+        "我想去银行处理业务。",
+        "找个离我近一点的银行。",
+        "帮我看下周围的银行。"
+      ],
+      "en": [
+        "Find the closest bank branch.",
+        "I need a bank within the nearby area.",
+        "Show me a bank I can reach from here.",
+        "Locate a nearby place for banking.",
+        "I have bank business to handle nearby.",
+        "Find a bank close to my current location."
+      ]
+    },
+    "atm_cash": {
+      "zh": [
+        "找最近的取款机。",
+        "附近有没有 ATM？",
+        "我想找地方取现金。",
+        "帮我找一个取款点。",
+        "找个方便过去的 ATM。",
+        "我需要现金，帮我找附近取款机。"
+      ],
+      "en": [
+        "Find the closest cash machine.",
+        "I need an ATM around here.",
+        "Show me somewhere nearby to withdraw cash.",
+        "Locate a cash withdrawal point.",
+        "Find an ATM that is easy to reach.",
+        "I need cash, find an ATM nearby."
+      ]
+    },
+    "pharmacy_medicine": {
+      "zh": [
+        "找最近的药店。",
+        "我需要买药，帮我找附近药房。",
+        "附近哪里可以买常用药？",
+        "帮我找个药房。",
+        "我想找能买处方药的地方。",
+        "找一个附近的 drugstore。"
+      ],
+      "en": [
+        "Find the closest drugstore.",
+        "I need a pharmacy for medicine.",
+        "Show me a nearby place to fill a prescription.",
+        "Find somewhere nearby that sells medication.",
+        "Locate a pharmacy around here.",
+        "I need basic medicine nearby."
+      ]
+    },
+    "clinic_healthcare": {
+      "zh": [
+        "找附近的急诊或诊所。",
+        "我不舒服，想找能看病的地方。",
+        "帮我找附近医疗中心。",
+        "附近有没有医院或诊所？",
+        "我需要附近的医疗帮助。",
+        "找一个能尽快看病的地方。"
+      ],
+      "en": [
+        "Find urgent care nearby.",
+        "I need a doctor or clinic around here.",
+        "Show me a nearby medical center.",
+        "I feel sick and need a healthcare place.",
+        "Find a hospital or clinic close by.",
+        "Locate nearby medical help."
+      ]
+    },
+    "library_read_study": {
+      "zh": [
+        "找附近的公共图书馆。",
+        "我想找个公共安静的地方看书。",
+        "帮我找附近适合学习的地方。",
+        "附近有没有图书馆？",
+        "找个安静的阅读空间。",
+        "我需要一个安静学习的公共空间。"
+      ],
+      "en": [
+        "Find a public library close by.",
+        "I want somewhere public and quiet to read.",
+        "Show me a nearby study place.",
+        "Locate a library around here.",
+        "Find a quiet public reading space.",
+        "I need a calm place for studying."
+      ]
+    },
+    "public_park_play": {
+      "zh": [
+        "找最近的公园。",
+        "帮我找附近公共绿地。",
+        "我想去附近公园走走。",
+        "找个孩子能玩的户外公共空间。",
+        "附近有没有游乐场或公园？",
+        "我想找一个公共户外地点。"
+      ],
+      "en": [
+        "Find the closest park.",
+        "Show me a nearby public green space.",
+        "I want to walk in a park nearby.",
+        "Find a place outdoors where kids can play.",
+        "Locate a nearby playground or park.",
+        "I want a public outdoor spot."
+      ]
+    },
+    "gym_exercise": {
+      "zh": [
+        "找附近的健身中心。",
+        "我想在附近运动。",
+        "帮我找附近健身房。",
+        "找个可以锻炼的地方。",
+        "我想找地方训练一下。",
+        "找一个现在方便过去的健身房。"
+      ],
+      "en": [
+        "Find a nearby fitness center.",
+        "I want to work out around here.",
+        "Show me a gym close by.",
+        "Locate somewhere nearby for exercise.",
+        "Find a place to train near me.",
+        "I need a gym I can get to now."
+      ]
+    },
+    "cinema_movie": {
+      "zh": [
+        "找最近的电影院。",
+        "我想在附近看电影。",
+        "帮我找周围的影院。",
+        "附近有没有电影院？",
+        "找个能看电影的地方。",
+        "我想去附近的电影娱乐场所。"
+      ],
+      "en": [
+        "Find the closest movie theater.",
+        "I want to watch a film nearby.",
+        "Show me nearby cinemas.",
+        "Locate a theater around here.",
+        "Find a place nearby to see a movie.",
+        "I want an entertainment place for a movie."
+      ]
+    },
+    "hotel_lodging": {
+      "zh": [
+        "找附近酒店。",
+        "我需要附近住宿。",
+        "帮我找周边可以住的地方。",
+        "找一个离这里近的酒店。",
+        "我想找附近住宿点。",
+        "我需要附近能过夜的地方。"
+      ],
+      "en": [
+        "Find a hotel near me.",
+        "I need nearby lodging.",
+        "Show me a place to stay around here.",
+        "Locate a hotel close to this area.",
+        "Find accommodation nearby.",
+        "I need somewhere to sleep nearby."
+      ]
+    },
+    "shopping_mall": {
+      "zh": [
+        "找最近的购物中心。",
+        "我想去附近商场。",
+        "帮我找周围购物的地方。",
+        "附近有没有 shopping mall？",
+        "找个店比较集中的地方。",
+        "我需要附近的购物区域。"
+      ],
+      "en": [
+        "Find the nearest shopping center.",
+        "I want to go to a mall nearby.",
+        "Show me nearby shopping places.",
+        "Locate a shopping mall around here.",
+        "Find a place with multiple stores nearby.",
+        "I need a nearby shopping area."
+      ]
+    },
+    "school_education": {
+      "zh": [
+        "找最近的学校。",
+        "帮我找附近教育机构。",
+        "我需要定位附近学校。",
+        "找个附近校区或学校。",
+        "附近有没有学校？",
+        "帮我找周边学校。"
+      ],
+      "en": [
+        "Find the closest school.",
+        "Show me nearby education facilities.",
+        "I need to locate a school around here.",
+        "Find a campus or school nearby.",
+        "Locate an education place close by.",
+        "I want to find a nearby school."
+      ]
+    },
+    "airport_travel": {
+      "zh": [
+        "找最近的机场。",
+        "我需要去机场。",
+        "帮我找最近的机场航站楼。",
+        "附近机场在哪里？",
+        "我赶飞机，需要去机场。",
+        "帮我找机场方向。"
+      ],
+      "en": [
+        "Find the closest airport.",
+        "I need directions to an airport.",
+        "Show me the nearest airport terminal.",
+        "Locate an airport around here.",
+        "I have a flight and need to get to the airport.",
+        "Find airport access nearby."
+      ]
+    },
+    "bus_station": {
+      "zh": [
+        "找最近的公交站。",
+        "我需要附近公交车站。",
+        "帮我找哪里可以坐公交。",
+        "找附近公共汽车站点。",
+        "附近有没有 bus stop？",
+        "我想从附近坐公交。"
+      ],
+      "en": [
+        "Find the nearest bus stop.",
+        "I need a nearby bus station.",
+        "Show me where to catch a bus.",
+        "Locate public bus access nearby.",
+        "Find a bus stop close to me.",
+        "I want to take a bus from nearby."
+      ]
+    },
+    "train_station": {
+      "zh": [
+        "找最近的地铁站。",
+        "我需要附近火车站或地铁站。",
+        "帮我找轨道交通站。",
+        "附近有没有 metro station？",
+        "找公共轨道交通入口。",
+        "我想坐地铁或火车。"
+      ],
+      "en": [
+        "Find the nearest subway station.",
+        "I need a nearby train station.",
+        "Show me rail transit close by.",
+        "Locate a metro station around here.",
+        "Find public rail access nearby.",
+        "I want to take the subway or train."
+      ]
+    },
+    "public_restroom": {
+      "zh": [
+        "找最近的公共厕所。",
+        "我想找附近厕所。",
+        "帮我找能上厕所的地方。",
+        "附近有没有公共卫生间？",
+        "找一个有 restroom 的地方。",
+        "我需要尽快去洗手间。"
+      ],
+      "en": [
+        "Find the closest public toilet.",
+        "I need a restroom around here.",
+        "Show me a nearby bathroom I can use.",
+        "Locate public restrooms nearby.",
+        "Find somewhere nearby with toilets.",
+        "I need to use the washroom soon."
+      ]
+    },
+    "government_service": {
+      "zh": [
+        "找附近公共服务办事点。",
+        "我需要去政府服务窗口。",
+        "帮我找附近政务服务机构。",
+        "附近有没有公共办事处？",
+        "找个能办手续的公共机构。",
+        "我想处理公共服务业务。"
+      ],
+      "en": [
+        "Find a public service office nearby.",
+        "I need a government office around here.",
+        "Show me nearby municipal services.",
+        "Locate a public office close by.",
+        "Find a place for public-service paperwork.",
+        "I need to handle government service nearby."
+      ]
+    },
+    "grocery_fruits_vegetables": {
+      "zh": [
+        "找附近超市。",
+        "我想在附近买菜。",
+        "帮我找水果蔬菜市场。",
+        "找个附近 grocery store。",
+        "哪里可以买新鲜蔬果？",
+        "我需要买日常食品。"
+      ],
+      "en": [
+        "Find a nearby supermarket.",
+        "I want to buy groceries around here.",
+        "Show me a market for fruits and vegetables.",
+        "Locate a grocery store close by.",
+        "Find somewhere nearby for fresh produce.",
+        "I need a store for daily groceries."
+      ]
+    },
+    "phone_recharge": {
+      "zh": [
+        "找个能给手机充值的地方。",
+        "我需要附近手机营业厅。",
+        "帮我找手机充值点。",
+        "我手机余额不够了，找附近能充值的地方。",
+        "找个能办理手机业务的店。",
+        "我想在附近给手机套餐充值。"
+      ],
+      "en": [
+        "Find somewhere to top up my phone.",
+        "I need a mobile phone store nearby.",
+        "Show me a place for phone recharge.",
+        "My phone plan needs credit, find a nearby option.",
+        "Locate a store where I can handle phone service.",
+        "I need to recharge my phone balance nearby."
+      ]
+    },
+    "bank_then_pharmacy": {
+      "en": [
+        "Visit a bank first and then pick up medicine.",
+        "Route me through a bank before a drugstore.",
+        "I need banking first, pharmacy second.",
+        "Put the bank before the pharmacy in the route."
+      ],
+      "zh": [
+        "先办银行业务，再去药店。",
+        "路线里先银行后药房。",
+        "我需要先去银行，再去买药。",
+        "把银行放在药店前面。"
+      ]
+    },
+    "parking_then_hospital": {
+      "en": [
+        "Route me to parking first, then medical care.",
+        "I am driving, so find parking before the clinic.",
+        "Put parking before the hospital stop.",
+        "Handle parking first, then go to healthcare."
+      ],
+      "zh": [
+        "先安排停车，再去医疗点。",
+        "我开车，先找停车再去诊所。",
+        "把停车点放在医院前面。",
+        "先解决停车，再去看病。"
+      ]
+    },
+    "library_then_cafe": {
+      "en": [
+        "Study at a library first, then get coffee.",
+        "Route me to a library and then a cafe.",
+        "Put the public library before coffee.",
+        "I want reading first and coffee after."
+      ],
+      "zh": [
+        "先去图书馆学习，再喝咖啡。",
+        "帮我串联图书馆和咖啡店。",
+        "先公共图书馆，再咖啡。",
+        "我想先看书后喝咖啡。"
+      ]
+    },
+    "add_atm_stop": {
+      "en": [
+        "Add a cash machine before continuing.",
+        "Put an ATM into this route.",
+        "Detour to withdraw cash on the way.",
+        "Add a nearby bank or ATM stop."
+      ],
+      "zh": [
+        "继续前加一个取款机。",
+        "把 ATM 加进路线。",
+        "路上绕去取现金。",
+        "顺路加一个银行或 ATM。"
+      ]
+    },
+    "add_pharmacy_stop": {
+      "en": [
+        "Add a drugstore before continuing.",
+        "Put a pharmacy into this route.",
+        "Detour to pick up medicine on the way.",
+        "Add a nearby medication stop."
+      ],
+      "zh": [
+        "继续前加一个药店。",
+        "把药房加进路线。",
+        "路上绕去买药。",
+        "顺路加一个买药点。"
+      ]
+    },
+    "add_restroom_stop": {
+      "en": [
+        "Add a toilet stop before continuing.",
+        "Put a restroom into this route.",
+        "Detour to a bathroom on the way.",
+        "Add a nearby public restroom stop."
+      ],
+      "zh": [
+        "继续前加一个厕所。",
+        "把洗手间加进路线。",
+        "路上绕去上厕所。",
+        "顺路加一个公共厕所。"
+      ]
+    }
+  },
+  "multi_stop_extra": {
+    "coffee_then_work": {
+      "zh": [
+        "我想先买杯咖啡，再找地方办公。",
+        "先找咖啡，然后安排一个能坐下工作的地方。",
+        "帮我把咖啡和办公地点串成一条路线。",
+        "我先需要咖啡，之后想去能用电脑的地方。",
+        "先去咖啡店，再去适合工作的空间。",
+        "安排一条先喝咖啡后办公的路线。"
+      ],
+      "en": [
+        "I want coffee first, then a place to work.",
+        "Plan coffee first and a laptop-friendly spot after that.",
+        "Put a coffee stop before a work-friendly place.",
+        "I need caffeine first, then somewhere to work.",
+        "Route me through a cafe and then a workspace-like place.",
+        "Make the route coffee first, work second."
+      ]
+    },
+    "eat_then_drink": {
+      "zh": [
+        "我想先吃饭，然后找地方喝一杯。",
+        "先安排晚餐，再安排喝东西的地方。",
+        "帮我把吃饭和喝酒串成一条路线。",
+        "先去餐厅，之后去酒吧或饮品店。",
+        "我先要吃点东西，再去喝点东西。",
+        "安排一条先用餐后喝饮料的路线。"
+      ],
+      "en": [
+        "I want to eat first, then get drinks.",
+        "Plan dinner first and drinks after.",
+        "Route me to a meal and then a bar or drink place.",
+        "Put food before drinks in the route.",
+        "I need a restaurant first, then somewhere for a drink.",
+        "Make the route meal first, drinks second."
+      ]
+    },
+    "parking_then_restaurant": {
+      "zh": [
+        "先帮我解决停车，再去餐厅。",
+        "我开车，先找停车点，再去吃饭。",
+        "安排一条先停车后用餐的路线。",
+        "先找停车方便的位置，然后去附近吃饭。",
+        "帮我把停车和餐厅连成一条路线。",
+        "先去停车场，再走去餐厅。"
+      ],
+      "en": [
+        "Find parking first, then take me to a restaurant.",
+        "I am driving, so plan parking before food.",
+        "Route me to park first and eat after.",
+        "Put a parking stop before the restaurant.",
+        "I need parking handled before dinner.",
+        "Make the route parking first, restaurant second."
+      ]
+    },
+    "dessert_then_coffee": {
+      "zh": [
+        "我想先买甜品，再去喝咖啡。",
+        "先找甜点店，然后找咖啡馆。",
+        "帮我把甜品和咖啡安排成一条路线。",
+        "先买点甜的，再找地方坐下喝咖啡。",
+        "路线里先放甜品，再放咖啡。",
+        "我先想吃甜点，之后想喝咖啡。"
+      ],
+      "en": [
+        "I want dessert first, then coffee.",
+        "Plan a dessert stop before a coffee shop.",
+        "Route me to something sweet and then coffee.",
+        "Put dessert first and cafe second.",
+        "I want to pick up sweets before getting coffee.",
+        "Make the route dessert first, coffee second."
+      ]
+    }
+  },
+  "route_update_extra": {
+    "add_coffee_stop": {
+      "zh": [
+        "路上顺便加一个咖啡店。",
+        "我想在原路线中插入一个咖啡停靠点。",
+        "先绕去买杯咖啡，再继续走。",
+        "帮我把附近咖啡店加进当前路线。"
+      ],
+      "en": [
+        "Add coffee as a stop on the way.",
+        "Insert a coffee stop into my current route.",
+        "Detour for coffee before continuing.",
+        "Put a nearby cafe into the route."
+      ]
+    },
+    "add_takeout_stop": {
+      "zh": [
+        "路上加一个外带餐点。",
+        "我想先取点外带，再继续去目的地。",
+        "帮我在路线中插入一个快餐或外带店。",
+        "顺路加一个可以买走食物的地方。"
+      ],
+      "en": [
+        "Add a takeout stop on the way.",
+        "I want to pick up food before continuing.",
+        "Insert a quick food stop into the route.",
+        "Add somewhere for food to go."
+      ]
+    },
+    "add_dessert_stop": {
+      "zh": [
+        "路线里加一个甜品店。",
+        "我想顺路买点甜的。",
+        "先绕去甜品店，再继续去原目的地。",
+        "帮我把附近蛋糕或冰淇淋店加进去。"
+      ],
+      "en": [
+        "Add a dessert stop to the route.",
+        "I want to pick up something sweet on the way.",
+        "Detour to dessert before continuing.",
+        "Insert a cake or ice cream stop."
+      ]
+    },
+    "add_parking_friendly_restaurant": {
+      "zh": [
+        "路线中加一家停车方便的餐厅。",
+        "我想中途去一个好停车的吃饭地方。",
+        "帮我插入一个开车过去方便的餐厅。",
+        "先绕到停车方便的餐厅，再继续走。"
+      ],
+      "en": [
+        "Add a parking-friendly restaurant to the route.",
+        "I want to stop at a restaurant that is easy to park at.",
+        "Insert a drive-friendly restaurant stop.",
+        "Detour to an easy-parking restaurant before continuing."
+      ]
+    }
+  }
+}
