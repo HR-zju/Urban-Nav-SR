@@ -92,3 +92,4 @@ Agent_part/RouteServer/apps/nav-assistant/.build/
 /docker/
 key.txt
 data/
+Agent_part/RouteServer/examples/agent_eval/

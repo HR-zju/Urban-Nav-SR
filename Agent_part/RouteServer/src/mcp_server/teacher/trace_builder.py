@@ -1,0 +1,411 @@
+"""RouteServer teacher wrapper that emits unified AgentTrace objects.
+
+这个模块把旧 RouteServer 中已经存在的能力包成 teacher runner：
+
+- ``IntentParser``: 自然语言意图解析。
+- ``GoalDecomposer``: 多目标 itinerary 拆解。
+- ``DestinationRecommendationEngine``: POI 推荐和候选排序。
+- ``run_zero_shot_visual_prompt_pipeline``: FPV visual prompt teacher。
+
+注意：这些 teacher 能力只写入 trace metadata / teacher artifact，不会作为学生
+模型可见 tool 暴露。学生仍然只学习 ``map_tool``、``image_tool``、
+``user_interaction_tool`` 三个元工具的调用协议。
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass
+from typing import Any
+
+from mcp_server.agent.schemas import AgentEvalCase, AgentTrace, ToolCall
+from mcp_server.agent.tool_parser import parse_agent_action
+from mcp_server.agent.tool_schema import get_tool_definitions
+from mcp_server.eval.metrics import compute_trace_metrics
+from mcp_server.llm import GoalDecomposer, IntentParser
+
+
+def _location_text(value: Any) -> str:
+    """Return provider-facing ``"lon,lat"`` text from dict or string."""
+
+    if isinstance(value, dict):
+        lat = value.get("latitude") if value.get("latitude") is not None else value.get("lat")
+        lon = value.get("longitude") if value.get("longitude") is not None else value.get("lon")
+        if lat is not None and lon is not None:
+            return f"{float(lon)},{float(lat)}"
+    return str(value or "").strip()
+
+
+def _lat_lon(value: Any) -> tuple[float, float] | None:
+    """Return ``(lat, lon)`` for teacher-side map/recommendation calls."""
+
+    if isinstance(value, dict):
+        lat = value.get("latitude") if value.get("latitude") is not None else value.get("lat")
+        lon = value.get("longitude") if value.get("longitude") is not None else value.get("lon")
+        if lat is not None and lon is not None:
+            return float(lat), float(lon)
+    text = str(value or "").strip()
+    if "," in text:
+        try:
+            lon_text, lat_text = text.split(",", 1)
+            return float(lat_text), float(lon_text)
+        except Exception:
+            return None
+    return None
+
+
+def _contains_any(text: str, keywords: list[str]) -> bool:
+    return any(keyword in text for keyword in keywords)
+
+
+def _resolve_mode(request: str, observation: dict[str, Any], intent: dict[str, Any]) -> str:
+    """Prefer explicit user/observation mode over heuristic intent defaults."""
+
+    observed_mode = str(observation.get("mode") or "").strip().lower()
+    if observed_mode in {"foot", "bike", "car"}:
+        return observed_mode
+    if _contains_any(request, ["步行", "走路", "walk", "on foot"]):
+        return "foot"
+    if _contains_any(request, ["骑行", "bike", "bicycle"]):
+        return "bike"
+    mode = str(intent.get("mode") or "").strip().lower()
+    return mode if mode in {"foot", "bike", "car"} else "foot"
+
+
+def _safe_summary(payload: dict[str, Any] | None) -> dict[str, Any]:
+    """Keep teacher metadata compact enough for review JSONL."""
+
+    if not isinstance(payload, dict):
+        return {}
+    if payload.get("status"):
+        return {
+            "status": payload.get("status"),
+            "error": payload.get("error"),
+        }
+    return {
+        "provider": payload.get("provider"),
+        "parsed_intent": payload.get("parsed_intent"),
+        "chosen_destination": payload.get("chosen_destination"),
+        "route_summary": payload.get("route_summary"),
+        "meta": payload.get("meta"),
+        "message": payload.get("message"),
+    }
+
+
+@dataclass
+class RouteServerTeacherConfig:
+    """Configuration for ``RouteServerAgentTeacher``.
+
+    use_llm:
+        True 时调用旧 ``IntentParser.parse`` / ``GoalDecomposer.parse``，这些函数
+        会在无 API 或失败时自动 fallback。False 时只走 heuristic，适合生成本地
+        review 样例和单测。
+    execute_tools:
+        True 时会把选出的学生可见 tool call 交给 ``ToolExecutor`` 执行。
+    enable_visual_prompt:
+        True 且 case 中有 FPV、GPS、route polyline 时，调用 visual prompt teacher。
+    """
+
+    use_llm: bool = True
+    execute_tools: bool = False
+    enable_visual_prompt: bool = False
+    enable_recommendation: bool = True
+
+
+class RouteServerAgentTeacher:
+    """Build one replayable AgentTrace from one AgentEvalCase.
+
+    输入:
+        ``AgentEvalCase``，可选 RouteServer ``app_context``。
+
+    输出:
+        ``AgentTrace``，其中 assistant turn 只包含学生应学习的
+        ``<tool_call>`` / ``<finish>``；旧 teacher 的解析、推荐、视觉结果只进
+        ``trace.metadata["teacher_internal"]``。
+    """
+
+    def __init__(
+        self,
+        *,
+        app_context: Any | None = None,
+        config: RouteServerTeacherConfig | None = None,
+    ) -> None:
+        self.app_context = app_context
+        self.config = config or RouteServerTeacherConfig()
+        self.intent_parser = IntentParser()
+        self.goal_decomposer = GoalDecomposer()
+
+    async def run_case(self, case: AgentEvalCase) -> AgentTrace:
+        trace = AgentTrace.from_case(
+            case,
+            model_run={
+                "runner": "routeserver_teacher",
+                "use_llm": bool(self.config.use_llm),
+                "execute_tools": bool(self.config.execute_tools),
+                "enable_visual_prompt": bool(self.config.enable_visual_prompt),
+            },
+        )
+        trace.tools = case.tools or get_tool_definitions()
+        trace.add_turn("user", "".join("<image>" for _ in case.images) + case.user_request)
+
+        intent = await self._parse_intent(case.user_request)
+        goals = await self._decompose_goals(case.user_request)
+        recommendation = await self._maybe_recommend(case, intent)
+        visual_prompt = await self._maybe_run_visual_prompt_teacher(case)
+
+        call = self._select_student_tool_call(
+            case,
+            intent=intent,
+            goals=goals,
+            recommendation=recommendation,
+            visual_prompt=visual_prompt,
+        )
+        assistant_text = self._tool_call_text(call)
+        trace.add_turn("assistant", assistant_text, metadata={"parsed_action": parse_agent_action(assistant_text).to_dict()})
+
+        teacher_internal = {
+            "intent_parse": intent,
+            "goal_decomposition": goals,
+            "recommendation": _safe_summary(recommendation),
+            "visual_prompt": _safe_summary(visual_prompt),
+            "selected_student_tool_call": call.to_dict(),
+        }
+        trace.metadata["teacher_internal"] = teacher_internal
+
+        if self.config.execute_tools:
+            response = await self._execute_selected_tool(call, case)
+            trace.add_turn("tool_response", response.to_dict(), tool=call.tool)
+            finish_payload = {
+                "route_action": "use_tool_result",
+                "tool": call.tool,
+                "op": call.op,
+                "success": response.success,
+                "teacher_source": "routeserver_teacher",
+            }
+        else:
+            finish_payload = {
+                "route_action": "pending_tool_execution",
+                "tool": call.tool,
+                "op": call.op,
+                "teacher_source": "routeserver_teacher",
+            }
+        finish_text = f"<finish>{json.dumps(finish_payload, ensure_ascii=False, sort_keys=True)}</finish>"
+        trace.add_turn("assistant", finish_text, metadata={"parsed_action": parse_agent_action(finish_text).to_dict()})
+
+        metric_result = compute_trace_metrics(trace, case)
+        trace.metrics = metric_result.metrics
+        if metric_result.errors:
+            trace.metadata["metric_errors"] = metric_result.errors
+        return trace
+
+    async def _parse_intent(self, user_request: str) -> dict[str, Any]:
+        if self.config.use_llm:
+            return await self.intent_parser.parse(user_request)
+        parsed = self.intent_parser.heuristic_parse(user_request)
+        parsed["intent_source"] = "heuristic_teacher_offline"
+        return parsed
+
+    async def _decompose_goals(self, user_request: str) -> dict[str, Any]:
+        if self.config.use_llm:
+            return await self.goal_decomposer.parse(user_request)
+        parsed = self.goal_decomposer.heuristic_decompose(user_request)
+        parsed["decomposition_source"] = "heuristic_teacher_offline"
+        return parsed
+
+    async def _maybe_recommend(self, case: AgentEvalCase, intent: dict[str, Any]) -> dict[str, Any]:
+        if not self.config.enable_recommendation or self.app_context is None:
+            return {"status": "skipped_no_app_context"}
+        location = _lat_lon(case.observation.get("current_location") or case.observation.get("origin"))
+        if location is None:
+            return {"status": "skipped_missing_current_location"}
+        current_latitude, current_longitude = location
+        try:
+            # Lazy import：recommendation 依赖 map provider / aiohttp，只有真实执行 teacher 时才加载。
+            from mcp_server.recommendation import DestinationRecommendationEngine
+
+            engine = DestinationRecommendationEngine(
+                map_client=self.app_context.osm_client,
+                provider=self.app_context.provider,
+                intent_parser=self.intent_parser,
+            )
+            return await engine.recommend(
+                user_instruction=case.user_request,
+                current_latitude=current_latitude,
+                current_longitude=current_longitude,
+                max_candidates=int(intent.get("max_candidates") or 5),
+                search_radius=float(intent.get("radius_m") or 3000),
+                mode=str(intent.get("mode") or "foot"),
+                compute_chosen_route=False,
+            )
+        except Exception as exc:
+            return {"status": "recommendation_error", "error": str(exc)}
+
+    async def _maybe_run_visual_prompt_teacher(self, case: AgentEvalCase) -> dict[str, Any]:
+        if not self.config.enable_visual_prompt:
+            return {"status": "skipped_disabled"}
+        observation = case.observation
+        gps = observation.get("gps") or observation.get("current_pose")
+        route_polyline = observation.get("route_polyline") or observation.get("route_polyline_gps")
+        coarse_waypoints = observation.get("coarse_waypoints") or observation.get("key_waypoints") or []
+        image_path = None
+        images = observation.get("images") or {}
+        if isinstance(images, dict):
+            image_path = images.get("fpv") or images.get("front")
+        if not gps or not route_polyline or not image_path:
+            return {"status": "skipped_missing_visual_prompt_inputs"}
+        try:
+            # Lazy import：visual prompt teacher 可能依赖图像和 LVLM 环境。
+            from mcp_server.services.visual_prompt_service import run_zero_shot_visual_prompt_pipeline
+
+            return await run_zero_shot_visual_prompt_pipeline(
+                gps=gps,
+                route_polyline=route_polyline,
+                coarse_waypoints=coarse_waypoints,
+                image_path=image_path,
+                heading_deg=observation.get("heading_deg"),
+                navigation_mode=str(observation.get("mode") or "foot"),
+                enable_verifier=False,
+                emit_qa_bundle=False,
+            )
+        except Exception as exc:
+            return {"status": "visual_prompt_error", "error": str(exc)}
+
+    async def _execute_selected_tool(self, call: ToolCall, case: AgentEvalCase):
+        from mcp_server.agent.tool_executor import ToolExecutor
+
+        executor = ToolExecutor(app_context=self.app_context)
+        return await executor.execute(call, case=case)
+
+    def _select_student_tool_call(
+        self,
+        case: AgentEvalCase,
+        *,
+        intent: dict[str, Any],
+        goals: dict[str, Any],
+        recommendation: dict[str, Any],
+        visual_prompt: dict[str, Any],
+    ) -> ToolCall:
+        del goals, visual_prompt
+        request = case.user_request.lower()
+        observation = case.observation
+        session_id = str(observation.get("route_session_id") or observation.get("session_id") or "").strip()
+        location = _location_text(observation.get("current_location") or observation.get("origin"))
+        destination = observation.get("new_destination") or observation.get("destination")
+        via_point = observation.get("via_point")
+
+        if self._needs_image_tool(request, observation):
+            return ToolCall(
+                tool="image_tool",
+                arguments={
+                    "op": "crop",
+                    "image": str(observation.get("focus_image") or "fpv"),
+                    "bbox": observation.get("focus_bbox") or observation.get("bbox") or [0.35, 0.35, 0.75, 0.85],
+                    "reason": "inspect_navigation_region",
+                },
+            )
+
+        if self._needs_clarification(request, observation, intent):
+            return ToolCall(
+                tool="user_interaction_tool",
+                arguments={
+                    "op": "request_clarification",
+                    "question": "请确认具体目的地、途经点或导航偏好。",
+                    "choices": observation.get("clarification_choices") or [],
+                },
+            )
+
+        if session_id and self._needs_destination_replace(request):
+            return ToolCall(
+                tool="map_tool",
+                arguments={
+                    "op": "replace_destination",
+                    "session_id": session_id,
+                    "destination": _location_text(destination or intent.get("search_keywords")),
+                },
+            )
+
+        if session_id and self._needs_add_via(request):
+            selected_via = dict(via_point or {})
+            if not selected_via:
+                chosen = recommendation.get("chosen_destination") if isinstance(recommendation, dict) else {}
+                selected_via = {
+                    "name": chosen.get("name") or str(intent.get("search_keywords") or "via point"),
+                    "location": chosen.get("location") or _location_text(destination or intent.get("search_keywords")),
+                }
+            return ToolCall(
+                tool="map_tool",
+                arguments={
+                    "op": "add_via_and_replan",
+                    "session_id": session_id,
+                    "via_point": selected_via,
+                },
+            )
+
+        origin = observation.get("origin") or observation.get("current_location")
+        if origin and destination and self._needs_route_session(request, observation):
+            return ToolCall(
+                tool="map_tool",
+                arguments={
+                    "op": "create_route_session",
+                    "origin": _location_text(origin),
+                    "destination": _location_text(destination),
+                    "mode": _resolve_mode(request, observation, intent),
+                },
+            )
+
+        query = str(intent.get("search_keywords") or intent.get("keywords") or case.user_request).strip()
+        if isinstance(intent.get("keywords"), list) and not str(intent.get("search_keywords") or "").strip():
+            query = "|".join(str(item) for item in intent.get("keywords") if str(item).strip())
+        return ToolCall(
+            tool="map_tool",
+            arguments={
+                "op": "search_poi",
+                "query": query,
+                "location": location,
+                "radius": int(intent.get("radius_m") or 1000),
+                "limit": int(intent.get("max_candidates") or 5),
+            },
+        )
+
+    def _tool_call_text(self, call: ToolCall) -> str:
+        summary = {
+            "source": "routeserver_teacher",
+            "decision": "tool_call",
+            "tool": call.tool,
+            "op": call.op,
+        }
+        return (
+            f"<reasoning_summary>{json.dumps(summary, ensure_ascii=False, sort_keys=True)}</reasoning_summary>\n"
+            f"<tool_call>{json.dumps(call.to_dict(), ensure_ascii=False, sort_keys=True)}</tool_call>"
+        )
+
+    @staticmethod
+    def _needs_image_tool(request: str, observation: dict[str, Any]) -> bool:
+        if observation.get("focus_bbox") or observation.get("bbox"):
+            return _contains_any(request, ["放大", "看清", "裁剪", "zoom", "crop", "inspect"])
+        return _contains_any(request, ["放大图像", "zoom in", "crop image"])
+
+    @staticmethod
+    def _needs_clarification(request: str, observation: dict[str, Any], intent: dict[str, Any]) -> bool:
+        if observation.get("requires_clarification"):
+            return True
+        if _contains_any(request, ["那个地方", "随便", "你决定", "不确定", "where should", "not sure"]):
+            return True
+        has_location = bool(observation.get("current_location") or observation.get("origin"))
+        has_query = bool(intent.get("search_keywords") or observation.get("destination"))
+        return not has_location and not has_query
+
+    @staticmethod
+    def _needs_destination_replace(request: str) -> bool:
+        return _contains_any(request, ["改成", "换成", "不要去", "replace", "change destination", "instead"])
+
+    @staticmethod
+    def _needs_add_via(request: str) -> bool:
+        return _contains_any(request, ["顺路", "途经", "经过", "先去", "加一个", "add via", "stop by", "on the way"])
+
+    @staticmethod
+    def _needs_route_session(request: str, observation: dict[str, Any]) -> bool:
+        if observation.get("force_route_session"):
+            return True
+        return bool(re.search(r"(去|到|前往|导航|route|take me|go to)", request))
