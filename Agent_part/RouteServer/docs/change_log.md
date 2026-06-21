@@ -1,5 +1,25 @@
 # RouteServer 变更记录
 
+## 2026-06-20
+
+### 新增 SideWalk Agent/Eval 协议闭环
+
+- 新增 `src/mcp_server/agent/`：
+  - `schemas.py` 定义 `AgentEvalCase`、`AgentTrace`、`ToolCall`、`ToolResponse`。
+  - `tool_schema.py` 只向学生模型暴露 `map_tool`、`image_tool`、`user_interaction_tool` 三个元工具。
+  - `tool_parser.py` 解析 `<tool_call>` / `<finish>`，并禁止可执行动作藏在 `<think>` 内。
+  - `tool_executor.py` 将元工具分发到 `core.map_ops` / `core.route_session_ops`，同时支持 image crop 和用户澄清动作的结构化记录。
+- 新增 `src/mcp_server/eval/`：
+  - `cases.py` 读写 `sidewalk_agent_eval_case_v1` JSONL。
+  - `runners.py` 定义 `AgentRunner`，并提供 rule baseline 与 RouteServer teacher adapter。
+  - `metrics.py` 实现 `parse_success`、`tool_name_accuracy`、`tool_op_accuracy`、`argument_validity`、`finish_validity`、`route_update_success`。
+  - `exporters.py` 将 `AgentTrace` 导出为 ms-swift agent JSONL。
+- 新增 `docs/SIDEWALK_AGENT_EVAL_PROTOCOL.md`，记录 eval case、trace、tool-call block、metrics 和 ms-swift 导出格式。
+- 新增 `tests/test_agent_eval_framework.py`，覆盖 case JSONL、tool parser、tool schema、rule runner、metrics 和 ms-swift exporter。
+- 新增 `src/mcp_server/teacher/trace_builder.py`，将旧 `IntentParser`、`GoalDecomposer`、POI recommendation 和 visual prompt teacher 封装为 `RouteServerTeacherRunner` 可输出的 `AgentTrace`。
+- 新增 `examples/agent_eval/sidewalk_agent_eval_cases_review.jsonl`，覆盖 `search_poi`、`create_route_session`、`add_via_and_replan`、`replace_destination`、`request_clarification`、`image_tool crop` 六类第一版样例。
+- 新增 `tools/evaluation/build_sidewalk_agent_review_samples.py`，可从 review cases 生成 teacher traces、ms-swift JSONL 和 metrics summary，便于人工 review。
+
 ## 2026-06-19
 
 ### RouteServer core 层兼容重构

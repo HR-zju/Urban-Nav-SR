@@ -3,13 +3,16 @@ from __future__ import annotations
 import os
 import importlib.util
 import sys
-from types import SimpleNamespace
+from importlib.machinery import ModuleSpec
+from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 _HAS_AIOHTTP = importlib.util.find_spec("aiohttp") is not None
 if not _HAS_AIOHTTP:
-    sys.modules.setdefault("aiohttp", SimpleNamespace())
+    aiohttp_stub = ModuleType("aiohttp")
+    aiohttp_stub.__spec__ = ModuleSpec("aiohttp", loader=None)
+    sys.modules.setdefault("aiohttp", aiohttp_stub)
 
 from mcp_server.core import map_ops, route_session_ops
 from mcp_server.services import route_session_service
