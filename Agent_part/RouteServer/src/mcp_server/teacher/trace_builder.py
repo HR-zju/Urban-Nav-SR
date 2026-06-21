@@ -1,4 +1,4 @@
-"""RouteServer teacher wrapper that emits unified AgentTrace objects.
+"""RouteServer teacher wrapper that emits final Agentic Stage2 AgentTrace objects.
 
 这个模块把旧 RouteServer 中已经存在的能力包成 teacher runner：
 
@@ -9,17 +9,27 @@
 
 注意：这些 teacher 能力只写入 trace metadata / teacher artifact，不会作为学生
 模型可见 tool 暴露。学生仍然只学习 ``map_tool``、``image_tool``、
-``user_interaction_tool`` 三个元工具的调用协议。
+``user_interaction_tool`` 三个元工具的调用协议。输出 trace 直接采用最终 Stage2
+因果顺序：工具交互先发生，随后插入 ``[TRAJ_*]`` readout prompt，再生成最终
+导航 CoT 和 ``<finish>``。
 """
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
 from typing import Any
 
-from mcp_server.agent.schemas import AgentEvalCase, AgentTrace, ToolCall
+from mcp_server.agent.schemas import AgentEvalCase, AgentTrace, ToolCall, ToolResponse
+from mcp_server.agent.stage2 import (
+    build_agent_state,
+    build_agent_think_text,
+    build_final_assistant_text,
+    build_tool_decision,
+    final_navigation_user_content,
+    initial_user_content,
+    synthetic_tool_response,
+)
 from mcp_server.agent.tool_parser import parse_agent_action
 from mcp_server.agent.tool_schema import get_tool_definitions
 from mcp_server.eval.metrics import compute_trace_metrics
@@ -120,9 +130,9 @@ class RouteServerAgentTeacher:
         ``AgentEvalCase``，可选 RouteServer ``app_context``。
 
     输出:
-        ``AgentTrace``，其中 assistant turn 只包含学生应学习的
-        ``<tool_call>`` / ``<finish>``；旧 teacher 的解析、推荐、视觉结果只进
-        ``trace.metadata["teacher_internal"]``。
+        ``AgentTrace``，其中 ``tool_call`` 和 ``tool_response`` 是独立 role；
+        assistant 文本只承担 LM 监督：先输出 ``<think><AgentState>...``，最终
+        输出 Phase1 CoT tags + ``<ToolResultUse>`` + ``<finish>``。
     """
 
     def __init__(
@@ -147,7 +157,7 @@ class RouteServerAgentTeacher:
             },
         )
         trace.tools = case.tools or get_tool_definitions()
-        trace.add_turn("user", "".join("<image>" for _ in case.images) + case.user_request)
+        trace.add_turn("user", initial_user_content(case), metadata={"stage2_step": "initial_request"})
 
         intent = await self._parse_intent(case.user_request)
         goals = await self._decompose_goals(case.user_request)
@@ -161,8 +171,12 @@ class RouteServerAgentTeacher:
             recommendation=recommendation,
             visual_prompt=visual_prompt,
         )
-        assistant_text = self._tool_call_text(call)
-        trace.add_turn("assistant", assistant_text, metadata={"parsed_action": parse_agent_action(assistant_text).to_dict()})
+        think_text = build_agent_think_text(
+            state=build_agent_state(case, intent=intent),
+            decision=build_tool_decision(call, reason=self._tool_decision_reason(call)),
+        )
+        trace.add_turn("assistant", think_text, metadata={"stage2_step": "tool_decision_think"})
+        trace.add_turn("tool_call", call.to_ms_swift_dict(), tool=call.tool, metadata={"stage2_step": "tool_call"})
 
         teacher_internal = {
             "intent_parse": intent,
@@ -175,23 +189,33 @@ class RouteServerAgentTeacher:
 
         if self.config.execute_tools:
             response = await self._execute_selected_tool(call, case)
-            trace.add_turn("tool_response", response.to_dict(), tool=call.tool)
-            finish_payload = {
-                "route_action": "use_tool_result",
-                "tool": call.tool,
-                "op": call.op,
-                "success": response.success,
-                "teacher_source": "routeserver_teacher",
-            }
+            if not response.success:
+                trace.metadata["tool_execution_warning"] = response.to_dict()
         else:
-            finish_payload = {
-                "route_action": "pending_tool_execution",
-                "tool": call.tool,
-                "op": call.op,
-                "teacher_source": "routeserver_teacher",
-            }
-        finish_text = f"<finish>{json.dumps(finish_payload, ensure_ascii=False, sort_keys=True)}</finish>"
-        trace.add_turn("assistant", finish_text, metadata={"parsed_action": parse_agent_action(finish_text).to_dict()})
+            response = synthetic_tool_response(
+                call,
+                case,
+                source="routeserver_teacher",
+                recommendation=recommendation,
+                visual_prompt=visual_prompt,
+            )
+        trace.add_turn("tool_response", response.to_dict(), tool=call.tool, metadata={"stage2_step": "tool_response"})
+        trace.add_turn("user", final_navigation_user_content(), metadata={"stage2_step": "trajectory_readout_prompt"})
+
+        finish_text = build_final_assistant_text(
+            case,
+            call=call,
+            response=response,
+            source="routeserver_teacher",
+        )
+        trace.add_turn(
+            "assistant",
+            finish_text,
+            metadata={
+                "stage2_step": "final_navigation",
+                "parsed_action": parse_agent_action(finish_text).to_dict(),
+            },
+        )
 
         metric_result = compute_trace_metrics(trace, case)
         trace.metrics = metric_result.metrics
@@ -271,7 +295,7 @@ class RouteServerAgentTeacher:
         except Exception as exc:
             return {"status": "visual_prompt_error", "error": str(exc)}
 
-    async def _execute_selected_tool(self, call: ToolCall, case: AgentEvalCase):
+    async def _execute_selected_tool(self, call: ToolCall, case: AgentEvalCase) -> ToolResponse:
         from mcp_server.agent.tool_executor import ToolExecutor
 
         executor = ToolExecutor(app_context=self.app_context)
@@ -368,17 +392,15 @@ class RouteServerAgentTeacher:
             },
         )
 
-    def _tool_call_text(self, call: ToolCall) -> str:
-        summary = {
-            "source": "routeserver_teacher",
-            "decision": "tool_call",
-            "tool": call.tool,
-            "op": call.op,
-        }
-        return (
-            f"<reasoning_summary>{json.dumps(summary, ensure_ascii=False, sort_keys=True)}</reasoning_summary>\n"
-            f"<tool_call>{json.dumps(call.to_dict(), ensure_ascii=False, sort_keys=True)}</tool_call>"
-        )
+    @staticmethod
+    def _tool_decision_reason(call: ToolCall) -> str:
+        if call.tool == "map_tool":
+            return "map or route state is required before producing the final navigation decision"
+        if call.tool == "image_tool":
+            return "a focused visual operation is required before final FPV-BEV reasoning"
+        if call.tool == "user_interaction_tool":
+            return "the request is underspecified and requires user-facing clarification"
+        return "external context is required before final navigation"
 
     @staticmethod
     def _needs_image_tool(request: str, observation: dict[str, Any]) -> bool:

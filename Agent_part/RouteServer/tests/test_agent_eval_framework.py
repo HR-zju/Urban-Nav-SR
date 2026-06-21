@@ -3,9 +3,10 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 import unittest
+import json
 
 
-from mcp_server.agent.schemas import AgentEvalCase, ToolCall
+from mcp_server.agent.schemas import AGENT_EVAL_CASE_SCHEMA_VERSION, AgentEvalCase, ToolCall
 from mcp_server.agent.tool_parser import parse_agent_action, parse_finish_text, parse_tool_call_text
 from mcp_server.agent.tool_schema import validate_tool_call
 from mcp_server.eval.cases import load_eval_cases, write_eval_cases
@@ -57,10 +58,24 @@ class AgentEvalFlowTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(metric_result.metrics["parse_success"], 1.0)
         self.assertEqual(metric_result.metrics["tool_op_accuracy"], 1.0)
+        self.assertEqual(metric_result.metrics["stage2_role_order_valid"], 1.0)
+        self.assertEqual(metric_result.metrics["trajectory_readout_order_valid"], 1.0)
+        self.assertEqual(metric_result.metrics["final_cot_validity"], 1.0)
         self.assertIn("messages", row)
         self.assertIn("tools", row)
+        self.assertIsInstance(row["tools"], str)
+        self.assertEqual(json.loads(row["tools"])[0]["function"]["name"], "map_tool")
         self.assertEqual(row["images"], ["/data/fpv.jpg", "/data/bev.jpg"])
         self.assertEqual(row["pixel_trajectory"], [[0.5, 0.9], [0.55, 0.75]])
+        roles = [message["role"] for message in row["messages"]]
+        self.assertIn("tool_call", roles)
+        self.assertIn("tool_response", roles)
+        self.assertNotIn("tool", roles)
+        tool_call = next(message for message in row["messages"] if message["role"] == "tool_call")
+        self.assertEqual(json.loads(tool_call["content"])["name"], "map_tool")
+        readout_index = next(index for index, message in enumerate(row["messages"]) if "[TRAJ_0]" in message["content"])
+        tool_response_index = next(index for index, message in enumerate(row["messages"]) if message["role"] == "tool_response")
+        self.assertGreater(readout_index, tool_response_index)
 
     async def test_routeserver_teacher_runner_offline_builds_trace(self) -> None:
         case = AgentEvalCase(
@@ -78,13 +93,22 @@ class AgentEvalFlowTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(trace.metrics["parse_success"], 1.0)
         self.assertEqual(trace.metrics["tool_op_accuracy"], 1.0)
+        self.assertEqual(trace.metrics["stage2_role_order_valid"], 1.0)
         self.assertEqual(trace.metadata["teacher_internal"]["selected_student_tool_call"]["arguments"]["op"], "replace_destination")
+        self.assertEqual([turn.role for turn in trace.turns], ["user", "assistant", "tool_call", "tool_response", "user", "assistant"])
+        self.assertEqual(trace.turns[2].content["name"], "map_tool")
+        self.assertIn("[TRAJ_15]", trace.turns[4].content)
+        self.assertIn("<ToolResultUse>", trace.turns[5].content)
+        self.assertIn("<finish>", trace.turns[5].content)
+        tool_response = json.loads(next(message["content"] for message in row["messages"] if message["role"] == "tool_response"))
+        self.assertTrue(tool_response["success"])
         self.assertEqual(row["sidewalk_meta"]["model_run"]["runner"], "routeserver_teacher")
 
 
 def _sample_case() -> AgentEvalCase:
     return AgentEvalCase(
         case_id="case-1",
+        schema_version=AGENT_EVAL_CASE_SCHEMA_VERSION,
         user_request="帮我找一个可以休息的地方",
         observation={
             "images": {"fpv": "/data/fpv.jpg", "bev": "/data/bev.jpg"},

@@ -1,17 +1,18 @@
-# SideWalk Agent Eval Protocol
+# SideWalk Agentic Stage2 Eval Protocol
 
-本文档定义 RouteServer 第一版 Agent/Eval 协议。目标是先得到可记录、可回放、
-可评估、可导出训练数据的最小闭环；不在协议层调用外部 LVLM，也不把旧 teacher
-中的 LLM/LVLM 能力暴露成学生模型可调用工具。
+本文档定义 RouteServer 最终 Agentic Cold Start 协议。它直接对齐 ms-swift
+`agent_template`：工具调用使用独立 `tool_call` role，工具返回使用独立
+`tool_response` role，`tools` 在导出时写成 JSON 字符串。旧的 assistant content 内嵌
+`<tool_call>...</tool_call>` 格式不再作为主流程保留。
 
 ## 1. 数据流
 
 ```text
-sidewalk_agent_eval_case_v1
-  -> AgentRunner(rule / teacher / external LVLM / E2E checkpoint)
-  -> sidewalk_agent_trace_v1
+sidewalk_agent_stage2_case_v1
+  -> AgentRunner(rule / RouteServer teacher / external LVLM / E2E checkpoint)
+  -> sidewalk_agent_trace_v2
   -> metrics
-  -> ms-swift JSONL exporter
+  -> sidewalk_agentic_stage2_sft_v1 ms-swift JSONL
 ```
 
 核心模块：
@@ -19,6 +20,7 @@ sidewalk_agent_eval_case_v1
 ```text
 src/mcp_server/agent/
   schemas.py
+  stage2.py
   tool_schema.py
   tool_parser.py
   tool_executor.py
@@ -30,13 +32,29 @@ src/mcp_server/eval/
   exporters.py
 ```
 
-## 2. AgentEvalCase JSONL
+## 2. 固定因果顺序
+
+Stage2 的训练样本必须让工具上下文出现在导航 readout token 之前：
+
+```text
+user image/request
+assistant <think><AgentState>...<ToolDecision>...</think>
+tool_call
+tool_response
+user "Produce the final sidewalk navigation decision..." + [TRAJ_0]...[TRAJ_15]
+assistant final CoT + <finish>
+```
+
+原因是 ms-swift SideWalk trajectory head 从 `[TRAJ_*]` token 的 hidden states 读出轨迹。
+只有把这些 token 放在 `tool_response` 之后，trajectory head 才能因果看到工具结果。
+
+## 3. AgentEvalCase JSONL
 
 每行一个 JSON object：
 
 ```json
 {
-  "schema_version": "sidewalk_agent_eval_case_v1",
+  "schema_version": "sidewalk_agent_stage2_case_v1",
   "case_id": "case-0001",
   "task_type": "sidewalk_navigation_agent",
   "user_request": "帮我找一个可以休息的地方",
@@ -51,9 +69,12 @@ src/mcp_server/eval/
   },
   "ground_truth": {
     "expected_tool_ops": ["search_poi"],
-    "pixel_trajectory": [[0.5, 0.9], [0.55, 0.75]]
+    "pixel_trajectory": [[0.5, 0.9], [0.55, 0.75]],
+    "trajectory_fpv_t": null,
+    "trajectory_ego_t": null,
+    "semantic_segmentation_path": null
   },
-  "split": "eval",
+  "split": "train",
   "locale": "zh-CN"
 }
 ```
@@ -61,9 +82,23 @@ src/mcp_server/eval/
 `observation.images` 支持 dict 或 list。dict 中推荐使用 `fpv`、`bev` 键，导出
 ms-swift JSONL 时会按 FPV 在前、BEV 在后的顺序写入 `images`。
 
-## 3. Student-Visible Tools
+Phase1/E2E 已有监督字段继续放在 `ground_truth` 中，包括：
 
-第一版只暴露三个元工具：
+```text
+pixel_trajectory
+trajectory_fpv_t
+trajectory_fpv_tv
+trajectory_ego_t
+trajectory_policy
+semantic_segmentation_path
+semantic_mask_path
+```
+
+这些字段不进入 LM messages；exporter 会透传给 SideWalk trainer 的 traj/seg loss。
+
+## 4. Student-Visible Tools
+
+只暴露三个元工具：
 
 ```text
 map_tool
@@ -71,11 +106,12 @@ image_tool
 user_interaction_tool
 ```
 
-### 3.1 map_tool
+旧 RouteServer 内部的 intent parser、goal decomposer、POI recommendation、visual prompt
+teacher 只能进入 `trace.metadata["teacher_internal"]`，不能作为学生可见工具暴露。
 
-用于地图查询、路线规划、route session 修改。
+### 4.1 map_tool
 
-支持的 `op`：
+用于地图查询、路线规划、route session 修改。支持的 `op`：
 
 ```text
 geocode
@@ -92,11 +128,7 @@ replace_destination
 replan_from_current_pose
 ```
 
-`map_tool` 内部由 `tool_executor.py` 调用 `core.map_ops` 和
-`core.route_session_ops`。这里不包含 POI 排序、意图解析、目标推荐等 teacher
-LVLM 能力；这些能力应该由 E2E LVLM 学习，或在 teacher runner 中生成监督 trace。
-
-### 3.2 image_tool
+### 4.2 image_tool
 
 用于对 FPV/BEV 图像做可审计操作，例如：
 
@@ -105,10 +137,7 @@ crop
 zoom_in
 ```
 
-第一版 executor 支持 crop/zoom-in 形态的 bbox 裁剪；如果没有执行环境，也可以只把
-tool call 记录进 trace，用于后续标注和离线回放。
-
-### 3.3 user_interaction_tool
+### 4.3 user_interaction_tool
 
 用于多轮对话中的用户澄清和确认：
 
@@ -118,41 +147,7 @@ request_clarification
 confirm_route_change
 ```
 
-离线 evaluator 不真正等待用户输入，只记录结构化动作：
-
-```json
-{
-  "await_user": true,
-  "question": "...",
-  "choices": [],
-  "proposal": {}
-}
-```
-
-## 4. Assistant Output Blocks
-
-推荐 assistant 输出同级 block，不把工具调用放进 `<think>`：
-
-```text
-<reasoning_summary>{"decision":"tool_call"}</reasoning_summary>
-<tool_call>{"tool":"map_tool","op":"search_poi","query":"rest stop","location":"120.0,30.0"}</tool_call>
-```
-
-或最终输出：
-
-```text
-<finish>{"route_action":"use_tool_result","safe_direction":"front_left"}</finish>
-```
-
-`<tool_response>` 是环境/tool 返回给模型的上下文，不是 assistant 需要预测的目标。
-exporter 会把 tool response 写成 `role="tool"` 的消息：
-
-```text
-<tool_response>{"tool":"map_tool","success":true,"result":{...}}</tool_response>
-```
-
-`tool_parser.py` 会显式拒绝把 `<tool_call>` 或 `<finish>` 放在 `<think>` /
-`<reasoning_summary>` 内部的输出，避免训练时把可执行动作藏进自由推理文本。
+离线 evaluator 不真正等待用户输入，只记录结构化动作和 synthetic tool response。
 
 ## 5. AgentTrace
 
@@ -160,26 +155,81 @@ runner 输出统一 trace：
 
 ```json
 {
-  "schema_version": "sidewalk_agent_trace_v1",
+  "schema_version": "sidewalk_agent_trace_v2",
   "case_id": "case-0001",
   "task_type": "sidewalk_navigation_agent",
   "request": {"...": "original AgentEvalCase"},
   "turns": [
     {"role": "user", "content": "<image><image>帮我找一个可以休息的地方"},
-    {"role": "assistant", "content": "<tool_call>{...}</tool_call>"},
-    {"role": "tool_response", "tool": "map_tool", "content": {"success": true}},
-    {"role": "assistant", "content": "<finish>{...}</finish>"}
+    {"role": "assistant", "content": "<think>...<AgentState>...<ToolDecision>...</think>"},
+    {"role": "tool_call", "tool": "map_tool", "content": {"name": "map_tool", "arguments": {"op": "search_poi"}}},
+    {"role": "tool_response", "tool": "map_tool", "content": {"tool": "map_tool", "success": true, "result": {}}},
+    {"role": "user", "content": "Produce the final sidewalk navigation decision...\n\n[TRAJ_0] ... [TRAJ_15]"},
+    {"role": "assistant", "content": "<think>...<Scene>...<ToolResultUse>...</think>\n<finish>{...}</finish>"}
   ],
   "supervision": {"expected_tool_ops": ["search_poi"]},
   "metrics": {}
 }
 ```
 
-trace 是后续人工 review、teacher distillation、SFT 数据导出的统一中间产物。
+最终 assistant 必须保留 Phase1 结构：
 
-## 6. Metrics
+```text
+<Scene>
+<FPVScene>
+<BEVContext>
+<CrossView>
+<Plan>
+<ToolResultUse>
+<finish>
+```
 
-第一版实现以下指标：
+如果输入 case 已有 Phase1 CoT response，Stage2 builder 会把 `<ToolResultUse>` 插入
+`</think>` 之前，并补齐 `<finish>` 中的工具字段。没有 Phase1 response 时，会生成
+一个 deterministic fallback CoT，便于 smoke/review。
+
+## 6. ms-swift JSONL Export
+
+`eval/exporters.py` 将高质量 `AgentTrace` 导出为：
+
+```json
+{
+  "schema_version": "sidewalk_agentic_stage2_sft_v1",
+  "stage": "agentic_cold_start",
+  "task_type": "sidewalk_navigation_agent",
+  "messages": [
+    {"role": "system", "content": "..."},
+    {"role": "user", "content": "<image><image>..."},
+    {"role": "assistant", "content": "<think>...<ToolDecision>...</think>"},
+    {"role": "tool_call", "content": "{\"name\":\"map_tool\",\"arguments\":{\"op\":\"search_poi\"}}"},
+    {"role": "tool_response", "content": "{\"tool\":\"map_tool\",\"success\":true,\"result\":{}}"},
+    {"role": "user", "content": "Produce the final sidewalk navigation decision...\n\n[TRAJ_0] ... [TRAJ_15]"},
+    {"role": "assistant", "content": "<think>...<ToolResultUse>...</think>\n<finish>{...}</finish>"}
+  ],
+  "tools": "[{\"type\":\"function\",\"function\":{\"name\":\"map_tool\"}}]",
+  "images": ["/data/fpv.jpg", "/data/bev.jpg"],
+  "pixel_trajectory": [[0.5, 0.9], [0.55, 0.75]],
+  "sidewalk_meta": {
+    "schema_version": "sidewalk_agentic_stage2_sft_v1",
+    "agent_trace_schema": "sidewalk_agent_trace_v2",
+    "case_id": "case-0001"
+  }
+}
+```
+
+Loss 归属：
+
+```text
+assistant content: LM loss，包括 <think>、Phase1 CoT tags、<finish>
+tool_call role: ms-swift agent_template 转成模型需要生成的 tool-call 文本，算 loss
+tool_response role: 环境上下文，不算 loss
+user/system/images/tools: 不算 loss
+pixel_trajectory / trajectory_fpv_t / semantic_segmentation_path: SideWalk trainer 额外监督
+```
+
+## 7. Metrics
+
+当前实现以下协议级指标：
 
 ```text
 parse_success
@@ -187,64 +237,30 @@ tool_name_accuracy
 tool_op_accuracy
 argument_validity
 finish_validity
+stage2_role_order_valid
+trajectory_readout_order_valid
+final_cot_validity
+finish_trajectory_consistency
 route_update_success
 ```
 
-含义：
+重点指标：
 
-- `parse_success`: assistant 是否输出可解析的 `<tool_call>` 或 `<finish>`。
-- `tool_name_accuracy`: 工具名是否正确；有 GT 时比较序列，否则检查是否属于允许工具。
-- `tool_op_accuracy`: 有 `expected_tool_ops` 时比较 op 序列。
-- `argument_validity`: tool call 参数是否通过轻量 schema 校验。
-- `finish_validity`: 是否输出合法 JSON `<finish>`。
-- `route_update_success`: route-session 类 tool response 是否成功返回 route/session 结果。
+- `stage2_role_order_valid`: 是否满足 `assistant -> tool_call -> tool_response -> readout user -> final assistant`。
+- `trajectory_readout_order_valid`: `[TRAJ_0]...[TRAJ_15]` 是否出现在最后一个 `tool_response` 之后。
+- `final_cot_validity`: 最终 assistant 是否包含 Phase1 CoT tags、`<ToolResultUse>` 和 `<finish>`。
 
 这些指标只评价协议和可执行性，不评价自然语言解释质量。
 
-## 7. ms-swift JSONL Export
-
-`eval/exporters.py` 将高质量 `AgentTrace` 导出为：
-
-```json
-{
-  "messages": [
-    {"role": "system", "content": "..."},
-    {"role": "user", "content": "<image><image>..."},
-    {"role": "assistant", "content": "<tool_call>{...}</tool_call>"},
-    {"role": "tool", "content": "<tool_response>{...}</tool_response>"},
-    {"role": "assistant", "content": "<finish>{...}</finish>"}
-  ],
-  "tools": [{"type": "function", "function": {"name": "map_tool"}}],
-  "images": ["/data/fpv.jpg", "/data/bev.jpg"],
-  "pixel_trajectory": [[0.5, 0.9], [0.55, 0.75]],
-  "sidewalk_meta": {
-    "agent_trace_schema": "sidewalk_agent_trace_v1",
-    "case_id": "case-0001",
-    "task_type": "sidewalk_navigation_agent"
-  }
-}
-```
-
-这样后续可以直接比较：
-
-```text
-RouteServer teacher
-rule baseline
-external LVLM
-本项目 E2E LVLM checkpoint
-```
-
-也可以把 teacher/human trace 转成统一 SFT 数据。
-
 ## 8. RouteServer Teacher Wrapper
 
-第一版 teacher wrapper 位于：
+teacher wrapper 位于：
 
 ```text
 src/mcp_server/teacher/trace_builder.py
 ```
 
-它把旧 RouteServer 能力封装为 `AgentTrace`：
+它把旧 RouteServer 能力封装为最终 Stage2 trace：
 
 ```text
 IntentParser
@@ -259,24 +275,4 @@ run_zero_shot_visual_prompt_pipeline
 trace.metadata["teacher_internal"]
 ```
 
-不会进入学生可见 `tools` schema。学生模型仍然只学习：
-
-```text
-map_tool
-image_tool
-user_interaction_tool
-```
-
-人工 review 小样例位于：
-
-```text
-examples/agent_eval/sidewalk_agent_eval_cases_review.jsonl
-```
-
-可用以下命令生成 teacher trace 和 ms-swift JSONL：
-
-```bash
-PYTHONPATH=src python tools/evaluation/build_sidewalk_agent_review_samples.py
-```
-
-默认使用 `RouteServerTeacherRunner(use_llm=False)`，不会调用外部 LLM/LVLM 或地图服务。
+学生可见部分只有三类元工具和最终导航 CoT。

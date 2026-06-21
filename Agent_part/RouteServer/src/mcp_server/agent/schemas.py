@@ -1,8 +1,9 @@
-"""Stable Agent/Eval data schemas.
+"""Stable Agentic Stage2 data schemas.
 
 这些 dataclass 是 RouteServer teacher、rule baseline、外部 LVLM 和本项目
-E2E LVLM checkpoint 之间的公共协议。它们只描述 JSON 可序列化数据，不调用
-任何外部模型，也不绑定 MCP/HTTP 入口。
+E2E LVLM checkpoint 之间的公共协议。Stage2 直接使用最终 agentic cold-start
+格式：工具调用是独立 ``tool_call`` role，工具返回是独立 ``tool_response`` role，
+最终导航 readout prompt 在工具返回之后插入 ``[TRAJ_*]`` token。
 """
 
 from __future__ import annotations
@@ -11,8 +12,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
-AGENT_EVAL_CASE_SCHEMA_VERSION = "sidewalk_agent_eval_case_v1"
-AGENT_TRACE_SCHEMA_VERSION = "sidewalk_agent_trace_v1"
+AGENT_EVAL_CASE_SCHEMA_VERSION = "sidewalk_agent_stage2_case_v1"
+AGENT_TRACE_SCHEMA_VERSION = "sidewalk_agent_trace_v2"
+MS_SWIFT_AGENTIC_STAGE2_SCHEMA_VERSION = "sidewalk_agentic_stage2_sft_v1"
 
 
 def _clean_dict(payload: dict[str, Any]) -> dict[str, Any]:
@@ -31,10 +33,13 @@ class ToolCall:
 
     输入格式:
         ``{"tool": "map_tool", "arguments": {"op": "search_poi", ...}}``
-        或兼容格式 ``{"tool": "map_tool", "op": "search_poi", ...}``。
+        或 ms-swift agent-template 格式
+        ``{"name": "map_tool", "arguments": {"op": "search_poi", ...}}``。
 
     输出格式:
         ``to_dict()`` 返回稳定 JSON，供 executor、metrics、exporter 共用。
+        ``to_ms_swift_dict()`` 返回 ``name/arguments`` 形态，供 ``tool_call`` role
+        直接序列化为 JSON 字符串。
     """
 
     tool: str
@@ -66,6 +71,15 @@ class ToolCall:
             }
         )
 
+    def to_ms_swift_dict(self) -> dict[str, Any]:
+        return _clean_dict(
+            {
+                "name": self.tool,
+                "arguments": dict(self.arguments),
+                "call_id": self.call_id,
+            }
+        )
+
     @property
     def op(self) -> str | None:
         op = self.arguments.get("op")
@@ -80,8 +94,9 @@ class ToolResponse:
         ``ToolExecutor.execute()`` 生成的成功/失败结果。
 
     输出:
-        ``to_dict()`` 可直接写入 ``AgentTrace.turns``；``to_block_text()``
-        用于构造训练消息中的 ``<tool_response>...</tool_response>`` 环境上下文。
+        ``to_dict()`` 可直接写入 ``AgentTrace.turns`` 的 ``tool_response`` role。
+        exporter 会把该 JSON object 序列化成 JSON 字符串，不再包 ``<tool_response>``
+        XML。
     """
 
     tool: str
@@ -109,9 +124,11 @@ class AgentTurn:
     """One replayable dialogue turn.
 
     role:
-        ``system`` / ``user`` / ``assistant`` / ``tool_response``。
+        ``system`` / ``user`` / ``assistant`` / ``tool_call`` / ``tool_response``。
     content:
-        原始文本或 JSON；assistant 文本可以包含 ``<tool_call>`` 或 ``<finish>``。
+        原始文本或 JSON。Stage2 中 ``tool_call`` content 是 JSON object/string，
+        形如 ``{"name": "...", "arguments": {...}}``；assistant content 保留
+        ``<think>`` 和最终 ``<finish>`` 文本监督。
     metadata:
         解析结果、teacher 来源、时间戳等附加信息。
     """
@@ -143,14 +160,16 @@ class AgentTurn:
 
 @dataclass
 class AgentEvalCase:
-    """One offline evaluation/training case.
+    """One offline evaluation/training case for Agentic Stage2.
 
     JSONL 行格式:
-        ``schema_version`` 固定为 ``sidewalk_agent_eval_case_v1``。
+        ``schema_version`` 固定为 ``sidewalk_agent_stage2_case_v1``。
         ``observation.images`` 可为 ``{"fpv": "...", "bev": "..."}`` 或图片路径列表。
-        ``ground_truth.expected_tool_ops`` 可选，用于 tool-op 指标。
+        ``ground_truth.expected_tool_ops`` 可选，用于 tool-op 指标；Phase1 的
+        ``pixel_trajectory``、``trajectory_fpv_t``、``semantic_segmentation_path`` 等
+        监督字段继续放在 ``ground_truth`` 中并由 exporter 透传。
 
-    该结构不包含 teacher LVLM 输出；teacher 只在 runner 阶段生成 AgentTrace。
+    该结构不包含新 teacher LVLM 输出；teacher 只在 runner 阶段生成 AgentTrace。
     """
 
     case_id: str
@@ -212,14 +231,15 @@ class AgentEvalCase:
 
 @dataclass
 class AgentTrace:
-    """Replayable Agent trajectory generated from one ``AgentEvalCase``.
+    """Replayable Agentic Stage2 trajectory generated from one ``AgentEvalCase``.
 
     输入:
         case + runner/model output + optional tool responses。
 
     输出:
         ``to_dict()`` 是 evaluator 的可回放 trace；exporter 会进一步转成
-        ms-swift 的 ``messages/tools/images/sidewalk_meta`` JSONL。
+        ms-swift agent-template 的
+        ``messages/tools/images/pixel_trajectory/sidewalk_meta`` JSONL。
     """
 
     case_id: str

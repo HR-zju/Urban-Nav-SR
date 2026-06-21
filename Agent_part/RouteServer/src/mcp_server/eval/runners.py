@@ -1,17 +1,25 @@
-"""Agent runners used by offline evaluation.
+"""Agent runners used by offline Agentic Stage2 evaluation.
 
-第一版 runner 不训练模型，只把不同来源的策略统一成 ``AgentTrace``：
+runner 不训练模型，只把不同来源的策略统一成最终 ``AgentTrace``：
 rule baseline、RouteServer teacher、后续外部 LVLM、本项目 E2E checkpoint 都走同一接口。
 """
 
 from __future__ import annotations
 
 import inspect
-import json
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Awaitable, Callable, Iterable
 
 from mcp_server.agent.schemas import AgentEvalCase, AgentTrace, ToolCall
+from mcp_server.agent.stage2 import (
+    build_agent_state,
+    build_agent_think_text,
+    build_final_assistant_text,
+    build_tool_decision,
+    final_navigation_user_content,
+    initial_user_content,
+    synthetic_tool_response,
+)
 from mcp_server.agent.tool_parser import parse_agent_action
 from mcp_server.agent.tool_schema import get_tool_definitions
 from mcp_server.eval.metrics import compute_trace_metrics
@@ -29,14 +37,15 @@ class AgentRunner(ABC):
 
 
 class RuleRunner(AgentRunner):
-    """Small deterministic baseline for protocol smoke tests.
+    """Small deterministic Stage2 baseline for protocol smoke tests.
 
     输入:
         ``AgentEvalCase``。
 
     输出:
-        包含 assistant ``<tool_call>`` 和可选 ``<tool_response>/<finish>`` 的
-        ``AgentTrace``。规则很简单，目的只是验证协议和 evaluator 不代表最终策略。
+        包含 ``assistant think -> tool_call -> tool_response -> readout user ->
+        assistant final`` 的 ``AgentTrace``。规则很简单，目的只是验证协议和
+        evaluator，不代表最终策略。
     """
 
     def __init__(self, *, executor: "ToolExecutor | None" = None) -> None:
@@ -45,33 +54,28 @@ class RuleRunner(AgentRunner):
     async def run_case(self, case: AgentEvalCase) -> AgentTrace:
         trace = AgentTrace.from_case(case, model_run={"runner": "rule"})
         trace.tools = case.tools or get_tool_definitions()
-        trace.add_turn("user", "".join("<image>" for _ in case.images) + case.user_request)
+        trace.add_turn("user", initial_user_content(case), metadata={"stage2_step": "initial_request"})
 
         call = self._select_tool_call(case)
-        assistant_text = (
-            '<reasoning_summary>{"source":"rule_runner","decision":"tool_call"}</reasoning_summary>\n'
-            f"<tool_call>{json.dumps(call.to_dict(), ensure_ascii=False)}</tool_call>"
+        think_text = build_agent_think_text(
+            state=build_agent_state(case),
+            decision=build_tool_decision(call, reason="rule baseline selected this tool before final navigation"),
         )
-        parsed = parse_agent_action(assistant_text)
-        trace.add_turn("assistant", assistant_text, metadata={"parsed_action": parsed.to_dict()})
+        trace.add_turn("assistant", think_text, metadata={"stage2_step": "tool_decision_think"})
+        trace.add_turn("tool_call", call.to_ms_swift_dict(), tool=call.tool, metadata={"stage2_step": "tool_call"})
 
         if self.executor is not None:
             response = await self.executor.execute(call, case=case)
-            trace.add_turn("tool_response", response.to_dict(), tool=call.tool)
-            finish_payload = {
-                "route_action": "use_tool_result",
-                "tool": call.tool,
-                "op": call.op,
-                "success": response.success,
-            }
         else:
-            finish_payload = {
-                "route_action": "pending_tool_execution",
-                "tool": call.tool,
-                "op": call.op,
-            }
-        finish_text = f"<finish>{json.dumps(finish_payload, ensure_ascii=False)}</finish>"
-        trace.add_turn("assistant", finish_text, metadata={"parsed_action": parse_agent_action(finish_text).to_dict()})
+            response = synthetic_tool_response(call, case, source="rule_runner")
+        trace.add_turn("tool_response", response.to_dict(), tool=call.tool, metadata={"stage2_step": "tool_response"})
+        trace.add_turn("user", final_navigation_user_content(), metadata={"stage2_step": "trajectory_readout_prompt"})
+        finish_text = build_final_assistant_text(case, call=call, response=response, source="rule_runner")
+        trace.add_turn(
+            "assistant",
+            finish_text,
+            metadata={"stage2_step": "final_navigation", "parsed_action": parse_agent_action(finish_text).to_dict()},
+        )
         metric_result = compute_trace_metrics(trace, case)
         trace.metrics = metric_result.metrics
         if metric_result.errors:
@@ -104,16 +108,16 @@ class RuleRunner(AgentRunner):
 
 
 class RouteServerTeacherRunner(AgentRunner):
-    """Adapter for existing RouteServer teacher functions.
+    """Adapter for RouteServer teacher functions.
 
     teacher callable:
-        输入 ``AgentEvalCase``；输出可以是 ``AgentTrace``、assistant 文本、或 trace dict。
-        这里保持兼容旧用法。
+        输入 ``AgentEvalCase``；输出可以是 final ``AgentTrace``、assistant 文本、或 trace dict。
+        新主流程应直接返回 ``sidewalk_agent_trace_v2``。
 
     default teacher:
         如果没有传 teacher callable，则使用 ``RouteServerAgentTeacher``，把旧
         IntentParser / GoalDecomposer / POI recommendation / visual prompt teacher
-        包装成统一 ``AgentTrace``。
+        包装成最终 Stage2 ``AgentTrace``。
     """
 
     def __init__(
@@ -156,7 +160,7 @@ class RouteServerTeacherRunner(AgentRunner):
         else:
             trace = AgentTrace.from_case(case, model_run={"runner": "routeserver_teacher"})
             trace.tools = case.tools or get_tool_definitions()
-            trace.add_turn("user", "".join("<image>" for _ in case.images) + case.user_request)
+            trace.add_turn("user", initial_user_content(case), metadata={"stage2_step": "initial_request"})
             trace.add_turn("assistant", str(result), metadata={"parsed_action": parse_agent_action(str(result)).to_dict()})
         metric_result = compute_trace_metrics(trace, case)
         trace.metrics = metric_result.metrics

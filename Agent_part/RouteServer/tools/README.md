@@ -258,6 +258,32 @@ MEDIA_MODE=copy
 PATH_MODE=relative
 ```
 
+### 7. 生成 Agentic Stage2 review 样例
+
+Stage2 冷启动样例使用最终 agent-template 协议：`tool_call` / `tool_response` 是独立
+role，工具返回之后再插入 `[TRAJ_0]...[TRAJ_15]` readout prompt，最终 assistant
+输出 Phase1 CoT tags、`<ToolResultUse>` 和 `<finish>`。
+
+```bash
+cd /home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer
+
+PYTHONPATH=src python tools/evaluation/build_sidewalk_agent_review_samples.py
+```
+
+主要产物：
+
+```text
+examples/agent_eval/sidewalk_agent_teacher_traces_review.jsonl
+examples/agent_eval/sidewalk_agent_ms_swift_review.jsonl
+examples/agent_eval/sidewalk_agent_metrics_review.json
+```
+
+对应协议文档：
+
+```text
+docs/SIDEWALK_AGENT_EVAL_PROTOCOL.md
+```
+
 Archive 校验内容包括：
 
 - FPV/BEV 路径存在。

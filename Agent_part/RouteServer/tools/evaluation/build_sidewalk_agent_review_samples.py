@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Build small SideWalk Agent review traces from eval cases.
+"""Build small SideWalk Agentic Stage2 review traces from eval cases.
 
 输入:
-    ``--cases`` 指向 ``sidewalk_agent_eval_case_v1`` JSONL。
+    ``--cases`` 指向 ``sidewalk_agent_stage2_case_v1`` JSONL。
 
 输出:
-    ``--traces-out``: ``sidewalk_agent_trace_v1`` JSONL。
-    ``--ms-swift-out``: ms-swift agent JSONL。
-    ``--metrics-out``: 汇总 parse/tool/finish 指标，便于人工 review 前快速筛查。
+    ``--traces-out``: ``sidewalk_agent_trace_v2`` JSONL。
+    ``--ms-swift-out``: ms-swift agent-template JSONL，使用 tool_call/tool_response role。
+    ``--metrics-out``: 汇总 tool/readout/final CoT 指标，便于人工 review 前快速筛查。
 """
 
 from __future__ import annotations

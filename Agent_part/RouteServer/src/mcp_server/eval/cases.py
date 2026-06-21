@@ -1,4 +1,4 @@
-"""Read/write helpers for ``sidewalk_agent_eval_case_v1`` JSONL."""
+"""Read/write helpers for ``sidewalk_agent_stage2_case_v1`` JSONL."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ def iter_eval_cases(path: str | Path) -> Iterator[AgentEvalCase]:
     """Yield eval cases from JSONL or a JSON array file.
 
     输入:
-        ``path`` 指向 JSONL，每行一个 ``AgentEvalCase``；也兼容 JSON 数组。
+        ``path`` 指向 JSONL，每行一个 final Stage2 ``AgentEvalCase``；也兼容 JSON 数组。
 
     输出:
         逐条 ``AgentEvalCase``，方便大文件流式评测。
