@@ -20,8 +20,10 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import subprocess
 from dataclasses import dataclass, replace
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -111,10 +113,15 @@ def discover_clip_dirs(root: Path) -> list[Path]:
     if _is_internnav_clip(root) or (root / "trajectory.json").is_file():
         return [root]
     dirs = {
+        path
+        for path in root.iterdir()
+        if path.is_dir() and (_is_internnav_clip(path) or (path / "trajectory.json").is_file())
+    }
+    dirs.update({
         path.parent
         for path in root.rglob("trajectory.json")
         if path.parent.is_dir()
-    }
+    })
     dirs.update(
         path.parent
         for path in root.rglob("frame_positions.npy")
@@ -378,7 +385,7 @@ def build_phase1_sample(
 ) -> dict[str, Any]:
     """Build one ms-swift source row plus sidecar labels for one frame."""
 
-    record = materialize_fpv_image(record, output_root)
+    record = materialize_fpv_image(record, output_root, frame_rate_hz=config.frame_rate_hz)
     with Image.open(record.image_path) as image:
         image_width, image_height = image.size
 
@@ -1281,7 +1288,7 @@ def _resolve_existing_internnav_image_path(clip_dir: Path, frame_idx: int) -> Pa
     return None
 
 
-def materialize_fpv_image(record: FrameRecord, output_root: Path) -> FrameRecord:
+def materialize_fpv_image(record: FrameRecord, output_root: Path, *, frame_rate_hz: float | None = None) -> FrameRecord:
     """Ensure the selected FPV sample has a JPG without extracting full clips."""
 
     if record.image_path is not None and record.image_path.is_file():
@@ -1292,6 +1299,7 @@ def materialize_fpv_image(record: FrameRecord, output_root: Path) -> FrameRecord
         record.fpv_video_path,
         record.frame_idx,
         output_root / "clips" / record.clip_id / "fpv_frames",
+        frame_rate_hz=frame_rate_hz,
     )
     if image_path is None:
         raise FileNotFoundError(f"Cannot extract FPV image for {record.clip_id}:{record.frame_idx}")
@@ -1353,13 +1361,19 @@ def _read_bev_image_meta(path: Path) -> dict[str, Any]:
 
 
 def _load_bev_index_entries(clip_dir: Path) -> list[dict[str, Any]]:
+    return list(_load_bev_index_entries_cached(str(clip_dir.resolve())))
+
+
+@lru_cache(maxsize=256)
+def _load_bev_index_entries_cached(clip_dir_text: str) -> tuple[dict[str, Any], ...]:
+    clip_dir = Path(clip_dir_text)
     for index_path in (clip_dir / "bev_index.json", clip_dir / "bev_images" / "bev_index.json"):
         if index_path.is_file():
             try:
                 data = json.loads(index_path.read_text(encoding="utf-8"))
                 entries = data.get("entries") if isinstance(data, dict) else None
                 if isinstance(entries, list):
-                    return [_normalize_bev_index_entry(item, index_path.parent) for item in entries if isinstance(item, dict)]
+                    return tuple(_normalize_bev_index_entry(item, index_path.parent) for item in entries if isinstance(item, dict))
             except Exception:
                 pass
 
@@ -1379,7 +1393,7 @@ def _load_bev_index_entries(clip_dir: Path) -> list[dict[str, Any]]:
             item = dict(meta)
             item["path"] = str(image_path)
             entries.append(_normalize_bev_index_entry(item, bev_dir))
-    return entries
+    return tuple(entries)
 
 
 def _normalize_bev_index_entry(item: dict[str, Any], base_dir: Path) -> dict[str, Any]:
@@ -1401,7 +1415,7 @@ def _normalize_bev_index_entry(item: dict[str, Any], base_dir: Path) -> dict[str
 
 
 def _nearest_bev_entry(entries: list[dict[str, Any]], *, frame_idx: int, timestamp: int | None) -> dict[str, Any] | None:
-    candidates = [entry for entry in entries if Path(str(entry.get("path") or "")).is_file()]
+    candidates = entries
     if not candidates:
         return None
     if timestamp is not None and any(entry.get("timestamp") is not None for entry in candidates):
@@ -1479,12 +1493,57 @@ def _frame_name_candidates(frame_idx: int, *, prefer_one_based: bool = False) ->
     return one_based + zero_based if prefer_one_based else zero_based + one_based
 
 
-def _extract_video_frame(video_path: Path, frame_idx: int, output_dir: Path) -> Path | None:
+def _can_try_cv2() -> bool:
+    """Avoid noisy OpenCV imports when the environment has a known NumPy ABI mismatch."""
+
+    if os.environ.get("SIDEWALK_PHASE1_TRY_CV2") in {"1", "true", "TRUE", "yes"}:
+        return True
+    try:
+        import numpy as np  # type: ignore
+
+        major = int(str(np.__version__).split(".", 1)[0])
+        if major >= 2:
+            return False
+    except Exception:
+        pass
+    return True
+
+
+def _extract_video_frame(video_path: Path, frame_idx: int, output_dir: Path, *, frame_rate_hz: float | None = None) -> Path | None:
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{int(frame_idx):06d}.jpg"
     if output_path.is_file():
         return output_path.resolve()
     try:
+        seek_seconds = None
+        if frame_rate_hz is not None and float(frame_rate_hz) > 0:
+            seek_seconds = max(0.0, float(frame_idx) / float(frame_rate_hz))
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+        ]
+        if seek_seconds is not None:
+            cmd.extend(["-ss", f"{seek_seconds:.6f}"])
+        cmd.extend(["-i", str(video_path)])
+        if seek_seconds is None:
+            cmd.extend(["-vf", f"select=eq(n\\,{int(frame_idx)})", "-vframes", "1"])
+        else:
+            cmd.extend(["-frames:v", "1"])
+        cmd.append(str(output_path))
+        subprocess.run(
+            cmd,
+            check=True,
+        )
+        if output_path.is_file():
+            return output_path.resolve()
+    except Exception:
+        pass
+    try:
+        if not _can_try_cv2():
+            raise ImportError("Skipping cv2 because NumPy >= 2 is active; use ffmpeg/decord fallback")
         import cv2  # type: ignore
 
         capture = cv2.VideoCapture(str(video_path))
@@ -1508,28 +1567,6 @@ def _extract_video_frame(video_path: Path, frame_idx: int, output_dir: Path) -> 
             return output_path.resolve()
     except Exception:
         pass
-    try:
-        subprocess.run(
-            [
-                "ffmpeg",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-y",
-                "-i",
-                str(video_path),
-                "-vf",
-                f"select=eq(n\\,{int(frame_idx)})",
-                "-vframes",
-                "1",
-                str(output_path),
-            ],
-            check=True,
-        )
-        if output_path.is_file():
-            return output_path.resolve()
-    except Exception:
-        return None
     return None
 
 

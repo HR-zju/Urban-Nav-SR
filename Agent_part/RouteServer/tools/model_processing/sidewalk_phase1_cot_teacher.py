@@ -775,7 +775,10 @@ async def generate_cot_dataset(
                     add_usage_to_report(report, telemetry)
                 except RuntimeError as exc:
                     if "not configured" in str(exc).lower():
-                        raise
+                        if cfg.fallback_policy != "template":
+                            raise
+                        validation = ValidationResult(False, [f"teacher_not_configured:{str(exc)[:200]}"], {})
+                        break
                     validation = ValidationResult(False, [f"teacher_call_failed:{type(exc).__name__}:{str(exc)[:200]}"], {})
                     continue
                 except Exception as exc:
