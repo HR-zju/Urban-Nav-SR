@@ -77,18 +77,3 @@
 | `add_coffee_stop` | 在去目的地之前，帮我中途加一个咖啡店。 | Add a coffee shop stop before continuing to the destination. | `cafe/coffee_shop`; `add_via_point_to_session` |
 | `add_atm_stop` | 在当前路线中途加一个附近的 ATM。 | Add a nearby ATM as a stop on the way. | `atm/bank`; `add_via_point_to_session` |
 | `add_convenience_store_stop` | 到最终目的地之前，帮我加一个便利店作为途经点。 | Add a convenience store stop before the final destination. | `convenience_store`; `add_via_point_to_session` |
-
-## 删除的 CitySeeker 类型
-
-| 原类型 | 处理 | 原因 |
-| --- | --- | --- |
-| 交通枢纽导航 / Transit Hub Navigation | 删除 | 当前任务不重点评估公交/地铁接驳，和一般 POI 检索差异不大 |
-| 无障碍设施导航 / Accessibility Needs | 删除 | 真值依赖可靠 accessibility 标签或人工审核，第一版不做 |
-
-## Review Notes
-
-1. `poi_navigation` 是否还需要保留学校、酒店、医疗设施等子类。
-2. `implicit_need_navigation` 的每个需求是否能稳定映射到一组可检索 POI。
-3. `multi_stop_route` 的目标顺序是否符合我们真实任务场景。
-4. `semantic_preference` 是否暂时只做小规模人工审核集。
-5. `route_update_add_via` 是否需要区分“追加到终点前”和“插入到指定两站之间”。
