@@ -814,7 +814,11 @@ class IntentParser(BaseLLMService):
         search_keywords = rules.get("destination_search_keywords", {}).get("poi", default_search_keywords())
 
         explicit_query = self._extract_explicit_destination_query(user_instruction)
-        if explicit_query:
+        cjk_intent = _cjk_heuristic_intent(user_instruction)
+        if cjk_intent:
+            destination_type = cjk_intent["destination_type"]
+            search_keywords = cjk_intent["search_keywords"]
+        elif explicit_query:
             destination_type = "named_place"
             search_keywords = explicit_query
         else:
@@ -1170,10 +1174,73 @@ def _split_itinerary_segments(user_instruction: str) -> list[str]:
     for segment in segments:
         if not segment or segment.lower() in stopwords:
             continue
+        if _is_origin_only_segment(segment):
+            continue
+        if _is_context_only_segment(segment):
+            continue
         if len(segment) <= 1:
             continue
         cleaned.append(segment)
     return cleaned
+
+
+def _is_origin_only_segment(segment: str) -> bool:
+    """Return whether a decomposed segment only describes the start point.
+
+    Args:
+        segment: Candidate itinerary segment.
+
+    Returns:
+        ``True`` if the segment is an origin phrase rather than a destination
+        goal.
+    """
+
+    text = str(segment or "").strip()
+    return bool(re.search(r"(?:从|由).{0,30}(?:出发|开始)$", text)) or text in {"出发", "开始"}
+
+
+def _is_context_only_segment(segment: str) -> bool:
+    """Return whether a segment only states user context, not a stop.
+
+    Args:
+        segment: Candidate itinerary segment.
+
+    Returns:
+        ``True`` when the segment is a condition such as hunger, illness, or
+        fatigue without an action verb that asks for a place.
+    """
+
+    text = str(segment or "").strip()
+    if re.search(r"(?:去|找|买|吃|喝|取|看|坐|休息|办公|看书)", text):
+        return False
+    return bool(re.search(r"(?:不舒服|有点饿|饿了|累了|渴了|手机.*没电)", text))
+
+
+def _cjk_heuristic_intent(user_instruction: str) -> dict[str, str] | None:
+    """Map common Chinese implicit needs to provider-facing search keywords.
+
+    Args:
+        user_instruction: User instruction or decomposed sub-goal.
+
+    Returns:
+        Destination type and search keywords, or ``None`` when no rule matches.
+    """
+
+    text = str(user_instruction or "")
+    rules: list[tuple[str, str, str]] = [
+        (r"饮料|喝的|饮品|奶茶|水", "drink_retail", "饮品|咖啡|便利店|超市"),
+        (r"咖啡|买杯咖啡|喝咖啡", "cafe", "咖啡|咖啡店"),
+        (r"吃饭|吃点|餐|小吃|快餐|食堂|美食", "restaurant", "餐厅|小吃|快餐|食堂"),
+        (r"银行|ATM|取钱|现金|自助银行", "bank", "银行|ATM|自助银行|中国银行"),
+        (r"药|不舒服|看诊|诊所|医院", "medical", "药店|医药|诊所|医院"),
+        (r"办公|看书|自习|安静|图书馆|书店", "workspace", "图书馆|书店|咖啡|共享办公"),
+        (r"日用品|饮料|便利店|超市|小卖部|零食", "retail", "便利店|超市|生活超市|小卖部"),
+        (r"休息|坐下|坐一会|歇", "rest_stop", "咖啡|公园|广场|茶馆"),
+    ]
+    for pattern, destination_type, keywords in rules:
+        if re.search(pattern, text):
+            return {"destination_type": destination_type, "search_keywords": keywords}
+    return None
 
 
 def _normalize_goal_label(raw_label: Any, fallback: str = "generic_stop") -> str:

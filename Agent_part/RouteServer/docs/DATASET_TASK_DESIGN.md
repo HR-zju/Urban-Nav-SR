@@ -386,7 +386,7 @@ CitySeeker 的 `to` 和 `complete_route` 是离线预生成并冻结的。我们
 
 ```text
 task_taxonomy_cityseeker.json  # 需求类型、指令模板、目标 POI 类型
-origins.jsonl                  # 起点，经纬度、heading、scene/city
+origin_regions.jsonl           # 可采样城市区域/网格/边界，不是固定 origin 真值
 POI provider                   # OSM/Overture/AMap/Baidu 等
 Route provider                 # OSRM/GraphHopper/AMap/Baidu 等
 ```
@@ -394,21 +394,31 @@ Route provider                 # OSRM/GraphHopper/AMap/Baidu 等
 输出：
 
 ```text
-task_gt.jsonl                  # 最终冻结真值
+task_gt.jsonl                  # 最终冻结真值，每行一个 case
 task_rejects.jsonl             # 无候选、无路线、质量不合格样本
-poi_candidates_cache.jsonl     # 每个 origin + subcategory 的候选 POI
-route_cache.jsonl              # origin -> candidate 的路线结果
+poi_cache.jsonl                # 每个 search request 的冻结 POI response
+route_cache.jsonl              # origin -> candidate 的冻结路线 response
+validation_report.json         # GT 最优性、格式和 cache 可追溯性检查
 ```
+
+UrbanNav 第一版依赖 map API 生成路线，不需要构建 CitySeeker 式 city graph。CitySeeker
+的 `from/to/complete_route` 思想可以参考，但本任务不要求维护街景节点、可走边、方位角和逐步动作。
+origin 是 benchmark 构造变量，应服务于任务、目的地和路线多样性，而不是来自 Frodobots/SideWalk
+等基础采样数据。
+
+与 MobilityBench 类似，数据构建阶段必须把外部地图服务响应冻结成 replay cache。后续
+RouteServer/baseline 运行和评估都应读取冻结数据，不能在评估阶段静默重查 live API。
 
 单目标样本算法：
 
 ```text
-for origin in origins:
-  for item in taxonomy.items:
-    instruction = sample(item.templates)
+for item in taxonomy.items:
+  instruction = sample(item.templates)
 
+  for region in origin_regions:
+    origin_candidates = sample_points(region)
     candidates = poi_search(
-      center=origin.latlng,
+      center=region.center or origin_candidate.latlng,
       target_types=item.target_types,
       brand_aliases=item.brand_aliases,
       required_attributes=item.required_attributes,
@@ -416,35 +426,42 @@ for origin in origins:
       radius=R
     )
 
-    candidates = filter_reachable(candidates)
+    candidates = merge_dedupe_candidates_from_multi_query(candidates)
 
-    for candidate in top_k_by_direct_distance(candidates):
-      route = route_provider.route(origin, candidate)
-      save route_cache
+    for origin in origin_candidates:
+      for candidate in top_k_by_direct_distance(candidates, origin):
+        route = route_provider.route(origin, candidate)
+        save route_cache
 
-    valid = candidates with successful route
-    gt_destination = argmin(valid, route.distance_m)
-    gt_route = route(origin, gt_destination)
+      valid = candidates with successful route and task constraints
+      ranked_destinations = sort(valid, by=route.distance_m)
+      gt_destination = ranked_destinations[0]
+      acceptable_destinations = destinations within acceptance policy
+      route_features = distance / steps / turn_count / directness / ambiguity
 
-    write task_gt.jsonl row
+      keep only if route_features fill benchmark quotas
+      write task_gt.jsonl row
 ```
 
 多目标顺序样本算法：
 
 ```text
-for origin in origins:
-  for ordered item in taxonomy.multi_stop_route:
-    leg_1_candidates = search first target type near origin
-    for d1 in top_k(leg_1_candidates):
-      leg_2_candidates = search second target type near d1
-      for d2 in top_k(leg_2_candidates):
-        route_1 = route(origin, d1)
-        route_2 = route(d1, d2)
-        total_distance = route_1.distance_m + route_2.distance_m
+for ordered item in taxonomy.multi_stop_route:
+  for region in origin_regions:
+    origin_candidates = sample_points(region)
+    for origin in origin_candidates:
+      leg_1_candidates = search first target type near origin
+      for d1 in top_k(leg_1_candidates):
+        leg_2_candidates = search second target type near d1
+        for d2 in top_k(leg_2_candidates):
+          route_1 = route(origin, d1)
+          route_2 = route(d1, d2)
+          total_distance = route_1.distance_m + route_2.distance_m
 
-    gt_destination_sequence = argmin(sequence, total_distance)
-    gt_route = concat(route_1, route_2)
-    write task_gt.jsonl row
+      gt_destination_sequence = argmin(sequence, total_distance)
+      gt_route = concat(route_1, route_2)
+      keep only if multi-leg route features fill benchmark quotas
+      write task_gt.jsonl row
 ```
 
 关键约束：
@@ -452,40 +469,48 @@ for origin in origins:
 - `gt_destination` 必须来自 POI provider 的真实候选，不能由 LLM 生成。
 - `gt_route` 必须来自 route provider 或本地图最短路，不能用直线段代替正式真值。
 - `nearest` 必须按路线距离算；直线距离只能用于 Top-K 预筛。
-- 所有候选、路线、reject reason 都要落盘，保证后续可以复查。
+- `gt_destination` 必须等于 `ranked_destinations[0]`；这是固定 provider、搜索半径、候选上限和路线模式下的最优。
+- `acceptable_destinations` 必须保存每个可接受目标自己的参考路线和参考路线距离。
+- 所有候选、路线、ranked destinations、reject reason 都要落盘，保证后续可以复查。
 - 评估集一旦生成，`gt_destination` 和 `gt_route` 必须冻结；地图数据更新后不能静默重算。
+- 每个样本应保存 `cache_keys`，能从 `poi_cache.jsonl` 和 `route_cache.jsonl` 反查构建时使用的原始 response。
+- 工具调用 trace 可用于诊断，但不能作为目的地/路线成功的必要条件。
 
-### 5.1 准备导航图或采样点
+### 5.1 准备采样区域和 origin 候选
 
-数据生成需要一个可计算路径的图：
+第一版数据生成不要求 city graph。需要准备的是可采样的城市区域、网格或边界：
 
 ```text
-nodes: frame / pano / GPS sample
-edges: adjacent movement
-edge weight: meters or traversal cost
-node attributes: lat, lng, heading, image_path, visible POIs optional
+region_id
+city
+scene_id / district / grid_id
+bbox or center + radius
+sampling_quota
+target task coverage hints
 ```
 
 来源可以是：
 
-- SideWalk clip 的 `trajectory.json`。
-- MCAP 抽帧或真实相机采集后生成的 `trajectory.json`。
-- 地图 provider 路线 polyline 采样点。
-- 类 CitySeeker 的已有图节点/轨迹图。
+- 城市行政区、商圈、校园、街区 bbox。
+- 地图 provider 返回的道路附近可导航点。
+- 人工定义的 benchmark 区域。
+- 后续如需视觉评测，可再把已生成 OD 样本对齐到街景/FPV/BEV 资源。
 
-输出起点表：
+输出区域表：
 
 ```json
 {
-  "origin_id": "frame_000120",
-  "scene_id": "yuquan",
+  "region_id": "hangzhou_yuquan_grid_001",
   "city": "hangzhou",
-  "lat": 30.2645,
-  "lng": 120.1180,
-  "heading_deg": 35.0,
-  "source": "sidewalk_trajectory"
+  "scene_id": "yuquan",
+  "bbox": [120.1170, 30.2635, 120.1210, 30.2675],
+  "sampling_quota": 50,
+  "source": "manual_region_v1"
 }
 ```
+
+origin 最终在 GT builder 内部从区域中采样，并按任务可达性、路线距离、路线形态和候选歧义度筛选。
+因此 `origin_candidates` 是中间产物，不是必须人工预先固定的 benchmark 输入。
 
 ### 5.2 生成需求指令
 
@@ -514,12 +539,18 @@ implicit_need_navigation/thirsty:
 
 注意：LLM 只负责语言多样化，不能决定真值目的地。
 
-### 5.3 为每个起点检索候选目标
+### 5.3 检索候选目标并构造 origin-task pairs
 
-对每个起点 \(o_i\)，每种需求类型 \(c\)：
+对每个区域、每种需求类型 \(c\)，先召回满足任务约束的 POI，再和区域内采样出的
+origin candidates 组合。对于隐式需求，要用多 query 召回，避免只搜一个关键词造成漏召回：
 
 ```text
-candidate_destinations = PoiProvider.search(o_i, target_types, radius)
+thirsty:
+  convenience_store
+  cafe
+  beverage_shop
+  drink
+  coffee
 ```
 
 过滤规则：
@@ -549,7 +580,7 @@ candidate_destinations = PoiProvider.search(o_i, target_types, radius)
 
 ### 5.4 选择 GT 目标
 
-CitySeeker 的默认思想是“nearest satisfying target”：
+默认策略是“nearest satisfying target by route distance”：
 
 \[
 d^* = \arg\min_{d \in C(o_i,c)} \mathrm{RouteDistance}(o_i,d)
@@ -562,6 +593,61 @@ route_distance_m > direct_distance_m
 ```
 
 如果 route provider 太慢，可先用直线距离取 Top-K，再对 Top-K 计算真实路线。
+为了保证 rank-1 最优可审计，每条样本必须保存：
+
+```text
+optimality_scope
+ranked_destinations
+candidate_audit
+reject_reason
+```
+
+示例：
+
+```json
+{
+  "optimality_scope": {
+    "poi_provider": "amap",
+    "search_radius_m": 1500,
+    "candidate_limit": 30,
+    "route_provider": "amap",
+    "route_mode": "foot",
+    "route_strategy": "default",
+    "cost": "route_distance_m",
+    "builder_version": "urbannav_gt_v1"
+  },
+  "candidate_audit": {
+    "searched_candidate_count": 18,
+    "routed_candidate_count": 8,
+    "rejected_candidate_count": 10
+  },
+  "ranked_destinations": [
+    {
+      "rank": 1,
+      "provider_poi_id": "poi_a",
+      "route_distance_m": 168.2,
+      "score_breakdown": {"relevance": 1.0, "route_distance_m": 168.2}
+    },
+    {
+      "rank": 2,
+      "provider_poi_id": "poi_b",
+      "route_distance_m": 210.5,
+      "score_breakdown": {"relevance": 1.0, "route_distance_m": 210.5}
+    }
+  ],
+  "cache_keys": {
+    "poi_search": ["poi:hangzhou_yuquan_restaurant_000120"],
+    "routes": ["route:hangzhou_yuquan_restaurant_000120:poi_a"]
+  }
+}
+```
+
+如果两个目的地路线代价差异很小，可同时进入 `acceptable_destinations`，但
+`gt_destination` 仍为 rank-1。可接受集合由固定策略生成，例如：
+
+```text
+route_distance_m <= min(best_distance * 1.2, best_distance + 100m)
+```
 
 对 `multi_stop_route`，目标不是单个 \(d^*\)，而是有序目标序列：
 
@@ -611,12 +697,37 @@ total_steps = coarse_waypoints length
   "instruction": "请帮我找最近的餐厅。",
   "origin": {"lat": 30.2645, "lng": 120.1180, "heading_deg": 35.0, "node_id": "frame_000120"},
   "gt_destination": {"name": "餐厅 A", "type": "restaurant", "lat": 30.2658, "lng": 120.1193, "provider_poi_id": "osm_node_123"},
-  "candidate_destinations": [{"name": "餐厅 A", "lat": 30.2658, "lng": 120.1193, "route_distance_m": 168.2}],
+  "acceptable_destinations": [
+    {
+      "name": "餐厅 A",
+      "type": "restaurant",
+      "lat": 30.2658,
+      "lng": 120.1193,
+      "provider_poi_id": "osm_node_123",
+      "reference_route_distance_m": 168.2,
+      "reference_route": [{"lat": 30.2645, "lng": 120.1180}, {"lat": 30.2658, "lng": 120.1193}],
+      "rank": 1
+    }
+  ],
+  "ranked_destinations": [{"rank": 1, "name": "餐厅 A", "lat": 30.2658, "lng": 120.1193, "route_distance_m": 168.2}],
   "gt_route": [{"lat": 30.2645, "lng": 120.1180}, {"lat": 30.2658, "lng": 120.1193}],
   "gt_waypoints": [{"coordinate": {"latitude": 30.2649, "longitude": 120.1184}, "action": "go_straight", "distance_m": 42.0}],
   "total_weight": 168.2,
   "total_steps": 6,
   "difficulty": "medium",
+  "optimality_scope": {
+    "poi_provider": "osm",
+    "search_radius_m": 1500,
+    "candidate_limit": 30,
+    "route_provider": "osrm",
+    "route_mode": "foot",
+    "cost": "route_distance_m",
+    "builder_version": "urbannav_gt_v1"
+  },
+  "cache_keys": {
+    "poi_search": ["poi:hangzhou_yuquan_poi_navigation_restaurant_000120"],
+    "routes": ["route:hangzhou_yuquan_poi_navigation_restaurant_000120:osm_node_123"]
+  },
   "source": {"taxonomy": "cityseeker_style_v1", "poi_provider": "osm", "route_provider": "osrm"}
 }
 ```
@@ -728,6 +839,12 @@ total_steps > 0
 gt_route 起点接近 origin
 gt_route 终点接近 gt_destination
 目标类型与 category/subcategory 一致
+gt_destination 等于 ranked_destinations[0]
+ranked_destinations 按 route_distance_m 升序
+acceptable_destinations 都有 reference_route_distance_m
+acceptable_destinations 都有 reference_route
+cache_keys 指向存在的 poi_cache / route_cache 记录
+optimality_scope 完整记录 provider、半径、候选上限、route mode、cost、builder_version
 ```
 
 建议自动写 `reject_reason`：
@@ -760,7 +877,7 @@ gt_route 终点接近 gt_destination
 python tools/evaluation/eval_destination_route.py \
   --ground-truth /path/to/task_gt.jsonl \
   --predictions /path/to/predictions.jsonl \
-  --destination-radius-m 50 \
+  --destination-radius-m 30 \
   --output-json /tmp/urbannav_eval_summary.json \
   --output-jsonl /tmp/urbannav_eval_rows.jsonl
 ```
@@ -768,26 +885,30 @@ python tools/evaluation/eval_destination_route.py \
 核心指标：
 
 ```text
-destination.success_rate
-destination.hit_at_1 / hit_at_3 / hit_at_5
-destination.mrr
-destination.mean_error_m
-route.success_rate
-route.mean_distance_ratio
-route.spl
-route.curve_ade_m / curve_fde_m / curve_mde_m
+destination_success
+hit@5
+route_success
+median_route_ratio
+spl
 ```
+
+`--destination-radius-m` 只是坐标兜底匹配容差；主匹配逻辑应优先使用
+`provider_poi_id/place_id`。当预测命中非 rank-1 但仍可接受目标时，路线成功和 SPL
+使用该 matched destination 的 `reference_route_distance_m`。
+
+`destination.mrr`、`mean_destination_error_m`、`curve_ade_m` 等只作为诊断指标，不进入主表。
 
 ## 10. 推荐落地顺序
 
-1. 先定义 `task_taxonomy.json`，固定 category/subcategory/instruction templates/target_types。
-2. 选定 POI 数据源，例如 OSM/Overture/商业地图 API。
-3. 选定路线生成器，例如 OSRM/GraphHopper/AMap/Baidu。
-4. 从一个小区域开始，采样 100-300 个 origin。
-5. 对每个 origin 和 subcategory 检索 Top-K 目标。
-6. 对 Top-K 计算 route distance，选最近可达目标为 GT。
-7. 用模板或 LLM paraphrase 生成多条同义需求指令。
-8. 保存 `task_gt.jsonl` 和 `task_rejects.jsonl`。
-9. 用 RouteServer 生成 predictions。
-10. 跑 `eval_destination_route.py`。
-11. 抽样人工检查 hard 和 semantic_preference 类。
+1. 定义 `task_taxonomy.json`，固定 category/subcategory/instruction templates/target_types。
+2. 定义 benchmark region 文件，包含 city/scene/bbox/quota。
+3. 选定 POI 数据源和路线生成器，例如 OSM/Overture/AMap/Baidu + OSRM/GraphHopper。
+4. 实现 GT builder smoke 版本，从一个小区域生成 100-300 个候选 OD case。
+5. 对每个 task 做多 query POI 召回，并把原始 response 写入 `poi_cache.jsonl`。
+6. 对 Top-K 候选计算 route distance，并把原始 route response 写入 `route_cache.jsonl`。
+7. 选最近可达目标为 rank-1 GT，生成 `ranked_destinations`、`acceptable_destinations`、`cache_keys` 和 `candidate_audit`。
+8. 运行 validator，输出 `validation_report.json`，不通过的样本写入 `task_rejects.jsonl`。
+9. 用模板或 LLM paraphrase 生成多条同义需求指令，但不能改变冻结 GT。
+10. 用 RouteServer 在 replay backend 上生成 predictions。
+11. 跑 `eval_destination_route.py`，主表只报告 `destination_success / hit@5 / route_success / median_route_ratio / spl`。
+12. 抽样人工检查 hard、implicit 和 semantic_preference 类，并在数据集卡中记录审核比例和 reject 统计。

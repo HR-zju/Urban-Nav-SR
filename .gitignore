@@ -93,3 +93,4 @@ Agent_part/RouteServer/apps/nav-assistant/.build/
 key.txt
 data/
 Agent_part/RouteServer/examples/agent_eval/
+Agent_part/RouteServer/tests/fixtures/
