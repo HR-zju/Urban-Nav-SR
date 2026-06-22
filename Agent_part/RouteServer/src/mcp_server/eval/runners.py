@@ -46,7 +46,7 @@ class RuleRunner(AgentRunner):
     输出:
         包含 ``assistant think -> tool_call -> tool_response -> readout user ->
         assistant final`` 的 ``AgentTrace``。规则很简单，目的只是验证协议和
-        evaluator，不代表最终策略。
+        evaluator 不代表最终策略。
     """
 
     def __init__(self, *, executor: "ToolExecutor | None" = None) -> None:

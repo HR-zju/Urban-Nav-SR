@@ -17,7 +17,7 @@ def iter_stage2_cases(path: str | Path) -> Iterator[AgentStage2Case]:
     """Yield Stage2 cases from JSONL or a JSON array file.
 
     输入:
-        ``path`` 指向 JSONL，每行一个 ``AgentStage2Case``；也兼容 JSON 数组。
+        ``path`` 指向 JSONL 每行一个 ``AgentStage2Case``；也兼容 JSON 数组。
 
     输出:
         逐条 ``AgentStage2Case``，方便大文件流式评测和构造 cold-start trace。

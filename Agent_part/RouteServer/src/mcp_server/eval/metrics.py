@@ -48,6 +48,15 @@ def _tool_calls(trace: AgentTrace) -> tuple[list[ToolCall], list[str]]:
 
 
 def _finishes(trace: AgentTrace) -> tuple[list[dict[str, Any]], list[str]]:
+    """
+    Extract all finish texts from the trace.
+    Args:
+        trace: The AgentTrace to extract
+    Returns:
+        finishes: [dict[str, Any]]: A list of finish texts extracted from the trace.
+        errors: [str]: A list of errors encountered during extraction.
+    
+    """
     finishes: list[dict[str, Any]] = []
     errors: list[str] = []
     for turn in trace.turns:
