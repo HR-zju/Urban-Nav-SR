@@ -1,6 +1,6 @@
 """Agent runners used by offline Agentic Stage2 evaluation.
 
-runner 不训练模型，只把不同来源的策略统一成最终 ``AgentTrace``：
+runner 不训练模型，只把不同来源的策略统一成最终 ``AgentTrace`` 
 rule baseline、RouteServer teacher、后续外部 LVLM、本项目 E2E checkpoint 都走同一接口。
 """
 
@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import inspect
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import TYPE_CHECKING, Awaitable, Callable, Iterable
 
-from mcp_server.agent.schemas import AgentEvalCase, AgentTrace, ToolCall
+from mcp_server.agent.schemas import AgentStage2Case, AgentTrace, ToolCall
 from mcp_server.agent.stage2 import (
     build_agent_state,
     build_agent_think_text,
@@ -29,10 +30,10 @@ if TYPE_CHECKING:
 
 
 class AgentRunner(ABC):
-    """Base class for anything that maps ``AgentEvalCase`` to ``AgentTrace``."""
+    """Base class for anything that maps ``AgentStage2Case`` to ``AgentTrace``."""
 
     @abstractmethod
-    async def run_case(self, case: AgentEvalCase) -> AgentTrace:
+    async def run_case(self, case: AgentStage2Case) -> AgentTrace:
         """Run one case and return a replayable trace."""
 
 
@@ -40,7 +41,7 @@ class RuleRunner(AgentRunner):
     """Small deterministic Stage2 baseline for protocol smoke tests.
 
     输入:
-        ``AgentEvalCase``。
+        ``AgentStage2Case``。
 
     输出:
         包含 ``assistant think -> tool_call -> tool_response -> readout user ->
@@ -51,7 +52,7 @@ class RuleRunner(AgentRunner):
     def __init__(self, *, executor: "ToolExecutor | None" = None) -> None:
         self.executor = executor
 
-    async def run_case(self, case: AgentEvalCase) -> AgentTrace:
+    async def run_case(self, case: AgentStage2Case) -> AgentTrace:
         trace = AgentTrace.from_case(case, model_run={"runner": "rule"})
         trace.tools = case.tools or get_tool_definitions()
         trace.add_turn("user", initial_user_content(case), metadata={"stage2_step": "initial_request"})
@@ -82,7 +83,7 @@ class RuleRunner(AgentRunner):
             trace.metadata["metric_errors"] = metric_result.errors
         return trace
 
-    def _select_tool_call(self, case: AgentEvalCase) -> ToolCall:
+    def _select_tool_call(self, case: AgentStage2Case) -> ToolCall:
         request = case.user_request.lower()
         location = case.observation.get("current_location") or case.observation.get("origin") or ""
         if any(keyword in request for keyword in ["厕所", "洗手间", "restroom", "toilet"]):
@@ -111,31 +112,35 @@ class RouteServerTeacherRunner(AgentRunner):
     """Adapter for RouteServer teacher functions.
 
     teacher callable:
-        输入 ``AgentEvalCase``；输出可以是 final ``AgentTrace``、assistant 文本、或 trace dict。
+        输入 ``AgentStage2Case``；输出可以是 final ``AgentTrace``、assistant 文本、或 trace dict。
         新主流程应直接返回 ``sidewalk_agent_trace_v2``。
 
     default teacher:
-        如果没有传 teacher callable，则使用 ``RouteServerAgentTeacher``，把旧
+        如果没有传 teacher callable 则使用 ``RouteServerAgentTeacher``，把旧
         IntentParser / GoalDecomposer / POI recommendation / visual prompt teacher
         包装成最终 Stage2 ``AgentTrace``。
     """
 
     def __init__(
         self,
-        teacher: Callable[[AgentEvalCase], AgentTrace | dict | str | Awaitable[AgentTrace | dict | str]] | None = None,
+        teacher: Callable[[AgentStage2Case], AgentTrace | dict | str | Awaitable[AgentTrace | dict | str]] | None = None,
         *,
         app_context: object | None = None,
         use_llm: bool = True,
         execute_tools: bool = False,
         enable_visual_prompt: bool = False,
+        enable_recommendation: bool = True,
+        tool_artifact_dir: str | Path | None = None,
     ) -> None:
         self.teacher = teacher
         self.app_context = app_context
         self.use_llm = bool(use_llm)
         self.execute_tools = bool(execute_tools)
         self.enable_visual_prompt = bool(enable_visual_prompt)
+        self.enable_recommendation = bool(enable_recommendation)
+        self.tool_artifact_dir = tool_artifact_dir
 
-    async def run_case(self, case: AgentEvalCase) -> AgentTrace:
+    async def run_case(self, case: AgentStage2Case) -> AgentTrace:
         if self.teacher is None:
             # Lazy import，避免只使用 eval.cases/metrics 时强依赖 map provider 或视觉环境。
             from mcp_server.teacher.trace_builder import RouteServerAgentTeacher, RouteServerTeacherConfig
@@ -146,6 +151,8 @@ class RouteServerTeacherRunner(AgentRunner):
                     use_llm=self.use_llm,
                     execute_tools=self.execute_tools,
                     enable_visual_prompt=self.enable_visual_prompt,
+                    enable_recommendation=self.enable_recommendation,
+                    tool_artifact_dir=self.tool_artifact_dir,
                 ),
             )
             return await teacher.run_case(case)
@@ -169,7 +176,7 @@ class RouteServerTeacherRunner(AgentRunner):
         return trace
 
 
-async def run_cases(runner: AgentRunner, cases: Iterable[AgentEvalCase]) -> list[AgentTrace]:
+async def run_cases(runner: AgentRunner, cases: Iterable[AgentStage2Case]) -> list[AgentTrace]:
     traces: list[AgentTrace] = []
     for case in cases:
         traces.append(await runner.run_case(case))

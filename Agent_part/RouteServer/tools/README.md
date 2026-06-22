@@ -267,15 +267,35 @@ role，工具返回之后再插入 `[TRAJ_0]...[TRAJ_15]` readout prompt，最�
 ```bash
 cd /home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer
 
-PYTHONPATH=src python tools/evaluation/build_sidewalk_agent_review_samples.py
+PYTHONPATH=src python tools/evaluation/build_sidewalk_agent_stage2_review_samples.py
 ```
+
+接真实 Phase1 archive，并通过真实 `ToolExecutor` 跑本地 fake map smoke：
+
+```bash
+PYTHONPATH=src python tools/evaluation/build_sidewalk_agent_stage2_review_samples.py \
+  --phase1-archive-jsonl "${CLIP}/phase1_archive/manifests/clip_test.jsonl" \
+  --limit 16 \
+  --execute-tools \
+  --tool-context fake \
+  --traces-out examples/agent_eval/sidewalk_phase1_stage2_traces_smoke.jsonl \
+  --ms-swift-out examples/agent_eval/sidewalk_phase1_agentic_stage2_ms_swift_smoke.jsonl \
+  --report-out examples/agent_eval/sidewalk_phase1_stage2_report_smoke.json
+```
+
+说明：
+
+- `--phase1-archive-jsonl` 会把 Phase1 archive 的 `messages/images/pixel_trajectory/sidewalk_meta` 转成 `AgentStage2Case`。
+- 原 Phase1 assistant CoT 放入 `ground_truth.phase1_response`，最终 assistant 会在原 CoT 中插入 `<ToolResultUse>`。
+- `pixel_trajectory`、`trajectory_fpv_t`、`trajectory_ego_t`、`trajectory_policy`、`semantic_segmentation_path` 等监督字段原样透传到 ms-swift Stage2 row。
+- `--tool-context fake` 不访问外网，但会经过真实 `ToolExecutor`、`map_ops` 和 route session core；`--tool-context provider` 才连接真实地图 provider。
 
 主要产物：
 
 ```text
-examples/agent_eval/sidewalk_agent_teacher_traces_review.jsonl
-examples/agent_eval/sidewalk_agent_ms_swift_review.jsonl
-examples/agent_eval/sidewalk_agent_metrics_review.json
+examples/agent_eval/sidewalk_agent_stage2_traces_review.jsonl
+examples/agent_eval/sidewalk_agentic_stage2_ms_swift_review.jsonl
+examples/agent_eval/sidewalk_agent_stage2_report_review.json
 ```
 
 对应协议文档：

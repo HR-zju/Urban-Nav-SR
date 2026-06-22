@@ -18,22 +18,15 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
-from mcp_server.agent.schemas import AgentEvalCase, AgentTrace, ToolCall, ToolResponse
-from mcp_server.agent.stage2 import (
-    build_agent_state,
-    build_agent_think_text,
-    build_final_assistant_text,
-    build_tool_decision,
-    final_navigation_user_content,
-    initial_user_content,
-    synthetic_tool_response,
-)
-from mcp_server.agent.tool_parser import parse_agent_action
-from mcp_server.agent.tool_schema import get_tool_definitions
-from mcp_server.eval.metrics import compute_trace_metrics
+from mcp_server.agent.schemas import AgentStage2Case, AgentTrace, ToolCall, ToolResponse
 from mcp_server.llm import GoalDecomposer, IntentParser
+from mcp_server.teacher.agentic_stage2_trace_builder import (
+    AgenticStage2TraceBuilder,
+    AgenticStage2TraceBuilderConfig,
+)
 
 
 def _location_text(value: Any) -> str:
@@ -115,19 +108,23 @@ class RouteServerTeacherConfig:
         True 时会把选出的学生可见 tool call 交给 ``ToolExecutor`` 执行。
     enable_visual_prompt:
         True 且 case 中有 FPV、GPS、route polyline 时，调用 visual prompt teacher。
+    tool_artifact_dir:
+        真实 ``ToolExecutor`` 写入 image crop 等副产物的目录。None 表示只返回
+        artifact metadata，不落盘裁剪图。
     """
 
     use_llm: bool = True
     execute_tools: bool = False
     enable_visual_prompt: bool = False
     enable_recommendation: bool = True
+    tool_artifact_dir: str | Path | None = None
 
 
 class RouteServerAgentTeacher:
-    """Build one replayable AgentTrace from one AgentEvalCase.
+    """Build one replayable AgentTrace from one AgentStage2Case.
 
     输入:
-        ``AgentEvalCase``，可选 RouteServer ``app_context``。
+        ``AgentStage2Case``，可选 RouteServer ``app_context``。
 
     输出:
         ``AgentTrace``，其中 ``tool_call`` 和 ``tool_response`` 是独立 role；
@@ -146,19 +143,7 @@ class RouteServerAgentTeacher:
         self.intent_parser = IntentParser()
         self.goal_decomposer = GoalDecomposer()
 
-    async def run_case(self, case: AgentEvalCase) -> AgentTrace:
-        trace = AgentTrace.from_case(
-            case,
-            model_run={
-                "runner": "routeserver_teacher",
-                "use_llm": bool(self.config.use_llm),
-                "execute_tools": bool(self.config.execute_tools),
-                "enable_visual_prompt": bool(self.config.enable_visual_prompt),
-            },
-        )
-        trace.tools = case.tools or get_tool_definitions()
-        trace.add_turn("user", initial_user_content(case), metadata={"stage2_step": "initial_request"})
-
+    async def run_case(self, case: AgentStage2Case) -> AgentTrace:
         intent = await self._parse_intent(case.user_request)
         goals = await self._decompose_goals(case.user_request)
         recommendation = await self._maybe_recommend(case, intent)
@@ -171,13 +156,6 @@ class RouteServerAgentTeacher:
             recommendation=recommendation,
             visual_prompt=visual_prompt,
         )
-        think_text = build_agent_think_text(
-            state=build_agent_state(case, intent=intent),
-            decision=build_tool_decision(call, reason=self._tool_decision_reason(call)),
-        )
-        trace.add_turn("assistant", think_text, metadata={"stage2_step": "tool_decision_think"})
-        trace.add_turn("tool_call", call.to_ms_swift_dict(), tool=call.tool, metadata={"stage2_step": "tool_call"})
-
         teacher_internal = {
             "intent_parse": intent,
             "goal_decomposition": goals,
@@ -185,43 +163,34 @@ class RouteServerAgentTeacher:
             "visual_prompt": _safe_summary(visual_prompt),
             "selected_student_tool_call": call.to_dict(),
         }
-        trace.metadata["teacher_internal"] = teacher_internal
 
+        response = None
+        extra_metadata: dict[str, Any] = {}
         if self.config.execute_tools:
             response = await self._execute_selected_tool(call, case)
             if not response.success:
-                trace.metadata["tool_execution_warning"] = response.to_dict()
-        else:
-            response = synthetic_tool_response(
-                call,
-                case,
-                source="routeserver_teacher",
-                recommendation=recommendation,
-                visual_prompt=visual_prompt,
-            )
-        trace.add_turn("tool_response", response.to_dict(), tool=call.tool, metadata={"stage2_step": "tool_response"})
-        trace.add_turn("user", final_navigation_user_content(), metadata={"stage2_step": "trajectory_readout_prompt"})
+                extra_metadata["tool_execution_warning"] = response.to_dict()
 
-        finish_text = build_final_assistant_text(
+        builder = AgenticStage2TraceBuilder(
+            AgenticStage2TraceBuilderConfig(source="routeserver_teacher", compute_metrics=True)
+        )
+        return builder.build_trace(
             case,
             call=call,
             response=response,
-            source="routeserver_teacher",
-        )
-        trace.add_turn(
-            "assistant",
-            finish_text,
-            metadata={
-                "stage2_step": "final_navigation",
-                "parsed_action": parse_agent_action(finish_text).to_dict(),
+            model_run={
+                "runner": "routeserver_teacher",
+                "use_llm": bool(self.config.use_llm),
+                "execute_tools": bool(self.config.execute_tools),
+                "enable_visual_prompt": bool(self.config.enable_visual_prompt),
             },
+            intent=intent,
+            tool_decision_reason=self._tool_decision_reason(call),
+            recommendation=recommendation,
+            visual_prompt=visual_prompt,
+            teacher_internal=teacher_internal,
+            extra_metadata=extra_metadata,
         )
-
-        metric_result = compute_trace_metrics(trace, case)
-        trace.metrics = metric_result.metrics
-        if metric_result.errors:
-            trace.metadata["metric_errors"] = metric_result.errors
-        return trace
 
     async def _parse_intent(self, user_request: str) -> dict[str, Any]:
         if self.config.use_llm:
@@ -237,7 +206,7 @@ class RouteServerAgentTeacher:
         parsed["decomposition_source"] = "heuristic_teacher_offline"
         return parsed
 
-    async def _maybe_recommend(self, case: AgentEvalCase, intent: dict[str, Any]) -> dict[str, Any]:
+    async def _maybe_recommend(self, case: AgentStage2Case, intent: dict[str, Any]) -> dict[str, Any]:
         if not self.config.enable_recommendation or self.app_context is None:
             return {"status": "skipped_no_app_context"}
         location = _lat_lon(case.observation.get("current_location") or case.observation.get("origin"))
@@ -265,7 +234,7 @@ class RouteServerAgentTeacher:
         except Exception as exc:
             return {"status": "recommendation_error", "error": str(exc)}
 
-    async def _maybe_run_visual_prompt_teacher(self, case: AgentEvalCase) -> dict[str, Any]:
+    async def _maybe_run_visual_prompt_teacher(self, case: AgentStage2Case) -> dict[str, Any]:
         if not self.config.enable_visual_prompt:
             return {"status": "skipped_disabled"}
         observation = case.observation
@@ -295,15 +264,15 @@ class RouteServerAgentTeacher:
         except Exception as exc:
             return {"status": "visual_prompt_error", "error": str(exc)}
 
-    async def _execute_selected_tool(self, call: ToolCall, case: AgentEvalCase) -> ToolResponse:
+    async def _execute_selected_tool(self, call: ToolCall, case: AgentStage2Case) -> ToolResponse:
         from mcp_server.agent.tool_executor import ToolExecutor
 
-        executor = ToolExecutor(app_context=self.app_context)
+        executor = ToolExecutor(app_context=self.app_context, artifact_dir=self.config.tool_artifact_dir)
         return await executor.execute(call, case=case)
 
     def _select_student_tool_call(
         self,
-        case: AgentEvalCase,
+        case: AgentStage2Case,
         *,
         intent: dict[str, Any],
         goals: dict[str, Any],

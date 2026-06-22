@@ -9,6 +9,7 @@ from typing import Iterable
 from mcp_server.agent.schemas import (
     MS_SWIFT_AGENTIC_STAGE2_SCHEMA_VERSION,
     AgentEvalCase,
+    AgentStage2Case,
     AgentTrace,
     ToolCall,
 )
@@ -47,14 +48,14 @@ def _tool_call_content(content) -> str:
     return json.dumps(call.to_ms_swift_dict(), ensure_ascii=False, sort_keys=True)
 
 
-def _case_from_trace(trace: AgentTrace) -> AgentEvalCase | None:
+def _case_from_trace(trace: AgentTrace) -> AgentStage2Case | None:
     request = trace.request
     if isinstance(request, dict) and request.get("case_id"):
-        return AgentEvalCase.from_dict(request)
+        return AgentStage2Case.from_dict(request)
     return None
 
 
-def trace_to_ms_swift_row(trace: AgentTrace, case: AgentEvalCase | None = None) -> dict:
+def trace_to_ms_swift_stage2_row(trace: AgentTrace, case: AgentStage2Case | None = None) -> dict:
     """Convert one ``AgentTrace`` to a trainable ms-swift agent-template JSONL row.
 
     输出字段:
@@ -121,17 +122,41 @@ def trace_to_ms_swift_row(trace: AgentTrace, case: AgentEvalCase | None = None) 
     return row
 
 
+def trace_to_ms_swift_row(trace: AgentTrace, case: AgentEvalCase | None = None) -> dict:
+    """Compatibility wrapper for the Stage2 exporter.
+
+    新代码应调用 ``trace_to_ms_swift_stage2_row``。保留该函数是为了不破坏早期
+    eval helper 和测试。
+    """
+
+    stage2_case = AgentStage2Case.from_dict(case.to_dict()) if case is not None else None
+    return trace_to_ms_swift_stage2_row(trace, stage2_case)
+
+
 def write_ms_swift_jsonl(
     traces: Iterable[AgentTrace],
     path: str | Path,
     *,
     cases_by_id: dict[str, AgentEvalCase] | None = None,
 ) -> None:
+    """Compatibility wrapper for ``write_ms_swift_stage2_jsonl``."""
+
+    write_ms_swift_stage2_jsonl(traces, path, cases_by_id=cases_by_id)
+
+
+def write_ms_swift_stage2_jsonl(
+    traces: Iterable[AgentTrace],
+    path: str | Path,
+    *,
+    cases_by_id: dict[str, AgentStage2Case] | None = None,
+) -> None:
+    """Write ms-swift agent-template JSONL for Stage2 cold-start training."""
+
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("w", encoding="utf-8") as handle:
         for trace in traces:
-            row = trace_to_ms_swift_row(trace, case=(cases_by_id or {}).get(trace.case_id))
+            row = trace_to_ms_swift_stage2_row(trace, case=(cases_by_id or {}).get(trace.case_id))
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 

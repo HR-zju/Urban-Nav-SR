@@ -8,7 +8,10 @@ import math
 import os
 import re
 
-import aiohttp
+try:
+    import aiohttp
+except ModuleNotFoundError:  # pragma: no cover - exercised only in minimal eval envs
+    aiohttp = None
 
 from mcp_server.config import (
     default_category_keywords,
@@ -872,6 +875,8 @@ class BaseHTTPMapClient:
         self.session: aiohttp.ClientSession | None = None
 
     async def connect(self) -> None:
+        if aiohttp is None:
+            raise RuntimeError("aiohttp is required to connect real map providers")
         total_timeout_s = float(os.getenv("MAP_HTTP_TOTAL_TIMEOUT_S", "60") or 60)
         connect_timeout_s = float(os.getenv("MAP_HTTP_CONNECT_TIMEOUT_S", "12") or 12)
         sock_read_timeout_raw = os.getenv("MAP_HTTP_SOCK_READ_TIMEOUT_S", "").strip()
@@ -2215,6 +2220,8 @@ class GoogleMapsClient(BaseHTTPMapClient):
 
 
 def create_map_client() -> tuple[MapProviderClient, str]:
+    if aiohttp is None:
+        raise RuntimeError("aiohttp is required to create real RouteServer map providers")
     provider = os.getenv("MAP_PROVIDER", "osm").strip().lower()
     if provider == "amap":
         amap_key = os.getenv("AMAP_KEY", "").strip()

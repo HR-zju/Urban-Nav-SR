@@ -6,14 +6,14 @@ import json
 from pathlib import Path
 from typing import Any
 
-from mcp_server.agent.schemas import AgentEvalCase, ToolCall, ToolResponse
+from mcp_server.agent.schemas import AgentStage2Case, ToolCall, ToolResponse
 from mcp_server.agent.tool_schema import (
     IMAGE_TOOL_NAME,
     MAP_TOOL_NAME,
     USER_INTERACTION_TOOL_NAME,
     validate_tool_call,
 )
-from mcp_server.core import map_ops, route_session_ops
+from mcp_server.core import map_ops
 
 
 def _as_location(value: Any) -> str:
@@ -46,7 +46,7 @@ class ToolExecutor:
     """Execute validated tool calls against RouteServer core operations.
 
     输入:
-        ``ToolCall``，可选 ``AgentEvalCase``，以及初始化时传入的 ``app_context``。
+        ``ToolCall``，可选 ``AgentStage2Case``，以及初始化时传入的 ``app_context``。
 
     输出:
         ``ToolResponse``。执行失败也返回结构化错误，不向上抛给 runner，这样离线
@@ -62,7 +62,7 @@ class ToolExecutor:
         self.app_context = app_context
         self.artifact_dir = Path(artifact_dir) if artifact_dir else None
 
-    async def execute(self, call: ToolCall, *, case: AgentEvalCase | None = None) -> ToolResponse:
+    async def execute(self, call: ToolCall, *, case: AgentStage2Case | None = None) -> ToolResponse:
         is_valid, errors = validate_tool_call(call)
         if not is_valid:
             return ToolResponse(
@@ -165,6 +165,8 @@ class ToolExecutor:
                 steps=bool(args.get("steps", False)),
             )
         elif op == "create_route_session":
+            from mcp_server.core import route_session_ops
+
             result = await route_session_ops.create_route_session(
                 app_context=self.app_context,
                 origin=_as_location(args.get("origin")),
@@ -174,12 +176,16 @@ class ToolExecutor:
                 session_name=args.get("session_name"),
             )
         elif op in {"get_route_session", "get_route"}:
+            from mcp_server.core import route_session_ops
+
             result = await route_session_ops.get_route_session_snapshot(
                 app_context=self.app_context,
                 session_id=str(args.get("session_id")),
                 force_replan=bool(args.get("force_replan", False)),
             )
         elif op == "add_via_and_replan":
+            from mcp_server.core import route_session_ops
+
             result = await route_session_ops.add_via_point(
                 app_context=self.app_context,
                 session_id=str(args.get("session_id")),
@@ -187,6 +193,8 @@ class ToolExecutor:
                 insert_before_index=args.get("insert_before_index"),
             )
         elif op == "remove_via_and_replan":
+            from mcp_server.core import route_session_ops
+
             result = await route_session_ops.remove_via_point(
                 app_context=self.app_context,
                 session_id=str(args.get("session_id")),
@@ -194,12 +202,16 @@ class ToolExecutor:
                 via_point_name=args.get("via_point_name"),
             )
         elif op == "replace_destination":
+            from mcp_server.core import route_session_ops
+
             result = await route_session_ops.replace_destination(
                 app_context=self.app_context,
                 session_id=str(args.get("session_id")),
                 destination=_as_location(args.get("destination")),
             )
         elif op == "replan_from_current_pose":
+            from mcp_server.core import route_session_ops
+
             result = await route_session_ops.replan_route_session_from_origin(
                 app_context=self.app_context,
                 session_id=str(args.get("session_id")),
@@ -214,7 +226,7 @@ class ToolExecutor:
             )
         return ToolResponse(tool=call.tool, success=True, result=result, call_id=call.call_id)
 
-    def _execute_image_tool(self, call: ToolCall, *, case: AgentEvalCase | None) -> ToolResponse:
+    def _execute_image_tool(self, call: ToolCall, *, case: AgentStage2Case | None) -> ToolResponse:
         args = dict(call.arguments)
         image_path = args.get("image_path")
         if not image_path and case is not None:

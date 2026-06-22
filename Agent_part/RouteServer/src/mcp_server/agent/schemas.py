@@ -2,7 +2,7 @@
 
 这些 dataclass 是 RouteServer teacher、rule baseline、外部 LVLM 和本项目
 E2E LVLM checkpoint 之间的公共协议。Stage2 直接使用最终 agentic cold-start
-格式：工具调用是独立 ``tool_call`` role，工具返回是独立 ``tool_response`` role，
+格式：工具调用是独立 ``tool_call`` role 工具返回是独立 ``tool_response`` role
 最终导航 readout prompt 在工具返回之后插入 ``[TRAJ_*]`` token。
 """
 
@@ -12,8 +12,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
-AGENT_EVAL_CASE_SCHEMA_VERSION = "sidewalk_agent_stage2_case_v1"
-AGENT_TRACE_SCHEMA_VERSION = "sidewalk_agent_trace_v2"
+AGENT_STAGE2_CASE_SCHEMA_VERSION = "sidewalk_agent_stage2_case_v1"
+AGENT_EVAL_CASE_SCHEMA_VERSION = AGENT_STAGE2_CASE_SCHEMA_VERSION
+AGENT_STAGE2_TRACE_SCHEMA_VERSION = "sidewalk_agent_trace_v2"
+AGENT_TRACE_SCHEMA_VERSION = AGENT_STAGE2_TRACE_SCHEMA_VERSION
 MS_SWIFT_AGENTIC_STAGE2_SCHEMA_VERSION = "sidewalk_agentic_stage2_sft_v1"
 
 
@@ -160,16 +162,19 @@ class AgentTurn:
 
 @dataclass
 class AgentEvalCase:
-    """One offline evaluation/training case for Agentic Stage2.
+    """Backward-compatible offline evaluation/training case container.
+
+    新代码应优先使用 ``AgentStage2Case``。保留本类是为了不破坏已有
+    ``AgentEvalCase`` import 和早期 eval helpers 字段与 Stage2 case 完全一致。
 
     JSONL 行格式:
         ``schema_version`` 固定为 ``sidewalk_agent_stage2_case_v1``。
         ``observation.images`` 可为 ``{"fpv": "...", "bev": "..."}`` 或图片路径列表。
-        ``ground_truth.expected_tool_ops`` 可选，用于 tool-op 指标；Phase1 的
+        ``ground_truth.expected_tool_ops`` 可选，用于 tool-op 指标 Phase1 的
         ``pixel_trajectory``、``trajectory_fpv_t``、``semantic_segmentation_path`` 等
         监督字段继续放在 ``ground_truth`` 中并由 exporter 透传。
 
-    该结构不包含新 teacher LVLM 输出；teacher 只在 runner 阶段生成 AgentTrace。
+    该结构不包含新 teacher LVLM 输出 teacher 只在 runner 阶段生成 AgentTrace。
     """
 
     case_id: str
@@ -230,8 +235,46 @@ class AgentEvalCase:
 
 
 @dataclass
+class AgentStage2Case(AgentEvalCase):
+    """Canonical Stage2 case used by Agentic Cold Start data generation.
+
+    输入:
+        一个 JSON object 通常来自 ``sidewalk_agent_stage2_cases_review.jsonl``
+        或 Phase1 archive 合并后的 Stage2 source。核心字段包括
+        ``case_id``、``user_request``、``observation``、``ground_truth``。
+
+    输出:
+        ``to_dict()`` 返回 JSONL 可写入对象；``images`` 返回按 FPV、BEV 优先排序
+        的图片路径列表。该类不执行 teacher 或 tool 只承载可复现输入和监督字段。
+
+    重要约束:
+        ``ground_truth.pixel_trajectory`` / ``trajectory_fpv_t`` /
+        ``semantic_segmentation_path`` 等监督字段不进入 LM 文本；它们由 exporter
+        透传给 ms-swift SideWalk trainer 的额外 loss。
+    """
+
+    schema_version: str = AGENT_STAGE2_CASE_SCHEMA_VERSION
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "AgentStage2Case":
+        return cls(
+            case_id=str(payload.get("case_id") or payload.get("id") or ""),
+            user_request=str(payload.get("user_request") or payload.get("instruction") or ""),
+            task_type=str(payload.get("task_type") or "sidewalk_navigation_agent"),
+            schema_version=str(payload.get("schema_version") or AGENT_STAGE2_CASE_SCHEMA_VERSION),
+            observation=dict(payload.get("observation") or {}),
+            dialogue_history=list(payload.get("dialogue_history") or payload.get("messages") or []),
+            tools=list(payload.get("tools") or []),
+            ground_truth=dict(payload.get("ground_truth") or {}),
+            split=str(payload.get("split") or "eval"),
+            locale=str(payload.get("locale") or "zh-CN"),
+            metadata=dict(payload.get("metadata") or {}),
+        )
+
+
+@dataclass
 class AgentTrace:
-    """Replayable Agentic Stage2 trajectory generated from one ``AgentEvalCase``.
+    """Replayable Agentic Stage2 trajectory generated from one ``AgentStage2Case``.
 
     输入:
         case + runner/model output + optional tool responses。
@@ -255,7 +298,7 @@ class AgentTrace:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_case(cls, case: AgentEvalCase, *, model_run: dict[str, Any] | None = None) -> "AgentTrace":
+    def from_case(cls, case: AgentStage2Case, *, model_run: dict[str, Any] | None = None) -> "AgentTrace":
         return cls(
             case_id=case.case_id,
             task_type=case.task_type,

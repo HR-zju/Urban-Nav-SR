@@ -1,7 +1,7 @@
 """Metrics for final Agentic Stage2 traces.
 
 指标只评估协议可解析性、工具选择、参数有效性、最终 CoT/finish 和
-``tool_response -> [TRAJ_*]`` 因果顺序。它不依赖外部 LVLM，也不评估自然语言质量。
+``tool_response -> [TRAJ_*]`` 因果顺序。它不依赖外部 LVLM 也不评估自然语言质量。
 """
 
 from __future__ import annotations
@@ -9,13 +9,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from mcp_server.agent.schemas import (
-    AgentEvalCase,
-    AgentMetricResult,
-    AgentTrace,
-    ToolCall,
-    ToolResponse,
-)
+from mcp_server.agent.schemas import AgentMetricResult, AgentStage2Case, AgentTrace, ToolCall, ToolResponse
 from mcp_server.agent.stage2 import NAVIGATION_READOUT_TOKENS
 from mcp_server.agent.tool_parser import parse_finish_text, parse_tool_call_text
 from mcp_server.agent.tool_schema import validate_tool_call
@@ -142,7 +136,11 @@ def _final_cot_valid(trace: AgentTrace) -> bool:
     return bool(final_text) and all(tag in final_text for tag in required_tags)
 
 
-def _finish_trajectory_consistent(finishes: list[dict[str, Any]], case: AgentEvalCase | None, trace: AgentTrace) -> float | None:
+def _finish_trajectory_consistent(
+    finishes: list[dict[str, Any]],
+    case: AgentStage2Case | None,
+    trace: AgentTrace,
+) -> float | None:
     payload: dict[str, Any] = {}
     if case is not None:
         payload.update(case.ground_truth)
@@ -156,7 +154,7 @@ def _finish_trajectory_consistent(finishes: list[dict[str, Any]], case: AgentEva
     return 1.0 if actual == expected else 0.0
 
 
-def _expected_ops(case: AgentEvalCase | None, trace: AgentTrace) -> list[str]:
+def _expected_ops(case: AgentStage2Case | None, trace: AgentTrace) -> list[str]:
     payload: dict[str, Any] = {}
     if case is not None:
         payload.update(case.ground_truth)
@@ -169,7 +167,7 @@ def _expected_ops(case: AgentEvalCase | None, trace: AgentTrace) -> list[str]:
     return [str(ops)]
 
 
-def compute_trace_metrics(trace: AgentTrace, case: AgentEvalCase | None = None) -> AgentMetricResult:
+def compute_trace_metrics(trace: AgentTrace, case: AgentStage2Case | None = None) -> AgentMetricResult:
     """Compute final Stage2 Agent metrics.
 
     输出字段:

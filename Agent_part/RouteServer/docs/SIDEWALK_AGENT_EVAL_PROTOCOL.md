@@ -30,6 +30,12 @@ src/mcp_server/eval/
   runners.py
   metrics.py
   exporters.py
+  phase1_archive_adapter.py
+  stage2_validator.py
+
+src/mcp_server/teacher/
+  agentic_stage2_trace_builder.py
+  trace_builder.py
 ```
 
 ## 2. 固定因果顺序
@@ -48,7 +54,47 @@ assistant final CoT + <finish>
 原因是 ms-swift SideWalk trajectory head 从 `[TRAJ_*]` token 的 hidden states 读出轨迹。
 只有把这些 token 放在 `tool_response` 之后，trajectory head 才能因果看到工具结果。
 
-## 3. AgentEvalCase JSONL
+正式 Python API：
+
+```text
+AgentStage2Case
+AgenticStage2TraceBuilder.build_trace()
+trace_to_ms_swift_stage2_row()
+write_ms_swift_stage2_jsonl()
+validate_stage2_case()
+validate_stage2_trace()
+validate_ms_swift_stage2_row()
+```
+
+旧的 `AgentEvalCase`、`trace_to_ms_swift_row()`、`write_ms_swift_jsonl()` 只作为兼容入口保留。
+
+## 2.1 Phase1 Archive 接入
+
+真实 Phase1 archive 通过以下 adapter 接入 Stage2：
+
+```text
+src/mcp_server/eval/phase1_archive_adapter.py
+phase1_archive_row_to_stage2_case()
+load_phase1_archive_stage2_cases()
+```
+
+支持两类输入：
+
+- `sidewalk_phase1_archive/manifests/*.jsonl`：`messages/images/pixel_trajectory/sidewalk_meta`。
+- 归档前 `phase1_cot_*.jsonl`：`prompt/response/fpv_image_path/bev_image_path`。
+
+adapter 只做字段迁移：
+
+- Phase1 assistant CoT 保存为 `ground_truth.phase1_response`。
+- `pixel_trajectory`、`trajectory_fpv_t`、`trajectory_fpv_tv`、`trajectory_ego_t`、`trajectory_policy` 原样进入 `ground_truth`。
+- `semantic_segmentation_path`、`semantic_mask_path` 等 seg 监督路径原样进入 `ground_truth`。
+- 图片路径默认按 Phase1 manifest 所在目录解析相对路径。
+
+注意：adapter 不重写轨迹、不重新采样标签。Stage2 的数学约束是把工具结果
+`C_tool` 插入在 readout token 之前，让 `[TRAJ_i]` hidden states 能看到工具上下文；
+监督目标 `Y` 仍然是 Phase1 archive 已验证过的轨迹/seg 标签。
+
+## 3. AgentStage2Case JSONL
 
 每行一个 JSON object：
 
@@ -158,7 +204,7 @@ runner 输出统一 trace：
   "schema_version": "sidewalk_agent_trace_v2",
   "case_id": "case-0001",
   "task_type": "sidewalk_navigation_agent",
-  "request": {"...": "original AgentEvalCase"},
+  "request": {"...": "original AgentStage2Case"},
   "turns": [
     {"role": "user", "content": "<image><image>帮我找一个可以休息的地方"},
     {"role": "assistant", "content": "<think>...<AgentState>...<ToolDecision>...</think>"},
@@ -190,7 +236,7 @@ runner 输出统一 trace：
 
 ## 6. ms-swift JSONL Export
 
-`eval/exporters.py` 将高质量 `AgentTrace` 导出为：
+`eval/exporters.py::trace_to_ms_swift_stage2_row()` 将高质量 `AgentTrace` 导出为：
 
 ```json
 {
@@ -254,7 +300,14 @@ route_update_success
 
 ## 8. RouteServer Teacher Wrapper
 
-teacher wrapper 位于：
+Stage2 trace 拼装入口位于：
+
+```text
+src/mcp_server/teacher/agentic_stage2_trace_builder.py
+```
+
+它只接收 case、tool call、tool response，然后输出固定顺序 trace。RouteServer teacher
+wrapper 位于：
 
 ```text
 src/mcp_server/teacher/trace_builder.py
@@ -276,3 +329,54 @@ trace.metadata["teacher_internal"]
 ```
 
 学生可见部分只有三类元工具和最终导航 CoT。
+
+## 9. Validator 与 Review Build
+
+独立 validator 位于：
+
+```text
+src/mcp_server/eval/stage2_validator.py
+```
+
+验证范围：
+
+```text
+case schema/version/basic fields
+trace role order and readout token order
+tool_call/tool_response JSON shape
+final assistant Phase1 tags + <ToolResultUse> + <finish>
+ms-swift row tools/tool_call/tool_response JSON string type
+```
+
+生成 review 样例：
+
+```bash
+PYTHONPATH=src python tools/evaluation/build_sidewalk_agent_stage2_review_samples.py
+```
+
+默认输入输出：
+
+```text
+examples/agent_eval/sidewalk_agent_stage2_cases_review.jsonl
+examples/agent_eval/sidewalk_agent_stage2_traces_review.jsonl
+examples/agent_eval/sidewalk_agentic_stage2_ms_swift_review.jsonl
+examples/agent_eval/sidewalk_agent_stage2_report_review.json
+```
+
+接真实 Phase1 archive 并使用 ToolExecutor smoke：
+
+```bash
+PYTHONPATH=src python tools/evaluation/build_sidewalk_agent_stage2_review_samples.py \
+  --phase1-archive-jsonl /path/to/sidewalk_phase1_archive/manifests/train.jsonl \
+  --limit 16 \
+  --execute-tools \
+  --tool-context fake \
+  --traces-out examples/agent_eval/sidewalk_phase1_stage2_traces_smoke.jsonl \
+  --ms-swift-out examples/agent_eval/sidewalk_phase1_agentic_stage2_ms_swift_smoke.jsonl \
+  --report-out examples/agent_eval/sidewalk_phase1_stage2_report_smoke.json
+```
+
+`--tool-context fake` 使用本地假地图客户端，但仍走真实 `ToolExecutor -> map_ops /
+route_session_ops` 调用路径，适合离线 smoke。`--tool-context provider` 会创建真实
+RouteServer map provider，可能依赖网络和 provider API key。默认不传
+`--execute-tools` 时仍使用 synthetic tool response，便于协议 review 和单测。

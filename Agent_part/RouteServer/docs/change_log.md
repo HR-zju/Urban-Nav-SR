@@ -5,21 +5,37 @@
 ### 升级 SideWalk Agent/Eval 为 Agentic Stage2 最终协议
 
 - 新增 `src/mcp_server/agent/`：
-  - `schemas.py` 定义 `sidewalk_agent_stage2_case_v1`、`sidewalk_agent_trace_v2`、`ToolCall`、`ToolResponse`。
+  - `schemas.py` 定义 `AgentStage2Case`、`sidewalk_agent_stage2_case_v1`、`sidewalk_agent_trace_v2`、`ToolCall`、`ToolResponse`。
   - `stage2.py` 固化 `assistant think -> tool_call -> tool_response -> user [TRAJ_*] -> assistant final` 顺序。
   - `tool_schema.py` 只向学生模型暴露 `map_tool`、`image_tool`、`user_interaction_tool` 三个元工具。
   - `tool_parser.py` 保留低层 action/finish 解析，用于 final assistant `<finish>` 校验。
   - `tool_executor.py` 将元工具分发到 `core.map_ops` / `core.route_session_ops`，同时支持 image crop 和用户澄清动作的结构化记录。
 - 新增 `src/mcp_server/eval/`：
-  - `cases.py` 读写 `sidewalk_agent_stage2_case_v1` JSONL。
+  - `cases.py` 读写 `sidewalk_agent_stage2_case_v1` JSONL，正式入口为 `load_stage2_cases` / `write_stage2_cases`。
   - `runners.py` 定义 `AgentRunner`，并提供 rule baseline 与 RouteServer teacher adapter。
   - `metrics.py` 实现 `parse_success`、`tool_name_accuracy`、`tool_op_accuracy`、`argument_validity`、`finish_validity`、`stage2_role_order_valid`、`trajectory_readout_order_valid`、`final_cot_validity`、`route_update_success`。
-  - `exporters.py` 将 `AgentTrace` 导出为 ms-swift agent-template JSONL，使用独立 `tool_call` / `tool_response` role，并把 `tools` 写成 JSON 字符串。
+  - `exporters.py` 将 `AgentTrace` 导出为 ms-swift agent-template JSONL，正式入口为 `trace_to_ms_swift_stage2_row` / `write_ms_swift_stage2_jsonl`，使用独立 `tool_call` / `tool_response` role，并把 `tools` 写成 JSON 字符串。
+  - `stage2_validator.py` 独立验证 case、trace、ms-swift row 的 role 顺序、tool JSON、readout token 和 final CoT tags。
 - 新增 `docs/SIDEWALK_AGENT_EVAL_PROTOCOL.md`，记录 final Stage2 case、trace、metrics 和 ms-swift 导出格式。
 - 新增 `tests/test_agent_eval_framework.py`，覆盖 case JSONL、tool parser、tool schema、rule runner、metrics 和 ms-swift exporter。
-- 新增 `src/mcp_server/teacher/trace_builder.py`，将旧 `IntentParser`、`GoalDecomposer`、POI recommendation 和 visual prompt teacher 封装为 `RouteServerTeacherRunner` 可输出的 `AgentTrace`。
-- 新增 `examples/agent_eval/sidewalk_agent_eval_cases_review.jsonl`，覆盖 `search_poi`、`create_route_session`、`add_via_and_replan`、`replace_destination`、`request_clarification`、`image_tool crop` 六类 Stage2 样例。
-- 新增 `tools/evaluation/build_sidewalk_agent_review_samples.py`，可从 review cases 生成 teacher traces、ms-swift JSONL 和 metrics summary，便于人工 review。
+- 新增 `src/mcp_server/teacher/agentic_stage2_trace_builder.py`，集中拼装 normalized Stage2 trace；`trace_builder.py` 只负责 RouteServer teacher 侧工具选择和 teacher internal metadata。
+- 新增 `examples/agent_eval/sidewalk_agent_stage2_cases_review.jsonl`，覆盖 `search_poi`、`create_route_session`、`add_via_and_replan`、`replace_destination`、`request_clarification`、`image_tool crop` 六类 Stage2 样例。
+- 新增 `tools/evaluation/build_sidewalk_agent_stage2_review_samples.py`，可从 review cases 生成 `sidewalk_agent_stage2_traces_review.jsonl`、`sidewalk_agentic_stage2_ms_swift_review.jsonl` 和 `sidewalk_agent_stage2_report_review.json`。
+
+### 接入 Phase1 Archive 与真实 ToolExecutor
+
+- 新增 `src/mcp_server/eval/phase1_archive_adapter.py`：
+  - 支持读取 `sidewalk_phase1_archive/manifests/*.jsonl` 和归档前 `phase1_cot_*.jsonl`。
+  - 将 Phase1 assistant CoT 保存到 `ground_truth.phase1_response`。
+  - 原样透传 `pixel_trajectory`、`trajectory_fpv_t`、`trajectory_fpv_tv`、`trajectory_ego_t`、`trajectory_policy` 和 seg 监督路径。
+  - 默认按 Phase1 manifest 所在目录解析相对图片/sidecar 路径。
+- 扩展 `tools/evaluation/build_sidewalk_agent_stage2_review_samples.py`：
+  - 增加 `--phase1-archive-jsonl` / `--limit` / `--execute-tools` / `--tool-context fake|provider|none`。
+  - `fake` 模式使用本地假地图客户端，但仍经过真实 `ToolExecutor -> map_ops/route_session_ops` 调用路径，适合离线 smoke。
+  - `provider` 模式创建真实 RouteServer map provider，供后续接 API key/网络环境使用。
+- `RouteServerTeacherRunner` 和 `RouteServerAgentTeacher` 增加 `enable_recommendation`、`tool_artifact_dir` 透传参数。
+- `ToolExecutor` 改为 lazy load route-session ops；`mcp_server.core` 不再在 map-only 场景提前加载 route-session provider 依赖，避免轻量测试环境缺 `aiohttp` 时阻断 `search_poi` smoke。
+- 增加 Phase1 archive + ToolExecutor 路径单测，并生成 `examples/agent_eval/sidewalk_phase1_*_smoke.*` 供人工 review。
 
 ## 2026-06-19
 

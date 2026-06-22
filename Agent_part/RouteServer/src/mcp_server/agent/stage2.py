@@ -1,4 +1,10 @@
-"""Helpers for the final SideWalk Agentic Stage2 protocol."""
+"""Helpers for the final SideWalk Agentic Stage2 protocol.
+
+本模块只处理“协议拼装”，不调用 LLM、地图服务或图像模型。核心数学/因果约束是
+自回归 Transformer 的 attention mask 第 t 个 token 只能看到它之前的 token。
+因此用于 trajectory head 的 ``[TRAJ_i]`` readout token 必须放在 ``tool_response``
+之后，否则读出的 hidden state 无法包含工具结果，轨迹监督会错位。
+"""
 
 from __future__ import annotations
 
@@ -6,7 +12,7 @@ import json
 import re
 from typing import Any
 
-from mcp_server.agent.schemas import AgentEvalCase, ToolCall, ToolResponse
+from mcp_server.agent.schemas import AgentStage2Case, ToolCall, ToolResponse
 
 
 TRAJECTORY_TOKEN_COUNT = 16
@@ -20,18 +26,48 @@ _FINISH_RE = re.compile(r"<finish>(.*?)</finish>", re.DOTALL)
 
 
 def json_dumps(payload: Any) -> str:
+    """Serialize protocol JSON deterministically.
+
+    输入:
+        任意 JSON 可序列化对象。
+
+    输出:
+        无多余空格、key 稳定排序的 UTF-8 JSON 字符串，适合放入 XML-like tag。
+    """
+
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def initial_user_content(case: AgentEvalCase) -> str:
+def initial_user_content(case: AgentStage2Case) -> str:
+    """Build the first user turn.
+
+    输入:
+        ``AgentStage2Case``，其中 ``observation.images`` 决定 ``<image>`` 数量。
+
+    输出:
+        ``<image>...`` 前缀 + 用户导航请求。
+    """
+
     return "".join("<image>" for _ in case.images) + case.user_request
 
 
 def final_navigation_user_content() -> str:
+    """Return the fixed final readout prompt containing all trajectory query tokens."""
+
     return FINAL_NAVIGATION_DECISION_PROMPT
 
 
 def build_agent_think_text(*, state: dict[str, Any], decision: dict[str, Any]) -> str:
+    """Build the assistant reasoning turn before tool execution.
+
+    输入:
+        ``state`` 是当前导航状态摘要；``decision`` 是是否调用工具、调用哪个工具的
+        结构化教师决策。
+
+    输出:
+        assistant content。该文本算 LM loss 但不包含可执行 ``tool_call`` JSON。
+    """
+
     return (
         "<think>\n"
         f"<AgentState>{json_dumps(state)}</AgentState>\n"
@@ -40,7 +76,9 @@ def build_agent_think_text(*, state: dict[str, Any], decision: dict[str, Any]) -
     )
 
 
-def build_agent_state(case: AgentEvalCase, *, intent: dict[str, Any] | None = None) -> dict[str, Any]:
+def build_agent_state(case: AgentStage2Case, *, intent: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Build the compact ``<AgentState>`` payload for the first assistant turn."""
+
     observation = case.observation
     intent = intent or {}
     return {
@@ -54,6 +92,8 @@ def build_agent_state(case: AgentEvalCase, *, intent: dict[str, Any] | None = No
 
 
 def build_tool_decision(call: ToolCall, *, reason: str) -> dict[str, Any]:
+    """Build the compact ``<ToolDecision>`` payload aligned with the next tool_call role."""
+
     return {
         "should_call_tool": True,
         "tool": call.tool,
@@ -64,12 +104,26 @@ def build_tool_decision(call: ToolCall, *, reason: str) -> dict[str, Any]:
 
 def synthetic_tool_response(
     call: ToolCall,
-    case: AgentEvalCase,
+    case: AgentStage2Case,
     *,
     source: str,
     recommendation: dict[str, Any] | None = None,
     visual_prompt: dict[str, Any] | None = None,
 ) -> ToolResponse:
+    """Create a deterministic offline tool response for review/cold-start bootstrapping.
+
+    输入:
+        ``call`` 是学生可见工具调用；``case`` 提供当前观测和监督；可选
+        ``recommendation`` / ``visual_prompt`` 只作为 teacher internal context 摘要。
+
+    输出:
+        ``ToolResponse``，可直接写入 trace 的 ``tool_response`` role。
+
+    说明:
+        真实 RouteServer executor 接入前 Stage2 仍必须提供 tool_response 保证
+        后续 ``[TRAJ_i]`` token 的 hidden state 能看到“工具结果”这一类上下文。
+    """
+
     args = dict(call.arguments)
     op = str(args.get("op") or "")
     if call.tool == "map_tool":
@@ -97,13 +151,24 @@ def synthetic_tool_response(
 
 
 def build_final_assistant_text(
-    case: AgentEvalCase,
+    case: AgentStage2Case,
     *,
     call: ToolCall,
     response: ToolResponse,
     source: str,
     phase1_response: str | None = None,
 ) -> str:
+    """Build the final assistant CoT and ``<finish>`` target.
+
+    输入:
+        Stage2 case、已执行或合成的工具调用/返回，以及可选 Phase1 CoT response。
+
+    输出:
+        最终 assistant content。若 case 中已有 Phase1 CoT 会插入
+        ``<ToolResultUse>`` 并补齐 ``<finish>`` 的 tool fields 否则生成可 review
+        的 deterministic fallback CoT。
+    """
+
     tool_use = _tool_result_use(call=call, response=response)
     finish_extra = _finish_extra(case=case, call=call, response=response, source=source)
     base_response = (phase1_response or _find_phase1_response(case)).strip()
@@ -149,7 +214,7 @@ def build_final_assistant_text(
     )
 
 
-def _available_context(case: AgentEvalCase) -> list[str]:
+def _available_context(case: AgentStage2Case) -> list[str]:
     context = ["user_request"]
     if case.images:
         context.append("images")
@@ -166,7 +231,7 @@ def _synthetic_map_result(
     *,
     op: str,
     args: dict[str, Any],
-    case: AgentEvalCase,
+    case: AgentStage2Case,
     recommendation: dict[str, Any] | None,
 ) -> dict[str, Any]:
     recommendation = recommendation or {}
@@ -232,7 +297,7 @@ def _tool_result_use(*, call: ToolCall, response: ToolResponse) -> dict[str, Any
     }
 
 
-def _finish_extra(*, case: AgentEvalCase, call: ToolCall, response: ToolResponse, source: str) -> dict[str, Any]:
+def _finish_extra(*, case: AgentStage2Case, call: ToolCall, response: ToolResponse, source: str) -> dict[str, Any]:
     finish = {
         "route_action": _route_action(call),
         "tool_used": True,
@@ -264,7 +329,7 @@ def _route_action(call: ToolCall) -> str:
     return "continue_navigation"
 
 
-def _route_session_id(case: AgentEvalCase, call: ToolCall, response: ToolResponse) -> Any:
+def _route_session_id(case: AgentStage2Case, call: ToolCall, response: ToolResponse) -> Any:
     if call.arguments.get("session_id") is not None:
         return call.arguments.get("session_id")
     result = response.result if isinstance(response.result, dict) else {}
@@ -272,14 +337,14 @@ def _route_session_id(case: AgentEvalCase, call: ToolCall, response: ToolRespons
     return session.get("session_id") or result.get("session_id") or case.observation.get("route_session_id")
 
 
-def _trajectory(case: AgentEvalCase) -> list[list[float]]:
+def _trajectory(case: AgentStage2Case) -> list[list[float]]:
     trajectory = case.ground_truth.get("pixel_trajectory") or case.ground_truth.get("trajectory")
     if isinstance(trajectory, list) and trajectory:
         return trajectory
     return [[0.5, round(0.9 - index * 0.03, 4)] for index in range(TRAJECTORY_TOKEN_COUNT)]
 
 
-def _find_phase1_response(case: AgentEvalCase) -> str:
+def _find_phase1_response(case: AgentStage2Case) -> str:
     for payload in (case.ground_truth, case.metadata, case.observation):
         for key in ("phase1_response", "phase1_answer", "cot_response", "assistant_response", "response"):
             value = payload.get(key) if isinstance(payload, dict) else None
