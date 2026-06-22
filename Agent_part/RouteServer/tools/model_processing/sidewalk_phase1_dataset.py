@@ -97,6 +97,8 @@ class FrameRecord:
     heading_deg: float | None = None
     timestamp: int | None = None
     speed_mps: float | None = None
+    video_frame_idx: int | None = None
+    video_frame_rate_hz: float | None = None
     roll_deg: float | None = None
     pitch_deg: float | None = None
     position_xy: tuple[float, float] | None = None
@@ -199,6 +201,28 @@ def _load_frame_orientation_order(clip_dir: Path) -> str | None:
         return None
     order = str(meta.get("frame_orientations_order") or "").strip().lower()
     return order if order in {"xyzw", "wxyz"} else None
+
+
+def _load_front_video_fps(clip_dir: Path) -> float | None:
+    for meta_name in ("mcap_extract_meta.json", "conversion_report.json"):
+        meta_path = clip_dir / meta_name
+        if not meta_path.is_file():
+            continue
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for key in ("front_video_fps", "video_fps"):
+            value = meta.get(key)
+            if value is None:
+                continue
+            try:
+                fps = float(value)
+            except Exception:
+                continue
+            if fps > 0:
+                return fps
+    return None
 
 
 def _orientation_row_to_wxyz(row: np.ndarray, *, order: str | None) -> tuple[float, float, float, float]:
@@ -1197,8 +1221,10 @@ def _iter_internnav_frame_records(
         raise ValueError(f"frame_orientations.npy must have shape [N, >=4]: {clip_dir}")
     camera_params = _load_camera_params(clip_dir)
     orientation_order = _load_frame_orientation_order(clip_dir)
+    front_video_fps = _load_front_video_fps(clip_dir)
     frame_times = _load_optional_array(clip_dir / "frame_times.npy")
     frame_speeds = _load_optional_array(clip_dir / "frame_speeds.npy")
+    frame_video_indices = _load_optional_array(clip_dir / "frame_video_indices.npy")
     frame_count = min(len(positions), len(orientations))
     fpv_video_path = (clip_dir / "front.mp4").resolve() if (clip_dir / "front.mp4").is_file() else None
     for frame_idx in range(frame_count):
@@ -1236,6 +1262,12 @@ def _iter_internnav_frame_records(
                 if frame_speeds is not None and frame_idx < len(frame_speeds)
                 else None
             ),
+            video_frame_idx=(
+                int(frame_video_indices[frame_idx])
+                if frame_video_indices is not None and frame_idx < len(frame_video_indices)
+                else None
+            ),
+            video_frame_rate_hz=front_video_fps,
             position_xy=(float(positions[frame_idx, 0]), float(positions[frame_idx, 1])),
             orientation_wxyz=_orientation_row_to_wxyz(orientations[frame_idx, :4], order=orientation_order),
             camera_params=camera_params,
@@ -1297,9 +1329,9 @@ def materialize_fpv_image(record: FrameRecord, output_root: Path, *, frame_rate_
         raise FileNotFoundError(f"Cannot resolve FPV image for {record.clip_id}:{record.frame_idx}")
     image_path = _extract_video_frame(
         record.fpv_video_path,
-        record.frame_idx,
+        record.video_frame_idx if record.video_frame_idx is not None else record.frame_idx,
         output_root / "clips" / record.clip_id / "fpv_frames",
-        frame_rate_hz=frame_rate_hz,
+        frame_rate_hz=record.video_frame_rate_hz if record.video_frame_idx is not None else frame_rate_hz,
     )
     if image_path is None:
         raise FileNotFoundError(f"Cannot extract FPV image for {record.clip_id}:{record.frame_idx}")
