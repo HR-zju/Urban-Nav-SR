@@ -167,3 +167,151 @@ HTML 中每条 case 包含：
 5. `acceptable_destinations` 是否被误当成多途经点；多途经点应检查
    `gt_destination_sequence` 的顺序是否符合指令。
 6. route-update 或 multi-stop 样例是否应进入主 benchmark，还是只作为分析集。
+
+## 7. 大规模 AMap GT 采集
+
+中国区域数据使用 AMap live provider 构建。采集阶段会真实调用 POI 检索和步行路线 API；没有 POI、没有可规划路线、路线距离超出范围或类别约束不满足的样例会进入 `task_rejects.jsonl`，不会写入 `task_gt.jsonl`。
+
+```bash
+cd Agent_part/RouteServer
+
+export MAP_PROVIDER=amap
+export AMAP_KEY="<your-amap-key>"
+
+PYTHONPATH=src python tools/dataset_processing/collect_urbannav_live_gt.py \
+  --output-root data/benchmark/urbannav_live_v1 \
+  --config config/urbannav_live_gt_collection.json \
+  --target-cases 10000 \
+  --map-provider amap \
+  --origins-per-region 45 \
+  --candidate-limit 10 \
+  --search-radius-m 1500 \
+  --acceptable-route-ratio 1.15 \
+  --throttle-s 0.05 \
+  --resume
+```
+
+dry-run 只检查采样计划，不访问 API：
+
+```bash
+PYTHONPATH=src python tools/dataset_processing/collect_urbannav_live_gt.py \
+  --output-root /tmp/urbannav_live_gt_dryrun \
+  --target-cases 10000 \
+  --dry-run \
+  --overwrite
+```
+
+## 8. Global OSM/OSRM Pilot
+
+多国家公开 split 使用 OSM/Overpass 做 POI 检索，并使用 OSRM/Valhalla 类 routing backend 生成步行路线。公共 Overpass 不适合高并发，pilot 阶段建议保守设置并开启 `--resume`。
+
+100-case smoke：
+
+```bash
+cd Agent_part/RouteServer
+
+PYTHONPATH=src python tools/dataset_processing/collect_urbannav_global_gt.py \
+  --output-root /tmp/urbannav_global_osm_smoke_100 \
+  --target-cases 100 \
+  --origins-per-region 12 \
+  --candidate-limit 3 \
+  --search-radius-m 1200 \
+  --throttle-s 0.5 \
+  --retry 1 \
+  --overwrite
+```
+
+1K pilot + Leaflet review：
+
+```bash
+cd Agent_part/RouteServer
+
+PYTHONPATH=src python tools/dataset_processing/run_urbannav_global_pilot_review.py \
+  --output-root data/benchmark/urbannav_global_osm_v1 \
+  --target-cases 1000 \
+  --origins-per-region 45 \
+  --candidate-limit 3 \
+  --search-radius-m 1200 \
+  --throttle-s 0.8 \
+  --retry 2 \
+  --case-concurrency 2 \
+  --route-concurrency 3 \
+  --resume \
+  --review-cases 160 \
+  --review-dir data/benchmark/urbannav_global_osm_v1/review_leaflet_160
+```
+
+## 9. Multi-Stop 和 Route-Update Review
+
+多途经点 review 用于检查有序 stop 的构造质量。HTML 地图会标注 `S, 1, 2, ..., D`。
+
+```bash
+cd Agent_part/RouteServer
+
+export MAP_PROVIDER=amap
+export AMAP_KEY="<your-amap-key>"
+
+PYTHONPATH=src python tools/dataset_processing/build_urbannav_multistop_review.py \
+  --output-root data/benchmark/urbannav_yuquan_multistop_live_v1 \
+  --origin-json tests/fixtures/urbannav_yuquan_origin.jsonl \
+  --tasks-json tests/fixtures/urbannav_yuquan_multistop_tasks.jsonl \
+  --map-provider amap \
+  --num-cases 5 \
+  --search-radius-m 1500 \
+  --candidate-limit 8 \
+  --acceptable-route-ratio 1.15
+```
+
+Route-update review 用于检查已有路线上的增量修改。HTML 地图用灰色虚线表示旧路线，红色实线表示更新后路线，并标注原起点、更新位置、旧目标、新增或替换目标和最终目标。
+
+```bash
+cd Agent_part/RouteServer
+
+export MAP_PROVIDER=amap
+export AMAP_KEY="<your-amap-key>"
+
+PYTHONPATH=src python tools/dataset_processing/build_urbannav_route_update_review.py \
+  --output-root data/benchmark/urbannav_yuquan_route_update_live_v1 \
+  --origin-json tests/fixtures/urbannav_yuquan_origin.jsonl \
+  --tasks-json config/urbannav_route_update_review_tasks.jsonl \
+  --map-provider amap \
+  --num-cases 4 \
+  --search-radius-m 1500 \
+  --candidate-limit 3 \
+  --acceptable-route-ratio 1.15
+```
+
+## 10. Commercial Provider Review
+
+商业 provider 对照集用于分析开放地图真值质量和 provider 偏差，不改变 UrbanNav schema 与 evaluator。TomTom smoke 需要提供 `TOMTOM_API_KEY`。
+
+```bash
+cd Agent_part/RouteServer
+
+export TOMTOM_API_KEY="<your-tomtom-key>"
+
+PYTHONPATH=src python tools/dataset_processing/run_urbannav_commercial_smoke_review.py \
+  --output-root data/benchmark/urbannav_global_tomtom_smoke_v1 \
+  --review-dir data/benchmark/urbannav_global_tomtom_smoke_v1/review \
+  --target-cases 50 \
+  --origins-per-region 8 \
+  --candidate-limit 5 \
+  --search-radius-m 1500 \
+  --case-concurrency 2 \
+  --route-concurrency 4 \
+  --resume
+```
+
+## 11. Combined Overview HTML
+
+综合 review 页面用于把 AMap、OSM、multi-stop、route-update 和 commercial review split 放在同一个 HTML 中比较。页面包含样本地图、provider/country/task 分布、10K 目标分布饼图和核心指标公式。
+
+```bash
+cd Agent_part/RouteServer
+
+PYTHONPATH=src python tools/evaluation/build_urbannav_combined_overview_html.py \
+  --output-dir data/benchmark/urbannav_combined_overview_v1 \
+  --multi-stop-tasks data/benchmark/urbannav_yuquan_multistop_live_v1/task_gt.jsonl \
+  --max-samples 190 \
+  --title "UrbanNav Combined Provider and 10K Plan Review"
+```
