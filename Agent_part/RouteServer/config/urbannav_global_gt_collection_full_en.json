@@ -1,0 +1,121 @@
+{
+  "version": "urbannav_global_gt_collection_v4_full_en",
+  "description": "English-only global UrbanNav GT collection config for the full non-China OSM split.",
+  "provider": "osm_local",
+  "search_radius_m": 1200,
+  "candidate_limit": 5,
+  "acceptable_route_ratio": 1.15,
+  "min_route_distance_m": 50,
+  "max_route_distance_m": 2500,
+  "regions": [
+    {"country": "usa", "city": "new_york", "locale": "en-US", "region_id": "new_york_midtown", "label": "New York Midtown", "lat": 40.7549, "lng": -73.9840, "radius_m": 900, "quota": 590},
+    {"country": "usa", "city": "san_francisco", "locale": "en-US", "region_id": "san_francisco_downtown", "label": "San Francisco Downtown", "lat": 37.7890, "lng": -122.4010, "radius_m": 900, "quota": 590},
+    {"country": "usa", "city": "chicago", "locale": "en-US", "region_id": "chicago_loop", "label": "Chicago Loop", "lat": 41.8837, "lng": -87.6290, "radius_m": 1000, "quota": 590},
+    {"country": "canada", "city": "toronto", "locale": "en-US", "region_id": "toronto_downtown", "label": "Toronto Downtown", "lat": 43.6532, "lng": -79.3832, "radius_m": 1000, "quota": 590},
+    {"country": "uk", "city": "london", "locale": "en-GB", "region_id": "london_soho", "label": "London Soho", "lat": 51.5136, "lng": -0.1365, "radius_m": 900, "quota": 590},
+    {"country": "france", "city": "paris", "locale": "en-US", "region_id": "paris_latin_quarter", "label": "Paris Latin Quarter", "lat": 48.8493, "lng": 2.3458, "radius_m": 900, "quota": 590},
+    {"country": "germany", "city": "berlin", "locale": "en-US", "region_id": "berlin_mitte", "label": "Berlin Mitte", "lat": 52.5208, "lng": 13.4095, "radius_m": 1000, "quota": 590},
+    {"country": "netherlands", "city": "amsterdam", "locale": "en-US", "region_id": "amsterdam_centrum", "label": "Amsterdam Centrum", "lat": 52.3676, "lng": 4.9041, "radius_m": 900, "quota": 590},
+    {"country": "spain", "city": "barcelona", "locale": "en-US", "region_id": "barcelona_eixample", "label": "Barcelona Eixample", "lat": 41.3874, "lng": 2.1686, "radius_m": 1000, "quota": 590},
+    {"country": "japan", "city": "tokyo", "locale": "en-US", "region_id": "tokyo_shinjuku", "label": "Tokyo Shinjuku", "lat": 35.6900, "lng": 139.7000, "radius_m": 900, "quota": 590},
+    {"country": "japan", "city": "osaka", "locale": "en-US", "region_id": "osaka_namba", "label": "Osaka Namba", "lat": 34.6687, "lng": 135.5010, "radius_m": 900, "quota": 590},
+    {"country": "south_korea", "city": "seoul", "locale": "en-US", "region_id": "seoul_myeongdong", "label": "Seoul Myeongdong", "lat": 37.5636, "lng": 126.9834, "radius_m": 900, "quota": 590},
+    {"country": "singapore", "city": "singapore", "locale": "en-SG", "region_id": "singapore_orchard", "label": "Singapore Orchard", "lat": 1.3048, "lng": 103.8318, "radius_m": 900, "quota": 590},
+    {"country": "thailand", "city": "bangkok", "locale": "en-US", "region_id": "bangkok_siam", "label": "Bangkok Siam", "lat": 13.7466, "lng": 100.5347, "radius_m": 1000, "quota": 590},
+    {"country": "australia", "city": "sydney", "locale": "en-AU", "region_id": "sydney_cbd", "label": "Sydney CBD", "lat": -33.8696, "lng": 151.2094, "radius_m": 900, "quota": 590},
+    {"country": "mexico", "city": "mexico_city", "locale": "en-US", "region_id": "mexico_city_roma", "label": "Mexico City Roma Norte", "lat": 19.4194, "lng": -99.1647, "radius_m": 1000, "quota": 590},
+    {"country": "brazil", "city": "sao_paulo", "locale": "en-US", "region_id": "sao_paulo_paulista", "label": "Sao Paulo Paulista", "lat": -23.5614, "lng": -46.6559, "radius_m": 1000, "quota": 590}
+  ],
+  "tasks": [
+    {
+      "category": "poi_navigation",
+      "subcategory": "restaurant",
+      "templates": ["Please find a nearby restaurant."],
+      "queries_by_locale": {"default": ["restaurant"]},
+      "osm_tags": ["amenity=restaurant", "amenity=fast_food"],
+      "provider_category_map": {"tomtom": ["7315"], "tomtom_labels": ["restaurant"]},
+      "allow_alternatives": false
+    },
+    {
+      "category": "poi_navigation",
+      "subcategory": "bank",
+      "templates": ["Please find a nearby bank."],
+      "queries_by_locale": {"default": ["bank"]},
+      "osm_tags": ["amenity=bank"],
+      "provider_category_map": {"tomtom": ["7397"], "tomtom_labels": ["bank"]},
+      "allow_alternatives": false
+    },
+    {
+      "category": "poi_navigation",
+      "subcategory": "atm",
+      "templates": ["Please find a nearby ATM."],
+      "queries_by_locale": {"default": ["ATM"]},
+      "osm_tags": ["amenity=atm"],
+      "provider_category_map": {"tomtom": ["7397"], "tomtom_labels": ["atm"]},
+      "allow_alternatives": false
+    },
+    {
+      "category": "poi_navigation",
+      "subcategory": "convenience_store",
+      "templates": ["Please find a nearby convenience store or supermarket."],
+      "queries_by_locale": {"default": ["convenience store"]},
+      "osm_tags": ["shop=convenience", "shop=supermarket"],
+      "provider_category_map": {"tomtom": ["9361"], "tomtom_labels": ["convenience_store", "supermarket"]},
+      "allow_alternatives": false
+    },
+    {
+      "category": "poi_navigation",
+      "subcategory": "hotel",
+      "templates": ["Please find a nearby hotel or hostel."],
+      "queries_by_locale": {"default": ["hotel"]},
+      "osm_tags": ["tourism=hotel", "tourism=hostel"],
+      "provider_category_map": {"tomtom": ["7314"], "tomtom_labels": ["hotel"]},
+      "allow_alternatives": false
+    },
+    {
+      "category": "implicit_need_navigation",
+      "subcategory": "hungry",
+      "templates": ["I'm hungry and need somewhere nearby to eat."],
+      "queries_by_locale": {"default": ["food"]},
+      "osm_tags": ["amenity=restaurant", "amenity=fast_food", "amenity=food_court", "amenity=cafe"],
+      "provider_category_map": {"tomtom": ["7315"], "tomtom_labels": ["restaurant", "cafe"]},
+      "allow_alternatives": true
+    },
+    {
+      "category": "implicit_need_navigation",
+      "subcategory": "thirsty",
+      "templates": ["I'm thirsty and need somewhere nearby to get a drink."],
+      "queries_by_locale": {"default": ["drink"]},
+      "osm_tags": ["shop=convenience", "amenity=cafe", "amenity=bar", "shop=supermarket"],
+      "provider_category_map": {"tomtom": ["7315", "9361"], "tomtom_labels": ["cafe", "convenience_store"]},
+      "allow_alternatives": true
+    },
+    {
+      "category": "implicit_need_navigation",
+      "subcategory": "work_with_wifi",
+      "templates": ["I need a nearby place where I can sit and work."],
+      "queries_by_locale": {"default": ["work with wifi"]},
+      "osm_tags": ["amenity=cafe", "amenity=library", "office=coworking"],
+      "provider_category_map": {"tomtom": ["7315"], "tomtom_labels": ["cafe", "library", "coworking"]},
+      "allow_alternatives": true
+    },
+    {
+      "category": "implicit_need_navigation",
+      "subcategory": "not_feeling_well",
+      "templates": ["I'm not feeling well and need a nearby medical place."],
+      "queries_by_locale": {"default": ["medical"]},
+      "osm_tags": ["amenity=clinic", "amenity=hospital", "amenity=pharmacy", "healthcare=clinic"],
+      "provider_category_map": {"tomtom": ["7321"], "tomtom_labels": ["pharmacy", "clinic", "hospital"]},
+      "allow_alternatives": true
+    },
+    {
+      "category": "implicit_need_navigation",
+      "subcategory": "rest_and_read",
+      "templates": ["I want a quiet nearby place to rest and read."],
+      "queries_by_locale": {"default": ["quiet place to read"]},
+      "osm_tags": ["amenity=library", "shop=books", "amenity=cafe", "leisure=park"],
+      "provider_category_map": {"tomtom": ["7315", "9362"], "tomtom_labels": ["library", "bookstore", "cafe", "park"]},
+      "allow_alternatives": true
+    }
+  ]
+}

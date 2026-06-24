@@ -465,7 +465,7 @@ def iter_collection_pairs(
     *,
     seed: int,
 ) -> Iterable[tuple[dict[str, Any], dict[str, Any], int]]:
-    """Yield origin-task-template triples in a balanced order.
+    r"""Yield origin-task-template triples in a balanced order.
 
     Args:
         plan: Expanded collection plan.
@@ -473,6 +473,13 @@ def iter_collection_pairs(
 
     Returns:
         Iterable of ``(origin, task, template_index)`` triples.
+
+    The iterator covers the full product between sampled origins and tasks,
+    while interleaving cities and task categories to keep the output balanced:
+
+    \[
+    \mathcal P_c = O_c \times T
+    \]
     """
 
     rng = random.Random(seed)
@@ -490,21 +497,20 @@ def iter_collection_pairs(
 
     cities = sorted(origins_by_city)
     categories = sorted(tasks_by_category)
-    max_len = max(len(items) for items in origins_by_city.values()) * max(len(items) for items in tasks_by_category.values())
-    for offset in range(max_len):
-        for city in cities:
-            origins = origins_by_city[city]
-            if not origins:
+    max_origins = max(len(items) for items in origins_by_city.values())
+    for origin_offset in range(max_origins):
+        for category in categories:
+            tasks = tasks_by_category[category]
+            if not tasks:
                 continue
-            origin = origins[offset % len(origins)]
-            for category in categories:
-                tasks = tasks_by_category[category]
-                if not tasks:
-                    continue
-                task = tasks[offset % len(tasks)]
+            for task_offset, task in enumerate(tasks):
                 template_count = max(1, len(task.get("templates") or [task.get("instruction", "")]))
-                template_index = offset % template_count
-                yield origin, task, template_index
+                template_index = (origin_offset + task_offset) % template_count
+                for city in cities:
+                    origins = origins_by_city[city]
+                    if origin_offset >= len(origins):
+                        continue
+                    yield origins[origin_offset], task, template_index
 
 
 def _sample_region_origins(

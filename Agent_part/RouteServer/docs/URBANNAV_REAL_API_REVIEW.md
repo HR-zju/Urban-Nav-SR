@@ -241,6 +241,129 @@ PYTHONPATH=src python tools/dataset_processing/run_urbannav_global_pilot_review.
   --review-dir data/benchmark/urbannav_global_osm_v1/review_leaflet_160
 ```
 
+## 8.1 Local OSM Extract Pilot
+
+公开主集更推荐使用本地 OSM extract，而不是公共 Overpass。流程是先从 PBF 或预抽 JSONL 构建本地 POI index，再用本地 OSRM/Valhalla 提供步行路线。
+
+先生成本地资产计划、router config 和构建脚本：
+
+```bash
+cd Agent_part/RouteServer
+
+PYTHONPATH=src python tools/dataset_processing/prepare_urbannav_osm_local_assets.py \
+  --global-config config/urbannav_global_gt_collection.json \
+  --source-config config/urbannav_osm_extract_sources.json \
+  --output-root data/osm \
+  --router-config-output config/urbannav_osm_local_sources.json \
+  --write-osrm-scripts \
+  --write-valhalla-scripts \
+  --write-router-config \
+  --router-type osrm \
+  --overwrite
+```
+
+下载、裁剪、构建 POI index 可以分阶段执行：
+
+```bash
+PYTHONPATH=src python tools/dataset_processing/prepare_urbannav_osm_local_assets.py \
+  --output-root data/osm \
+  --download \
+  --overwrite
+
+PYTHONPATH=src python tools/dataset_processing/prepare_urbannav_osm_local_assets.py \
+  --output-root data/osm \
+  --extract \
+  --overwrite
+
+PYTHONPATH=src python tools/dataset_processing/prepare_urbannav_osm_local_assets.py \
+  --output-root data/osm \
+  --build-poi-index \
+  --overwrite
+```
+
+这些步骤依赖本机工具：
+
+```text
+osmium          # 裁剪 Geofabrik/BBBike PBF
+pyosmium        # 从 PBF 抽取 POI JSONL
+osrm-extract    # 构建 OSRM 步行图
+valhalla_*      # 构建 Valhalla pedestrian tiles，可选
+```
+
+构建并启动 OSRM：
+
+```bash
+bash data/osm/osrm/build_osrm_all.sh
+bash data/osm/osrm/run_osrm_all.sh
+```
+
+如果使用 Valhalla，生成 config 时把 `--router-type valhalla` 打开，然后构建并启动：
+
+```bash
+PYTHONPATH=src python tools/dataset_processing/prepare_urbannav_osm_local_assets.py \
+  --output-root data/osm \
+  --router-config-output config/urbannav_osm_local_sources.json \
+  --write-valhalla-scripts \
+  --write-router-config \
+  --router-type valhalla \
+  --overwrite
+
+bash data/osm/osrm/build_valhalla_all.sh
+bash data/osm/osrm/run_valhalla_all.sh
+```
+
+构建本地 POI JSONL：
+
+```bash
+cd Agent_part/RouteServer
+
+PYTHONPATH=src python tools/dataset_processing/build_osm_poi_index.py \
+  --input-pbf data/osm/cities/tokyo_shinjuku.osm.pbf \
+  --output-jsonl data/osm/index/tokyo_shinjuku.jsonl \
+  --country japan \
+  --city tokyo \
+  --region-id tokyo_shinjuku \
+  --overwrite
+```
+
+如果已经用外部工具预抽了 POI，也可以直接从 JSONL 构建：
+
+```bash
+PYTHONPATH=src python tools/dataset_processing/build_osm_poi_index.py \
+  --input-jsonl /path/to/preextracted_tokyo_pois.jsonl \
+  --output-jsonl data/osm/index/tokyo_shinjuku.jsonl \
+  --country japan \
+  --city tokyo \
+  --region-id tokyo_shinjuku \
+  --overwrite
+```
+
+本地 provider 的索引和 router 配置见：
+
+```text
+config/urbannav_osm_local_sources.json
+```
+
+采集时使用 `osm_local`：
+
+```bash
+PYTHONPATH=src python tools/dataset_processing/collect_urbannav_global_gt.py \
+  --output-root data/benchmark/urbannav_global_osm_local_v1 \
+  --config config/urbannav_global_gt_collection.json \
+  --provider osm_local \
+  --poi-index-root data/osm/index \
+  --local-router-config config/urbannav_osm_local_sources.json \
+  --target-cases 1000 \
+  --origins-per-region 45 \
+  --candidate-limit 3 \
+  --search-radius-m 1200 \
+  --case-concurrency 2 \
+  --route-concurrency 3 \
+  --resume
+```
+
+该路径不访问公共 Overpass；是否访问网络取决于 `local-router-config` 里配置的 OSRM/Valhalla endpoint。论文级公开 split 应使用本机或内网固定 OSRM/Valhalla 服务，并记录 PBF 版本和 SHA。
+
 ## 9. Multi-Stop 和 Route-Update Review
 
 多途经点 review 用于检查有序 stop 的构造质量。HTML 地图会标注 `S, 1, 2, ..., D`。

@@ -16,6 +16,7 @@ from typing import Any, Iterable
 
 from mcp_server.core.commercial_global_provider import TomTomUrbanNavProvider
 from mcp_server.core.osm_global_provider import OsmOverpassOsrmProvider
+from mcp_server.core.osm_local_provider import LocalOsmOsrmProvider
 from mcp_server.core.replay_map_backend import ReplayPoiResult, ReplayRouteResult
 from mcp_server.core.urbannav_provider import UrbanNavLiveProvider, UrbanNavPoiSearchRequest, UrbanNavRouteRequest
 from mcp_server.eval.urbannav_io import iter_json_records, load_urbannav_cases
@@ -74,10 +75,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--overwrite", action="store_true", help="Remove existing output files before running.")
     parser.add_argument("--dry-run", action="store_true", help="Only write collection plan and manifest.")
     parser.add_argument("--max-attempts", type=int, default=0, help="Optional attempted pair cap.")
-    parser.add_argument("--provider", choices=["osm", "tomtom"], default=None, help="Live provider backend.")
+    parser.add_argument("--provider", choices=["osm", "osm_local", "tomtom"], default=None, help="Live provider backend.")
     parser.add_argument("--overpass-url", default=None, help="Override Overpass endpoint.")
     parser.add_argument("--osrm-url", default=None, help="Override OSRM endpoint prefix.")
     parser.add_argument("--osrm-profile", default="foot", help="OSRM profile.")
+    parser.add_argument("--poi-index-root", type=Path, default=None, help="Local OSM POI index root for --provider osm_local.")
+    parser.add_argument("--local-router-config", type=Path, default=None, help="Local OSM router config JSON.")
+    parser.add_argument("--local-osrm-url", default=None, help="Fallback local OSRM endpoint for --provider osm_local.")
+    parser.add_argument("--local-valhalla-url", default=None, help="Fallback local Valhalla endpoint for --provider osm_local.")
+    parser.add_argument("--valhalla-costing", default="pedestrian", help="Valhalla costing for --provider osm_local.")
     parser.add_argument("--tomtom-key", default=None, help="TomTom API key for commercial review collection.")
     parser.add_argument("--tomtom-search-url", default=None, help="Override TomTom Search API prefix.")
     parser.add_argument("--tomtom-routing-url", default=None, help="Override TomTom Routing API prefix.")
@@ -289,7 +295,11 @@ async def build_global_case(
                     radius_m=radius_m,
                     limit=candidate_limit,
                     locale=str(origin_record.get("locale") or ""),
-                    raw=_provider_request_raw(task=task, provider_name=provider.capabilities.provider_name),
+                    raw=_provider_request_raw(
+                        task=task,
+                        provider_name=provider.capabilities.provider_name,
+                        origin_record=origin_record,
+                    ),
                 ),
             ),
             retry=args.retry,
@@ -468,6 +478,17 @@ def _create_provider(args: argparse.Namespace, config: dict[str, Any]) -> UrbanN
     provider_name = str(args.provider or config.get("provider") or "osm").strip().lower()
     if provider_name in {"osm", "osm_overpass_osrm"}:
         return OsmOverpassOsrmProvider(overpass_url=args.overpass_url, osrm_url=args.osrm_url, osrm_profile=args.osrm_profile)
+    if provider_name in {"osm_local", "osm_local_osrm"}:
+        if args.poi_index_root is None:
+            raise ValueError("--poi-index-root is required for --provider osm_local")
+        return LocalOsmOsrmProvider(
+            poi_index_root=args.poi_index_root,
+            router_config=args.local_router_config,
+            default_osrm_url=args.local_osrm_url or args.osrm_url,
+            osrm_profile=args.osrm_profile,
+            default_valhalla_url=args.local_valhalla_url,
+            valhalla_costing=args.valhalla_costing,
+        )
     if provider_name in {"tomtom", "tomtom_search_routing"}:
         return TomTomUrbanNavProvider(
             api_key=args.tomtom_key,
@@ -494,21 +515,30 @@ def _provider_tags(*, task: dict[str, Any], provider_name: str) -> list[str]:
     return [str(item) for item in task.get("osm_tags") or provider_map.get("osm", [])]
 
 
-def _provider_request_raw(*, task: dict[str, Any], provider_name: str) -> dict[str, Any]:
+def _provider_request_raw(*, task: dict[str, Any], provider_name: str, origin_record: dict[str, Any]) -> dict[str, Any]:
     """Build provider-specific request metadata.
 
     Args:
         task: Task record.
         provider_name: Active provider name.
+        origin_record: Origin metadata.
 
     Returns:
         Raw request metadata.
     """
 
+    raw = {
+        "country": origin_record.get("country"),
+        "city": origin_record.get("city"),
+        "region_id": origin_record.get("region_id"),
+        "locale": origin_record.get("locale"),
+    }
     if "tomtom" not in provider_name:
-        return {}
+        return {key: value for key, value in raw.items() if value is not None}
     categories = _provider_tags(task=task, provider_name=provider_name)
-    return {"tomtom_category_set": categories} if categories else {}
+    if categories:
+        raw["tomtom_category_set"] = categories
+    return {key: value for key, value in raw.items() if value is not None}
 
 
 def iter_global_collection_pairs(
@@ -516,7 +546,7 @@ def iter_global_collection_pairs(
     *,
     seed: int,
 ) -> Iterable[tuple[dict[str, Any], dict[str, Any], int]]:
-    """Yield balanced origin/task/template triples.
+    r"""Yield balanced origin/task/template triples.
 
     Args:
         plan: Expanded plan.
@@ -524,6 +554,13 @@ def iter_global_collection_pairs(
 
     Returns:
         Iterable of triples.
+
+    The iterator enumerates the full city-local Cartesian product between
+    sampled origins and task templates while keeping cities interleaved:
+
+    \[
+    \mathcal P_c = O_c \times T
+    \]
     """
 
     rng = random.Random(seed)
@@ -535,13 +572,16 @@ def iter_global_collection_pairs(
     tasks = list(plan.tasks)
     rng.shuffle(tasks)
     cities = sorted(origins_by_city)
-    max_len = max(len(items) for items in origins_by_city.values()) * max(1, len(tasks))
-    for offset in range(max_len):
-        for city in cities:
-            origin = origins_by_city[city][offset % len(origins_by_city[city])]
-            task = tasks[offset % len(tasks)]
+    max_origins = max(len(items) for items in origins_by_city.values())
+    for origin_offset in range(max_origins):
+        for task_offset, task in enumerate(tasks):
             template_count = max(1, len(task.get("templates") or [""]))
-            yield origin, task, offset % template_count
+            template_index = (origin_offset + task_offset) % template_count
+        for city in cities:
+                origins = origins_by_city[city]
+                if origin_offset >= len(origins):
+                    continue
+                yield origins[origin_offset], task, template_index
 
 
 def _sample_region_origins(region: dict[str, Any], *, max_origins: int, rng: random.Random) -> list[dict[str, Any]]:

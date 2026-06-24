@@ -10,6 +10,7 @@ import math
 from pathlib import Path
 from typing import Any, Iterable
 
+from mcp_server.core.osm_local_index import LocalOsmPoiIndex
 from mcp_server.eval.urbannav_io import load_urbannav_cases
 from mcp_server.eval.urbannav_schema import UrbanNavCase, UrbanNavDestination, UrbanNavPoint
 
@@ -41,6 +42,12 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_MULTI_STOP_TASKS,
         help="Optional JSONL file with complex multi-stop instruction examples.",
     )
+    parser.add_argument(
+        "--osm-local-index-root",
+        type=Path,
+        default=None,
+        help="Optional local OSM POI index root rendered as provider review examples.",
+    )
     parser.add_argument("--title", default="UrbanNav Benchmark Overview", help="HTML title.")
     return parser.parse_args()
 
@@ -60,6 +67,7 @@ def main() -> None:
         packages=packages,
         max_samples=args.max_samples,
         multi_stop_tasks_path=args.multi_stop_tasks,
+        osm_local_index_root=args.osm_local_index_root,
         title=args.title,
     )
 
@@ -71,6 +79,7 @@ def build_combined_overview_html(
     packages: list[tuple[str, Path]],
     max_samples: int,
     multi_stop_tasks_path: str | Path | None = DEFAULT_MULTI_STOP_TASKS,
+    osm_local_index_root: str | Path | None = None,
     title: str,
 ) -> dict[str, Any]:
     """Build a combined provider/country review page.
@@ -82,6 +91,7 @@ def build_combined_overview_html(
         max_samples: Maximum rendered route samples.
         multi_stop_tasks_path: Optional JSONL file with complex multi-stop
             instruction examples for human review.
+        osm_local_index_root: Optional local OSM POI index root.
         title: Page title.
 
     Returns:
@@ -95,6 +105,7 @@ def build_combined_overview_html(
     samples = _balanced_samples(records, max_samples=max_samples)
     summary = _actual_summary(records)
     multi_stop_tasks = _load_jsonl_dicts(Path(multi_stop_tasks_path)) if multi_stop_tasks_path else []
+    osm_local_examples = _load_osm_local_examples(Path(osm_local_index_root)) if osm_local_index_root else []
     cards = [_case_card(index=index, item=item) for index, item in enumerate(samples, start=1)]
     html = _html_page(
         title=title,
@@ -105,6 +116,7 @@ def build_combined_overview_html(
         sample_count=len(samples),
         package_count=len(packages),
         multi_stop_tasks=multi_stop_tasks,
+        osm_local_examples=osm_local_examples,
     )
     index_path = root / "index.html"
     index_path.write_text(html, encoding="utf-8")
@@ -116,6 +128,7 @@ def build_combined_overview_html(
                 "packages": [{"label": label, "path": str(path)} for label, path in packages],
                 "total_records": len(records),
                 "rendered_samples": len(samples),
+                "osm_local_examples": len(osm_local_examples),
                 "summary": summary,
             },
             ensure_ascii=False,
@@ -211,14 +224,14 @@ def _load_jsonl_dicts(path: Path) -> list[dict[str, Any]]:
 
 
 def _balanced_samples(records: list[dict[str, Any]], *, max_samples: int) -> list[dict[str, Any]]:
-    """Sample records across provider, country, city, and category.
+    """Sample diverse records across provider, country, city, and task type.
 
     Args:
         records: Loaded records.
         max_samples: Maximum samples.
 
     Returns:
-        Balanced sample records.
+        Diverse sample records with repeated instruction templates suppressed.
     """
 
     buckets: dict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
@@ -226,17 +239,263 @@ def _balanced_samples(records: list[dict[str, Any]], *, max_samples: int) -> lis
         case: UrbanNavCase = record["case"]
         key = (record["provider"], record["country"], str(case.city or ""), str(case.category or ""))
         buckets[key].append(record)
-    ordered_keys = sorted(buckets)
+
+    for bucket in buckets.values():
+        bucket.sort(key=_sample_priority)
+
+    ordered_keys = sorted(buckets, key=lambda key: (_bucket_complexity(key, buckets[key]), key))
     samples: list[dict[str, Any]] = []
+    seen_instructions: set[str] = set()
+    instruction_counts: Counter[str] = Counter()
+    intent_counts: Counter[str] = Counter()
+    seen_city_category: Counter[tuple[str, str]] = Counter()
     cursor = 0
     while len(samples) < max(0, max_samples) and ordered_keys:
+        ordered_keys = [
+            item
+            for item in ordered_keys
+            if buckets[item] and _bucket_has_available_instruction(buckets[item], instruction_counts, max_per_instruction=2)
+            and _bucket_has_available_intent(buckets[item], intent_counts, max_per_intent=3)
+        ]
+        if not ordered_keys:
+            break
         key = ordered_keys[cursor % len(ordered_keys)]
         bucket = buckets[key]
         if bucket:
-            samples.append(bucket.pop(0))
+            selected_index = _select_diverse_record_index(
+                bucket,
+                seen_instructions=seen_instructions,
+                instruction_counts=instruction_counts,
+                intent_counts=intent_counts,
+                seen_city_category=seen_city_category,
+            )
+            if selected_index is None:
+                buckets[key] = []
+                ordered_keys = [item for item in ordered_keys if buckets[item]]
+                continue
+            record = bucket.pop(selected_index)
+            case: UrbanNavCase = record["case"]
+            signature = _instruction_signature(case.instruction)
+            intent = _instruction_intent(case.instruction, case.category)
+            seen_instructions.add(signature)
+            instruction_counts[signature] += 1
+            intent_counts[intent] += 1
+            seen_city_category[(str(case.city or ""), str(case.category or ""))] += 1
+            samples.append(record)
         ordered_keys = [item for item in ordered_keys if buckets[item]]
+        ordered_keys.sort(key=lambda item: (seen_city_category[(item[2], item[3])], _bucket_complexity(item, buckets[item]), item))
         cursor += 1
     return samples
+
+
+def _bucket_has_available_instruction(
+    bucket: list[dict[str, Any]],
+    instruction_counts: Counter[str],
+    *,
+    max_per_instruction: int,
+) -> bool:
+    """Check whether a bucket still contains an underrepresented instruction.
+
+    Args:
+        bucket: Candidate records.
+        instruction_counts: Current rendered counts by instruction signature.
+        max_per_instruction: Maximum rendered cards per signature.
+
+    Returns:
+        ``True`` when at least one candidate can still be rendered.
+    """
+
+    for record in bucket:
+        case: UrbanNavCase = record["case"]
+        if instruction_counts[_instruction_signature(case.instruction)] < max_per_instruction:
+            return True
+    return False
+
+
+def _bucket_has_available_intent(
+    bucket: list[dict[str, Any]],
+    intent_counts: Counter[str],
+    *,
+    max_per_intent: int,
+) -> bool:
+    """Check whether a bucket still has an underrepresented intent.
+
+    Args:
+        bucket: Candidate records.
+        intent_counts: Current rendered counts by semantic intent.
+        max_per_intent: Maximum rendered cards per intent.
+
+    Returns:
+        ``True`` if at least one candidate is still allowed.
+    """
+
+    for record in bucket:
+        case: UrbanNavCase = record["case"]
+        intent = _instruction_intent(case.instruction, case.category)
+        if _is_complex_category(case.category) or intent_counts[intent] < max_per_intent:
+            return True
+    return False
+
+
+def _sample_priority(record: dict[str, Any]) -> tuple[int, int, str]:
+    """Return priority for a review sample.
+
+    Args:
+        record: Loaded case record.
+
+    Returns:
+        Sort key. Lower values are rendered earlier.
+    """
+
+    case: UrbanNavCase = record["case"]
+    category = str(case.category or "")
+    complexity = 0
+    if category.startswith("multi_stop"):
+        complexity -= 80
+    if category.startswith("route_update"):
+        complexity -= 70
+    if case.metadata.get("acceptable_destinations"):
+        complexity -= 20
+    if len(str(case.instruction or "")) >= 28:
+        complexity -= 10
+    if case.gt_route and len(case.gt_route) >= 8:
+        complexity -= 5
+    return (complexity, len(_instruction_signature(case.instruction)), str(case.case_id))
+
+
+def _bucket_complexity(key: tuple[str, str, str, str], bucket: list[dict[str, Any]]) -> int:
+    """Return bucket priority for diverse review rendering.
+
+    Args:
+        key: Bucket key.
+        bucket: Records in the bucket.
+
+    Returns:
+        Numeric priority.
+    """
+
+    category = key[3]
+    score = 0
+    if category.startswith("multi_stop"):
+        score -= 80
+    if category.startswith("route_update"):
+        score -= 70
+    score -= min(len(bucket), 20)
+    return score
+
+
+def _select_diverse_record_index(
+    bucket: list[dict[str, Any]],
+    *,
+    seen_instructions: set[str],
+    instruction_counts: Counter[str],
+    intent_counts: Counter[str],
+    seen_city_category: Counter[tuple[str, str]],
+) -> int | None:
+    """Select a record index while suppressing repeated instructions.
+
+    Args:
+        bucket: Candidate records.
+        seen_instructions: Normalized instruction signatures already rendered.
+        instruction_counts: Render count by normalized instruction signature.
+        intent_counts: Render count by semantic intent.
+        seen_city_category: Coverage counter by city/category.
+
+    Returns:
+        Selected list index, or ``None`` when no under-cap candidate remains.
+    """
+
+    best_index: int | None = None
+    best_score: tuple[int, int, int, str] | None = None
+    candidates = [
+        (index, record)
+        for index, record in enumerate(bucket)
+        if instruction_counts[_instruction_signature(record["case"].instruction)] < 2
+        and (_is_complex_category(record["case"].category) or intent_counts[_instruction_intent(record["case"].instruction, record["case"].category)] < 3)
+    ]
+    for index, record in candidates[:240]:
+        case: UrbanNavCase = record["case"]
+        signature = _instruction_signature(case.instruction)
+        duplicate_penalty = 500 if signature in seen_instructions else 0
+        if instruction_counts[signature] >= 2:
+            duplicate_penalty += 2000
+        intent = _instruction_intent(case.instruction, case.category)
+        intent_penalty = intent_counts[intent] * 120
+        if not _is_complex_category(case.category) and intent_counts[intent] >= 3:
+            intent_penalty += 2000
+        city_category = (str(case.city or ""), str(case.category or ""))
+        coverage_penalty = seen_city_category[city_category] * 6
+        priority = _sample_priority(record)
+        score = (duplicate_penalty + intent_penalty + coverage_penalty + priority[0], priority[1], index, str(case.case_id))
+        if best_score is None or score < best_score:
+            best_score = score
+            best_index = index
+    return best_index
+
+
+def _is_complex_category(category: str | None) -> bool:
+    """Return whether a task category is inherently complex.
+
+    Args:
+        category: Task category.
+
+    Returns:
+        ``True`` for multi-stop and route-update tasks.
+    """
+
+    text = str(category or "")
+    return text.startswith("multi_stop") or text.startswith("route_update")
+
+
+def _instruction_intent(instruction: str | None, category: str | None = None) -> str:
+    """Map an instruction into a coarse review intent.
+
+    Args:
+        instruction: Raw instruction.
+        category: Task category.
+
+    Returns:
+        Coarse intent label used only for preview de-duplication.
+    """
+
+    text = str(instruction or "").lower()
+    category_text = str(category or "")
+    if _is_complex_category(category_text):
+        return category_text
+    patterns = [
+        ("medical", ["hospital", "healthcare", "medical", "clinic", "pharmacy", "药", "医疗", "医院", "诊所", "身体"]),
+        ("cash_bank", ["atm", "bank", "cash", "银行", "取钱", "现金", "自助机"]),
+        ("food", ["restaurant", "food", "hungry", "eat", "kfc", "mcdonald", "饭", "餐", "吃", "小吃"]),
+        ("drink_cafe", ["coffee", "cafe", "drink", "thirsty", "starbucks", "咖啡", "饮料", "渴"]),
+        ("work_study", ["work", "wi-fi", "wifi", "read", "book", "library", "办公", "看书", "安静"]),
+        ("daily_goods", ["convenience", "grocery", "supermarket", "fruit", "vegetable", "日用品", "便利", "超市", "水果", "蔬菜"]),
+        ("restroom", ["restroom", "toilet", "bathroom", "厕所", "洗手间"]),
+        ("hotel", ["hotel", "hostel", "酒店", "宾馆"]),
+        ("shopping", ["shopping", "mall", "store", "购物", "商场"]),
+        ("child_play", ["child", "play", "park", "孩子", "儿童", "公园"]),
+        ("cinema", ["cinema", "movie", "theater", "影院", "电影院"]),
+        ("charging", ["charge", "charging", "充电"]),
+    ]
+    for label, keywords in patterns:
+        if any(keyword in text for keyword in keywords):
+            return label
+    return _instruction_signature(instruction)[:32] or "unknown"
+
+
+def _instruction_signature(instruction: str | None) -> str:
+    """Normalize an instruction for review de-duplication.
+
+    Args:
+        instruction: Raw navigation instruction.
+
+    Returns:
+        Compact signature.
+    """
+
+    text = str(instruction or "").strip().lower()
+    for token in ("附近", "最近", "帮我", "请", "一个", "一家", "the", "a ", "an "):
+        text = text.replace(token, "")
+    return "".join(ch for ch in text if ch.isalnum() or "\u4e00" <= ch <= "\u9fff")[:80]
 
 
 def _actual_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -334,6 +593,7 @@ def _html_page(
     sample_count: int,
     package_count: int,
     multi_stop_tasks: list[dict[str, Any]],
+    osm_local_examples: list[dict[str, Any]],
 ) -> str:
     """Build the full HTML page.
 
@@ -346,6 +606,7 @@ def _html_page(
         sample_count: Rendered sample count.
         package_count: Number of packages.
         multi_stop_tasks: Complex multi-stop task examples.
+        osm_local_examples: Local OSM POI examples.
 
     Returns:
         HTML document.
@@ -359,6 +620,7 @@ def _html_page(
     task_table = _distribution_table(plan.get("task_distribution", []), label_key="label", extra_key="category")
     multi_stop_section = _multi_stop_examples_section(multi_stop_tasks)
     route_update_section = _route_update_examples_section(records)
+    osm_local_section = _osm_local_examples_section(osm_local_examples)
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -519,6 +781,39 @@ def _html_page(
       }}
       setTimeout(() => map.invalidateSize(), 100);
     }}
+    function renderPointMap(id, markers) {{
+      const container = document.getElementById(id);
+      if (!container) return;
+      if (!window.L) {{
+        container.classList.add('map-error');
+        container.textContent = 'Leaflet 未加载。请检查浏览器是否能访问 https://unpkg.com。';
+        return;
+      }}
+      const map = L.map(id);
+      const tiles = L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+        maxZoom: 19,
+        attribution: '&copy; OpenStreetMap contributors'
+      }}).addTo(map);
+      tiles.on('tileerror', function() {{
+        container.classList.add('map-error');
+        if (!container.textContent) container.textContent = 'OSM 瓦片加载失败；候选点坐标仍已写入 HTML。';
+      }});
+      const layers = [];
+      if (markers && markers.length) {{
+        markers.forEach(function(marker) {{
+          if (!marker || !marker.point) return;
+          layers.push(L.marker(marker.point, {{icon: waypointIcon(marker.label || '', marker.kind || '')}})
+            .addTo(map)
+            .bindPopup(marker.popup || marker.label || ''));
+        }});
+      }}
+      if (layers.length) {{
+        map.fitBounds(L.featureGroup(layers).getBounds(), {{padding: [24, 24]}});
+      }} else {{
+        map.setView([0, 0], 2);
+      }}
+      setTimeout(() => map.invalidateSize(), 100);
+    }}
   </script>
 </head>
 <body>
@@ -548,6 +843,7 @@ def _html_page(
     {_metrics_section()}
     {multi_stop_section}
     {route_update_section}
+    {osm_local_section}
     {''.join(cards)}
   </main>
 </body>
@@ -762,6 +1058,146 @@ def _route_update_markers(update: dict[str, Any]) -> list[dict[str, Any]]:
         seen.add(key)
         markers.append({"label": label, "kind": kind, "point": point, "popup": popup})
     return markers
+
+
+def _load_osm_local_examples(index_root: Path, *, per_city: int = 6) -> list[dict[str, Any]]:
+    """Load diverse local OSM POI examples from JSONL indexes.
+
+    Args:
+        index_root: Local OSM POI index root.
+        per_city: Maximum examples per city/region.
+
+    Returns:
+        Example dictionaries for review rendering.
+    """
+
+    if not index_root.exists():
+        return []
+    preferred_categories = [
+        "amenity:cafe",
+        "amenity:restaurant",
+        "amenity:fast_food",
+        "amenity:bank",
+        "amenity:atm",
+        "amenity:pharmacy",
+        "shop:convenience",
+        "shop:supermarket",
+        "leisure:park",
+        "tourism:hotel",
+        "amenity:library",
+    ]
+    examples: list[dict[str, Any]] = []
+    for path in sorted(index_root.glob("*.jsonl")):
+        try:
+            index = LocalOsmPoiIndex.from_path(path, source_id=path.stem)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        by_category: dict[str, list[Any]] = defaultdict(list)
+        for record in index.records:
+            category = str(record.category or "")
+            if category in preferred_categories:
+                by_category[category].append(record)
+        selected = []
+        for category in preferred_categories:
+            candidates = sorted(by_category.get(category, []), key=lambda item: (_poi_name_quality(item.name), item.name, item.osm_id))
+            for record in candidates:
+                if _poi_name_quality(record.name) < 0:
+                    continue
+                selected.append(record)
+                break
+            if len(selected) >= per_city:
+                break
+        if not selected:
+            selected = sorted(index.records, key=lambda item: (_poi_name_quality(item.name), item.name, item.osm_id))[:per_city]
+        for record in selected[:per_city]:
+            examples.append(
+                {
+                    "region_id": record.region_id or path.stem,
+                    "city": record.city or path.stem,
+                    "country": record.country or "",
+                    "name": record.name,
+                    "category": record.category,
+                    "tags": record.tags,
+                    "point": [record.lat, record.lng],
+                    "provider_poi_id": f"osm:{record.osm_id}",
+                }
+            )
+    return examples
+
+
+def _poi_name_quality(name: str | None) -> int:
+    """Score display quality of a POI name.
+
+    Args:
+        name: POI name.
+
+    Returns:
+        Higher means better.
+    """
+
+    text = str(name or "").strip()
+    if not text or text.lower().startswith("unnamed"):
+        return -1
+    score = min(len(text), 40)
+    if any(ch.isdigit() for ch in text):
+        score -= 2
+    return score
+
+
+def _osm_local_examples_section(examples: list[dict[str, Any]]) -> str:
+    """Build local OSM POI review examples.
+
+    Args:
+        examples: Local OSM examples.
+
+    Returns:
+        HTML section.
+    """
+
+    if not examples:
+        return ""
+    by_region: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for item in examples:
+        by_region[str(item.get("region_id") or item.get("city") or "unknown")].append(item)
+    cards = []
+    for index, (region_id, rows) in enumerate(sorted(by_region.items()), start=1):
+        map_id = f"osm_local_map_{index:04d}"
+        markers = [
+            {
+                "label": str(i),
+                "kind": "stop",
+                "point": row["point"],
+                "popup": f"{row.get('name')} / {row.get('category')}",
+            }
+            for i, row in enumerate(rows[:8], start=1)
+        ]
+        table_rows = []
+        for i, row in enumerate(rows[:8], start=1):
+            tags = row.get("tags") if isinstance(row.get("tags"), dict) else {}
+            tag_text = ", ".join(f"{key}={value}" for key, value in list(tags.items())[:5])
+            table_rows.append(
+                f"<tr><td>{i}</td><td>{_esc(row.get('name'))}</td><td>{_esc(row.get('category'))}</td><td>{_esc(tag_text)}</td></tr>"
+            )
+        city = rows[0].get("city") if rows else region_id
+        country = rows[0].get("country") if rows else ""
+        cards.append(
+            f"""
+            <article class="task-card">
+              <div class="sub">#{index} {_esc(country)} / {_esc(region_id)}</div>
+              <h4>{_esc(city)} local OSM POI candidates</h4>
+              <div id="{map_id}" class="mini-map"></div>
+              <table><thead><tr><th>#</th><th>Name</th><th>Category</th><th>Tags</th></tr></thead><tbody>{''.join(table_rows)}</tbody></table>
+              <script>renderPointMap("{map_id}", {json.dumps(markers, ensure_ascii=False)});</script>
+            </article>
+            """
+        )
+    return f"""
+    <section class="panel">
+      <h3>Local OSM POI Index Examples</h3>
+      <p class="section-note">这些样例来自本地 OSM PBF 抽取后的 POI index，用于检查跨城市、跨类别的候选目的地覆盖；这里展示的是候选 POI，不代表已经完成路线 GT。</p>
+      <div class="task-grid">{''.join(cards)}</div>
+    </section>
+    """
 
 
 def _destination_name(value: Any) -> str:

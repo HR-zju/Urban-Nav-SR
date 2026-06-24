@@ -1,0 +1,67 @@
+{
+  "description": "Generated local OSM router config for UrbanNav.",
+  "poi_index_root": "data/osm/index",
+  "default_router_type": "osrm",
+  "default_osrm_url": "http://127.0.0.1:5000",
+  "default_osrm_profile": "foot",
+  "default_valhalla_url": "http://127.0.0.1:8002",
+  "default_valhalla_costing": "pedestrian",
+  "indexes": {
+    "default": "all.jsonl",
+    "new_york_midtown": "new_york_midtown.jsonl",
+    "san_francisco_downtown": "san_francisco_downtown.jsonl",
+    "london_soho": "london_soho.jsonl",
+    "paris_latin_quarter": "paris_latin_quarter.jsonl",
+    "berlin_mitte": "berlin_mitte.jsonl",
+    "tokyo_shinjuku": "tokyo_shinjuku.jsonl",
+    "singapore_orchard": "singapore_orchard.jsonl",
+    "sydney_cbd": "sydney_cbd.jsonl"
+  },
+  "routers": {
+    "default": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5000",
+      "profile": "foot"
+    },
+    "new_york_midtown": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5011",
+      "profile": "foot"
+    },
+    "san_francisco_downtown": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5012",
+      "profile": "foot"
+    },
+    "london_soho": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5013",
+      "profile": "foot"
+    },
+    "paris_latin_quarter": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5014",
+      "profile": "foot"
+    },
+    "berlin_mitte": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5015",
+      "profile": "foot"
+    },
+    "tokyo_shinjuku": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5016",
+      "profile": "foot"
+    },
+    "singapore_orchard": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5017",
+      "profile": "foot"
+    },
+    "sydney_cbd": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5018",
+      "profile": "foot"
+    }
+  }
+}

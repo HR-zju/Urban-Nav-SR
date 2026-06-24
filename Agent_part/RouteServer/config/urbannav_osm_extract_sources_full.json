@@ -1,0 +1,107 @@
+{
+  "description": "OSM PBF sources for the full non-China UrbanNav global benchmark split.",
+  "sources": {
+    "new_york_midtown": {
+      "url": "https://download.geofabrik.de/north-america/us/new-york-latest.osm.pbf",
+      "raw_filename": "new-york-latest.osm.pbf",
+      "osrm_port": 5011,
+      "valhalla_port": 6011
+    },
+    "san_francisco_downtown": {
+      "url": "https://download.geofabrik.de/north-america/us/california-latest.osm.pbf",
+      "raw_filename": "california-latest.osm.pbf",
+      "osrm_port": 5012,
+      "valhalla_port": 6012
+    },
+    "chicago_loop": {
+      "url": "https://download.geofabrik.de/north-america/us/illinois-latest.osm.pbf",
+      "raw_filename": "illinois-latest.osm.pbf",
+      "osrm_port": 5013,
+      "valhalla_port": 6013
+    },
+    "toronto_downtown": {
+      "url": "https://download.geofabrik.de/north-america/canada/ontario-latest.osm.pbf",
+      "raw_filename": "ontario-latest.osm.pbf",
+      "osrm_port": 5014,
+      "valhalla_port": 6014
+    },
+    "london_soho": {
+      "url": "https://download.geofabrik.de/europe/great-britain/england-latest.osm.pbf",
+      "raw_filename": "england-latest.osm.pbf",
+      "osrm_port": 5015,
+      "valhalla_port": 6015
+    },
+    "paris_latin_quarter": {
+      "url": "https://download.geofabrik.de/europe/france/ile-de-france-latest.osm.pbf",
+      "raw_filename": "ile-de-france-latest.osm.pbf",
+      "osrm_port": 5016,
+      "valhalla_port": 6016
+    },
+    "berlin_mitte": {
+      "url": "https://download.geofabrik.de/europe/germany/berlin-latest.osm.pbf",
+      "raw_filename": "berlin-latest.osm.pbf",
+      "osrm_port": 5017,
+      "valhalla_port": 6017
+    },
+    "amsterdam_centrum": {
+      "url": "https://download.geofabrik.de/europe/netherlands-latest.osm.pbf",
+      "raw_filename": "netherlands-latest.osm.pbf",
+      "osrm_port": 5018,
+      "valhalla_port": 6018
+    },
+    "barcelona_eixample": {
+      "url": "https://download.geofabrik.de/europe/spain/catalonia-latest.osm.pbf",
+      "raw_filename": "catalonia-latest.osm.pbf",
+      "osrm_port": 5019,
+      "valhalla_port": 6019
+    },
+    "tokyo_shinjuku": {
+      "url": "https://download.geofabrik.de/asia/japan/kanto-latest.osm.pbf",
+      "raw_filename": "kanto-latest.osm.pbf",
+      "osrm_port": 5020,
+      "valhalla_port": 6020
+    },
+    "osaka_namba": {
+      "url": "https://download.geofabrik.de/asia/japan/kansai-latest.osm.pbf",
+      "raw_filename": "kansai-latest.osm.pbf",
+      "osrm_port": 5021,
+      "valhalla_port": 6021
+    },
+    "seoul_myeongdong": {
+      "url": "https://download.geofabrik.de/asia/south-korea-latest.osm.pbf",
+      "raw_filename": "south-korea-latest.osm.pbf",
+      "osrm_port": 5022,
+      "valhalla_port": 6022
+    },
+    "singapore_orchard": {
+      "url": "https://download.geofabrik.de/asia/malaysia-singapore-brunei-latest.osm.pbf",
+      "raw_filename": "malaysia-singapore-brunei-latest.osm.pbf",
+      "osrm_port": 5023,
+      "valhalla_port": 6023
+    },
+    "bangkok_siam": {
+      "url": "https://download.geofabrik.de/asia/thailand-latest.osm.pbf",
+      "raw_filename": "thailand-latest.osm.pbf",
+      "osrm_port": 5024,
+      "valhalla_port": 6024
+    },
+    "sydney_cbd": {
+      "url": "https://download.geofabrik.de/australia-oceania/australia/new-south-wales-latest.osm.pbf",
+      "raw_filename": "new-south-wales-latest.osm.pbf",
+      "osrm_port": 5025,
+      "valhalla_port": 6025
+    },
+    "mexico_city_roma": {
+      "url": "https://download.geofabrik.de/north-america/mexico-latest.osm.pbf",
+      "raw_filename": "mexico-latest.osm.pbf",
+      "osrm_port": 5026,
+      "valhalla_port": 6026
+    },
+    "sao_paulo_paulista": {
+      "url": "https://download.geofabrik.de/south-america/brazil/sudeste-latest.osm.pbf",
+      "raw_filename": "brazil-sudeste-latest.osm.pbf",
+      "osrm_port": 5027,
+      "valhalla_port": 6027
+    }
+  }
+}
