@@ -36,6 +36,18 @@ For dataset, benchmark, and evaluator code:
 - Treat tool-call traces as diagnostics unless a benchmark explicitly defines tool-call quality as a metric.
 - Keep the main benchmark metric set small; add extra quantities as debug or slice analysis unless explicitly promoted.
 
+## Architecture And Iteration Management
+
+When implementing core code:
+
+- Manage iterations explicitly. Prefer extending stable interfaces over duplicating near-identical versioned implementations.
+- Start from the most general and minimal base abstraction, then implement specialized variants through inheritance, adapters, or small composition layers.
+- Keep provider, backend, runner, evaluator, builder, and visualization responsibilities decoupled.
+- Do not mix multiple feature versions, provider-specific branches, and shared utility functions into one large script.
+- Extract reusable utilities into library modules when two or more scripts need the same behavior.
+- CLI scripts should be thin orchestration layers: parse arguments, call library code, and write artifacts.
+- New versions should make their behavioral differences explicit through class names, config fields, or strategy objects, not hidden conditionals scattered through unrelated code.
+
 ## UrbanNav Benchmark Rules
 
 For `instruction -> destination -> route` benchmark work:
@@ -60,3 +72,4 @@ For new benchmark/evaluator behavior:
 - Do not modify unrelated files.
 - Prefer existing project patterns over introducing new abstractions.
 - Avoid broad refactors unless they are necessary for the requested work.
+- If a script grows to contain multiple versions or unrelated tools, split it before adding more functionality.
