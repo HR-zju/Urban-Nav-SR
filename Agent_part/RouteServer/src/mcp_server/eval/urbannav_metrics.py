@@ -536,8 +536,10 @@ def evaluate_route_update_case(
 
     cfg = config or UrbanNavEvalConfig()
     update = _route_update_metadata(case)
+    update_type = str(update.get("update_type") or "")
     current_origin = _point_from_dict(update.get("current_origin"))
     previous_destination = UrbanNavDestination.from_dict(update.get("previous_destination")) if isinstance(update.get("previous_destination"), dict) else None
+    final_destination = UrbanNavDestination.from_dict(update.get("final_destination")) if isinstance(update.get("final_destination"), dict) else None
     current_origin_error = None
     current_origin_used = True
     if prediction is None or not prediction.route_polyline:
@@ -567,24 +569,44 @@ def evaluate_route_update_case(
         pred_distance = route_distance_m(prediction.route_polyline)
     reference_distance = _reference_distance(case, destination_match.destination) if destination_match else None
     endpoint_error = _endpoint_error(prediction.route_polyline, destination_match.destination) if prediction and destination_match else None
-    updated_route_success = (
-        updated_destination_success
-        and bool(prediction and prediction.route_polyline)
-        and endpoint_error is not None
-        and endpoint_error <= cfg.endpoint_tolerance_m
-        and pred_distance is not None
-        and pred_distance > 0
-        and reference_distance is not None
-        and reference_distance > 0
-    )
+    via_route_error = None
+    final_endpoint_error = None
+    final_destination_preserved = True
+    if update_type == "add_via" and prediction is not None and destination_match is not None:
+        via_route_error = _route_min_error(prediction.route_polyline, destination_match.destination)
+        final_endpoint_error = _endpoint_error(prediction.route_polyline, final_destination) if final_destination is not None else None
+        final_destination_preserved = final_endpoint_error is not None and final_endpoint_error <= cfg.endpoint_tolerance_m
+        updated_route_success = (
+            updated_destination_success
+            and bool(prediction.route_polyline)
+            and via_route_error is not None
+            and via_route_error <= cfg.endpoint_tolerance_m
+            and final_destination_preserved
+            and pred_distance is not None
+            and pred_distance > 0
+        )
+    else:
+        updated_route_success = (
+            updated_destination_success
+            and bool(prediction and prediction.route_polyline)
+            and endpoint_error is not None
+            and endpoint_error <= cfg.endpoint_tolerance_m
+            and pred_distance is not None
+            and pred_distance > 0
+            and reference_distance is not None
+            and reference_distance > 0
+        )
     route_update_success = bool(updated_route_success and current_origin_used and avoid_previous)
     return {
-        "update_type": update.get("update_type"),
+        "update_type": update_type or update.get("update_type"),
         "route_update_success": route_update_success,
         "updated_destination_success": updated_destination_success,
         "updated_route_success": updated_route_success,
         "current_origin_used": current_origin_used,
         "current_origin_error_m": current_origin_error,
+        "final_destination_preserved": final_destination_preserved,
+        "final_endpoint_error_m": final_endpoint_error,
+        "via_route_error_m": via_route_error,
         "previous_destination_avoided": avoid_previous,
         "previous_destination_selected": previous_match is not None,
         "endpoint_error_m": endpoint_error,
@@ -783,6 +805,23 @@ def _endpoint_error(route: list[UrbanNavPoint], destination: UrbanNavDestination
     return haversine_m(route[-1], dest_point)
 
 
+def _route_min_error(route: list[UrbanNavPoint], destination: UrbanNavDestination) -> float | None:
+    """Compute minimum distance from any route point to a destination.
+
+    Args:
+        route: Predicted route polyline.
+        destination: Destination that should be visited along the route.
+
+    Returns:
+        Minimum route-to-destination error in meters, or ``None`` when missing.
+    """
+
+    dest_point = destination.point
+    if not route or dest_point is None:
+        return None
+    return min(haversine_m(point, dest_point) for point in route)
+
+
 def _summarize_extended_rows(rows: list[UrbanNavEvalRow]) -> dict[str, Any]:
     """Aggregate category-specific extension metrics.
 
@@ -816,6 +855,7 @@ def _summarize_extended_rows(rows: list[UrbanNavEvalRow]) -> dict[str, Any]:
                 "route_update_route_success": _mean_bool(item.get("updated_route_success") for item in update_rows),
                 "route_update_current_origin_used": _mean_bool(item.get("current_origin_used") for item in update_rows),
                 "route_update_previous_destination_avoided": _mean_bool(item.get("previous_destination_avoided") for item in update_rows),
+                "route_update_final_destination_preserved": _mean_bool(item.get("final_destination_preserved") for item in update_rows),
             }
         )
     return summary

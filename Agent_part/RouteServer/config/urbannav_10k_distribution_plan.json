@@ -1,0 +1,32 @@
+{
+  "version": "urbannav_10k_distribution_plan_v1",
+  "target_cases": 10000,
+  "city_distribution": [
+    {"country": "China", "city": "Beijing", "count": 500},
+    {"country": "China", "city": "Shanghai", "count": 500},
+    {"country": "China", "city": "Shenzhen", "count": 500},
+    {"country": "China", "city": "Hangzhou", "count": 500},
+    {"country": "Japan", "city": "Tokyo", "count": 500},
+    {"country": "Japan", "city": "Osaka", "count": 500},
+    {"country": "South Korea", "city": "Seoul", "count": 500},
+    {"country": "Singapore", "city": "Singapore", "count": 500},
+    {"country": "Thailand", "city": "Bangkok", "count": 500},
+    {"country": "USA", "city": "New York", "count": 500},
+    {"country": "USA", "city": "San Francisco", "count": 500},
+    {"country": "USA", "city": "Chicago", "count": 500},
+    {"country": "Canada", "city": "Toronto", "count": 500},
+    {"country": "UK", "city": "London", "count": 500},
+    {"country": "France", "city": "Paris", "count": 500},
+    {"country": "Germany", "city": "Berlin", "count": 500},
+    {"country": "Netherlands", "city": "Amsterdam", "count": 500},
+    {"country": "Spain", "city": "Barcelona", "count": 500},
+    {"country": "Australia", "city": "Sydney", "count": 500},
+    {"country": "Brazil", "city": "Sao Paulo", "count": 500}
+  ],
+  "task_distribution": [
+    {"category": "poi_navigation", "label": "Explicit POI navigation", "count": 4000},
+    {"category": "implicit_need_navigation", "label": "Implicit need navigation", "count": 3500},
+    {"category": "multi_stop_route", "label": "Ordered multi-stop route", "count": 1500},
+    {"category": "route_update_add_via", "label": "Route update / reroute", "count": 1000}
+  ]
+}
