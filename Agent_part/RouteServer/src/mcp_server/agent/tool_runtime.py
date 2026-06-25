@@ -1,4 +1,4 @@
-"""Single-tool online runtime for SideWalk Agentic Stage2.
+r"""Single-tool online runtime for SideWalk Agentic Stage2.
 
 Stage2 cold-start training uses a fixed causal order:
 

@@ -130,17 +130,27 @@ Agent_part/RouteServer/tests/test_agent_online_runtime.py
 
 ## 5. `image_tool.inspect` 决策
 
-- [ ] 当前不暴露 `image_tool.inspect`，除非语义明确。
-- [ ] 方案 A：不实现 inspect，继续只暴露 `crop` / `zoom_in`。
-- [ ] 方案 B：实现 inspect 为外部视觉工具，返回结构化视觉结论。
-- [ ] 明确禁止把 teacher LVLM 直接伪装成学生可调用工具。
-- [ ] 若实现 inspect，补 schema、executor、validator、fake-provider 单测。
+- [x] 当前不暴露 `image_tool.inspect`，除非语义明确。
+- [x] 方案 A：不实现 inspect，继续只暴露 `crop` / `zoom_in`。
+- [x] 方案 B：暂缓；只有定义为真实外部视觉工具并返回结构化视觉结论后才可启用。
+- [x] 明确禁止把 teacher LVLM 直接伪装成学生可调用工具。
+- [x] 已补 schema / executor / exported tools 防回归单测，确保 `image_tool.inspect` 不进入 Stage2。
+
+决策记录：
+
+Stage2 选择方案 A。`image_tool` 当前只提供可审计、确定性的图像操作：
+`crop` 与 `zoom_in`。`inspect` 含义不明确，容易被错误实现为 teacher LVLM
+能力暴露给学生模型，导致训练目标把教师视觉推理能力建模成环境工具。若后续要启用
+`image_tool.inspect`，必须先定义独立外部视觉 runtime、输入输出 schema、failure
+语义、artifact 记录和 fake-provider 单测，再加入工具 schema。
 
 验收标准：
 
 - tool schema 与 executor op 集合一致。
-- ms-swift prompt 不把 inspect 说明写入 CoT target。
-- inspect 返回作为 `tool_response`，原始结果不进入 assistant target。
+- exported ms-swift `tools` 不包含 `inspect`。
+- `ToolExecutor` 对 `image_tool.inspect` 返回 `invalid_tool_call`。
+- ms-swift prompt 不把 `image_tool.inspect` 说明写入 CoT target。
+- 如果未来启用 inspect，返回必须作为 `tool_response`，原始结果不进入 assistant target。
 
 ## 6. Phase1 Archive 到 Stage2 标注流水线
 
