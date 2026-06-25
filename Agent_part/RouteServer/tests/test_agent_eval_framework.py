@@ -7,8 +7,11 @@ import unittest
 import json
 
 
-from mcp_server.agent.schemas import AGENT_STAGE2_CASE_SCHEMA_VERSION, AgentStage2Case, ToolCall
+from mcp_server.agent.schemas import AGENT_STAGE2_CASE_SCHEMA_VERSION, AgentStage2Case, ToolCall, ToolResponse
+from mcp_server.agent.stage2 import build_agent_state, build_agent_think_text, build_tool_decision
+from mcp_server.agent.tool_executor import ToolExecutor
 from mcp_server.agent.tool_parser import parse_agent_action, parse_finish_text, parse_tool_call_text
+from mcp_server.agent.tool_runtime import AgentToolRuntime, AgentToolRuntimeConfig, ToolBudget
 from mcp_server.agent.tool_schema import validate_tool_call
 from mcp_server.eval.cases import load_stage2_cases, write_stage2_cases
 from mcp_server.eval.exporters import trace_to_ms_swift_stage2_row
@@ -91,6 +94,46 @@ class AgentEvalFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([turn.role for turn in trace.turns], ["user", "assistant", "tool_call", "tool_response", "user", "assistant"])
         self.assertEqual(trace.turns[2].content["name"], "map_tool")
         self.assertIn("[TRAJ_0]", trace.turns[4].content)
+        self.assertIn('"result_summary"', trace.turns[5].content)
+        self.assertIn('"navigation_effect"', trace.turns[5].content)
+        self.assertTrue(validate_stage2_trace(trace, case).valid)
+
+    async def test_agentic_stage2_trace_builder_supports_no_tool_replay(self) -> None:
+        case = _sample_no_tool_case()
+        trace = AgenticStage2TraceBuilder().build_trace(
+            case,
+            call=None,
+            tool_decision_reason="visible FPV, BEV, and route state are enough for local navigation",
+        )
+        row = trace_to_ms_swift_stage2_row(trace, case)
+
+        self.assertEqual([turn.role for turn in trace.turns], ["user", "assistant", "user", "assistant"])
+        self.assertIn('"should_call_tool":false', trace.turns[1].content)
+        self.assertIn("[TRAJ_0]", trace.turns[2].content)
+        self.assertNotIn("<ToolResultUse>", trace.turns[3].content)
+        self.assertEqual(trace.metrics["parse_success"], 1.0)
+        self.assertEqual(trace.metrics["tool_decision_consistency"], 1.0)
+        self.assertEqual(trace.metrics["unnecessary_tool_call_rate"], 0.0)
+        self.assertTrue(validate_stage2_trace(trace, case).valid)
+        self.assertTrue(validate_ms_swift_stage2_row(row).valid)
+        self.assertEqual([message["role"] for message in row["messages"]], ["system", "user", "assistant", "user", "assistant"])
+
+    async def test_agentic_stage2_trace_builder_supports_failed_tool_response(self) -> None:
+        case = _sample_case()
+        call = ToolCall(tool="map_tool", arguments={"op": "search_poi", "query": "rest stop", "location": "120,30"})
+        response = ToolResponse(
+            tool="map_tool",
+            success=False,
+            error={"message": "offline map index unavailable"},
+            call_id=call.call_id,
+        )
+        trace = AgenticStage2TraceBuilder().build_trace(case, call=call, response=response)
+
+        self.assertEqual([turn.role for turn in trace.turns], ["user", "assistant", "tool_call", "tool_response", "user", "assistant"])
+        self.assertIn('"success":false', trace.turns[5].content)
+        self.assertIn('"failure_recovery"', trace.turns[5].content)
+        self.assertEqual(trace.metrics["parse_success"], 1.0)
+        self.assertEqual(trace.metrics["tool_result_use_validity"], 1.0)
         self.assertTrue(validate_stage2_trace(trace, case).valid)
 
     async def test_routeserver_teacher_runner_offline_builds_trace(self) -> None:
@@ -119,6 +162,19 @@ class AgentEvalFlowTest(unittest.IsolatedAsyncioTestCase):
         tool_response = json.loads(next(message["content"] for message in row["messages"] if message["role"] == "tool_response"))
         self.assertTrue(tool_response["success"])
         self.assertEqual(row["sidewalk_meta"]["model_run"]["runner"], "routeserver_teacher")
+
+    async def test_routeserver_teacher_runner_supports_no_tool_policy(self) -> None:
+        case = _sample_no_tool_case()
+        trace = await RouteServerTeacherRunner(use_llm=False, enable_recommendation=False).run_case(case)
+        row = trace_to_ms_swift_stage2_row(trace, case)
+
+        self.assertEqual([turn.role for turn in trace.turns], ["user", "assistant", "user", "assistant"])
+        self.assertEqual(trace.metadata["teacher_internal"]["selected_student_tool_call"], None)
+        self.assertEqual(trace.metadata["teacher_internal"]["tool_policy"], "no_tool")
+        self.assertEqual(trace.metrics["parse_success"], 1.0)
+        self.assertNotIn("<ToolResultUse>", trace.turns[3].content)
+        self.assertTrue(validate_stage2_trace(trace, case).valid)
+        self.assertTrue(validate_ms_swift_stage2_row(row).valid)
 
     async def test_phase1_archive_case_runs_with_real_tool_executor_path(self) -> None:
         phase1_row = _sample_phase1_archive_row()
@@ -150,6 +206,102 @@ class AgentEvalFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(validate_ms_swift_stage2_row(row).valid)
 
 
+class AgentToolRuntimeTest(unittest.IsolatedAsyncioTestCase):
+    async def test_single_tool_runtime_executes_fake_provider_tool_call(self) -> None:
+        case = _sample_case()
+        call = ToolCall(tool="map_tool", arguments={"op": "search_poi", "query": "coffee", "location": "120,30"})
+        runtime = AgentToolRuntime(
+            executor=ToolExecutor(app_context=SimpleNamespace(provider="fake_test_map", osm_client=_FakeMapClient()))
+        )
+
+        trace = await runtime.run_case(case, first_assistant_output=_runtime_first_output(case, call))
+
+        self.assertEqual([turn.role for turn in trace.turns], ["user", "assistant", "tool_call", "tool_response", "user", "assistant"])
+        self.assertNotIn("<tool_call>", trace.turns[1].content)
+        self.assertEqual(trace.turns[2].content["name"], "map_tool")
+        self.assertTrue(trace.turns[3].content["success"])
+        self.assertEqual(trace.turns[3].content["result"]["provider"], "fake_test_map")
+        self.assertEqual(trace.turns[3].content["result"]["results"][0]["source"], "fake_test_map")
+        self.assertIn("[TRAJ_0]", trace.turns[4].content)
+        self.assertIn("<ToolResultUse>", trace.turns[5].content)
+        self.assertNotIn("runtime_errors", trace.metadata)
+        self.assertTrue(validate_stage2_trace(trace, case).valid)
+
+    async def test_single_tool_runtime_supports_no_tool_decision(self) -> None:
+        case = _sample_no_tool_case()
+        runtime = AgentToolRuntime()
+
+        trace = await runtime.run_case(case, first_assistant_output=_runtime_first_output(case, None))
+
+        self.assertEqual([turn.role for turn in trace.turns], ["user", "assistant", "user", "assistant"])
+        self.assertIn('"should_call_tool":false', trace.turns[1].content)
+        self.assertNotIn("<ToolResultUse>", trace.turns[3].content)
+        self.assertEqual(trace.metrics["tool_decision_consistency"], 1.0)
+        self.assertEqual(trace.metrics["unnecessary_tool_call_rate"], 0.0)
+        self.assertTrue(validate_stage2_trace(trace, case).valid)
+
+    async def test_single_tool_runtime_keeps_failed_tool_response_replayable(self) -> None:
+        case = _sample_case()
+        call = ToolCall(tool="map_tool", arguments={"op": "search_poi", "query": "coffee", "location": "120,30"})
+        runtime = AgentToolRuntime(executor=ToolExecutor())
+
+        trace = await runtime.run_case(case, first_assistant_output=_runtime_first_output(case, call))
+
+        self.assertEqual([turn.role for turn in trace.turns], ["user", "assistant", "tool_call", "tool_response", "user", "assistant"])
+        self.assertFalse(trace.turns[3].content["success"])
+        self.assertEqual(trace.turns[3].content["error"]["code"], "missing_app_context")
+        self.assertIn('"success":false', trace.turns[5].content)
+        self.assertIn('"failure_recovery"', trace.turns[5].content)
+        self.assertTrue(validate_stage2_trace(trace, case).valid)
+
+    async def test_single_tool_runtime_budget_blocks_disallowed_op(self) -> None:
+        case = _sample_budget_case()
+        call = ToolCall(tool="map_tool", arguments={"op": "geocode", "query": "coffee"})
+        extra_call = ToolCall(tool="map_tool", arguments={"op": "search_poi", "query": "coffee", "location": "120,30"})
+        runtime = AgentToolRuntime(
+            config=AgentToolRuntimeConfig(
+                budget=ToolBudget(max_tool_calls=1, allowed_ops_by_tool={"map_tool": ("search_poi",)})
+            )
+        )
+        first_output = _runtime_first_output(case, call)
+        first_output = f"{first_output}<tool_call>{json.dumps(extra_call.to_dict(), ensure_ascii=False, separators=(',', ':'))}</tool_call>"
+
+        trace = await runtime.run_case(case, first_assistant_output=first_output)
+
+        self.assertEqual([turn.role for turn in trace.turns], ["user", "assistant", "tool_call", "tool_response", "user", "assistant"])
+        self.assertFalse(trace.turns[3].content["success"])
+        self.assertEqual(trace.turns[3].content["error"]["code"], "tool_op_not_allowed")
+        self.assertIn("extra_tool_calls_ignored:1", trace.metadata["runtime_errors"])
+        self.assertEqual(trace.metadata["runtime_log"]["budget"]["allowed_ops_by_tool"]["map_tool"], ["search_poi"])
+        self.assertTrue(validate_stage2_trace(trace, case).valid)
+
+    async def test_single_tool_runtime_writes_review_artifacts(self) -> None:
+        case = _sample_case()
+        call = ToolCall(tool="map_tool", arguments={"op": "search_poi", "query": "coffee", "location": "120,30"})
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            runtime = AgentToolRuntime(
+                executor=ToolExecutor(app_context=SimpleNamespace(provider="fake_test_map", osm_client=_FakeMapClient())),
+                config=AgentToolRuntimeConfig(review_artifact_dir=tmp_dir),
+            )
+            trace = await runtime.run_case(case, first_assistant_output=_runtime_first_output(case, call))
+            runtime_log_path = Path(tmp_dir) / case.case_id / "runtime_log.json"
+            trace_path = Path(tmp_dir) / case.case_id / "agent_trace.json"
+
+            self.assertTrue(runtime_log_path.exists())
+            self.assertTrue(trace_path.exists())
+            runtime_log = json.loads(runtime_log_path.read_text(encoding="utf-8"))
+
+        artifact_types = {item["type"] for item in trace.artifacts}
+        self.assertIn("runtime_log", artifact_types)
+        self.assertIn("runtime_trace", artifact_types)
+        self.assertEqual(len(runtime_log["conversation"]), 6)
+        self.assertEqual(len(runtime_log["tool_calls"]), 1)
+        self.assertEqual(len(runtime_log["tool_responses"]), 1)
+        self.assertEqual(runtime_log["errors"], [])
+        self.assertEqual(trace.metadata["runtime_log"]["case_id"], case.case_id)
+        self.assertTrue(validate_stage2_trace(trace, case).valid)
+
+
 def _sample_case() -> AgentStage2Case:
     return AgentStage2Case(
         case_id="case-1",
@@ -162,6 +314,57 @@ def _sample_case() -> AgentStage2Case:
         ground_truth={
             "expected_tool_ops": ["search_poi"],
             "pixel_trajectory": [[0.5, 0.9], [0.55, 0.75]],
+        },
+    )
+
+
+def _sample_budget_case() -> AgentStage2Case:
+    return AgentStage2Case(
+        case_id="case-budget",
+        schema_version=AGENT_STAGE2_CASE_SCHEMA_VERSION,
+        user_request="根据需要查询地图后继续导航",
+        observation={
+            "images": {"fpv": "/data/fpv.jpg", "bev": "/data/bev.jpg"},
+            "current_location": "120.0,30.0",
+        },
+        ground_truth={
+            "pixel_trajectory": [[0.5, 0.9], [0.52, 0.82]],
+            "intent": "go_straight",
+        },
+    )
+
+
+def _runtime_first_output(case: AgentStage2Case, call: ToolCall | None) -> str:
+    decision_reason = (
+        "external tool context is required before final navigation"
+        if call is not None
+        else "visible FPV, BEV, and route state are enough for local navigation"
+    )
+    output = build_agent_think_text(
+        state=build_agent_state(case),
+        decision=build_tool_decision(call, reason=decision_reason),
+    )
+    if call is None:
+        return output
+    payload = json.dumps(call.to_dict(), ensure_ascii=False, separators=(",", ":"))
+    return f"{output}<tool_call>{payload}</tool_call>"
+
+
+def _sample_no_tool_case() -> AgentStage2Case:
+    return AgentStage2Case(
+        case_id="case-no-tool",
+        schema_version=AGENT_STAGE2_CASE_SCHEMA_VERSION,
+        user_request="继续沿当前可见人行道安全前进",
+        observation={
+            "images": {"fpv": "/data/fpv.jpg", "bev": "/data/bev.jpg"},
+            "current_location": "120.0,30.0",
+            "route_session_id": "route-local",
+            "force_no_tool": True,
+        },
+        ground_truth={
+            "tool_policy": "no_tool",
+            "pixel_trajectory": [[0.5, 0.9], [0.5, 0.82]],
+            "intent": "go_straight",
         },
     )
 
