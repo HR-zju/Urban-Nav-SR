@@ -262,7 +262,8 @@ PATH_MODE=relative
 
 Stage2 冷启动样例使用最终 agent-template 协议：`tool_call` / `tool_response` 是独立
 role，工具返回之后再插入 `[TRAJ_0]...[TRAJ_15]` readout prompt，最终 assistant
-输出 Phase1 CoT tags、`<ToolResultUse>` 和 `<finish>`。
+输出 Phase1 CoT tags、可选 `<ToolResultUse>` 和 `<finish>`。显式 no-tool replay
+使用 `force_no_tool=true` 或 `tool_policy=no_tool`，不写 `tool_call` / `tool_response`。
 
 ```bash
 cd /home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer
@@ -278,24 +279,35 @@ PYTHONPATH=src python tools/evaluation/build_sidewalk_agent_stage2_review_sample
   --limit 16 \
   --execute-tools \
   --tool-context fake \
+  --stage2-cases-out examples/agent_eval/sidewalk_phase1_stage2_cases_smoke.jsonl \
   --traces-out examples/agent_eval/sidewalk_phase1_stage2_traces_smoke.jsonl \
   --ms-swift-out examples/agent_eval/sidewalk_phase1_agentic_stage2_ms_swift_smoke.jsonl \
-  --report-out examples/agent_eval/sidewalk_phase1_stage2_report_smoke.json
+  --report-out examples/agent_eval/sidewalk_phase1_stage2_report_smoke.json \
+  --split-output-dir examples/agent_eval/sidewalk_phase1_stage2_splits_smoke \
+  --review-samples-out examples/agent_eval/sidewalk_phase1_stage2_review_samples_smoke.jsonl \
+  --review-index-out examples/agent_eval/sidewalk_phase1_stage2_review_index_smoke.csv
 ```
 
 说明：
 
 - `--phase1-archive-jsonl` 会把 Phase1 archive 的 `messages/images/pixel_trajectory/sidewalk_meta` 转成 `AgentStage2Case`。
-- 原 Phase1 assistant CoT 放入 `ground_truth.phase1_response`，最终 assistant 会在原 CoT 中插入 `<ToolResultUse>`。
+- 原 Phase1 assistant CoT 放入 `ground_truth.phase1_response`；tool 路径会在原 CoT 中插入 `<ToolResultUse>`，no-tool 路径不会插入。
 - `pixel_trajectory`、`trajectory_fpv_t`、`trajectory_ego_t`、`trajectory_policy`、`semantic_segmentation_path` 等监督字段原样透传到 ms-swift Stage2 row。
+- final assistant 的 `<finish>.trajectory` 会以 `ground_truth.pixel_trajectory` 为准，避免 Phase1 CoT 中四舍五入后的轨迹和 trajectory head 监督错位。
 - `--tool-context fake` 不访问外网，但会经过真实 `ToolExecutor`、`map_ops` 和 route session core；`--tool-context provider` 才连接真实地图 provider。
+- 默认 `--split-policy hash` 会按稳定 case/clip key 分配 `train/val/heldout`，可用 `--split-seed` 和 ratio 参数固定数据版本。
+- `--split-output-dir` 会按 split 写出 cases/traces/ms-swift rows；`--review-samples-out` 和 `--review-index-out` 用于人工抽样检查。
 
 主要产物：
 
 ```text
+examples/agent_eval/sidewalk_agent_stage2_cases_review.jsonl
 examples/agent_eval/sidewalk_agent_stage2_traces_review.jsonl
 examples/agent_eval/sidewalk_agentic_stage2_ms_swift_review.jsonl
 examples/agent_eval/sidewalk_agent_stage2_report_review.json
+examples/agent_eval/sidewalk_agent_stage2_review_samples_review.jsonl
+examples/agent_eval/sidewalk_agent_stage2_review_index_review.csv
+examples/agent_eval/sidewalk_agent_stage2_splits_review/
 ```
 
 对应协议文档：

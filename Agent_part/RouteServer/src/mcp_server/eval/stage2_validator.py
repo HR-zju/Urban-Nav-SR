@@ -24,9 +24,15 @@ from mcp_server.agent.tool_schema import validate_tool_call
 from mcp_server.eval.metrics import compute_trace_metrics
 
 
-STAGE2_TRACE_ROLE_SEQUENCE = ("user", "assistant", "tool_call", "tool_response", "user", "assistant")
-STAGE2_ROW_ROLE_SEQUENCE = ("system", "user", "assistant", "tool_call", "tool_response", "user", "assistant")
-FINAL_COT_REQUIRED_TAGS = ("<Scene>", "<FPVScene>", "<BEVContext>", "<CrossView>", "<Plan>", "<ToolResultUse>", "<finish>")
+STAGE2_TOOL_TRACE_ROLE_SEQUENCE = ("user", "assistant", "tool_call", "tool_response", "user", "assistant")
+STAGE2_NO_TOOL_TRACE_ROLE_SEQUENCE = ("user", "assistant", "user", "assistant")
+STAGE2_TRACE_ROLE_SEQUENCE = STAGE2_TOOL_TRACE_ROLE_SEQUENCE
+STAGE2_TOOL_ROW_ROLE_SEQUENCE = ("system", "user", "assistant", "tool_call", "tool_response", "user", "assistant")
+STAGE2_NO_TOOL_ROW_ROLE_SEQUENCE = ("system", "user", "assistant", "user", "assistant")
+STAGE2_ROW_ROLE_SEQUENCE = STAGE2_TOOL_ROW_ROLE_SEQUENCE
+FINAL_COT_REQUIRED_BASE_TAGS = ("<Scene>", "<FPVScene>", "<BEVContext>", "<CrossView>", "<Plan>", "<finish>")
+FINAL_COT_REQUIRED_TOOL_TAGS = FINAL_COT_REQUIRED_BASE_TAGS + ("<ToolResultUse>",)
+FINAL_COT_REQUIRED_TAGS = FINAL_COT_REQUIRED_TOOL_TAGS
 
 
 @dataclass(frozen=True)
@@ -86,8 +92,8 @@ def validate_stage2_trace(trace: AgentTrace, case: AgentStage2Case | None = None
         ``AgentTrace``，可选原始 ``AgentStage2Case``。
 
     输出:
-        ``Stage2ValidationResult``。检查固定 role 顺序、tool_call JSON、tool_response
-        JSON、readout token 位置、最终 CoT tags 和 ``<finish>`` JSON。
+        ``Stage2ValidationResult``。检查 tool/no-tool role 顺序、tool_call JSON、
+        tool_response JSON、readout token 位置、最终 CoT tags 和 ``<finish>`` JSON。
     """
 
     errors: list[str] = []
@@ -95,11 +101,13 @@ def validate_stage2_trace(trace: AgentTrace, case: AgentStage2Case | None = None
     if trace.schema_version != AGENT_STAGE2_TRACE_SCHEMA_VERSION:
         errors.append(f"trace_schema_version:{trace.schema_version}")
     roles = tuple(turn.role for turn in trace.turns)
-    if roles != STAGE2_TRACE_ROLE_SEQUENCE:
+    has_tool_roles = "tool_call" in roles or "tool_response" in roles
+    expected_roles = STAGE2_TOOL_TRACE_ROLE_SEQUENCE if has_tool_roles else STAGE2_NO_TOOL_TRACE_ROLE_SEQUENCE
+    if roles != expected_roles:
         errors.append(f"trace_role_sequence:{roles}")
 
     call = None
-    if len(trace.turns) > 2:
+    if has_tool_roles and len(trace.turns) > 2:
         call_payload, call_errors = _json_dict(trace.turns[2].content)
         errors.extend(f"tool_call:{item}" for item in call_errors)
         if call_payload is not None:
@@ -107,7 +115,7 @@ def validate_stage2_trace(trace: AgentTrace, case: AgentStage2Case | None = None
             is_valid, validation_errors = validate_tool_call(call)
             if not is_valid:
                 errors.extend(f"tool_call_schema:{item}" for item in validation_errors)
-    if len(trace.turns) > 3:
+    if has_tool_roles and len(trace.turns) > 3:
         response_payload, response_errors = _json_dict(trace.turns[3].content)
         errors.extend(f"tool_response:{item}" for item in response_errors)
         if response_payload is not None:
@@ -116,16 +124,19 @@ def validate_stage2_trace(trace: AgentTrace, case: AgentStage2Case | None = None
             if "success" not in response_payload:
                 errors.append("tool_response_missing_success")
 
-    if len(trace.turns) > 4:
-        readout = trace.turns[4].content
+    readout_index = 4 if has_tool_roles else 2
+    final_index = 5 if has_tool_roles else 3
+    if len(trace.turns) > readout_index:
+        readout = trace.turns[readout_index].content
         if not isinstance(readout, str) or not _contains_all_readout_tokens(readout):
             errors.append("missing_readout_tokens")
-    if len(trace.turns) > 5:
-        final_text = trace.turns[5].content
+    if len(trace.turns) > final_index:
+        final_text = trace.turns[final_index].content
         if not isinstance(final_text, str):
             errors.append("final_assistant_not_text")
         else:
-            for tag in FINAL_COT_REQUIRED_TAGS:
+            required_tags = FINAL_COT_REQUIRED_TOOL_TAGS if has_tool_roles else FINAL_COT_REQUIRED_BASE_TAGS
+            for tag in required_tags:
                 if tag not in final_text:
                     errors.append(f"final_missing_tag:{tag}")
             finish, finish_errors = parse_finish_text(final_text)
@@ -134,9 +145,26 @@ def validate_stage2_trace(trace: AgentTrace, case: AgentStage2Case | None = None
                 expected_traj = case.ground_truth.get("pixel_trajectory")
                 if expected_traj and finish.get("trajectory") != expected_traj:
                     errors.append("finish_trajectory_mismatch")
+    else:
+        errors.append("missing_final_assistant")
+
+    for index, turn in enumerate(trace.turns):
+        if turn.role != "assistant" or not isinstance(turn.content, str):
+            continue
+        if "<tool_response>" in turn.content:
+            errors.append(f"legacy_tool_response_format:{index}")
+        if index != final_index and "<ToolResultUse>" in turn.content:
+            errors.append(f"tool_result_use_outside_final:{index}")
 
     metric_result = compute_trace_metrics(trace, case)
-    for key in ("parse_success", "stage2_role_order_valid", "trajectory_readout_order_valid", "final_cot_validity"):
+    for key in (
+        "parse_success",
+        "stage2_role_order_valid",
+        "trajectory_readout_order_valid",
+        "final_cot_validity",
+        "tool_result_use_validity",
+        "tool_decision_consistency",
+    ):
         if metric_result.metrics.get(key) != 1.0:
             errors.append(f"metric_failed:{key}")
     errors.extend(metric_result.errors)
@@ -168,7 +196,9 @@ def validate_ms_swift_stage2_row(row: dict[str, Any]) -> Stage2ValidationResult:
     if not isinstance(messages, list):
         return Stage2ValidationResult(valid=False, errors=["messages_not_list"])
     roles = tuple(str(message.get("role")) for message in messages if isinstance(message, dict))
-    if roles != STAGE2_ROW_ROLE_SEQUENCE:
+    has_tool_roles = "tool_call" in roles or "tool_response" in roles
+    expected_roles = STAGE2_TOOL_ROW_ROLE_SEQUENCE if has_tool_roles else STAGE2_NO_TOOL_ROW_ROLE_SEQUENCE
+    if roles != expected_roles:
         errors.append(f"row_role_sequence:{roles}")
 
     tools = row.get("tools")
@@ -196,11 +226,16 @@ def validate_ms_swift_stage2_row(row: dict[str, Any]) -> Stage2ValidationResult:
                     errors.extend(f"tool_call_schema:{item}" for item in validation_errors)
         if role == "tool" or (isinstance(content, str) and "<tool_response>" in content):
             errors.append("legacy_tool_response_format")
-    if len(messages) > 5 and not _contains_all_readout_tokens(str(messages[5].get("content"))):
+        if role == "assistant" and index != (6 if has_tool_roles else 4) and isinstance(content, str) and "<ToolResultUse>" in content:
+            errors.append(f"tool_result_use_outside_final:{index}")
+    readout_index = 5 if has_tool_roles else 3
+    final_index = 6 if has_tool_roles else 4
+    if len(messages) > readout_index and not _contains_all_readout_tokens(str(messages[readout_index].get("content"))):
         errors.append("row_missing_readout_tokens")
-    if len(messages) > 6:
-        final_text = messages[6].get("content")
-        if not isinstance(final_text, str) or not all(tag in final_text for tag in FINAL_COT_REQUIRED_TAGS):
+    if len(messages) > final_index:
+        final_text = messages[final_index].get("content")
+        required_tags = FINAL_COT_REQUIRED_TOOL_TAGS if has_tool_roles else FINAL_COT_REQUIRED_BASE_TAGS
+        if not isinstance(final_text, str) or not all(tag in final_text for tag in required_tags):
             errors.append("row_final_cot_invalid")
     else:
         errors.append("row_missing_final_assistant")

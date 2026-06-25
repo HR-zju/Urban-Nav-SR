@@ -6,9 +6,13 @@
     ``--phase1-archive-jsonl`` 指向 Phase1 archive/pre-archive JSONL。
 
 输出:
+    ``--stage2-cases-out``: 由 Phase1 archive 适配后的
+    ``sidewalk_agent_stage2_case_v1`` JSONL。
     ``--traces-out``: ``sidewalk_agent_trace_v2`` JSONL。
     ``--ms-swift-out``: ``sidewalk_agentic_stage2_sft_v1`` JSONL。
     ``--report-out``: case/trace/export row 的 validator report。
+    ``--split-output-dir``: 固定 train/val/heldout split 后的 cases/traces/rows。
+    ``--review-samples-out`` / ``--review-index-out``: 人工 review 小样本。
 
 说明:
     默认不执行真实工具，使用 deterministic synthetic tool_response。传
@@ -36,6 +40,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from mcp_server.eval.cases import load_stage2_cases
+from mcp_server.eval.cases import write_stage2_cases
 from mcp_server.eval.exporters import (
     trace_to_ms_swift_stage2_row,
     write_ms_swift_stage2_jsonl,
@@ -43,6 +48,17 @@ from mcp_server.eval.exporters import (
 )
 from mcp_server.eval.phase1_archive_adapter import load_phase1_archive_stage2_cases
 from mcp_server.eval.runners import RouteServerTeacherRunner, run_cases
+from mcp_server.eval.stage2_pipeline import (
+    STAGE2_SPLITS,
+    Stage2SplitConfig,
+    apply_stage2_splits,
+    count_stage2_splits,
+    sample_stage2_review_rows,
+    summarize_stage2_slices,
+    write_jsonl_records,
+    write_review_index_csv,
+    write_stage2_split_outputs,
+)
 from mcp_server.eval.stage2_validator import (
     validate_ms_swift_stage2_row,
     validate_stage2_case,
@@ -281,6 +297,19 @@ def _load_cases_from_args(args: argparse.Namespace):
 
 async def _run(args: argparse.Namespace) -> None:
     cases = _load_cases_from_args(args)
+    split_config = Stage2SplitConfig(
+        train_ratio=args.train_ratio,
+        val_ratio=args.val_ratio,
+        heldout_ratio=args.heldout_ratio,
+        seed=args.split_seed,
+    )
+    split_counts = (
+        apply_stage2_splits(cases, split_config)
+        if args.split_policy == "hash"
+        else count_stage2_splits(cases)
+    )
+    if args.stage2_cases_out:
+        write_stage2_cases(cases, args.stage2_cases_out)
     case_validations = [{"case_id": case.case_id, **validate_stage2_case(case).to_dict()} for case in cases]
 
     app_context = await _build_app_context(args)
@@ -311,6 +340,32 @@ async def _run(args: argparse.Namespace) -> None:
 
     write_traces_jsonl(traces, args.traces_out)
     write_ms_swift_stage2_jsonl(traces, args.ms_swift_out, cases_by_id=cases_by_id)
+    split_outputs = (
+        write_stage2_split_outputs(cases=cases, traces=traces, rows=rows, output_dir=args.split_output_dir)
+        if args.split_output_dir
+        else {}
+    )
+    slice_summary = summarize_stage2_slices(
+        cases,
+        traces,
+        rows,
+        case_validations=case_validations,
+        trace_validations=trace_validations,
+        row_validations=row_validations,
+    )
+    review_samples = sample_stage2_review_rows(
+        cases,
+        traces,
+        rows,
+        case_validations=case_validations,
+        trace_validations=trace_validations,
+        row_validations=row_validations,
+        per_slice=args.review_per_slice,
+    )
+    if args.review_samples_out:
+        write_jsonl_records(review_samples, args.review_samples_out)
+    if args.review_index_out:
+        write_review_index_csv(review_samples, args.review_index_out)
 
     metric_names = sorted({key for trace in traces for key in trace.metrics.keys()})
     report = {
@@ -325,10 +380,26 @@ async def _run(args: argparse.Namespace) -> None:
         "enable_visual_prompt": bool(args.enable_visual_prompt),
         "enable_recommendation": bool(args.enable_recommendation),
         "outputs": {
+            "stage2_cases_out": str(args.stage2_cases_out) if args.stage2_cases_out else None,
             "traces_out": str(args.traces_out),
             "ms_swift_out": str(args.ms_swift_out),
             "report_out": str(args.report_out),
+            "review_samples_out": str(args.review_samples_out) if args.review_samples_out else None,
+            "review_index_out": str(args.review_index_out) if args.review_index_out else None,
+            "split_output_dir": str(args.split_output_dir) if args.split_output_dir else None,
+            "split_outputs": split_outputs,
             "tool_artifact_dir": str(args.tool_artifact_dir) if args.tool_artifact_dir else None,
+        },
+        "split": {
+            "policy": args.split_policy,
+            "seed": args.split_seed,
+            "canonical_splits": list(STAGE2_SPLITS),
+            "ratios": {
+                "train": args.train_ratio,
+                "val": args.val_ratio,
+                "heldout": args.heldout_ratio,
+            },
+            "counts": split_counts,
         },
         "metrics": {
             name: _metric_average([trace.metrics.get(name) for trace in traces])
@@ -339,9 +410,17 @@ async def _run(args: argparse.Namespace) -> None:
             "traces": _validation_counts(trace_validations),
             "ms_swift_rows": _validation_counts(row_validations),
         },
+        "slices": {key: value for key, value in slice_summary.items() if key != "records"},
+        "review": {
+            "per_slice": args.review_per_slice,
+            "sample_count": len(review_samples),
+            "samples_out": str(args.review_samples_out) if args.review_samples_out else None,
+            "index_out": str(args.review_index_out) if args.review_index_out else None,
+        },
         "cases": [
             {
                 "case_id": trace.case_id,
+                "split": cases[index].split,
                 "metrics": trace.metrics,
                 "case_validation": case_validations[index],
                 "trace_validation": trace_validations[index],
@@ -397,9 +476,35 @@ def parse_args() -> argparse.Namespace:
         default=str(ROOT / "examples" / "agent_eval" / "sidewalk_agentic_stage2_ms_swift_review.jsonl"),
     )
     parser.add_argument(
+        "--stage2-cases-out",
+        default=None,
+        help="Optional output JSONL for adapted Stage2 cases.",
+    )
+    parser.add_argument(
         "--report-out",
         default=str(ROOT / "examples" / "agent_eval" / "sidewalk_agent_stage2_report_review.json"),
     )
+    parser.add_argument(
+        "--split-output-dir",
+        default=None,
+        help="Optional directory for train/val/heldout cases, traces, and ms-swift rows.",
+    )
+    parser.add_argument("--split-policy", choices=["hash", "preserve"], default="hash")
+    parser.add_argument("--split-seed", default="sidewalk_agentic_stage2_v1")
+    parser.add_argument("--train-ratio", type=float, default=0.90)
+    parser.add_argument("--val-ratio", type=float, default=0.05)
+    parser.add_argument("--heldout-ratio", type=float, default=0.05)
+    parser.add_argument(
+        "--review-samples-out",
+        default=None,
+        help="Optional JSONL containing small manual-review samples from each split/tool/op slice.",
+    )
+    parser.add_argument(
+        "--review-index-out",
+        default=None,
+        help="Optional CSV index for manual-review samples.",
+    )
+    parser.add_argument("--review-per-slice", type=int, default=5)
     parser.add_argument("--execute-tools", action="store_true", help="Run selected tool_call through ToolExecutor.")
     parser.add_argument(
         "--tool-context",
@@ -424,6 +529,18 @@ def parse_args() -> argparse.Namespace:
         raise SystemExit("--tool-context provider requires --execute-tools")
     if args.tool_artifact_dir:
         args.tool_artifact_dir = str(Path(args.tool_artifact_dir).expanduser())
+    for key in (
+        "stage2_cases_out",
+        "split_output_dir",
+        "review_samples_out",
+        "review_index_out",
+        "traces_out",
+        "ms_swift_out",
+        "report_out",
+    ):
+        value = getattr(args, key, None)
+        if value:
+            setattr(args, key, str(Path(value).expanduser()))
     return args
 
 

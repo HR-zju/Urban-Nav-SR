@@ -10,8 +10,8 @@
 注意：这些 teacher 能力只写入 trace metadata / teacher artifact，不会作为学生
 模型可见 tool 暴露。学生仍然只学习 ``map_tool``、``image_tool``、
 ``user_interaction_tool`` 三个元工具的调用协议。输出 trace 直接采用最终 Stage2
-因果顺序：工具交互先发生，随后插入 ``[TRAJ_*]`` readout prompt，再生成最终
-导航 CoT 和 ``<finish>``。
+因果顺序：需要工具时工具交互先发生，随后插入 ``[TRAJ_*]`` readout prompt；
+显式 no-tool replay 则直接从 ``<ToolDecision>`` 进入 readout prompt。
 """
 
 from __future__ import annotations
@@ -96,6 +96,14 @@ def _safe_summary(payload: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def _is_no_tool_policy(value: Any) -> bool:
+    """Return True when a case explicitly requests no-tool replay."""
+
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"no_tool", "none", "skip_tool", "local_only", "false"}
+
+
 @dataclass
 class RouteServerTeacherConfig:
     """Configuration for ``RouteServerAgentTeacher``.
@@ -129,7 +137,7 @@ class RouteServerAgentTeacher:
     输出:
         ``AgentTrace``，其中 ``tool_call`` 和 ``tool_response`` 是独立 role；
         assistant 文本只承担 LM 监督：先输出 ``<think><AgentState>...``，最终
-        输出 Phase1 CoT tags + ``<ToolResultUse>`` + ``<finish>``。
+        输出 Phase1 CoT tags + 可选 ``<ToolResultUse>`` + ``<finish>``。
     """
 
     def __init__(
@@ -149,24 +157,28 @@ class RouteServerAgentTeacher:
         recommendation = await self._maybe_recommend(case, intent)
         visual_prompt = await self._maybe_run_visual_prompt_teacher(case)
 
-        call = self._select_student_tool_call(
-            case,
-            intent=intent,
-            goals=goals,
-            recommendation=recommendation,
-            visual_prompt=visual_prompt,
-        )
+        no_tool_replay = self._uses_no_tool_replay(case)
+        call = None
+        if not no_tool_replay:
+            call = self._select_student_tool_call(
+                case,
+                intent=intent,
+                goals=goals,
+                recommendation=recommendation,
+                visual_prompt=visual_prompt,
+            )
         teacher_internal = {
             "intent_parse": intent,
             "goal_decomposition": goals,
             "recommendation": _safe_summary(recommendation),
             "visual_prompt": _safe_summary(visual_prompt),
-            "selected_student_tool_call": call.to_dict(),
+            "selected_student_tool_call": call.to_dict() if call is not None else None,
+            "tool_policy": "no_tool" if no_tool_replay else "tool",
         }
 
         response = None
         extra_metadata: dict[str, Any] = {}
-        if self.config.execute_tools:
+        if self.config.execute_tools and call is not None:
             response = await self._execute_selected_tool(call, case)
             if not response.success:
                 extra_metadata["tool_execution_warning"] = response.to_dict()
@@ -270,6 +282,29 @@ class RouteServerAgentTeacher:
         executor = ToolExecutor(app_context=self.app_context, artifact_dir=self.config.tool_artifact_dir)
         return await executor.execute(call, case=case)
 
+    def _uses_no_tool_replay(self, case: AgentStage2Case) -> bool:
+        """Check explicit no-tool annotations without adding random policy logic.
+
+        Args:
+            case: Stage2 case whose ``observation`` / ``ground_truth`` / ``metadata``
+                may request no-tool replay.
+
+        Returns:
+            True when the teacher should emit ``should_call_tool=false`` and skip
+            ``tool_call`` / ``tool_response`` roles.
+        """
+
+        for payload in (case.observation, case.ground_truth, case.metadata):
+            if not isinstance(payload, dict):
+                continue
+            if _is_no_tool_policy(payload.get("tool_policy")):
+                return True
+            if _is_no_tool_policy(payload.get("stage2_tool_policy")):
+                return True
+            if payload.get("force_no_tool") is True:
+                return True
+        return False
+
     def _select_student_tool_call(
         self,
         case: AgentStage2Case,
@@ -362,7 +397,9 @@ class RouteServerAgentTeacher:
         )
 
     @staticmethod
-    def _tool_decision_reason(call: ToolCall) -> str:
+    def _tool_decision_reason(call: ToolCall | None) -> str:
+        if call is None:
+            return "available FPV, BEV, and route state are sufficient for the final local navigation decision"
         if call.tool == "map_tool":
             return "map or route state is required before producing the final navigation decision"
         if call.tool == "image_tool":

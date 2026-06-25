@@ -1,5 +1,37 @@
 # RouteServer 变更记录
 
+## 2026-06-25
+
+### 完整落地 Phase1 Archive 到 Agentic Stage2 标注流水线
+
+- 新增 `eval/stage2_pipeline.py`，集中实现 Stage2 hash split、split 文件写出、
+  slice report、manual review samples 和 CSV index，避免 build CLI 继续膨胀为协议定义。
+- 扩展 `tools/evaluation/build_sidewalk_agent_stage2_review_samples.py`：
+  - 支持 `--stage2-cases-out`，可直接保存由真实 Phase1 archive 适配出的
+    `sidewalk_agent_stage2_case_v1`。
+  - 支持 `--split-output-dir`，按固定 `train/val/heldout` 写出 cases、traces、
+    ms-swift rows。
+  - 支持 `--review-samples-out` / `--review-index-out`，按
+    `(split, tool_policy, op)` 抽取人工 review 小样本。
+  - report 新增 split 配置、tool/no-tool/failed-tool、tool name、op、validation、
+    Phase1 intent 等 slice 聚合。
+- `agent/stage2.py` 在复用 Phase1 CoT 时以 `ground_truth.pixel_trajectory`
+  覆盖最终 `<finish>.trajectory`，避免 Phase1 文本四舍五入和 trajectory head
+  监督浮点值错位。
+- 新增 `tests/test_stage2_pipeline.py`，覆盖真实 Phase1 archive JSONL 适配、fake
+  executor CLI smoke、split 输出、slice report 和 review index。
+
+## 2026-06-24
+
+### 补齐 Agentic Stage2 tool/no-tool/failed-tool 协议
+
+- `agent/stage2.py` 支持 `ToolCall | None`：tool 路径保持 `tool_call -> tool_response -> [TRAJ_*] -> final`；显式 no-tool replay 输出 `should_call_tool=false` 后直接进入 `[TRAJ_*]` readout。
+- `<ToolResultUse>` 从简单 tool/op 标记扩展为可审计工具使用结论，包含 `result_summary`、`selected_result`、`route_update`、`navigation_effect`，failed-tool 样本额外包含 `failure_recovery`。
+- `teacher/agentic_stage2_trace_builder.py` 统一生成 tool 与 no-tool 两种合法 trace；`teacher/trace_builder.py` 通过 `force_no_tool` 或 `tool_policy=no_tool` 支持确定性 no-tool replay。
+- `eval/metrics.py` 与 `eval/stage2_validator.py` 支持 tool/no-tool 两种 role sequence，并新增 `tool_result_use_validity`、`tool_decision_consistency`、`unnecessary_tool_call_rate`。
+- `tests/test_agent_eval_framework.py` 增加 tool、no-tool、failed-tool 三类 smoke，确保 trace 和 ms-swift row 都能通过 validator。
+- `docs/SIDEWALK_AGENT_EVAL_PROTOCOL.md` 更新 tool/no-tool/failed-tool 语义，强调工具 schema 顶层注入、原始 `tool_response` 不进入 assistant LM target、`<ToolResultUse>` 只记录工具结果使用结论。
+
 ## 2026-06-20
 
 ### 升级 SideWalk Agent/Eval 为 Agentic Stage2 最终协议

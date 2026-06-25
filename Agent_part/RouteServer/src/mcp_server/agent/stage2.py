@@ -18,6 +18,10 @@ from mcp_server.agent.schemas import AgentStage2Case, ToolCall, ToolResponse
 TRAJECTORY_TOKEN_COUNT = 16
 NAVIGATION_READOUT_TOKENS = tuple(f"[TRAJ_{index}]" for index in range(TRAJECTORY_TOKEN_COUNT))
 FINAL_NAVIGATION_DECISION_PROMPT = (
+    "Produce the final sidewalk navigation decision using FPV, BEV, and route state.\n\n"
+    + " ".join(NAVIGATION_READOUT_TOKENS)
+)
+FINAL_NAVIGATION_DECISION_WITH_TOOL_PROMPT = (
     "Produce the final sidewalk navigation decision using the tool result, FPV, BEV, and route state.\n\n"
     + " ".join(NAVIGATION_READOUT_TOKENS)
 )
@@ -51,10 +55,19 @@ def initial_user_content(case: AgentStage2Case) -> str:
     return "".join("<image>" for _ in case.images) + case.user_request
 
 
-def final_navigation_user_content() -> str:
-    """Return the fixed final readout prompt containing all trajectory query tokens."""
+def final_navigation_user_content(*, tool_used: bool = True) -> str:
+    """Return the final readout prompt containing all trajectory query tokens.
 
-    return FINAL_NAVIGATION_DECISION_PROMPT
+    Args:
+        tool_used: True 时提示模型把已经出现的 ``tool_response`` 纳入最终导航；
+            False 时生成 no-tool replay 的最终导航 prompt。
+
+    Returns:
+        带 ``[TRAJ_i]`` 的 user turn 文本。该 turn 必须位于最终 assistant 前，
+        且在 tool 路径中必须位于 ``tool_response`` 后。
+    """
+
+    return FINAL_NAVIGATION_DECISION_WITH_TOOL_PROMPT if tool_used else FINAL_NAVIGATION_DECISION_PROMPT
 
 
 def build_agent_think_text(*, state: dict[str, Any], decision: dict[str, Any]) -> str:
@@ -91,15 +104,26 @@ def build_agent_state(case: AgentStage2Case, *, intent: dict[str, Any] | None = 
     }
 
 
-def build_tool_decision(call: ToolCall, *, reason: str) -> dict[str, Any]:
-    """Build the compact ``<ToolDecision>`` payload aligned with the next tool_call role."""
+def build_tool_decision(call: ToolCall | None, *, reason: str) -> dict[str, Any]:
+    """Build the compact ``<ToolDecision>`` payload.
 
-    return {
-        "should_call_tool": True,
-        "tool": call.tool,
-        "op": call.op,
+    Args:
+        call: 下一步要执行的工具调用。None 表示教师标注 no-tool replay。
+        reason: 教师给出的决策理由，作为 LM 监督的一部分。
+
+    Returns:
+        ``<ToolDecision>`` JSON。tool 路径中它与下一条 ``tool_call`` role 对齐；
+        no-tool 路径中 ``should_call_tool=false``，后续直接进入导航 readout。
+    """
+
+    decision = {
+        "should_call_tool": call is not None,
         "reason": reason,
     }
+    if call is not None:
+        decision["tool"] = call.tool
+        decision["op"] = call.op
+    return decision
 
 
 def synthetic_tool_response(
@@ -153,33 +177,33 @@ def synthetic_tool_response(
 def build_final_assistant_text(
     case: AgentStage2Case,
     *,
-    call: ToolCall,
-    response: ToolResponse,
+    call: ToolCall | None,
+    response: ToolResponse | None,
     source: str,
     phase1_response: str | None = None,
 ) -> str:
     """Build the final assistant CoT and ``<finish>`` target.
 
     输入:
-        Stage2 case、已执行或合成的工具调用/返回，以及可选 Phase1 CoT response。
+        Stage2 case、可选工具调用/返回，以及可选 Phase1 CoT response。
 
     输出:
         最终 assistant content。若 case 中已有 Phase1 CoT 会插入
-        ``<ToolResultUse>`` 并补齐 ``<finish>`` 的 tool fields 否则生成可 review
-        的 deterministic fallback CoT。
+        tool 路径会插入 ``<ToolResultUse>`` 并补齐 ``<finish>`` 的 tool fields。
+        no-tool 路径不写 ``<ToolResultUse>``，避免把不存在的环境返回变成 LM target。
     """
 
-    tool_use = _tool_result_use(call=call, response=response)
+    tool_use = _tool_result_use(call=call, response=response) if call is not None and response is not None else None
     finish_extra = _finish_extra(case=case, call=call, response=response, source=source)
     base_response = (phase1_response or _find_phase1_response(case)).strip()
     if base_response:
-        text = _insert_tool_result_use(base_response, tool_use)
+        text = _insert_tool_result_use(base_response, tool_use) if tool_use is not None else base_response
         return _augment_finish(text, finish_extra)
 
     scene = {
         "summary": "offline Stage2 teacher sample",
         "request": case.user_request,
-        "tool_context_available": True,
+        "tool_context_available": tool_use is not None,
     }
     fpv_scene = {
         "navigable_area": "use visible sidewalk and obstacle cues from FPV",
@@ -192,15 +216,25 @@ def build_final_assistant_text(
     }
     cross_view = {
         "alignment": "use FPV appearance with BEV route context",
-        "tool_result": "available_before_trajectory_readout",
+        "tool_result": "available_before_trajectory_readout" if tool_use is not None else "not_used",
     }
     plan = {
         "route_action": finish_extra["route_action"],
-        "tool": call.tool,
-        "op": call.op,
-        "next_step": "produce local trajectory from FPV, BEV, and tool result",
+        "next_step": (
+            "produce local trajectory from FPV, BEV, and tool result"
+            if tool_use is not None
+            else "produce local trajectory from FPV, BEV, and route state"
+        ),
     }
+    if call is not None:
+        plan["tool"] = call.tool
+        plan["op"] = call.op
+    if tool_use is not None:
+        bev_context["tool_result_summary"] = tool_use.get("result_summary")
+        cross_view["tool_grounding"] = tool_use.get("navigation_effect")
+        plan["tool_result_use"] = tool_use.get("used_for")
     finish = dict(finish_extra)
+    tool_result_block = f"<ToolResultUse>{json_dumps(tool_use)}</ToolResultUse>\n" if tool_use is not None else ""
     return (
         "<think>\n"
         f"<Scene>{json_dumps(scene)}</Scene>\n"
@@ -208,21 +242,27 @@ def build_final_assistant_text(
         f"<BEVContext>{json_dumps(bev_context)}</BEVContext>\n"
         f"<CrossView>{json_dumps(cross_view)}</CrossView>\n"
         f"<Plan>{json_dumps(plan)}</Plan>\n"
-        f"<ToolResultUse>{json_dumps(tool_use)}</ToolResultUse>\n"
+        f"{tool_result_block}"
         "</think>\n"
         f"<finish>{json_dumps(finish)}</finish>"
     )
 
 
 def _available_context(case: AgentStage2Case) -> list[str]:
+    """Return only runtime-observable context for ``<AgentState>``.
+
+    ``ground_truth.pixel_trajectory`` / ``trajectory_fpv_t`` /
+    ``trajectory_ego_t`` are teacher labels for loss computation.  They are
+    exported as top-level ms-swift fields, but must not be advertised as
+    available agent context in the assistant target; otherwise Stage2 would
+    teach the model a data-leaking state description.
+    """
+
     context = ["user_request"]
     if case.images:
         context.append("images")
     for key in ("current_location", "origin", "destination", "route_session_id", "route_polyline"):
         if case.observation.get(key) is not None:
-            context.append(key)
-    for key in ("pixel_trajectory", "trajectory_fpv_t", "trajectory_ego_t", "semantic_segmentation_path"):
-        if case.ground_truth.get(key) is not None:
             context.append(key)
     return context
 
@@ -288,21 +328,44 @@ def _compact_tool_context(payload: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def _tool_result_use(*, call: ToolCall, response: ToolResponse) -> dict[str, Any]:
-    return {
+    """Summarize how the final assistant should use one tool response.
+
+    The raw ``tool_response`` remains environment context and is not copied into
+    assistant LM targets. This summary is the teacher-visible conclusion:
+    \\[
+    u = f(c, r)
+    \\]
+    where ``c`` is the tool call and ``r`` is the deterministic tool response.
+    """
+
+    payload = {
         "tool_used": True,
         "tool": call.tool,
         "op": call.op,
         "success": response.success,
         "used_for": "final_navigation_decision",
+        "result_summary": _tool_result_summary(call=call, response=response),
+        "selected_result": _selected_tool_result(call=call, response=response),
+        "route_update": _route_update_from_tool(call=call, response=response),
+        "navigation_effect": _navigation_effect_from_tool(call=call, response=response),
     }
+    if not response.success:
+        payload["failure_recovery"] = _failure_recovery_from_tool(call=call, response=response)
+    return {key: value for key, value in payload.items() if value is not None}
 
 
-def _finish_extra(*, case: AgentStage2Case, call: ToolCall, response: ToolResponse, source: str) -> dict[str, Any]:
+def _finish_extra(
+    *,
+    case: AgentStage2Case,
+    call: ToolCall | None,
+    response: ToolResponse | None,
+    source: str,
+) -> dict[str, Any]:
     finish = {
         "route_action": _route_action(call),
-        "tool_used": True,
-        "tool": call.tool,
-        "op": call.op,
+        "tool_used": call is not None,
+        "tool": call.tool if call is not None else None,
+        "op": call.op if call is not None else None,
         "route_session_id": _route_session_id(case, call, response),
         "trajectory": _trajectory(case),
         "intent": case.ground_truth.get("intent") or case.observation.get("intent") or "follow_sidewalk_route",
@@ -314,7 +377,126 @@ def _finish_extra(*, case: AgentStage2Case, call: ToolCall, response: ToolRespon
     return {key: value for key, value in finish.items() if value is not None}
 
 
-def _route_action(call: ToolCall) -> str:
+def _tool_result_summary(*, call: ToolCall, response: ToolResponse) -> str:
+    """Return a short deterministic result summary for ``<ToolResultUse>``."""
+
+    result = response.result if isinstance(response.result, dict) else {}
+    if not response.success:
+        error = response.error if isinstance(response.error, dict) else {}
+        message = error.get("message") or error.get("error") or result.get("message") or "tool_failed"
+        return f"{call.tool}.{call.op} failed: {message}"
+    if call.tool == "map_tool":
+        if call.op in {"search_poi", "search_category"}:
+            candidates = _candidate_list(result)
+            return f"map search returned {len(candidates)} candidate(s)"
+        if call.op == "create_route_session":
+            session_id = _nested_get(result, ("session", "session_id")) or result.get("session_id")
+            return f"route session created: {session_id}" if session_id else "route session created"
+        if call.op in {"add_via_and_replan", "remove_via_and_replan", "replace_destination", "replan_from_current_pose"}:
+            return "route session updated"
+        return f"map operation succeeded: {call.op}"
+    if call.tool == "image_tool":
+        return f"image operation succeeded: {call.op}"
+    if call.tool == "user_interaction_tool":
+        return "user interaction request prepared"
+    return f"tool operation succeeded: {call.tool}.{call.op}"
+
+
+def _selected_tool_result(*, call: ToolCall, response: ToolResponse) -> str | None:
+    """Return the selected POI/route/image artifact in compact text form."""
+
+    result = response.result if isinstance(response.result, dict) else {}
+    if not response.success:
+        return None
+    if call.tool == "map_tool" and call.op in {"search_poi", "search_category"}:
+        candidates = _candidate_list(result)
+        if not candidates:
+            return None
+        selected = candidates[0]
+        if isinstance(selected, dict):
+            name = selected.get("name") or selected.get("title") or selected.get("id") or "candidate"
+            location = selected.get("location") or selected.get("coordinate") or selected.get("coordinates")
+            distance = selected.get("distance_m") or selected.get("distance")
+            parts = [str(name)]
+            if location is not None:
+                parts.append(f"location={location}")
+            if distance is not None:
+                parts.append(f"distance_m={distance}")
+            return "; ".join(parts)
+        return str(selected)
+    if call.tool == "map_tool" and call.op in {"create_route_session", "get_route_session"}:
+        session_id = _nested_get(result, ("session", "session_id")) or result.get("session_id")
+        return str(session_id) if session_id is not None else None
+    if call.tool == "image_tool":
+        artifact = result.get("image") or result.get("image_path") or result.get("op")
+        return str(artifact) if artifact is not None else None
+    return None
+
+
+def _route_update_from_tool(*, call: ToolCall, response: ToolResponse) -> str:
+    """Classify whether the tool changed global route state."""
+
+    if not response.success:
+        return "none"
+    if call.tool != "map_tool":
+        return "none"
+    if call.op == "create_route_session":
+        return "create_route_session"
+    if call.op in {"add_via_and_replan", "remove_via_and_replan", "replace_destination", "replan_from_current_pose"}:
+        return str(call.op)
+    return "none"
+
+
+def _navigation_effect_from_tool(*, call: ToolCall, response: ToolResponse) -> str:
+    """Describe how the tool result should influence final local navigation."""
+
+    if not response.success:
+        return "tool_failed_use_fpv_bev_and_existing_route_context"
+    if call.tool == "map_tool":
+        if call.op in {"search_poi", "search_category"}:
+            return "ground destination or nearby map context before local trajectory generation"
+        if call.op == "create_route_session":
+            return "condition local trajectory on the newly created route session"
+        if call.op in {"add_via_and_replan", "remove_via_and_replan", "replace_destination", "replan_from_current_pose"}:
+            return "condition local trajectory on the updated route session"
+        return "use map context as a constraint on local navigation"
+    if call.tool == "image_tool":
+        return "use focused visual evidence for FPV-BEV alignment and obstacle reasoning"
+    if call.tool == "user_interaction_tool":
+        return "defer or constrain final route decision according to requested clarification"
+    return "use external context before final navigation"
+
+
+def _failure_recovery_from_tool(*, call: ToolCall, response: ToolResponse) -> str:
+    """Return the deterministic fallback policy for failed tool execution."""
+
+    del response
+    if call.tool == "map_tool":
+        return "fallback_to_existing_route_state_and_visible_fpv_bev_context"
+    if call.tool == "image_tool":
+        return "fallback_to_uncropped_fpv_bev_context"
+    if call.tool == "user_interaction_tool":
+        return "request_user_input_in_finish_or_keep_low_confidence"
+    return "fallback_to_available_context"
+
+
+def _candidate_list(result: dict[str, Any]) -> list[Any]:
+    candidates = result.get("candidates") or result.get("results") or result.get("pois") or []
+    return candidates if isinstance(candidates, list) else []
+
+
+def _nested_get(payload: dict[str, Any], path: tuple[str, ...]) -> Any:
+    current: Any = payload
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def _route_action(call: ToolCall | None) -> str:
+    if call is None:
+        return "continue_navigation"
     op = call.op or ""
     if call.tool == "user_interaction_tool":
         return "request_user_input"
@@ -329,10 +511,10 @@ def _route_action(call: ToolCall) -> str:
     return "continue_navigation"
 
 
-def _route_session_id(case: AgentStage2Case, call: ToolCall, response: ToolResponse) -> Any:
-    if call.arguments.get("session_id") is not None:
+def _route_session_id(case: AgentStage2Case, call: ToolCall | None, response: ToolResponse | None) -> Any:
+    if call is not None and call.arguments.get("session_id") is not None:
         return call.arguments.get("session_id")
-    result = response.result if isinstance(response.result, dict) else {}
+    result = response.result if response is not None and isinstance(response.result, dict) else {}
     session = result.get("session") if isinstance(result.get("session"), dict) else {}
     return session.get("session_id") or result.get("session_id") or case.observation.get("route_session_id")
 
@@ -376,5 +558,8 @@ def _augment_finish(text: str, extra: dict[str, Any]) -> str:
     if not isinstance(payload, dict):
         return text
     for key, value in extra.items():
-        payload.setdefault(key, value)
+        if key in {"trajectory", "route_action", "tool_used", "tool", "op", "route_session_id", "teacher_source"}:
+            payload[key] = value
+        else:
+            payload.setdefault(key, value)
     return text[: match.start(1)] + json_dumps(payload) + text[match.end(1) :]

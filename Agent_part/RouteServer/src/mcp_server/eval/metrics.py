@@ -7,12 +7,16 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from mcp_server.agent.schemas import AgentMetricResult, AgentStage2Case, AgentTrace, ToolCall, ToolResponse
 from mcp_server.agent.stage2 import NAVIGATION_READOUT_TOKENS
 from mcp_server.agent.tool_parser import parse_finish_text, parse_tool_call_text
 from mcp_server.agent.tool_schema import validate_tool_call
+
+
+_TAG_RE_CACHE: dict[str, re.Pattern[str]] = {}
 
 
 def _json_dict(content: Any) -> tuple[dict[str, Any] | None, list[str]]:
@@ -69,12 +73,46 @@ def _finishes(trace: AgentTrace) -> tuple[list[dict[str, Any]], list[str]]:
     return finishes, errors
 
 
+def _tag_json_payload(text: str, tag: str) -> tuple[dict[str, Any] | None, list[str]]:
+    """Parse one JSON payload from an XML-like Stage2 tag."""
+
+    pattern = _TAG_RE_CACHE.get(tag)
+    if pattern is None:
+        pattern = re.compile(rf"<{re.escape(tag)}>(.*?)</{re.escape(tag)}>", re.DOTALL)
+        _TAG_RE_CACHE[tag] = pattern
+    match = pattern.search(text)
+    if not match:
+        return None, [f"missing_tag:{tag}"]
+    try:
+        payload = json.loads(match.group(1).strip())
+    except json.JSONDecodeError as exc:
+        return None, [f"{tag}_json_decode_error:{exc.msg}"]
+    if not isinstance(payload, dict):
+        return None, [f"{tag}_json_not_object"]
+    return payload, []
+
+
+def _tool_decisions(trace: AgentTrace) -> tuple[list[dict[str, Any]], list[str]]:
+    decisions: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for turn in trace.turns:
+        if turn.role != "assistant" or not isinstance(turn.content, str) or "<ToolDecision>" not in turn.content:
+            continue
+        payload, payload_errors = _tag_json_payload(turn.content, "ToolDecision")
+        errors.extend(payload_errors)
+        if payload is not None:
+            decisions.append(payload)
+    return decisions, errors
+
+
 def _tool_responses(trace: AgentTrace) -> list[ToolResponse]:
     responses: list[ToolResponse] = []
     for turn in trace.turns:
         if turn.role != "tool_response":
             continue
         content = turn.content
+        if isinstance(content, str):
+            content, _ = _json_dict(content)
         if isinstance(content, dict):
             responses.append(
                 ToolResponse(
@@ -93,10 +131,17 @@ def _role_order_valid(trace: AgentTrace) -> bool:
     initial_user = _first_index(trace, "user", start=0)
     think = _first_index(trace, "assistant", start=(initial_user + 1 if initial_user is not None else 0))
     tool_call = _first_index(trace, "tool_call", start=(think + 1 if think is not None else 0))
-    tool_response = _first_index(trace, "tool_response", start=(tool_call + 1 if tool_call is not None else 0))
-    readout_user = _first_readout_user_index(trace, start=(tool_response + 1 if tool_response is not None else 0))
+    if tool_call is not None:
+        tool_response = _first_index(trace, "tool_response", start=tool_call + 1)
+        readout_user = _first_readout_user_index(trace, start=(tool_response + 1 if tool_response is not None else 0))
+        final_assistant = _first_final_assistant_index(trace, start=(readout_user + 1 if readout_user is not None else 0))
+        return all(index is not None for index in (initial_user, think, tool_call, tool_response, readout_user, final_assistant))
+    tool_response = _first_index(trace, "tool_response", start=(think + 1 if think is not None else 0))
+    if tool_response is not None:
+        return False
+    readout_user = _first_readout_user_index(trace, start=(think + 1 if think is not None else 0))
     final_assistant = _first_final_assistant_index(trace, start=(readout_user + 1 if readout_user is not None else 0))
-    return all(index is not None for index in (initial_user, think, tool_call, tool_response, readout_user, final_assistant))
+    return all(index is not None for index in (initial_user, think, readout_user, final_assistant))
 
 
 def _trajectory_readout_order_valid(trace: AgentTrace) -> bool:
@@ -104,9 +149,11 @@ def _trajectory_readout_order_valid(trace: AgentTrace) -> bool:
     for index, turn in enumerate(trace.turns):
         if turn.role == "tool_response":
             last_tool_response = index
-    if last_tool_response is None:
-        return False
-    readout_user = _first_readout_user_index(trace, start=last_tool_response + 1)
+    if last_tool_response is not None:
+        readout_user = _first_readout_user_index(trace, start=last_tool_response + 1)
+        return readout_user is not None
+    first_think = _first_index(trace, "assistant", start=0)
+    readout_user = _first_readout_user_index(trace, start=(first_think + 1 if first_think is not None else 0))
     return readout_user is not None
 
 
@@ -136,13 +183,40 @@ def _contains_readout_tokens(text: str) -> bool:
 
 
 def _final_cot_valid(trace: AgentTrace) -> bool:
-    required_tags = ("<Scene>", "<FPVScene>", "<BEVContext>", "<CrossView>", "<Plan>", "<ToolResultUse>", "<finish>")
+    required_tags = ("<Scene>", "<FPVScene>", "<BEVContext>", "<CrossView>", "<Plan>", "<finish>")
     final_text = ""
     for turn in reversed(trace.turns):
         if turn.role == "assistant" and isinstance(turn.content, str) and "<finish>" in turn.content:
             final_text = turn.content
             break
-    return bool(final_text) and all(tag in final_text for tag in required_tags)
+    if not final_text or not all(tag in final_text for tag in required_tags):
+        return False
+    has_tool_call = any(turn.role == "tool_call" for turn in trace.turns)
+    return "<ToolResultUse>" in final_text if has_tool_call else True
+
+
+def _tool_result_use_valid(trace: AgentTrace) -> bool:
+    final_text = ""
+    for turn in reversed(trace.turns):
+        if turn.role == "assistant" and isinstance(turn.content, str) and "<finish>" in turn.content:
+            final_text = turn.content
+            break
+    has_tool_call = any(turn.role == "tool_call" for turn in trace.turns)
+    if has_tool_call:
+        payload, errors = _tag_json_payload(final_text, "ToolResultUse")
+        return payload is not None and not errors and payload.get("tool_used") is True
+    if "<ToolResultUse>" not in final_text:
+        return True
+    payload, errors = _tag_json_payload(final_text, "ToolResultUse")
+    return payload is not None and not errors and payload.get("tool_used") is False
+
+
+def _tool_decision_consistent(trace: AgentTrace, decisions: list[dict[str, Any]]) -> bool:
+    if not decisions:
+        return False
+    should_call = bool(decisions[0].get("should_call_tool"))
+    has_tool_call = any(turn.role == "tool_call" for turn in trace.turns)
+    return should_call == has_tool_call
 
 
 def _finish_trajectory_consistent(
@@ -176,24 +250,51 @@ def _expected_ops(case: AgentStage2Case | None, trace: AgentTrace) -> list[str]:
     return [str(ops)]
 
 
+def _expected_no_tool(case: AgentStage2Case | None, trace: AgentTrace) -> bool:
+    """Return True when supervision explicitly says no tool should be called."""
+
+    payloads: list[dict[str, Any]] = []
+    if case is not None:
+        payloads.extend([case.observation, case.ground_truth, case.metadata])
+    request = trace.request if isinstance(trace.request, dict) else {}
+    payloads.extend([request.get("observation") or {}, request.get("ground_truth") or {}, request.get("metadata") or {}])
+    for payload in payloads:
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("force_no_tool") is True:
+            return True
+        for key in ("tool_policy", "stage2_tool_policy"):
+            value = str(payload.get(key) or "").strip().lower()
+            if value in {"no_tool", "none", "skip_tool", "local_only"}:
+                return True
+    return False
+
+
 def compute_trace_metrics(trace: AgentTrace, case: AgentStage2Case | None = None) -> AgentMetricResult:
     """Compute final Stage2 Agent metrics.
 
     输出字段:
-        ``parse_success``: ``tool_call`` role 和最终 ``<finish>`` 是否可解析。
+        ``parse_success``: ``<ToolDecision>``、可选 ``tool_call`` 和最终
+            ``<finish>`` 是否可解析且 decision/role 一致。
         ``tool_name_accuracy``: 工具名是否在允许集合内，若有 GT 则比较序列。
         ``tool_op_accuracy``: 有 ``expected_tool_ops`` 时比较 op 序列。
         ``argument_validity``: tool-call schema 参数是否有效。
         ``finish_validity``: 是否输出合法 ``<finish>{...}</finish>``。
-        ``stage2_role_order_valid``: 是否满足工具交互先于导航 readout 的顺序。
-        ``trajectory_readout_order_valid``: ``[TRAJ_*]`` 是否位于 tool_response 之后。
-        ``final_cot_validity``: 最终 assistant 是否包含 Phase1 tags 和 ``ToolResultUse``。
+        ``stage2_role_order_valid``: 是否满足 tool/no-tool 因果顺序。
+        ``trajectory_readout_order_valid``: ``[TRAJ_*]`` 在 tool 路径中是否位于
+            ``tool_response`` 之后，在 no-tool 路径中是否位于 ``<ToolDecision>`` 后。
+        ``final_cot_validity``: 最终 assistant 是否包含 Phase1 tags 和 ``<finish>``；
+            tool 路径还要求 ``<ToolResultUse>``。
+        ``tool_result_use_validity``: ``<ToolResultUse>`` 是否只表达工具结果使用结论。
+        ``tool_decision_consistency``: ``should_call_tool`` 是否与实际 role 序列一致。
+        ``unnecessary_tool_call_rate``: 显式 no-tool 样本是否错误调用工具。
         ``route_update_success``: route-session 类 tool_response 是否成功更新。
     """
 
     tool_calls, tool_parse_errors = _tool_calls(trace)
     finishes, finish_parse_errors = _finishes(trace)
-    parse_errors = tool_parse_errors + finish_parse_errors
+    tool_decisions, decision_parse_errors = _tool_decisions(trace)
+    parse_errors = tool_parse_errors + finish_parse_errors + decision_parse_errors
 
     valid_calls = []
     validation_errors: list[str] = []
@@ -203,8 +304,11 @@ def compute_trace_metrics(trace: AgentTrace, case: AgentStage2Case | None = None
         validation_errors.extend(errors)
 
     expected_ops = _expected_ops(case, trace)
+    expected_no_tool = _expected_no_tool(case, trace)
     called_ops = [str(call.op) for call in tool_calls if call.op]
-    if expected_ops:
+    if expected_no_tool:
+        tool_op_accuracy = 1.0 if not called_ops else 0.0
+    elif expected_ops:
         tool_op_accuracy = 1.0 if called_ops == expected_ops else 0.0
     else:
         tool_op_accuracy = None
@@ -213,7 +317,9 @@ def compute_trace_metrics(trace: AgentTrace, case: AgentStage2Case | None = None
     if case is not None:
         expected_names = [str(item) for item in case.ground_truth.get("expected_tool_names") or []]
     called_names = [call.tool for call in tool_calls]
-    if expected_names:
+    if expected_no_tool:
+        tool_name_accuracy = 1.0 if not called_names else 0.0
+    elif expected_names:
         tool_name_accuracy = 1.0 if called_names == expected_names else 0.0
     elif tool_calls:
         tool_name_accuracy = 1.0 if all(validate_tool_call(call)[0] for call in tool_calls) else 0.0
@@ -228,8 +334,9 @@ def compute_trace_metrics(trace: AgentTrace, case: AgentStage2Case | None = None
             route_update_success = 1.0 if response.success else 0.0
             break
 
+    tool_decision_consistency = 1.0 if _tool_decision_consistent(trace, tool_decisions) else 0.0
     metrics: dict[str, float | None] = {
-        "parse_success": 1.0 if tool_calls and finishes and not parse_errors else 0.0,
+        "parse_success": 1.0 if finishes and not parse_errors and tool_decision_consistency == 1.0 else 0.0,
         "tool_name_accuracy": tool_name_accuracy,
         "tool_op_accuracy": tool_op_accuracy,
         "argument_validity": (sum(1.0 for item in valid_calls if item) / len(valid_calls)) if valid_calls else None,
@@ -237,6 +344,9 @@ def compute_trace_metrics(trace: AgentTrace, case: AgentStage2Case | None = None
         "stage2_role_order_valid": 1.0 if _role_order_valid(trace) else 0.0,
         "trajectory_readout_order_valid": 1.0 if _trajectory_readout_order_valid(trace) else 0.0,
         "final_cot_validity": 1.0 if _final_cot_valid(trace) else 0.0,
+        "tool_result_use_validity": 1.0 if _tool_result_use_valid(trace) else 0.0,
+        "tool_decision_consistency": tool_decision_consistency,
+        "unnecessary_tool_call_rate": (1.0 if tool_calls else 0.0) if expected_no_tool else None,
         "finish_trajectory_consistency": _finish_trajectory_consistent(finishes, case, trace),
         "route_update_success": route_update_success,
     }

@@ -40,7 +40,7 @@ src/mcp_server/teacher/
 
 ## 2. 固定因果顺序
 
-Stage2 的训练样本必须让工具上下文出现在导航 readout token 之前：
+Stage2 的训练样本必须让工具上下文出现在导航 readout token 之前。tool 路径：
 
 ```text
 user image/request
@@ -53,6 +53,17 @@ assistant final CoT + <finish>
 
 原因是 ms-swift SideWalk trajectory head 从 `[TRAJ_*]` token 的 hidden states 读出轨迹。
 只有把这些 token 放在 `tool_response` 之后，trajectory head 才能因果看到工具结果。
+显式 no-tool replay 使用同一 schema 的短序列：
+
+```text
+user image/request
+assistant <think><AgentState>...<ToolDecision>{"should_call_tool":false,...}</ToolDecision></think>
+user "Produce the final sidewalk navigation decision..." + [TRAJ_0]...[TRAJ_15]
+assistant final CoT + <finish>
+```
+
+no-tool 样本必须通过 `observation.force_no_tool=true`、`ground_truth.tool_policy="no_tool"`
+或 `metadata.tool_policy="no_tool"` 显式标注，构建脚本负责控制 replay 比例。
 
 正式 Python API：
 
@@ -115,6 +126,7 @@ adapter 只做字段迁移：
   },
   "ground_truth": {
     "expected_tool_ops": ["search_poi"],
+    "tool_policy": "tool",
     "pixel_trajectory": [[0.5, 0.9], [0.55, 0.75]],
     "trajectory_fpv_t": null,
     "trajectory_ego_t": null,
@@ -141,6 +153,15 @@ semantic_mask_path
 ```
 
 这些字段不进入 LM messages；exporter 会透传给 SideWalk trainer 的 traj/seg loss。
+
+no-tool replay 推荐写法：
+
+```json
+{
+  "observation": {"force_no_tool": true},
+  "ground_truth": {"tool_policy": "no_tool"}
+}
+```
 
 ## 4. Student-Visible Tools
 
@@ -218,7 +239,7 @@ runner 输出统一 trace：
 }
 ```
 
-最终 assistant 必须保留 Phase1 结构：
+tool 路径最终 assistant 必须保留 Phase1 结构并追加工具使用结论：
 
 ```text
 <Scene>
@@ -230,9 +251,31 @@ runner 输出统一 trace：
 <finish>
 ```
 
+其中 `<ToolResultUse>` 是 teacher 对工具返回的可学习摘要，不是原始 `tool_response`
+的复制。字段包括：
+
+```json
+{
+  "tool_used": true,
+  "tool": "map_tool",
+  "op": "search_poi",
+  "success": false,
+  "used_for": "final_navigation_decision",
+  "result_summary": "map_tool.search_poi failed: offline map index unavailable",
+  "route_update": "none",
+  "navigation_effect": "tool_failed_use_fpv_bev_and_existing_route_context",
+  "failure_recovery": "fallback_to_existing_route_state_and_visible_fpv_bev_context"
+}
+```
+
+`failure_recovery` 只在 `success=false` 的 failed-tool trace 中出现。no-tool 路径不写
+`<ToolResultUse>`，最终 assistant 只保留 Phase1 tags 和 `<finish>`，并在
+`<finish>` 中写入 `"tool_used": false`。
+
 如果输入 case 已有 Phase1 CoT response，Stage2 builder 会把 `<ToolResultUse>` 插入
-`</think>` 之前，并补齐 `<finish>` 中的工具字段。没有 Phase1 response 时，会生成
-一个 deterministic fallback CoT，便于 smoke/review。
+`</think>` 之前；no-tool 路径不会插入。两条路径都会补齐 `<finish>` 中的 Stage2
+字段。没有 Phase1 response 时，会生成一个 deterministic fallback CoT，便于
+smoke/review。
 
 ## 6. ms-swift JSONL Export
 
@@ -286,15 +329,21 @@ finish_validity
 stage2_role_order_valid
 trajectory_readout_order_valid
 final_cot_validity
+tool_result_use_validity
+tool_decision_consistency
+unnecessary_tool_call_rate
 finish_trajectory_consistency
 route_update_success
 ```
 
 重点指标：
 
-- `stage2_role_order_valid`: 是否满足 `assistant -> tool_call -> tool_response -> readout user -> final assistant`。
-- `trajectory_readout_order_valid`: `[TRAJ_0]...[TRAJ_15]` 是否出现在最后一个 `tool_response` 之后。
-- `final_cot_validity`: 最终 assistant 是否包含 Phase1 CoT tags、`<ToolResultUse>` 和 `<finish>`。
+- `stage2_role_order_valid`: 是否满足 tool 序列或显式 no-tool 序列。
+- `trajectory_readout_order_valid`: tool 路径中 `[TRAJ_0]...[TRAJ_15]` 是否出现在最后一个 `tool_response` 之后；no-tool 路径中是否出现在 `<ToolDecision>` 之后。
+- `final_cot_validity`: 最终 assistant 是否包含 Phase1 CoT tags 和 `<finish>`；tool 路径还必须包含 `<ToolResultUse>`。
+- `tool_result_use_validity`: tool 路径中 `<ToolResultUse>.tool_used=true`；no-tool 路径中不出现 `<ToolResultUse>` 或显式 `tool_used=false`。
+- `tool_decision_consistency`: `<ToolDecision>.should_call_tool` 是否与后续是否存在 `tool_call` role 一致。
+- `unnecessary_tool_call_rate`: 对显式 no-tool 样本，是否仍然调用了工具。
 
 这些指标只评价协议和可执行性，不评价自然语言解释质量。
 
@@ -342,9 +391,9 @@ src/mcp_server/eval/stage2_validator.py
 
 ```text
 case schema/version/basic fields
-trace role order and readout token order
+trace tool/no-tool role order and readout token order
 tool_call/tool_response JSON shape
-final assistant Phase1 tags + <ToolResultUse> + <finish>
+final assistant Phase1 tags + optional <ToolResultUse> + <finish>
 ms-swift row tools/tool_call/tool_response JSON string type
 ```
 
@@ -371,12 +420,30 @@ PYTHONPATH=src python tools/evaluation/build_sidewalk_agent_stage2_review_sample
   --limit 16 \
   --execute-tools \
   --tool-context fake \
+  --stage2-cases-out examples/agent_eval/sidewalk_phase1_stage2_cases_smoke.jsonl \
   --traces-out examples/agent_eval/sidewalk_phase1_stage2_traces_smoke.jsonl \
   --ms-swift-out examples/agent_eval/sidewalk_phase1_agentic_stage2_ms_swift_smoke.jsonl \
-  --report-out examples/agent_eval/sidewalk_phase1_stage2_report_smoke.json
+  --report-out examples/agent_eval/sidewalk_phase1_stage2_report_smoke.json \
+  --split-output-dir examples/agent_eval/sidewalk_phase1_stage2_splits_smoke \
+  --review-samples-out examples/agent_eval/sidewalk_phase1_stage2_review_samples_smoke.jsonl \
+  --review-index-out examples/agent_eval/sidewalk_phase1_stage2_review_index_smoke.csv
 ```
 
 `--tool-context fake` 使用本地假地图客户端，但仍走真实 `ToolExecutor -> map_ops /
 route_session_ops` 调用路径，适合离线 smoke。`--tool-context provider` 会创建真实
 RouteServer map provider，可能依赖网络和 provider API key。默认不传
 `--execute-tools` 时仍使用 synthetic tool response，便于协议 review 和单测。
+
+第 6 步完整流水线会额外输出：
+
+- `--stage2-cases-out`: Phase1 archive 适配后的 `sidewalk_agent_stage2_case_v1`。
+- `--split-output-dir`: `train/val/heldout` 三组 cases/traces/ms-swift rows。
+- `--review-samples-out`: 按 `(split, tool_policy, op)` 抽样的人工 review JSONL。
+- `--review-index-out`: 便于人工筛选的 CSV index。
+- report 中的 `slices` 会按 split、tool/no-tool/failed-tool、tool name、op、
+  validation、Phase1 intent 聚合计数和协议 metrics。
+
+注意：真实 Phase1 CoT 中的 `<finish>.trajectory` 可能经过文本四舍五入。Stage2
+最终 assistant 会以 `ground_truth.pixel_trajectory` 覆盖 `<finish>.trajectory`，
+保证 LM 监督文本、ms-swift row 的 `pixel_trajectory`、trajectory head 监督三者
+严格一致。

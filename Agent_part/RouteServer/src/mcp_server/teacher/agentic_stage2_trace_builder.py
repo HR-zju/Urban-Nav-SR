@@ -5,6 +5,10 @@
 
 ``user -> assistant think -> tool_call -> tool_response -> user [TRAJ_*] -> assistant final``
 
+no-tool replay 使用同一 schema 的短序列：
+
+``user -> assistant think -> user [TRAJ_*] -> assistant final``
+
 重要因果模型:
     SideWalk trajectory head 从 ``[TRAJ_i]`` token 的 hidden state 读出轨迹点。
     对自回归 Transformer hidden state 只能 attend 到当前位置之前的上下文。因此
@@ -45,15 +49,16 @@ class AgenticStage2TraceBuilderConfig:
 
 
 class AgenticStage2TraceBuilder:
-    """Assemble one normalized Stage2 trace from a case and one tool interaction.
+    """Assemble one normalized Stage2 trace from a case and an optional tool interaction.
 
     输入:
-        ``AgentStage2Case``、已选择的 ``ToolCall``、可选 ``ToolResponse``。若没有
-        response 会生成 deterministic synthetic response 适合 cold-start review。
+        ``AgentStage2Case``、可选 ``ToolCall``、可选 ``ToolResponse``。tool 路径
+        若没有 response 会生成 deterministic synthetic response；no-tool 路径
+        则不会生成 ``tool_call`` / ``tool_response`` role。
 
     输出:
-        ``AgentTrace``，其 ``turns`` 固定满足 Stage2 因果顺序；``supervision``
-        继承 case.ground_truth 用于 exporter 透传 traj/seg loss 字段。
+        ``AgentTrace``，其 ``turns`` 满足 Stage2 因果顺序；``supervision`` 继承
+        case.ground_truth 用于 exporter 透传 traj/seg loss 字段。
     """
 
     def __init__(self, config: AgenticStage2TraceBuilderConfig | None = None) -> None:
@@ -63,7 +68,7 @@ class AgenticStage2TraceBuilder:
         self,
         case: AgentStage2Case,
         *,
-        call: ToolCall,
+        call: ToolCall | None = None,
         response: ToolResponse | None = None,
         tools: list[dict[str, Any]] | None = None,
         model_run: dict[str, Any] | None = None,
@@ -79,8 +84,8 @@ class AgenticStage2TraceBuilder:
 
         参数:
             case: Stage2 输入样本。
-            call: 模型应该学习生成的工具调用，写入独立 ``tool_call`` role。
-            response: 工具返回；为空时使用 ``synthetic_tool_response``。
+            call: 模型应该学习生成的工具调用；None 表示 no-tool replay。
+            response: 工具返回；tool 路径为空时使用 ``synthetic_tool_response``。
             tools: 学生可见工具 schema 为空时使用默认三类元工具。
             model_run: 记录 runner/teacher 配置的审计信息。
             intent/recommendation/visual_prompt: teacher internal context 只用于摘要和合成返回。
@@ -99,22 +104,28 @@ class AgenticStage2TraceBuilder:
             decision=build_tool_decision(call, reason=tool_decision_reason),
         )
         trace.add_turn("assistant", think_text, metadata={"stage2_step": "tool_decision_think"})
-        trace.add_turn("tool_call", call.to_ms_swift_dict(), tool=call.tool, metadata={"stage2_step": "tool_call"})
 
-        resolved_response = response or synthetic_tool_response(
-            call,
-            case,
-            source=self.config.source,
-            recommendation=recommendation,
-            visual_prompt=visual_prompt,
-        )
+        resolved_response = None
+        if call is not None:
+            trace.add_turn("tool_call", call.to_ms_swift_dict(), tool=call.tool, metadata={"stage2_step": "tool_call"})
+            resolved_response = response or synthetic_tool_response(
+                call,
+                case,
+                source=self.config.source,
+                recommendation=recommendation,
+                visual_prompt=visual_prompt,
+            )
+            trace.add_turn(
+                "tool_response",
+                resolved_response.to_dict(),
+                tool=call.tool,
+                metadata={"stage2_step": "tool_response"},
+            )
         trace.add_turn(
-            "tool_response",
-            resolved_response.to_dict(),
-            tool=call.tool,
-            metadata={"stage2_step": "tool_response"},
+            "user",
+            final_navigation_user_content(tool_used=call is not None),
+            metadata={"stage2_step": "trajectory_readout_prompt"},
         )
-        trace.add_turn("user", final_navigation_user_content(), metadata={"stage2_step": "trajectory_readout_prompt"})
 
         final_text = build_final_assistant_text(
             case,

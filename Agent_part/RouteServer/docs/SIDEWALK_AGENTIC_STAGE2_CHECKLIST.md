@@ -12,6 +12,7 @@
 - [x] `[TRAJ_0]...[TRAJ_15]` 必须位于最后一个 `tool_response` 之后。
 - [x] 最终 assistant 只写工具结果使用结论：`<ToolResultUse>{...}</ToolResultUse>`。
 - [x] no-tool replay 不写 `tool_call`、`tool_response`、`<ToolResultUse>`。
+- [x] `AgentState.available_context` 只列运行时可观测上下文；`pixel_trajectory` / `trajectory_fpv_t` / `trajectory_ego_t` / seg label 只作为顶层监督字段，不进入 assistant target。
 
 验收标准：
 
@@ -156,12 +157,28 @@ Stage2 选择方案 A。`image_tool` 当前只提供可审计、确定性的图�
 
 - [x] Phase1 archive adapter 透传原始 CoT / trajectory / seg supervision。
 - [x] build script 支持 synthetic / fake executor 生成 review 样例。
-- [ ] 用真实 Phase1 archive 生成 Stage2 cases。
-- [ ] 使用 fake/real executor 生成 Stage2 traces。
-- [ ] 输出 ms-swift rows。
-- [ ] 输出 report，按 tool / no-tool / failed-tool / op 做 slice。
-- [ ] 人工 review 小样本。
-- [ ] 固定 train/val/held-out split。
+- [x] 用真实 Phase1 archive 生成 Stage2 cases。
+- [x] 使用 fake/real executor 生成 Stage2 traces。
+- [x] 输出 ms-swift rows。
+- [x] 输出 report，按 tool / no-tool / failed-tool / op 做 slice。
+- [x] 人工 review 小样本。
+- [x] 固定 train/val/held-out split。
+
+当前实现：
+
+- `eval/phase1_archive_adapter.py` 将真实 Phase1 archive/pre-archive JSONL 适配为
+  `AgentStage2Case`，原始 CoT 保存到 `ground_truth.phase1_response`，轨迹和 seg
+  监督字段原样透传。
+- `eval/stage2_pipeline.py` 负责 deterministic hash split、slice report、review
+  sample、review CSV index 和 split 文件写出。
+- `tools/evaluation/build_sidewalk_agent_stage2_review_samples.py` 支持从真实
+  Phase1 archive 一次性输出 cases、traces、ms-swift rows、report、review samples
+  和 train/val/heldout split 文件。
+- `--tool-context fake` 不访问外网，但会经过真实 `ToolExecutor -> map_ops /
+  route_session_ops` 路径；`--tool-context provider` 是显式真实 provider 入口。
+- final assistant 的 `<finish>.trajectory` 会以 `ground_truth.pixel_trajectory`
+  覆盖 Phase1 CoT 中可能四舍五入的 trajectory，保证 LM target 与 trajectory
+  head 监督严格对齐。
 
 验收输出：
 
@@ -172,18 +189,102 @@ sidewalk_agentic_stage2_ms_swift_*.jsonl
 sidewalk_agent_stage2_report_*.json
 ```
 
+当前 smoke：
+
+```bash
+cd Agent_part/RouteServer
+PYTHONPATH=src PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/test_stage2_pipeline.py tests/test_agent_eval_framework.py
+
+PYTHONPATH=src python tools/evaluation/build_sidewalk_agent_stage2_review_samples.py \
+  --phase1-archive-jsonl /path/to/phase1_archive/manifests/train.jsonl \
+  --limit 3 \
+  --execute-tools \
+  --tool-context fake \
+  --stage2-cases-out /tmp/sidewalk_stage2_step6_smoke/sidewalk_agent_stage2_cases_smoke.jsonl \
+  --traces-out /tmp/sidewalk_stage2_step6_smoke/sidewalk_agent_stage2_traces_smoke.jsonl \
+  --ms-swift-out /tmp/sidewalk_stage2_step6_smoke/sidewalk_agentic_stage2_ms_swift_smoke.jsonl \
+  --report-out /tmp/sidewalk_stage2_step6_smoke/sidewalk_agent_stage2_report_smoke.json \
+  --split-output-dir /tmp/sidewalk_stage2_step6_smoke/splits \
+  --review-samples-out /tmp/sidewalk_stage2_step6_smoke/sidewalk_agent_stage2_review_samples_smoke.jsonl \
+  --review-index-out /tmp/sidewalk_stage2_step6_smoke/sidewalk_agent_stage2_review_index_smoke.csv
+```
+
 ## 7. ms-swift 训练接入
 
 - [x] Stage2 prompt template：`agentic_stage2_cot_trajectory`。
 - [x] parser 支持 `AgentState` / `ToolDecision` / `ToolResultUse`。
 - [x] tokenize / forward smoke。
-- [ ] 使用 RouteServer 真实 Stage2 rows 跑 dataset smoke。
-- [ ] Stage2-A 小数据训练：`--sidewalk_phase phase0`。
-- [ ] Stage2-A held-out 对比。
+- [x] 使用 RouteServer 真实 Stage2 rows 跑 dataset smoke。
+- [x] 使用 UrbanNav mini Stage2 rows 跑 frozen-forward framework smoke，不加载 base LLM、不建 optimizer、不更新参数。
+- [x] Stage2-A 小数据训练入口与 dry-run command smoke：`--sidewalk_phase phase0`。
+- [ ] Stage2-A 真实小数据训练：待 frozen-forward / held-out smoke 完成后，再固定 `BASE_MODEL`、train/val split、输出目录和 GPU 环境。
+- [x] Stage2-A held-out 对比入口与 evaluator smoke。
+- [ ] Stage2-A 真实 held-out 对比：待 Stage2-A checkpoint。
 - [ ] Stage2-B 打开 trajectory loss：
-  - [ ] `--sidewalk_phase phase1`
-  - [ ] `--sidewalk_phase1_supervision lm_traj`
-- [ ] Stage2-B held-out 对比。
+  - [x] 入口与 dry-run command smoke：`--sidewalk_phase phase1`
+  - [x] 入口与 dry-run command smoke：`--sidewalk_phase1_supervision lm_traj`
+  - [x] frozen-forward smoke 验证 `[TRAJ_i]` readout 与 trajectory head forward wiring。
+  - [ ] 真实训练：待固定 `BASE_MODEL` / Stage2-A checkpoint、train/val split、输出目录和 GPU 环境。
+- [x] Stage2-B held-out 对比入口与 evaluator smoke。
+- [ ] Stage2-B 真实 held-out 对比：待 Stage2-B checkpoint。
+
+当前 ms-swift 入口：
+
+```text
+swift/sidewalk_nav/cli/smoke_agentic_stage2.py
+examples/sidewalk_nav/agentic_stage2/run_agentic_stage2_pipeline.sh dataset_smoke
+examples/sidewalk_nav/agentic_stage2/run_agentic_stage2_pipeline.sh frozen_forward_smoke
+examples/sidewalk_nav/agentic_stage2/run_agentic_stage2_pipeline.sh train_stage2a
+examples/sidewalk_nav/agentic_stage2/run_agentic_stage2_pipeline.sh train_stage2b
+examples/sidewalk_nav/agentic_stage2/run_agentic_stage2_pipeline.sh benchmark_stage2a
+examples/sidewalk_nav/agentic_stage2/run_agentic_stage2_pipeline.sh benchmark_stage2b
+```
+
+当前 smoke：
+
+```bash
+cd /home/ubuntu/WorkSpace/project/SR/Code/ms-swift
+source /home/ubuntu/anaconda3/etc/profile.d/conda.sh
+conda activate internnav
+
+PYTHONPYCACHEPREFIX=/tmp/pycache_ms_swift_stage2_step7 \
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+pytest -q -p no:cacheprovider \
+  tests/test_sidewalk_agentic_stage2_dataset_smoke.py \
+  tests/test_sidewalk_agentic_stage2_prompt.py
+
+STAGE2_MANIFEST=/tmp/sidewalk_stage2_step6_smoke/sidewalk_agentic_stage2_ms_swift_smoke.jsonl \
+OUTPUT_ROOT=/tmp/ms_swift_stage2_step7_smoke \
+SMOKE_LIMIT=3 \
+bash examples/sidewalk_nav/agentic_stage2/run_agentic_stage2_pipeline.sh dataset_smoke
+
+STAGE2_MANIFEST=/tmp/sidewalk_stage2_urbannav_mini/sidewalk_agentic_stage2_urbannav_mini.jsonl \
+OUTPUT_ROOT=/tmp/sidewalk_stage2_urbannav_mini/ms_swift \
+SMOKE_LIMIT=6 \
+bash examples/sidewalk_nav/agentic_stage2/run_agentic_stage2_pipeline.sh frozen_forward_smoke
+```
+
+RouteServer 真实 Stage2 row smoke 结果：
+
+- `valid_rows=3`
+- `decision_agentic_summary.metrics.protocol_parse_success=1.0`
+- `decision_agentic_summary.metrics.should_call_tool_match=1.0`
+- `final_agentic_summary.metrics.final_cot_tag_validity=1.0`
+- `final_agentic_summary.metrics.tool_result_use_valid=1.0`
+- `final_text_traj_summary.ade=0.0`
+- `final_text_traj_summary.fde=0.0`
+
+UrbanNav mini frozen-forward smoke 结果：
+
+- `num_rows=6`
+- `tool_policy_counts={"tool":4,"no_tool":1,"failed_tool":1}`
+- `validation.valid_rows=6`
+- `frozen_forward.valid_rows=6`
+- `parameter_update_attempted=false`
+- `optimizer_step_attempted=false`
+- `base_llm_loaded=false`
+- 所有 tool / failed-tool 样本满足 `first_traj_token_index > tool_response_token_index`
+- 每条样本 frozen trajectory head 输出 `trajectory_output_shape=[1,3,16,2]`
 
 验收指标：
 
