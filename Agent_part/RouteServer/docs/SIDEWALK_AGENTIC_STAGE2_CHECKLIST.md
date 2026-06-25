@@ -102,18 +102,18 @@ Agent_part/RouteServer/tests/test_agent_online_runtime.py
 目标：把 fake first/final assistant output 替换成真实模型调用，但输出仍统一为
 `AgentTrace`。
 
-- [ ] 定义 `ModelAdapter` 协议：
-  - [ ] `generate_pre_tool(messages, tools, images) -> str`
-  - [ ] `generate_final(messages, tools, images) -> str`
-- [ ] 新增 `OnlineAgentRunner`：
-  - [ ] 构造 system/user/images/tools。
-  - [ ] 第一次调用模型生成 `AgentState + ToolDecision + optional tool_call`。
-  - [ ] 调用 `AgentToolRuntime` 执行工具。
-  - [ ] 追加 `tool_response` 和 `[TRAJ_i]`。
-  - [ ] 第二次调用模型生成 final CoT + `<finish>`。
-  - [ ] 输出 `AgentTrace`、ms-swift row、validation report。
-- [ ] 支持 fake model adapter 测试。
-- [ ] 支持 ms-swift inference adapter。
+- [x] 定义 `ModelAdapter` 协议：
+  - [x] `generate_pre_tool(messages, tools, images) -> str`
+  - [x] `generate_final(messages, tools, images) -> str`
+- [x] 新增 `OnlineAgentRunner`：
+  - [x] 构造 system/user/images/tools。
+  - [x] 第一次调用模型生成 `AgentState + ToolDecision + optional tool_call`。
+  - [x] 调用 `AgentToolRuntime` 执行工具。
+  - [x] 追加 `tool_response` 和 `[TRAJ_i]`。
+  - [x] 第二次调用模型生成 final CoT + `<finish>`。
+  - [x] 输出 `AgentTrace`、ms-swift row、validation report。
+- [x] 支持 fake model adapter 测试。
+- [x] 支持 ms-swift inference adapter。
 
 建议文件：
 

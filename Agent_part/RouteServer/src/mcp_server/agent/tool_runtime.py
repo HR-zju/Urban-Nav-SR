@@ -13,11 +13,12 @@ trajectory readout prompt.
 
 from __future__ import annotations
 
+import inspect
 import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from mcp_server.agent.schemas import AgentStage2Case, AgentTrace, ToolCall, ToolResponse
 from mcp_server.agent.stage2 import (
@@ -27,7 +28,6 @@ from mcp_server.agent.stage2 import (
 )
 from mcp_server.agent.tool_parser import parse_agent_action, parse_tool_call_text
 from mcp_server.agent.tool_schema import get_tool_definitions
-from mcp_server.eval.metrics import compute_trace_metrics
 
 
 _ACTION_BLOCK_RE = re.compile(r"<(tool_call|finish)>(.*?)</\1>", re.DOTALL)
@@ -202,6 +202,7 @@ class AgentToolRuntime:
         *,
         first_assistant_output: str,
         final_assistant_output: str | None = None,
+        final_assistant_generator: Callable[[AgentTrace], str | Awaitable[str]] | None = None,
         tools: list[dict[str, Any]] | None = None,
         phase1_response: str | None = None,
     ) -> AgentTrace:
@@ -218,6 +219,11 @@ class AgentToolRuntime:
                 appended ``tool_response`` and final ``[TRAJ_i]`` readout
                 prompt.  When omitted, RouteServer synthesizes a deterministic
                 final CoT/``<finish>`` for smoke tests.
+            final_assistant_generator: Optional async/sync callback invoked
+                after the runtime has appended the final readout user turn.
+                The callback receives the prefix ``AgentTrace`` and should
+                return the model-generated final assistant text.  It is used by
+                ``OnlineAgentRunner`` for the second real model call.
             tools: Optional student-visible tool definitions.  Defaults to
                 ``case.tools`` or the built-in RouteServer Stage2 tools.
             phase1_response: Optional Phase1 CoT response used when
@@ -279,17 +285,21 @@ class AgentToolRuntime:
             final_navigation_user_content(tool_used=call is not None),
             metadata={"stage2_step": "trajectory_readout_prompt"},
         )
-        final_text = (
-            final_assistant_output.strip()
-            if final_assistant_output is not None
-            else build_final_assistant_text(
+        if final_assistant_output is not None:
+            final_text = final_assistant_output.strip()
+        elif final_assistant_generator is not None:
+            generated = final_assistant_generator(trace)
+            if inspect.isawaitable(generated):
+                generated = await generated
+            final_text = str(generated).strip()
+        else:
+            final_text = build_final_assistant_text(
                 case,
                 call=call,
                 response=response,
                 source=self.config.source,
                 phase1_response=phase1_response,
             )
-        )
         trace.add_turn(
             "assistant",
             final_text,
@@ -302,6 +312,8 @@ class AgentToolRuntime:
         if runtime_errors:
             trace.metadata["runtime_errors"] = list(runtime_errors)
         if self.config.compute_metrics:
+            from mcp_server.eval.metrics import compute_trace_metrics
+
             metric_result = compute_trace_metrics(trace, case)
             trace.metrics = metric_result.metrics
             if metric_result.errors:

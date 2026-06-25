@@ -16,6 +16,16 @@ from mcp_server.eval.exporters import (
     write_traces_jsonl,
 )
 from mcp_server.eval.metrics import compute_trace_metrics
+from mcp_server.eval.online_agent_runner import (
+    CallableModelAdapter,
+    ModelAdapter,
+    MsSwiftInferenceAdapter,
+    MsSwiftInferenceConfig,
+    OnlineAgentRunResult,
+    OnlineAgentRunner,
+    OnlineAgentRunnerConfig,
+    build_initial_model_messages,
+)
 from mcp_server.eval.phase1_archive_adapter import (
     PHASE1_ARCHIVE_STAGE2_ADAPTER_VERSION,
     iter_phase1_archive_stage2_cases,
@@ -38,12 +48,19 @@ __all__ = [
     "PHASE1_ARCHIVE_STAGE2_ADAPTER_VERSION",
     "Stage2ValidationResult",
     "compute_trace_metrics",
+    "CallableModelAdapter",
     "iter_eval_cases",
     "iter_phase1_archive_stage2_cases",
     "iter_stage2_cases",
     "load_eval_cases",
     "load_phase1_archive_stage2_cases",
     "load_stage2_cases",
+    "ModelAdapter",
+    "MsSwiftInferenceAdapter",
+    "MsSwiftInferenceConfig",
+    "OnlineAgentRunResult",
+    "OnlineAgentRunner",
+    "OnlineAgentRunnerConfig",
     "phase1_archive_row_to_stage2_case",
     "trace_to_ms_swift_row",
     "trace_to_ms_swift_stage2_row",
@@ -56,4 +73,5 @@ __all__ = [
     "write_ms_swift_jsonl",
     "write_ms_swift_stage2_jsonl",
     "write_traces_jsonl",
+    "build_initial_model_messages",
 ]
