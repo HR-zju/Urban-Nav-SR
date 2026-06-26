@@ -382,19 +382,61 @@ Held-out mini benchmark:
 
 ## 8. Urban-Nav-SR Benchmark / 推理闭环
 
-- [ ] 固定 base checkpoint。
-- [ ] 固定 held-out benchmark manifest。
-- [ ] 跑 base checkpoint zero-shot benchmark。
-- [ ] 接 Stage2-A checkpoint 推理。
-- [ ] 接 Stage2-B checkpoint 推理。
-- [ ] 同一 held-out 集合前后对比。
-- [ ] 输出 per-case trace、summary report、error report、artifact index。
+- [x] 固定 base checkpoint。
+- [x] 固定 held-out benchmark manifest。
+- [x] 跑 base checkpoint zero-shot benchmark。
+- [x] 接 Stage2-A checkpoint 推理。
+- [x] 接 Stage2-B checkpoint 推理。
+- [x] 同一 held-out 集合前后对比。
+- [x] 输出 per-case trace、summary report、error report、artifact index。
+
+当前实现：
+
+- `eval/agentic_stage2_benchmark.py` 是 RouteServer 侧 benchmark packaging
+  模块，负责读取 ms-swift benchmark 输出并生成 Urban review 包。
+- `tools/evaluation/run_sidewalk_agentic_stage2_benchmark.py` 是薄 CLI，支持：
+  - `--action collect`：只收集已有 ms-swift 输出，不加载模型。
+  - `--action run`：调用 ms-swift 现有 Stage2 pipeline。
+  - `--action run-and-collect`：先跑 pipeline，再生成 Urban review 包。
+- collector 输出：
+  - `config.json`
+  - `per_case_report.jsonl`
+  - `error_report.jsonl`
+  - `artifact_index.json`
+  - `summary_report.json`
+  - `summary_report.md`
+- 单测使用 fake ms-swift 输出，离线验证 case 对齐、error report、
+  artifact index 和 CLI collect，不访问地图 API、LLM 或 GPU。
+
+当前 mini 闭环：
+
+```text
+run_id: stage2-full-mini-20260626
+base_model: /workspace/ms-swift/.cache/ms-swift/modelscope/models/Qwen/Qwen3___5-4B
+stage2a_checkpoint: /tmp/ms_swift_stage2_full_mini/stage2a_agentic_text/v0-20260626-154725/checkpoint-4
+stage2b_checkpoint: /tmp/ms_swift_stage2_full_mini/stage2b_agentic_traj/v0-20260626-155228/checkpoint-4
+heldout_manifest: /tmp/sidewalk_stage2_urbannav_mini/heldout.jsonl
+ms_swift_output_root: /tmp/ms_swift_stage2_full_mini_host
+urban_review: /tmp/ms_swift_stage2_full_mini_host/urban_review
+num_cases: 1
+tool_policy_counts: {"failed_tool": 1}
+stage2b_head_parse_success: 1.0
+stage2b_head_ADE/FDE: 0.0852 / 0.1290
+```
+
+边界说明：
+
+- 当前是 4/1/1 UrbanNav mini split 的 held-out collect，只证明
+  base / Stage2-A / Stage2-B 推理、评测、对齐和 review packaging 闭环可运行。
+- 正式研究结论仍需要扩大第 6 节真实 Phase1 archive split 后复跑。
+- 文本 agentic 指标在单条 failed-tool held-out 上仍为 0；这被记录进
+  `error_report.jsonl`，用于人工 review 和后续扩大数据后的回归对比。
 
 验收标准：
 
-- 同一 case_id 可对齐 base / Stage2-A / Stage2-B 输出。
-- route action、tool decision、trajectory 指标可聚合。
-- failed case 可以回放完整 messages / tool_response / artifacts。
+- [x] 同一 case_id 可对齐 base / Stage2-A / Stage2-B 输出。
+- [x] route action、tool decision、trajectory 指标可聚合。
+- [x] failed case 可以回放完整 messages / tool_response / artifacts。
 
 ## 9. 最终推理接口
 
