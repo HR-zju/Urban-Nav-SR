@@ -14,6 +14,14 @@ from mcp_server.agent.schemas import (
     ToolCall,
     ToolResponse,
 )
+from mcp_server.agent.final_inference import (
+    RouteServerAgentInferenceConfig,
+    RouteServerAgentInferenceRequest,
+    RouteServerAgentInferenceResult,
+    load_routeserver_final_inference_request,
+    run_routeserver_final_inference,
+    write_routeserver_final_inference_artifacts,
+)
 from mcp_server.agent.tool_runtime import AgentToolRuntime, AgentToolRuntimeConfig, RuntimeTraceLogger, ToolBudget
 
 __all__ = [
@@ -33,4 +41,10 @@ __all__ = [
     "AgentToolRuntimeConfig",
     "RuntimeTraceLogger",
     "ToolBudget",
+    "RouteServerAgentInferenceConfig",
+    "RouteServerAgentInferenceRequest",
+    "RouteServerAgentInferenceResult",
+    "load_routeserver_final_inference_request",
+    "run_routeserver_final_inference",
+    "write_routeserver_final_inference_artifacts",
 ]

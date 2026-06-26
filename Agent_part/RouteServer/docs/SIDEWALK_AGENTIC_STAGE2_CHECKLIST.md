@@ -440,34 +440,66 @@ stage2b_head_ADE/FDE: 0.0852 / 0.1290
 
 ## 9. 最终推理接口
 
-- [ ] RouteServer online runtime 输入：
-  - [ ] images
-  - [ ] user request
-  - [ ] route state
-  - [ ] available tools
-- [ ] RouteServer online runtime 输出：
-  - [ ] final assistant text
-  - [ ] parsed `<finish>`
-  - [ ] trajectory
-  - [ ] tool_call / tool_response trace
-  - [ ] artifacts
-  - [ ] validation report
-- [ ] ms-swift `infer.py` 输出可以接入 RouteServer runtime。
-- [ ] RouteServer runtime 可以保存 ms-swift-compatible replay row。
+- [x] RouteServer online runtime 输入：
+  - [x] images
+  - [x] user request
+  - [x] route state
+  - [x] available tools
+- [x] RouteServer online runtime 输出：
+  - [x] final assistant text
+  - [x] parsed `<finish>`
+  - [x] trajectory
+  - [x] tool_call / tool_response trace
+  - [x] artifacts
+  - [x] validation report
+- [x] ms-swift `infer.py` 输出可以接入 RouteServer runtime。
+- [x] RouteServer runtime 可以保存 ms-swift-compatible replay row。
+
+当前实现：
+
+- `agent/final_inference.py` 提供应用层稳定 API：
+  - `RouteServerAgentInferenceRequest`
+  - `RouteServerAgentInferenceConfig`
+  - `RouteServerAgentInferenceResult`
+  - `run_routeserver_final_inference()`
+  - `write_routeserver_final_inference_artifacts()`
+- `tools/evaluation/run_sidewalk_agentic_stage2_inference.py` 提供单 case CLI：
+  - `--model-backend fake` 用于离线 smoke 和 schema 回归。
+  - `--model-backend ms-swift` 使用 `MsSwiftInferenceAdapter` 调
+    `swift.sidewalk_nav.cli.infer`。
+- 输出文件：
+  - `result.json`
+  - `agent_trace.json`
+  - `ms_swift_replay_row.json`
+  - `validation_report.json`
+  - `artifact_index.json`
+- `ms_swift_replay_row.json` 保持 agent-template 兼容字段，可回放或进入后续
+  review/SFT 数据闭环。
+
+当前边界：
+
+- CLI 的 ms-swift backend 是 subprocess 形式，适合本机/容器内执行；真正服务化
+  时应在第 10 步封装成长期模型服务或容器 RPC，避免每个 case 重复加载模型。
+- `--execute-tools` 当前只创建基础 `ToolExecutor`；真实地图 provider/session
+  context 需要由上层 RouteServer 服务注入。
 
 验收标准：
 
-- 单 case CLI 可以端到端运行。
-- batch benchmark 可以端到端运行。
-- 输出 trace 可以复用现有 validator/exporter/metrics。
+- [x] 单 case CLI 可以端到端运行。
+- [x] batch benchmark 可以端到端运行。
+- [x] 输出 trace 可以复用现有 validator/exporter/metrics。
 
 ## 10. 当前下一步
 
-Step7 的工程闭环已经完成。下一步不再是继续补入口，而是扩大数据和补齐真实运行质量：
+Stage2 工程链路已经覆盖标注、训练、benchmark packaging 和单 case 最终推理接口。
+下一步不再是继续补入口，而是扩大数据、补齐真实 tool executor 测试，并把最终推理
+接口服务化：
 
 1. 第 2 节：补 `ToolExecutor` 每个 op 的 fake-provider 单测，保证真实 executor
    能稳定覆盖所有暴露工具。
 2. 扩大第 6 节 Phase1 archive split，生成非 mini 的 train/val/held-out，并保持
    tool / no-tool / failed-tool slice 可控。
-3. 复跑第 7-8 节完整训练与对比，使用固定完整 split，而不是 4/1/1 mini split。
-4. 排查训练日志中的 `grad_norm=nan`，确认是日志/AMP 缩放问题还是梯度数值问题。
+3. 将第 9 节 CLI 后端升级为长期 ms-swift 模型服务/RPC，避免单 case subprocess
+   重复加载 4B 模型。
+4. 复跑第 7-8 节完整训练与对比，使用固定完整 split，而不是 4/1/1 mini split。
+5. 排查训练日志中的 `grad_norm=nan`，确认是日志/AMP 缩放问题还是梯度数值问题。
