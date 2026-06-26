@@ -217,16 +217,33 @@ PYTHONPATH=src python tools/evaluation/build_sidewalk_agent_stage2_review_sample
 - [x] 使用 RouteServer 真实 Stage2 rows 跑 dataset smoke。
 - [x] 使用 UrbanNav mini Stage2 rows 跑 frozen-forward framework smoke，不加载 base LLM、不建 optimizer、不更新参数。
 - [x] Stage2-A 小数据训练入口与 dry-run command smoke：`--sidewalk_phase phase0`。
-- [ ] Stage2-A 真实小数据训练：待 frozen-forward / held-out smoke 完成后，再固定 `BASE_MODEL`、train/val split、输出目录和 GPU 环境。
+- [x] Stage2-A 安全真实训练 smoke 入口：`train_stage2a_smoke`，默认 `max_steps=1`、`max_length=4096`、`lora_rank=2`、`target_modules=q_proj v_proj`、小样本采样，避免 OOM。
+- [x] Stage2-A CUDA 容器真实 smoke：UrbanNav mini train/val rows + Qwen3.5-4B + LoRA 1-step 已通过。
+- [x] Stage2-A 真实小数据训练：UrbanNav mini train/val rows + Qwen3.5-4B + LoRA 4-step 已通过，不再使用 smoke sample cap。
 - [x] Stage2-A held-out 对比入口与 evaluator smoke。
-- [ ] Stage2-A 真实 held-out 对比：待 Stage2-A checkpoint。
+- [x] Stage2-A 真实 held-out 对比：同一 UrbanNav mini held-out split 已完成 base / Stage2-A 对比。
 - [ ] Stage2-B 打开 trajectory loss：
   - [x] 入口与 dry-run command smoke：`--sidewalk_phase phase1`
   - [x] 入口与 dry-run command smoke：`--sidewalk_phase1_supervision lm_traj`
   - [x] frozen-forward smoke 验证 `[TRAJ_i]` readout 与 trajectory head forward wiring。
-  - [ ] 真实训练：待固定 `BASE_MODEL` / Stage2-A checkpoint、train/val split、输出目录和 GPU 环境。
+  - [x] 安全真实训练 smoke 入口：`train_stage2b_smoke`，使用 smoke-only `residual_points` 小 head 跑 1-step 验证。
+  - [x] Stage2-B CUDA 容器真实 smoke：UrbanNav mini train/val rows + LM/traj loss 1-step 已通过。
+  - [x] 真实训练：基于 Stage2-A checkpoint，使用生产 `causal_multi_query_curve` head、LM + trajectory loss 4-step 已通过。
 - [x] Stage2-B held-out 对比入口与 evaluator smoke。
-- [ ] Stage2-B 真实 held-out 对比：待 Stage2-B checkpoint。
+- [x] Stage2-B 真实 held-out 对比：同一 UrbanNav mini held-out split 已完成，trajectory head 输出可评估。
+
+当前 Step7 状态：
+
+- 工程闭环已完成：dataset smoke、frozen-forward、Stage2-A train、Stage2-A held-out、
+  Stage2-B train、Stage2-B held-out、compare 均已跑通。
+- 当前 split 是 UrbanNav mini：train=4、val=1、held-out=1，held-out 单条为
+  failed-tool case。该结果只证明训练/推理/评测框架可运行，不作为研究级模型质量指标。
+- 为避免 RTX 3090 OOM，正式 mini 训练保持 `target_modules=q_proj v_proj`、
+  `lora_rank=2`、`max_length=4096`、`per_device_train_batch_size=1`。
+- Stage2-B 使用生产 `causal_multi_query_curve` trajectory head，但关闭
+  `sidewalk_train_traj_token_embedding`，避免把整张 embedding 表加入可训练参数。
+- 训练日志中 `grad_norm=nan` 仍需后续排查；当前 `loss`、`eval_loss`、
+  `traj_loss` 均为有限值，checkpoint 可保存并可用于推理。
 
 当前 ms-swift 入口：
 
@@ -234,7 +251,9 @@ PYTHONPATH=src python tools/evaluation/build_sidewalk_agent_stage2_review_sample
 swift/sidewalk_nav/cli/smoke_agentic_stage2.py
 examples/sidewalk_nav/agentic_stage2/run_agentic_stage2_pipeline.sh dataset_smoke
 examples/sidewalk_nav/agentic_stage2/run_agentic_stage2_pipeline.sh frozen_forward_smoke
+examples/sidewalk_nav/agentic_stage2/run_agentic_stage2_pipeline.sh train_stage2a_smoke
 examples/sidewalk_nav/agentic_stage2/run_agentic_stage2_pipeline.sh train_stage2a
+examples/sidewalk_nav/agentic_stage2/run_agentic_stage2_pipeline.sh train_stage2b_smoke
 examples/sidewalk_nav/agentic_stage2/run_agentic_stage2_pipeline.sh train_stage2b
 examples/sidewalk_nav/agentic_stage2/run_agentic_stage2_pipeline.sh benchmark_stage2a
 examples/sidewalk_nav/agentic_stage2/run_agentic_stage2_pipeline.sh benchmark_stage2b
@@ -285,6 +304,70 @@ UrbanNav mini frozen-forward smoke 结果：
 - `base_llm_loaded=false`
 - 所有 tool / failed-tool 样本满足 `first_traj_token_index > tool_response_token_index`
 - 每条样本 frozen trajectory head 输出 `trajectory_output_shape=[1,3,16,2]`
+
+当前 CUDA 训练 smoke 使用容器而不是宿主 `internnav`：
+
+```text
+container: sidewalk-ms-swift
+container torch: 2.10.0+cu128
+container cuda_available: true
+host internnav torch: 2.11.0+cu130
+host internnav cuda_available: false on current 570/CUDA 12.8 driver
+```
+
+已通过的真实 smoke：
+
+```text
+Stage2-A:
+  action: train_stage2a_smoke
+  model: /workspace/ms-swift/.cache/ms-swift/modelscope/models/Qwen/Qwen3___5-4B
+  data: /tmp/sidewalk_stage2_urbannav_mini/train.jsonl#2, val.jsonl#1
+  trainable_parameters: 0.2294M
+  memory: 13.93GiB
+  checkpoint: /tmp/ms_swift_stage2a_real_smoke_container_4096/stage2a_agentic_text_smoke/.../checkpoint-1
+
+Stage2-B:
+  action: train_stage2b_smoke
+  smoke head: residual_points
+  train_traj_token_embedding: false
+  trainable_parameters: 6.8675M
+  memory: 18.00GiB
+  traj_loss: train=0.01379, eval=0.007365
+  checkpoint: /tmp/ms_swift_stage2b_real_smoke_container_small4/stage2b_agentic_traj_smoke/.../checkpoint-1
+```
+
+已通过的完整 mini 闭环：
+
+```text
+Stage2-A mini:
+  action: train_stage2a
+  model: /workspace/ms-swift/.cache/ms-swift/modelscope/models/Qwen/Qwen3___5-4B
+  data: /tmp/sidewalk_stage2_urbannav_mini/train.jsonl#4, val.jsonl#1
+  trainable_parameters: 0.2294M
+  memory: 14.01GiB
+  train_loss: 1.647
+  eval_loss: 1.712
+  checkpoint: /tmp/ms_swift_stage2_full_mini/stage2a_agentic_text/v0-20260626-154725/checkpoint-4
+
+Stage2-B mini:
+  action: train_stage2b
+  init_adapter: /tmp/ms_swift_stage2_full_mini/stage2a_agentic_text/v0-20260626-154725/checkpoint-4
+  head: causal_multi_query_curve
+  train_traj_token_embedding: false
+  memory: 18.51GiB
+  train_loss: 1.666
+  eval_loss: 1.726
+  traj_loss: train≈0.2087-0.2123, eval=0.2123
+  checkpoint: /tmp/ms_swift_stage2_full_mini/stage2b_agentic_traj/v0-20260626-155228/checkpoint-4
+
+Held-out mini benchmark:
+  split: /tmp/sidewalk_stage2_urbannav_mini/heldout.jsonl#1
+  base/stage2a/stage2b text parse metrics: 0.0 on the single failed-tool held-out case
+  stage2b trajectory head parse_success: 1.0
+  stage2b trajectory head strict_success: 1.0
+  stage2b trajectory head ADE/FDE: 0.0852 / 0.1290
+  comparison_dir: /tmp/ms_swift_stage2_full_mini/comparison
+```
 
 验收指标：
 
@@ -338,11 +421,11 @@ UrbanNav mini frozen-forward smoke 结果：
 
 ## 10. 当前下一步
 
-优先做第 2 节：`ToolExecutor` 每个 op 的 fake-provider 单测。
+Step7 的工程闭环已经完成。下一步不再是继续补入口，而是扩大数据和补齐真实运行质量：
 
-完成第 2 节后再做：
-
-1. 第 3 节 runtime budget / logger。
-2. 第 4 节 `OnlineAgentRunner + ModelAdapter`。
-3. 第 6 节真实 Phase1 archive Stage2 数据生成。
-4. 第 7-8 节训练与前后对比。
+1. 第 2 节：补 `ToolExecutor` 每个 op 的 fake-provider 单测，保证真实 executor
+   能稳定覆盖所有暴露工具。
+2. 扩大第 6 节 Phase1 archive split，生成非 mini 的 train/val/held-out，并保持
+   tool / no-tool / failed-tool slice 可控。
+3. 复跑第 7-8 节完整训练与对比，使用固定完整 split，而不是 4/1/1 mini split。
+4. 排查训练日志中的 `grad_norm=nan`，确认是日志/AMP 缩放问题还是梯度数值问题。
