@@ -308,13 +308,13 @@ Multi-stop GT 构造采用逐段最优，而不是一次性只选最终点。对
 \(g_1,\ldots,g_K\)，每一段从当前点 \(p_{i-1}\) 搜索并规划：
 
 \[
-d_i^\* = \arg\min_{d \in D_i^{routeable}} c(p_{i-1}, d)
+d_i^* = \arg\min_{d \in D_i^{routeable}} c(p_{i-1}, d)
 \]
 
 完整路线是各段路线拼接：
 
 \[
-R = R(p_0,d_1^\*) \oplus R(d_1^\*,d_2^\*) \oplus \cdots \oplus R(d_{K-1}^\*,d_K^\*)
+R = R(p_0,d_1^*) \oplus R(d_1^*,d_2^*) \oplus \cdots \oplus R(d_{K-1}^*,d_K^*)
 \]
 
 真实 API review 构建入口：
@@ -382,7 +382,7 @@ sequence\_success =
 \[
 multi\_stop\_SPL =
 sequence\_success \cdot leg\_route\_success \cdot
-\frac{L(R^\*)}{\max(L(R^\*), L(\hat R))}
+\frac{L(R^*)}{\max(L(R^*), L(\hat R))}
 \]
 
 报告字段：
