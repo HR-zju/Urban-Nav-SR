@@ -3,7 +3,15 @@
 本文档是 Urban-Nav-SR / RouteServer 与 ms-swift 之间的 Stage2 agentic cold-start
 执行清单。它用于约束后续修改顺序，避免 schema、executor、runtime、训练和评测各自漂移。
 
+> 实现注释：本文档按完整闭环排序：先固定协议，再做数据标注，再接 ms-swift
+> 训练，最后做 benchmark 和在线推理。每一节都对应一类可验证产物，避免直接进入训练后
+> 才发现 role sequence、loss mask 或 trajectory readout 位置错位。
+
 ## 0. 固定原则
+
+> 实现注释：这一节是 Stage2 的“不可变协议”。核心约束来自自回归模型因果性：
+> `[TRAJ_i]` 的 hidden state 只能看到它之前的 token，所以工具交互必须先发生，
+> `tool_response` 必须先进入上下文，最后才放导航 readout token 和 final assistant target。
 
 - [x] Stage2 主训练格式保持 single-tool interaction，不混入多轮 SpotAgent loop。
 - [x] `tools` 保持顶层 JSON string，由 ms-swift agent-template 注入，不写入 `<Scene>` 等 CoT tag。
@@ -23,6 +31,10 @@ PYTHONPATH=src PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/test_agent_eval_
 
 ## 1. RouteServer Schema / Builder / Exporter
 
+> 实现注释：RouteServer 是 teacher trace 和 review trace 的来源，内部保存 canonical
+> 审计顺序；exporter 再把 trace 转为 ms-swift agent-template row。这里不要把
+> ms-swift 的模板兼容细节反向污染 RouteServer schema。
+
 - [x] `AgentStage2Case` 作为 Stage2 case 主类。
 - [x] `AgentTrace` 支持 `tool_call` / `tool_response` 独立 role。
 - [x] `AgenticStage2TraceBuilder` 支持 tool / no-tool / failed-tool 三类 trace。
@@ -39,6 +51,10 @@ PYTHONPATH=src PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/test_agent_eval_
 - no-tool 路径中 `[TRAJ_i]` 在 first assistant think 后。
 
 ## 2. ToolExecutor 逐工具单测
+
+> 实现注释：Stage2 框架已经支持工具 role，但“工具可训练”不等于“真实工具可靠”。
+> 本节要求每个暴露给模型的 op 都有 fake-provider 单测，保证 executor 分发、失败返回、
+> artifact 和 session 状态可审计；默认不访问 live API，避免测试不稳定。
 
 目标：把“协议支持工具”推进到“executor 真实分发可测”。所有测试默认使用 fake provider /
 fake store，不访问 live map API。
@@ -74,6 +90,11 @@ PYTHONPATH=src PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/test_agent_tool_
 
 ## 3. Stage2 Single-tool Runtime
 
+> 实现注释：`AgentToolRuntime` 是 SpotAgent-style runtime policy 的最小可控版本：
+> 只执行第一轮里最多一个工具，并把失败写成 `tool_response.success=false`。这样既能训练
+> “何时调用工具/如何使用工具结果”，又不会让多轮工具循环破坏 Stage2 trajectory head 的
+> 因果位置。
+
 - [x] 新增 `AgentToolRuntime`。
 - [x] 支持解析 first assistant 的 `<tool_call>`。
 - [x] 将 `<tool_call>` 规范化成独立 `tool_call` role。
@@ -99,6 +120,10 @@ Agent_part/RouteServer/tests/test_agent_online_runtime.py
 ```
 
 ## 4. Online Model Runner
+
+> 实现注释：`OnlineAgentRunner` 把 teacher replay 推进到真实在线评测：第一次模型生成
+> 工具决策，runtime 执行工具，第二次模型在 tool result 和 `[TRAJ_i]` 可见后生成
+> final navigation。输出仍统一为 `AgentTrace`，所以可以复用 validator/exporter/metrics。
 
 目标：把 fake first/final assistant output 替换成真实模型调用，但输出仍统一为
 `AgentTrace`。
@@ -131,6 +156,10 @@ Agent_part/RouteServer/tests/test_agent_online_runtime.py
 
 ## 5. `image_tool.inspect` 决策
 
+> 实现注释：这里的重点是防止数据泄漏。`inspect` 如果只是 teacher LVLM 的别名，
+> 模型会学到“调用一个不存在的视觉专家工具”，而不是学习 FPV/BEV 自身推理。因此当前只暴露
+> 可审计的图像操作，真正的 inspect 必须等外部视觉 runtime 和失败语义都明确后再启用。
+
 - [x] 当前不暴露 `image_tool.inspect`，除非语义明确。
 - [x] 方案 A：不实现 inspect，继续只暴露 `crop` / `zoom_in`。
 - [x] 方案 B：暂缓；只有定义为真实外部视觉工具并返回结构化视觉结论后才可启用。
@@ -155,6 +184,10 @@ Stage2 选择方案 A。`image_tool` 当前只提供可审计、确定性的图�
 
 ## 6. Phase1 Archive 到 Stage2 标注流水线
 
+> 实现注释：Stage2 不重做 Phase1 的 BEV/FPV 轨迹监督，而是在已有 E2E CoT、trajectory、
+> seg supervision 基础上补 agentic teacher trace。最终 row 同时服务两类 loss：
+> assistant/tool_call 文本 loss，以及顶层 `pixel_trajectory` / segmentation 的额外监督 loss。
+
 - [x] Phase1 archive adapter 透传原始 CoT / trajectory / seg supervision。
 - [x] build script 支持 synthetic / fake executor 生成 review 样例。
 - [x] 用真实 Phase1 archive 生成 Stage2 cases。
@@ -165,6 +198,10 @@ Stage2 选择方案 A。`image_tool` 当前只提供可审计、确定性的图�
 - [x] 固定 train/val/held-out split。
 
 当前实现：
+
+> 实现注释：`--tool-context fake` 是“真实 executor 路径 + fake provider 数据”，适合
+> 批量标注前 smoke；`--tool-context provider` 才是真实地图 provider 入口，运行前需要固定
+> key、配额、城市范围和失败重试策略。
 
 - `eval/phase1_archive_adapter.py` 将真实 Phase1 archive/pre-archive JSONL 适配为
   `AgentStage2Case`，原始 CoT 保存到 `ground_truth.phase1_response`，轨迹和 seg
@@ -211,6 +248,11 @@ PYTHONPATH=src python tools/evaluation/build_sidewalk_agent_stage2_review_sample
 
 ## 7. ms-swift 训练接入
 
+> 实现注释：ms-swift 侧只负责“如何训练/推理这条 row”，不重新定义 RouteServer
+> canonical schema。对 tool trace，训练前会生成 template-compatible view：把 final
+> readout 合并到 preceding `tool_response`，保持 `tool_response -> [TRAJ_i] -> final assistant`
+> 的因果顺序，同时满足 ms-swift agent-template 的 tool/assistant 配对要求。
+
 - [x] Stage2 prompt template：`agentic_stage2_cot_trajectory`。
 - [x] parser 支持 `AgentState` / `ToolDecision` / `ToolResultUse`。
 - [x] tokenize / forward smoke。
@@ -233,6 +275,9 @@ PYTHONPATH=src python tools/evaluation/build_sidewalk_agent_stage2_review_sample
 - [x] Stage2-B 真实 held-out 对比：同一 UrbanNav mini held-out split 已完成，trajectory head 输出可评估。
 
 当前 Step7 状态：
+
+> 实现注释：当前 mini 结果只证明工程闭环，不代表模型能力结论。特别是 held-out 只有
+> 1 条 failed-tool case，文本指标为 0 时应进入 error review，而不是直接否定训练入口。
 
 - 工程闭环已完成：dataset smoke、frozen-forward、Stage2-A train、Stage2-A held-out、
   Stage2-B train、Stage2-B held-out、compare 均已跑通。
@@ -382,6 +427,10 @@ Held-out mini benchmark:
 
 ## 8. Urban-Nav-SR Benchmark / 推理闭环
 
+> 实现注释：第 8 节解决“同一 held-out 上怎么公平比较 base / Stage2-A / Stage2-B”。
+> RouteServer 不在这里做模型推理细节，而是收集 ms-swift 输出，按 case_id 对齐成
+> per-case report，并把 parse/tool/trajectory 失败整理成 error report 供人工复盘。
+
 - [x] 固定 base checkpoint。
 - [x] 固定 held-out benchmark manifest。
 - [x] 跑 base checkpoint zero-shot benchmark。
@@ -391,6 +440,9 @@ Held-out mini benchmark:
 - [x] 输出 per-case trace、summary report、error report、artifact index。
 
 当前实现：
+
+> 实现注释：collector 的输入是 ms-swift 已经落盘的 refs/predictions/metrics。
+> 这样 benchmark packaging 可以离线复跑，不依赖 GPU、地图 API 或 LLM key。
 
 - `eval/agentic_stage2_benchmark.py` 是 RouteServer 侧 benchmark packaging
   模块，负责读取 ms-swift benchmark 输出并生成 Urban review 包。
@@ -440,6 +492,10 @@ stage2b_head_ADE/FDE: 0.0852 / 0.1290
 
 ## 9. 最终推理接口
 
+> 实现注释：第 9 节是应用层接口，不再是训练数据构造。输入来自真实 RouteServer
+> runtime，输出既要能被业务消费（final text / parsed finish / trajectory），也要能被
+> 研发回放（完整 trace / tool_response / validation / ms-swift replay row）。
+
 - [x] RouteServer online runtime 输入：
   - [x] images
   - [x] user request
@@ -456,6 +512,9 @@ stage2b_head_ADE/FDE: 0.0852 / 0.1290
 - [x] RouteServer runtime 可以保存 ms-swift-compatible replay row。
 
 当前实现：
+
+> 实现注释：当前 ms-swift backend 通过 subprocess 调 `infer.py`，适合 smoke 和
+> 单机验证；生产服务应把模型加载变成常驻进程，否则每个 case 重复加载 4B 模型成本过高。
 
 - `agent/final_inference.py` 提供应用层稳定 API：
   - `RouteServerAgentInferenceRequest`
@@ -490,6 +549,9 @@ stage2b_head_ADE/FDE: 0.0852 / 0.1290
 - [x] 输出 trace 可以复用现有 validator/exporter/metrics。
 
 ## 10. 当前下一步
+
+> 实现注释：此处列的是工程进入正式数据规模前的风险收敛项。优先级高于继续加新功能：
+> 工具 executor 单测、真实 split 扩大、服务化推理、完整 benchmark 复跑、以及数值稳定性排查。
 
 Stage2 工程链路已经覆盖标注、训练、benchmark packaging 和单 case 最终推理接口。
 下一步不再是继续补入口，而是扩大数据、补齐真实 tool executor 测试，并把最终推理

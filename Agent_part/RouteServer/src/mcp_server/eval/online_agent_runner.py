@@ -159,13 +159,16 @@ class OnlineAgentRunner(AgentRunner):
 
         tools = list(case.tools or get_tool_definitions())
         images = case.images
+        # 第一次模型调用只看 system/user/images/tools，让模型决定是否需要工具。
         first_messages = build_initial_model_messages(case, system_prompt=self.config.system_prompt)
         pre_tool_output = await self.model_adapter.generate_pre_tool(first_messages, tools, images)
 
         async def generate_final(prefix_trace: AgentTrace) -> str:
+            # 将 runtime prefix 导成 ms-swift row，保证第二次模型调用看到规范 role 序列。
             row = trace_to_ms_swift_stage2_row(prefix_trace, case)
             return await self.model_adapter.generate_final(row["messages"], tools, row.get("images") or images)
 
+        # AgentToolRuntime 负责解析 tool_call、执行工具、追加 tool_response 和 final readout。
         trace = await self.runtime.run_case(
             case,
             first_assistant_output=pre_tool_output,
@@ -174,6 +177,7 @@ class OnlineAgentRunner(AgentRunner):
         )
         trace.model_run["runner"] = self.config.source
         trace.model_run["model_adapter"] = self.model_adapter.__class__.__name__
+        # 同一份 trace 同时做 schema validation 和 ms-swift replay row 导出。
         row = trace_to_ms_swift_stage2_row(trace, case)
         trace_validation = validate_stage2_trace(trace, case)
         row_validation = validate_ms_swift_stage2_row(row)
@@ -343,6 +347,7 @@ class MsSwiftInferenceAdapter:
         *,
         target: str,
     ) -> str:
+        # 每次生成写一个 one-row manifest，复用 ms-swift infer.py 的模板/图像处理逻辑。
         row = self.build_inference_row(messages, tools, images, target=target)
         return await asyncio.to_thread(self._run_ms_swift_infer, row, target)
 
@@ -374,6 +379,7 @@ class MsSwiftInferenceAdapter:
                 for line in output_path.read_text(encoding="utf-8").splitlines()
                 if line.strip()
             ]
+        # infer.py 的 contract 是每个输入 row 产生一条 prediction row，这里取第一条响应。
         if not rows:
             raise RuntimeError(f"ms-swift inference produced no rows for target={target}")
         response = rows[0].get("response")
@@ -384,6 +390,7 @@ class MsSwiftInferenceAdapter:
     def _command(self, *, input_path: Path, output_path: Path) -> list[str]:
         """Build the ms-swift CLI command without shell interpolation."""
 
+        # 用 argv list 而不是 shell 字符串，避免 checkpoint/path 中特殊字符导致命令注入或转义问题。
         command = [
             self.config.python_executable,
             "-m",

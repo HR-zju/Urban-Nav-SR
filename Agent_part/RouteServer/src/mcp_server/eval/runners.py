@@ -53,6 +53,7 @@ class RuleRunner(AgentRunner):
         self.executor = executor
 
     async def run_case(self, case: AgentStage2Case) -> AgentTrace:
+        # RuleRunner 永远走 tool 路径，用于 smoke 协议，不代表最终 teacher 策略。
         trace = AgentTrace.from_case(case, model_run={"runner": "rule"})
         trace.tools = case.tools or get_tool_definitions()
         trace.add_turn("user", initial_user_content(case), metadata={"stage2_step": "initial_request"})
@@ -86,6 +87,7 @@ class RuleRunner(AgentRunner):
     def _select_tool_call(self, case: AgentStage2Case) -> ToolCall:
         request = case.user_request.lower()
         location = case.observation.get("current_location") or case.observation.get("origin") or ""
+        # 简单关键词规则只覆盖典型工具路由，目的是让测试稳定产生不同 op。
         if any(keyword in request for keyword in ["厕所", "洗手间", "restroom", "toilet"]):
             return ToolCall(tool="map_tool", arguments={"op": "search_poi", "query": "restroom", "location": location})
         if any(keyword in request for keyword in ["咖啡", "坐", "休息", "coffee", "bench", "rest"]):
@@ -145,6 +147,7 @@ class RouteServerTeacherRunner(AgentRunner):
             # Lazy import，避免只使用 eval.cases/metrics 时强依赖 map provider 或视觉环境。
             from mcp_server.teacher.trace_builder import RouteServerAgentTeacher, RouteServerTeacherConfig
 
+            # 默认 teacher 是 RouteServer 真实 teacher adapter，可选择 synthetic 或 executor tool_response。
             teacher = RouteServerAgentTeacher(
                 app_context=self.app_context,
                 config=RouteServerTeacherConfig(
@@ -163,8 +166,10 @@ class RouteServerTeacherRunner(AgentRunner):
         if isinstance(result, AgentTrace):
             trace = result
         elif isinstance(result, dict):
+            # 允许外部 teacher 直接返回 trace dict，方便跨进程/JSONL 集成。
             trace = AgentTrace.from_dict(result)
         else:
+            # 兼容旧 teacher 只返回 assistant 文本的情况；validator 会指出 role sequence 不完整。
             trace = AgentTrace.from_case(case, model_run={"runner": "routeserver_teacher"})
             trace.tools = case.tools or get_tool_definitions()
             trace.add_turn("user", initial_user_content(case), metadata={"stage2_step": "initial_request"})
@@ -179,5 +184,6 @@ class RouteServerTeacherRunner(AgentRunner):
 async def run_cases(runner: AgentRunner, cases: Iterable[AgentStage2Case]) -> list[AgentTrace]:
     traces: list[AgentTrace] = []
     for case in cases:
+        # 顺序执行保证输出顺序和输入 case 顺序一致，便于后续 rows/cases zip 对齐。
         traces.append(await runner.run_case(case))
     return traces

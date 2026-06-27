@@ -38,12 +38,14 @@ def _tool_calls(trace: AgentTrace) -> tuple[list[ToolCall], list[str]]:
     errors: list[str] = []
     for turn in trace.turns:
         if turn.role == "tool_call":
+            # Stage2 正式格式：独立 tool_call role。
             payload, payload_errors = _json_dict(turn.content)
             errors.extend(payload_errors)
             if payload is not None:
                 calls.append(ToolCall.from_dict(payload))
             continue
         if turn.role == "assistant" and isinstance(turn.content, str) and "<tool_call>" in turn.content:
+            # 兼容/审计旧 XML 格式，但 validator 会要求最终数据使用独立 role。
             call, parse_errors = parse_tool_call_text(turn.content)
             errors.extend(parse_errors)
             if call is not None:
@@ -128,6 +130,7 @@ def _tool_responses(trace: AgentTrace) -> list[ToolResponse]:
 
 
 def _role_order_valid(trace: AgentTrace) -> bool:
+    # 只校验相对顺序，不要求 index 固定，便于兼容可选 system turn。
     initial_user = _first_index(trace, "user", start=0)
     think = _first_index(trace, "assistant", start=(initial_user + 1 if initial_user is not None else 0))
     tool_call = _first_index(trace, "tool_call", start=(think + 1 if think is not None else 0))
@@ -150,6 +153,7 @@ def _trajectory_readout_order_valid(trace: AgentTrace) -> bool:
         if turn.role == "tool_response":
             last_tool_response = index
     if last_tool_response is not None:
+        # tool 路径中 readout 必须在最后一个 tool_response 之后。
         readout_user = _first_readout_user_index(trace, start=last_tool_response + 1)
         return readout_user is not None
     first_think = _first_index(trace, "assistant", start=0)
@@ -203,6 +207,7 @@ def _tool_result_use_valid(trace: AgentTrace) -> bool:
             break
     has_tool_call = any(turn.role == "tool_call" for turn in trace.turns)
     if has_tool_call:
+        # tool 路径要求模型在 final CoT 中总结“如何使用工具结果”。
         payload, errors = _tag_json_payload(final_text, "ToolResultUse")
         return payload is not None and not errors and payload.get("tool_used") is True
     if "<ToolResultUse>" not in final_text:
@@ -234,6 +239,7 @@ def _finish_trajectory_consistent(
     if not finishes:
         return 0.0
     actual = finishes[-1].get("trajectory")
+    # finish.trajectory 与顶层 pixel_trajectory 一致时，LM target 和 trajectory head target 不冲突。
     return 1.0 if actual == expected else 0.0
 
 
@@ -307,6 +313,7 @@ def compute_trace_metrics(trace: AgentTrace, case: AgentStage2Case | None = None
     expected_no_tool = _expected_no_tool(case, trace)
     called_ops = [str(call.op) for call in tool_calls if call.op]
     if expected_no_tool:
+        # no-tool replay 的正确行为是完全不调用工具。
         tool_op_accuracy = 1.0 if not called_ops else 0.0
     elif expected_ops:
         tool_op_accuracy = 1.0 if called_ops == expected_ops else 0.0
@@ -331,10 +338,12 @@ def compute_trace_metrics(trace: AgentTrace, case: AgentStage2Case | None = None
     for response in responses:
         result = response.result if isinstance(response.result, dict) else {}
         if "session" in result or "route_plan" in result or "session_changed" in result:
+            # route-session 类工具只看是否成功返回更新结果，不在 metrics 中重算路线质量。
             route_update_success = 1.0 if response.success else 0.0
             break
 
     tool_decision_consistency = 1.0 if _tool_decision_consistent(trace, tool_decisions) else 0.0
+    # None 表示该样本没有对应 GT 或不适用，聚合时不会被当作 0。
     metrics: dict[str, float | None] = {
         "parse_success": 1.0 if finishes and not parse_errors and tool_decision_consistency == 1.0 else 0.0,
         "tool_name_accuracy": tool_name_accuracy,

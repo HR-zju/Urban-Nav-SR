@@ -93,6 +93,7 @@ class RouteServerAgentInferenceRequest:
             ``AgentStage2Case`` consumed by ``OnlineAgentRunner``.
         """
 
+        # RouteServer 外部请求先归一化成 AgentStage2Case；在线推理不依赖 GT supervision。
         observation: dict[str, Any] = {
             "images": self.images,
             "route_state": dict(self.route_state),
@@ -223,6 +224,7 @@ async def run_routeserver_final_inference(
     """
 
     config = config or RouteServerAgentInferenceConfig()
+    # 最终接口仍使用 Stage2 single-tool 协议；多轮工具循环留给后续 Stage3/runtime eval。
     runtime = AgentToolRuntime(
         executor=executor,
         config=AgentToolRuntimeConfig(
@@ -234,6 +236,7 @@ async def run_routeserver_final_inference(
             review_artifact_dir=config.review_artifact_dir,
         ),
     )
+    # OnlineAgentRunner 做两次模型调用，中间由 AgentToolRuntime 执行工具并补齐 tool_response。
     runner_config = OnlineAgentRunnerConfig(source=config.source)
     if config.system_prompt is not None:
         runner_config = OnlineAgentRunnerConfig(source=config.source, system_prompt=config.system_prompt)
@@ -242,6 +245,7 @@ async def run_routeserver_final_inference(
         runtime=runtime,
         config=runner_config,
     ).run_case_with_report(request.to_case())
+    # RouteServer 对外返回 parsed finish/trajectory；同时保留原始 assistant 文本供人工审计。
     final_text = _final_assistant_text(result.trace.to_dict())
     finish, finish_errors = parse_finish_text(final_text) if final_text else (None, ["missing_final_assistant"])
     artifacts = list(result.trace.artifacts)
@@ -282,6 +286,7 @@ def write_routeserver_final_inference_artifacts(
 
     target = Path(output_dir)
     target.mkdir(parents=True, exist_ok=True)
+    # 分开落盘：result 供应用读取，trace/replay row 供问题复现和后续 SFT。
     paths = {
         "result": target / "result.json",
         "trace": target / "agent_trace.json",

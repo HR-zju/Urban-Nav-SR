@@ -259,11 +259,14 @@ def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 async def _build_app_context(args: argparse.Namespace):
     if not args.execute_tools or args.tool_context == "none":
+        # 不执行工具时 teacher runner 会写 deterministic synthetic tool_response。
         return None
     if args.tool_context == "fake":
+        # fake context 走真实 ToolExecutor/map_ops/route_session_ops 代码路径，但不访问网络。
         os.environ.setdefault("ROUTE_SESSION_STORE", "memory")
         return SimpleNamespace(provider="fake_stage2_map", osm_client=FakeStage2MapClient())
     if args.tool_context == "provider":
+        # provider context 会创建真实地图客户端，运行前必须保证 API key/网络/配额可用。
         from mcp_server.map_providers import create_map_client
 
         client, provider = create_map_client()
@@ -283,6 +286,7 @@ async def _close_app_context(app_context: Any | None) -> None:
 
 def _load_cases_from_args(args: argparse.Namespace):
     if args.phase1_archive_jsonl:
+        # 真实数据入口：Phase1 archive -> AgentStage2Case，保留原 CoT/traj/seg supervision。
         return load_phase1_archive_stage2_cases(
             args.phase1_archive_jsonl,
             limit=args.limit,
@@ -291,11 +295,13 @@ def _load_cases_from_args(args: argparse.Namespace):
         )
     cases = load_stage2_cases(args.cases)
     if args.limit is not None:
+        # 已有 Stage2 cases 的 smoke 裁剪，不改变 case 内已有 split。
         cases = cases[: int(args.limit)]
     return cases
 
 
 async def _run(args: argparse.Namespace) -> None:
+    # 1. 加载/适配 case，并在需要时固定 hash split。
     cases = _load_cases_from_args(args)
     split_config = Stage2SplitConfig(
         train_ratio=args.train_ratio,
@@ -312,6 +318,7 @@ async def _run(args: argparse.Namespace) -> None:
         write_stage2_cases(cases, args.stage2_cases_out)
     case_validations = [{"case_id": case.case_id, **validate_stage2_case(case).to_dict()} for case in cases]
 
+    # 2. 运行 teacher runner：可以 synthetic tool_response，也可以走 fake/provider executor。
     app_context = await _build_app_context(args)
     try:
         runner = RouteServerTeacherRunner(
@@ -326,9 +333,11 @@ async def _run(args: argparse.Namespace) -> None:
     finally:
         await _close_app_context(app_context)
 
+    # 3. 导出 ms-swift row，并保持 case_id 对齐以透传 Phase1 supervision。
     cases_by_id = {case.case_id: case for case in cases}
     rows = [trace_to_ms_swift_stage2_row(trace, case=cases_by_id.get(trace.case_id)) for trace in traces]
 
+    # 4. 三层 validation：case/trace/export row 任一失败都进入 report。
     trace_validations = [
         {"case_id": trace.case_id, **validate_stage2_trace(trace, case=cases_by_id.get(trace.case_id)).to_dict()}
         for trace in traces
@@ -340,6 +349,7 @@ async def _run(args: argparse.Namespace) -> None:
 
     write_traces_jsonl(traces, args.traces_out)
     write_ms_swift_stage2_jsonl(traces, args.ms_swift_out, cases_by_id=cases_by_id)
+    # 5. 可选写 train/val/heldout 三套文件，供 ms-swift 训练和人工审计复用同一 split。
     split_outputs = (
         write_stage2_split_outputs(cases=cases, traces=traces, rows=rows, output_dir=args.split_output_dir)
         if args.split_output_dir
@@ -353,6 +363,7 @@ async def _run(args: argparse.Namespace) -> None:
         trace_validations=trace_validations,
         row_validations=row_validations,
     )
+    # 6. review samples 按 split/tool/op 抽样，不让高频普通样本淹没 failed-tool 样本。
     review_samples = sample_stage2_review_rows(
         cases,
         traces,
@@ -367,6 +378,7 @@ async def _run(args: argparse.Namespace) -> None:
     if args.review_index_out:
         write_review_index_csv(review_samples, args.review_index_out)
 
+    # 7. report 是本次构建的总账，记录输入、输出、split、metrics、validation 和样本级摘要。
     metric_names = sorted({key for trace in traces for key in trace.metrics.keys()})
     report = {
         "schema_version": "sidewalk_agent_stage2_review_report_v1",
@@ -446,6 +458,7 @@ async def _run(args: argparse.Namespace) -> None:
         + report["validation"]["ms_swift_rows"]["invalid"]
     )
     if invalid_count and args.fail_on_invalid:
+        # 默认 fail-fast，避免无效样本静默进入训练集。
         raise SystemExit(f"Stage2 review build found {invalid_count} invalid validation entries")
 
 

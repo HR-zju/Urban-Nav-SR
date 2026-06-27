@@ -81,6 +81,7 @@ def validate_stage2_case(case: AgentStage2Case) -> Stage2ValidationResult:
     if not case.images:
         warnings.append("missing_images")
     if not isinstance(case.ground_truth, dict):
+        # ground_truth 允许为空，但类型必须稳定，便于 exporter 透传监督字段。
         errors.append("ground_truth_not_object")
     return Stage2ValidationResult(valid=not errors, errors=errors, warnings=warnings)
 
@@ -102,12 +103,14 @@ def validate_stage2_trace(trace: AgentTrace, case: AgentStage2Case | None = None
         errors.append(f"trace_schema_version:{trace.schema_version}")
     roles = tuple(turn.role for turn in trace.turns)
     has_tool_roles = "tool_call" in roles or "tool_response" in roles
+    # tool/no-tool 使用两套固定序列；混入多轮工具或 legacy role 会直接报错。
     expected_roles = STAGE2_TOOL_TRACE_ROLE_SEQUENCE if has_tool_roles else STAGE2_NO_TOOL_TRACE_ROLE_SEQUENCE
     if roles != expected_roles:
         errors.append(f"trace_role_sequence:{roles}")
 
     call = None
     if has_tool_roles and len(trace.turns) > 2:
+        # tool_call 必须是可解析 JSON object，并通过工具 schema 校验。
         call_payload, call_errors = _json_dict(trace.turns[2].content)
         errors.extend(f"tool_call:{item}" for item in call_errors)
         if call_payload is not None:
@@ -116,6 +119,7 @@ def validate_stage2_trace(trace: AgentTrace, case: AgentStage2Case | None = None
             if not is_valid:
                 errors.extend(f"tool_call_schema:{item}" for item in validation_errors)
     if has_tool_roles and len(trace.turns) > 3:
+        # failed tool 也是合法 response，但必须显式给出 success=false。
         response_payload, response_errors = _json_dict(trace.turns[3].content)
         errors.extend(f"tool_response:{item}" for item in response_errors)
         if response_payload is not None:
@@ -127,6 +131,7 @@ def validate_stage2_trace(trace: AgentTrace, case: AgentStage2Case | None = None
     readout_index = 4 if has_tool_roles else 2
     final_index = 5 if has_tool_roles else 3
     if len(trace.turns) > readout_index:
+        # 这里直接检查所有 [TRAJ_i]，保证 trajectory head 的 readout token 完整出现。
         readout = trace.turns[readout_index].content
         if not isinstance(readout, str) or not _contains_all_readout_tokens(readout):
             errors.append("missing_readout_tokens")
@@ -144,6 +149,7 @@ def validate_stage2_trace(trace: AgentTrace, case: AgentStage2Case | None = None
             if finish is not None and case is not None:
                 expected_traj = case.ground_truth.get("pixel_trajectory")
                 if expected_traj and finish.get("trajectory") != expected_traj:
+                    # 文本 finish 和顶层 trajectory supervision 必须一致，否则 LM/traj loss 目标冲突。
                     errors.append("finish_trajectory_mismatch")
     else:
         errors.append("missing_final_assistant")
@@ -152,8 +158,10 @@ def validate_stage2_trace(trace: AgentTrace, case: AgentStage2Case | None = None
         if turn.role != "assistant" or not isinstance(turn.content, str):
             continue
         if "<tool_response>" in turn.content:
+            # 禁止 v1 XML tool_response 回流，Stage2 只能用独立 tool_response role。
             errors.append(f"legacy_tool_response_format:{index}")
         if index != final_index and "<ToolResultUse>" in turn.content:
+            # ToolResultUse 只表达最终如何使用工具结果，不应出现在 pre-tool think。
             errors.append(f"tool_result_use_outside_final:{index}")
 
     metric_result = compute_trace_metrics(trace, case)
@@ -166,6 +174,7 @@ def validate_stage2_trace(trace: AgentTrace, case: AgentStage2Case | None = None
         "tool_decision_consistency",
     ):
         if metric_result.metrics.get(key) != 1.0:
+            # metrics 里的协议失败提升为 validator hard error，build 脚本据此拦截坏样本。
             errors.append(f"metric_failed:{key}")
     errors.extend(metric_result.errors)
     return Stage2ValidationResult(
@@ -197,6 +206,7 @@ def validate_ms_swift_stage2_row(row: dict[str, Any]) -> Stage2ValidationResult:
         return Stage2ValidationResult(valid=False, errors=["messages_not_list"])
     roles = tuple(str(message.get("role")) for message in messages if isinstance(message, dict))
     has_tool_roles = "tool_call" in roles or "tool_response" in roles
+    # exported row 比 trace 多 system，因此单独校验 row role sequence。
     expected_roles = STAGE2_TOOL_ROW_ROLE_SEQUENCE if has_tool_roles else STAGE2_NO_TOOL_ROW_ROLE_SEQUENCE
     if roles != expected_roles:
         errors.append(f"row_role_sequence:{roles}")
@@ -205,6 +215,7 @@ def validate_ms_swift_stage2_row(row: dict[str, Any]) -> Stage2ValidationResult:
     if not isinstance(tools, str):
         errors.append("tools_not_json_string")
     else:
+        # ms-swift/pyarrow 对 list[dict] 容易类型漂移，因此 tools 必须是 JSON string。
         payload, payload_errors = _json_value(tools)
         errors.extend(f"tools:{item}" for item in payload_errors)
         if payload is not None and not isinstance(payload, list):
@@ -217,6 +228,7 @@ def validate_ms_swift_stage2_row(row: dict[str, Any]) -> Stage2ValidationResult:
         role = message.get("role")
         content = message.get("content")
         if role in {"tool_call", "tool_response"}:
+            # agent-template 期望 tool role content 是 JSON 字符串，而不是 Python dict。
             payload, payload_errors = _json_dict(content)
             errors.extend(f"{role}:{item}" for item in payload_errors)
             if role == "tool_call" and payload is not None:

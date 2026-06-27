@@ -77,6 +77,7 @@ def phase1_archive_row_to_stage2_case(
     assistant_response = _last_message_content(messages, "assistant") or str(row.get("response") or "")
     sidewalk_meta = dict(row.get("sidewalk_meta") or {})
 
+    # Phase1 row 可能来自归档后 manifest，也可能来自预归档 COT JSONL；这里统一成 Stage2 case。
     images = _extract_images(row, base_dir=base_dir)
     observation = _build_observation(row, sidewalk_meta=sidewalk_meta, images=images, base_dir=base_dir)
     ground_truth = _build_ground_truth(row, sidewalk_meta=sidewalk_meta, assistant_response=assistant_response, base_dir=base_dir)
@@ -115,6 +116,7 @@ def iter_phase1_archive_stage2_cases(
     source = Path(path).expanduser()
     with source.open("r", encoding="utf-8") as handle:
         for index, line in enumerate(handle):
+            # limit 用于 smoke，不影响真实构建时的 deterministic split。
             if limit is not None and index >= int(limit):
                 break
             text = line.strip()
@@ -197,6 +199,7 @@ def _extract_user_request(row: dict[str, Any], user_prompt: str) -> str:
     instruction = str(row.get("instruction") or "").strip()
     if instruction:
         return instruction
+    # Phase1 prompt 常见格式是 "Instruction: ..."，Stage2 只取用户请求本身。
     match = re.search(r"^Instruction:\s*(.+?)\s*$", user_prompt, flags=re.MULTILINE)
     if match:
         return match.group(1).strip()
@@ -216,6 +219,7 @@ def _strip_image_tokens(text: str) -> str:
 def _extract_images(row: dict[str, Any], *, base_dir: Path | None) -> list[str]:
     raw_images = row.get("images")
     if isinstance(raw_images, list):
+        # 保持 Phase1 image 顺序，通常是 FPV 在前、BEV 在后。
         return [_resolve_path(item, base_dir=base_dir) for item in raw_images if item]
     images = []
     if row.get("fpv_image_path"):
@@ -233,6 +237,7 @@ def _build_observation(
     base_dir: Path | None,
 ) -> dict[str, Any]:
     observation: dict[str, Any] = {
+        # observation 是模型运行时可见上下文；GT 标签不会放到这里。
         "images": _image_dict(images),
         "route_context": dict(row.get("route_context") or sidewalk_meta.get("route_context") or {}),
         "local_bev_context": dict(row.get("local_bev_context") or sidewalk_meta.get("local_bev_context") or {}),
@@ -275,6 +280,7 @@ def _build_ground_truth(
     for key in SUPERVISION_KEYS:
         value = row.get(key)
         if value is not None:
+            # 监督字段原样透传，路径类字段只做相对路径解析，不改标签值。
             ground_truth[key] = _resolve_path(value, base_dir=base_dir) if key.endswith("_path") else value
     for key in ("intent_gt", "route_theta_deg", "trajectory_source"):
         value = row.get(key, sidewalk_meta.get(key))
@@ -285,6 +291,7 @@ def _build_ground_truth(
         if value is not None:
             ground_truth[key] = value
     if assistant_response.strip():
+        # 原 Phase1 CoT 作为 Stage2 final assistant 的基础 LM target。
         ground_truth["phase1_response"] = assistant_response
     for key in ("semantic_segmentation_path", "semantic_mask_path", "segmentation_path", "mask_path"):
         value = row.get(key) or sidewalk_meta.get(key)
@@ -378,6 +385,7 @@ def _resolve_path(value: Any, *, base_dir: Path | None) -> str:
 
 
 def _case_id(row: dict[str, Any], *, sidewalk_meta: dict[str, Any], index: int, prefix: str) -> str:
+    # 优先使用稳定源 ID；只有缺失时才回退到行号，避免重排输入导致 split 漂移。
     raw = (
         row.get("case_id")
         or row.get("id")

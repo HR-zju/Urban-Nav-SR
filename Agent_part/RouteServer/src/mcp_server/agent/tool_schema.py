@@ -120,6 +120,7 @@ def get_tool_definitions() -> list[dict[str, Any]]:
 
 
 def expected_ops_for_tool(tool: str) -> set[str]:
+    # metrics/validator 用这个函数判断模型是否调用了 schema 内允许的 op。
     return set(TOOL_OPS_BY_NAME.get(tool, set()))
 
 
@@ -137,6 +138,7 @@ def validate_tool_call(call: ToolCall | dict[str, Any]) -> tuple[bool, list[str]
     call_obj = call if isinstance(call, ToolCall) else ToolCall.from_dict(call)
     errors: list[str] = []
     if call_obj.tool not in TOOL_OPS_BY_NAME:
+        # 未注册工具直接拒绝，避免模型调用 teacher-only 或历史内部工具。
         errors.append(f"unknown_tool:{call_obj.tool}")
         return False, errors
     op = call_obj.op
@@ -147,6 +149,7 @@ def validate_tool_call(call: ToolCall | dict[str, Any]) -> tuple[bool, list[str]
 
     args = call_obj.arguments
     if call_obj.tool == MAP_TOOL_NAME:
+        # 这里只做轻量必填项校验；坐标范围/provider 细节交给 executor 和 map_ops。
         if op in {"geocode", "search_poi"} and not (args.get("query") or args.get("address") or args.get("keywords")):
             errors.append("missing_query")
         if op in {"reverse_geocode"} and not (args.get("latitude") is not None and args.get("longitude") is not None):
@@ -180,9 +183,11 @@ def validate_tool_call(call: ToolCall | dict[str, Any]) -> tuple[bool, list[str]
         } and not args.get("session_id"):
             errors.append("missing_session_id")
     elif call_obj.tool == IMAGE_TOOL_NAME:
+        # image_tool 当前只允许确定性图像操作，不暴露 inspect/视觉理解工具。
         if op in {"crop", "zoom_in"} and not (args.get("bbox") and (args.get("image") or args.get("image_path"))):
             errors.append("missing_image_or_bbox")
     elif call_obj.tool == USER_INTERACTION_TOOL_NAME:
+        # 离线场景不会真的等待用户，但 question 必须可审计。
         if op in {"ask_user", "request_clarification", "confirm_route_change"} and not args.get("question"):
             errors.append("missing_question")
 

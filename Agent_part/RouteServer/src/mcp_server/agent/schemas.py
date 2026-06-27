@@ -22,6 +22,7 @@ MS_SWIFT_AGENTIC_STAGE2_SCHEMA_VERSION = "sidewalk_agentic_stage2_sft_v1"
 def _clean_dict(payload: dict[str, Any]) -> dict[str, Any]:
     """Drop empty optional fields while preserving valid false/zero values."""
 
+    # 注意不能用 truthiness 过滤：False/0 是合法协议值，例如 tool_response.success=false。
     return {
         key: value
         for key, value in payload.items()
@@ -50,9 +51,11 @@ class ToolCall:
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "ToolCall":
+        # 兼容 RouteServer 内部 tool 字段和 ms-swift/openai 风格 name 字段。
         tool = str(payload.get("tool") or payload.get("name") or "").strip()
         arguments = payload.get("arguments")
         if not isinstance(arguments, dict):
+            # 旧样本可能把 op/query 等参数平铺在根对象，这里收束回 arguments。
             arguments = {
                 key: value
                 for key, value in payload.items()
@@ -228,6 +231,7 @@ class AgentEvalCase:
         if isinstance(images, list):
             return [str(item) for item in images if item]
         if isinstance(images, dict):
+            # 固定 FPV/front 优先、BEV 次之，保证 <image> token 顺序稳定。
             ordered = [images.get("fpv"), images.get("front"), images.get("bev")]
             ordered.extend(value for key, value in images.items() if key not in {"fpv", "front", "bev"})
             return [str(item) for item in ordered if item]
@@ -299,6 +303,7 @@ class AgentTrace:
 
     @classmethod
     def from_case(cls, case: AgentStage2Case, *, model_run: dict[str, Any] | None = None) -> "AgentTrace":
+        # trace 继承 case 的工具 schema 和监督字段；runner 只负责追加对话 turn。
         return cls(
             case_id=case.case_id,
             task_type=case.task_type,
@@ -332,9 +337,11 @@ class AgentTrace:
         tool: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> None:
+        # role/content 不在这里强校验，validator 统一负责 hard error 和 review warning。
         self.turns.append(AgentTurn(role=role, content=content, tool=tool, metadata=dict(metadata or {})))
 
     def to_dict(self) -> dict[str, Any]:
+        # to_dict 是所有 review/export 的共同入口，保持字段稳定比压缩体积更重要。
         return _clean_dict(
             {
                 "schema_version": self.schema_version,

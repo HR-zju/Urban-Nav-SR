@@ -235,6 +235,7 @@ class AgentToolRuntime:
             of exceptions.
         """
 
+        # 从标准 Stage2 case 初始化 trace，后续所有 runtime 动作都写成可回放 role。
         trace = AgentTrace.from_case(
             case,
             model_run={
@@ -246,6 +247,7 @@ class AgentToolRuntime:
         trace.tools = list(tools or case.tools or get_tool_definitions())
         trace.add_turn("user", initial_user_content(case), metadata={"stage2_step": "initial_request"})
 
+        # 第一轮 assistant 可以包含思考和工具请求；runtime 只解析/执行第一个工具。
         call, runtime_errors = self._parse_first_tool_call(first_assistant_output)
         parsed_tool_call_count = _count_tool_calls(first_assistant_output)
         if parsed_tool_call_count > self.config.budget.max_tool_calls:
@@ -254,6 +256,7 @@ class AgentToolRuntime:
             )
         decision, decision_errors = _parse_tool_decision(first_assistant_output)
         runtime_errors.extend(decision_errors)
+        # 可执行 <tool_call> 不保留在 assistant content 中，避免把 action JSON 当普通 CoT。
         assistant_think = _strip_action_blocks(first_assistant_output).strip()
         trace.add_turn(
             "assistant",
@@ -270,6 +273,7 @@ class AgentToolRuntime:
 
         response = None
         if call is not None:
+            # tool_call / tool_response 独立成 role，和 ms-swift agent-template 的 loss mask 对齐。
             trace.add_turn("tool_call", call.to_ms_swift_dict(), tool=call.tool, metadata={"stage2_step": "tool_call"})
             response = await self._execute_tool(call, case, parsed_tool_call_count=parsed_tool_call_count)
             trace.add_turn(
@@ -280,6 +284,7 @@ class AgentToolRuntime:
             )
             trace.artifacts.extend(_new_artifacts(trace.artifacts, response.artifacts))
 
+        # [TRAJ_i] readout 必须在 tool_response 后，trajectory head 的 hidden state 才能看到工具结果。
         trace.add_turn(
             "user",
             final_navigation_user_content(tool_used=call is not None),
@@ -288,6 +293,7 @@ class AgentToolRuntime:
         if final_assistant_output is not None:
             final_text = final_assistant_output.strip()
         elif final_assistant_generator is not None:
+            # 真实在线评测在这里触发第二次模型调用，输入已经包含 tool_response 和 [TRAJ_i]。
             generated = final_assistant_generator(trace)
             if inspect.isawaitable(generated):
                 generated = await generated
@@ -312,6 +318,7 @@ class AgentToolRuntime:
         if runtime_errors:
             trace.metadata["runtime_errors"] = list(runtime_errors)
         if self.config.compute_metrics:
+            # runtime 内部只附加协议指标，不在这里做训练/优化。
             from mcp_server.eval.metrics import compute_trace_metrics
 
             metric_result = compute_trace_metrics(trace, case)
@@ -361,6 +368,7 @@ class AgentToolRuntime:
             failure-recovery supervision.
         """
 
+        # budget / allowlist 拒绝也写成 failed tool_response，方便训练失败恢复策略。
         budget_denial = self.config.budget.denial_for(call, parsed_tool_call_count=parsed_tool_call_count)
         if budget_denial is not None:
             return ToolResponse(tool=call.tool, success=False, error=budget_denial, call_id=call.call_id)
@@ -435,6 +443,7 @@ def _runtime_log_from_trace(
 ) -> dict[str, Any]:
     """Build a structured runtime log from a normalized Stage2 trace."""
 
+    # 记录完整 conversation 与工具 I/O，便于人工复盘 SpotAgent-style online trace。
     conversation = [turn.to_dict() for turn in trace.turns]
     tool_calls = [turn.to_dict() for turn in trace.turns if turn.role == "tool_call"]
     tool_responses = [turn.to_dict() for turn in trace.turns if turn.role == "tool_response"]

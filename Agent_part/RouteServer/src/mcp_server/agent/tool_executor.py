@@ -63,6 +63,7 @@ class ToolExecutor:
         self.artifact_dir = Path(artifact_dir) if artifact_dir else None
 
     async def execute(self, call: ToolCall, *, case: AgentStage2Case | None = None) -> ToolResponse:
+        # executor 只执行 schema 允许的工具；非法调用也转成 tool_response，保证 trace 完整。
         is_valid, errors = validate_tool_call(call)
         if not is_valid:
             return ToolResponse(
@@ -72,6 +73,7 @@ class ToolExecutor:
                 call_id=call.call_id,
             )
         try:
+            # 三类元工具统一从这里分发，方便 validator/test 对 schema 与 executor 做一致性检查。
             if call.tool == MAP_TOOL_NAME:
                 return await self._execute_map_tool(call)
             if call.tool == IMAGE_TOOL_NAME:
@@ -109,6 +111,7 @@ class ToolExecutor:
 
         args = dict(call.arguments)
         op = str(args.get("op"))
+        # map_tool 是单一 student-visible 工具，op 再映射到 RouteServer core map/session API。
         if op == "geocode":
             result = await map_ops.geocode(
                 app_context=self.app_context,
@@ -141,6 +144,7 @@ class ToolExecutor:
                 subcategories=args.get("subcategories"),
             )
         elif op in {"plan_route", "get_route"} and not args.get("session_id"):
+            # 没有 session_id 的 get_route 走一次性 route planning；有 session_id 时读取 route session。
             origin_lat, origin_lon = _lat_lon(
                 args.get("origin")
                 or {
@@ -167,6 +171,7 @@ class ToolExecutor:
         elif op == "create_route_session":
             from mcp_server.core import route_session_ops
 
+            # route session 类 op 会更新 app_context 内的 session store，测试时必须用 fake/memory store 隔离。
             result = await route_session_ops.create_route_session(
                 app_context=self.app_context,
                 origin=_as_location(args.get("origin")),
@@ -255,11 +260,13 @@ class ToolExecutor:
         with Image.open(source) as image:
             width, height = image.size
             if all(0.0 <= value <= 1.0 for value in bbox):
+                # bbox 支持 0-1 归一化坐标，按原图尺寸转成像素 crop。
                 x1, y1, x2, y2 = bbox[0] * width, bbox[1] * height, bbox[2] * width, bbox[3] * height
             else:
                 x1, y1, x2, y2 = bbox
             crop = image.crop((max(0, x1), max(0, y1), min(width, x2), min(height, y2)))
             if self.artifact_dir is None:
+                # 无 artifact_dir 时只返回 metadata，不在磁盘产生文件，适合轻量 smoke。
                 artifact = {
                     "type": "image_crop",
                     "source_path": str(source),
@@ -267,6 +274,7 @@ class ToolExecutor:
                     "size": list(crop.size),
                 }
             else:
+                # 有 artifact_dir 时保存裁剪图，便于人工 review tool artifact。
                 self.artifact_dir.mkdir(parents=True, exist_ok=True)
                 name = f"{source.stem}_{call.call_id or 'crop'}.jpg"
                 target = self.artifact_dir / name

@@ -153,6 +153,7 @@ def run_ms_swift_stage2_pipeline(
     logs_dir.mkdir(parents=True, exist_ok=True)
     results: list[PipelineCommandResult] = []
     for action in actions:
+        # Urban 侧只编排 ms-swift 已有 pipeline；stdout/stderr 全量保留，便于复现失败。
         command = _pipeline_command(config, action)
         stdout_path = logs_dir / f"{action}.stdout.log"
         stderr_path = logs_dir / f"{action}.stderr.log"
@@ -203,15 +204,18 @@ def collect_agentic_stage2_benchmark(config: AgenticStage2BenchmarkConfig) -> di
     report_dir = Path(config.report_output_dir)
     report_dir.mkdir(parents=True, exist_ok=True)
 
+    # prepared refs 是 held-out 对齐基准；base/stage2a/stage2b 都按同一行号比较。
     decision_refs = _read_required_jsonl(output_root / "benchmark" / BENCHMARK_REF_FILES["decision"])
     final_refs = _read_required_jsonl(output_root / "benchmark" / BENCHMARK_REF_FILES["final"])
     if len(decision_refs) != len(final_refs):
         raise ValueError(f"decision/final reference mismatch: {len(decision_refs)} != {len(final_refs)}")
 
+    # 三个 run 目录可以缺少 trajectory-head 输出，但不能缺少核心文本 prediction。
     runs = {
         run_name: _load_run_outputs(output_root, run_name, expected_rows=len(final_refs))
         for run_name in RUN_NAMES
     }
+    # per_case_report 把同一个 case_id 的 base / Stage2-A / Stage2-B 输出放在一行。
     per_case = [
         _build_case_report(
             config=config,
@@ -223,7 +227,9 @@ def collect_agentic_stage2_benchmark(config: AgenticStage2BenchmarkConfig) -> di
         )
         for index, (decision_ref, final_ref) in enumerate(zip(decision_refs, final_refs))
     ]
+    # error_report 是 review 队列：只收集 parse、tool、trajectory 等可操作失败。
     errors = _build_error_rows(per_case)
+    # artifact_index 只记录原始文件位置，不复制大文件，避免 benchmark 目录膨胀。
     artifact_index = {
         "schema_version": "sidewalk_agentic_stage2_benchmark_artifact_index_v1",
         "run_id": config.run_id,
@@ -334,6 +340,7 @@ def _write_json(payload: dict[str, Any], path: str | Path) -> None:
 
 def _load_run_outputs(output_root: Path, run_name: str, *, expected_rows: int) -> dict[str, Any]:
     run_dir = output_root / run_name
+    # final_head_* 是 Stage2-B 相关可选产物；文本/agentic prediction 是必需对齐项。
     files = {
         "decision_predictions": run_dir / "decision_predictions.jsonl",
         "decision_metrics": run_dir / "decision_agentic_metrics.jsonl",
@@ -350,6 +357,7 @@ def _load_run_outputs(output_root: Path, run_name: str, *, expected_rows: int) -
     rows = {name: _read_jsonl(path) for name, path in files.items() if path.suffix == ".jsonl"}
     summaries = {name: _read_json(path) for name, path in files.items() if path.suffix == ".json"}
     for name in ("decision_predictions", "final_predictions"):
+        # 非空 prediction 文件必须与 held-out refs 等长，防止错位比较。
         if rows.get(name) and len(rows[name]) != expected_rows:
             raise ValueError(f"{run_name}/{name} row count mismatch: {len(rows[name])} != {expected_rows}")
     return {
@@ -419,6 +427,7 @@ def _run_case_errors(run_name: str, run: dict[str, Any], index: int) -> list[str
     final_metrics = _row_at(rows.get("final_agentic_metrics"), index)
     final_traj_metrics = _row_at(rows.get("final_text_traj_metrics"), index)
     head_metrics = _row_at(rows.get("final_head_traj_metrics"), index)
+    # 这里不直接判定模型好坏，只把会阻断人工 review 的协议/解析问题列出来。
     if _row_at(rows.get("decision_predictions"), index) is None:
         errors.append(f"{label}:missing_decision_prediction")
     if _row_at(rows.get("final_predictions"), index) is None:
@@ -607,6 +616,7 @@ def _case_id(row: dict[str, Any], index: int) -> str:
         value = meta.get(key)
         if value:
             return str(value)
+    # 老数据缺 stable id 时才退回行号；正式 benchmark 应优先固定 case_id。
     return f"row-{index:06d}"
 
 

@@ -95,10 +95,12 @@ class AgenticStage2TraceBuilder:
             ``AgentTrace``，包含 messages、tools、supervision、metadata、metrics。
         """
 
+        # trace 从 case 继承 supervision；builder 只负责拼装对话与 teacher metadata。
         trace = AgentTrace.from_case(case, model_run=dict(model_run or {"runner": self.config.source}))
         trace.tools = list(tools or case.tools or get_tool_definitions())
         trace.add_turn("user", initial_user_content(case), metadata={"stage2_step": "initial_request"})
 
+        # 第一轮 assistant 只写 AgentState/ToolDecision；可执行 tool_call 作为独立 role 追加。
         think_text = build_agent_think_text(
             state=build_agent_state(case, intent=intent),
             decision=build_tool_decision(call, reason=tool_decision_reason),
@@ -107,6 +109,7 @@ class AgenticStage2TraceBuilder:
 
         resolved_response = None
         if call is not None:
+            # tool 路径：teacher 监督模型生成 tool_call，再把环境返回放入 tool_response role。
             trace.add_turn("tool_call", call.to_ms_swift_dict(), tool=call.tool, metadata={"stage2_step": "tool_call"})
             resolved_response = response or synthetic_tool_response(
                 call,
@@ -122,11 +125,13 @@ class AgenticStage2TraceBuilder:
                 metadata={"stage2_step": "tool_response"},
             )
         trace.add_turn(
+            # no-tool 和 tool 路径都必须在 final assistant 前插入 [TRAJ_i] readout。
             "user",
             final_navigation_user_content(tool_used=call is not None),
             metadata={"stage2_step": "trajectory_readout_prompt"},
         )
 
+        # final assistant 复用 Phase1 CoT 时会补 ToolResultUse/finish 字段，保持 LM 与 traj target 对齐。
         final_text = build_final_assistant_text(
             case,
             call=call,
@@ -144,10 +149,12 @@ class AgenticStage2TraceBuilder:
         )
 
         if teacher_internal:
+            # teacher_internal 只用于审计，不导入 assistant target。
             trace.metadata["teacher_internal"] = dict(teacher_internal)
         if extra_metadata:
             trace.metadata.update(extra_metadata)
         if self.config.compute_metrics:
+            # build 阶段先算协议指标，后续 report 可以按 tool/no-tool/failed-tool slice 聚合。
             metric_result = compute_trace_metrics(trace, case)
             trace.metrics = metric_result.metrics
             if metric_result.errors:

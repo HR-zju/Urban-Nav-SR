@@ -82,6 +82,7 @@ def assign_stage2_split(case: AgentStage2Case, config: Stage2SplitConfig) -> str
 
     train_threshold, val_threshold = config.normalized_thresholds()
     key = _split_key(case)
+    # 使用稳定 key 做 hash，而不是按输入顺序切分，保证增量重建时旧样本 split 不漂移。
     digest = hashlib.sha1(f"{config.seed}:{key}".encode("utf-8")).hexdigest()
     bucket = int(digest[:12], 16) % 10000
     if bucket < train_threshold:
@@ -106,6 +107,7 @@ def apply_stage2_splits(cases: list[AgentStage2Case], config: Stage2SplitConfig)
     for case in cases:
         split = assign_stage2_split(case, config)
         case.split = split
+        # 把 split 依据写回 metadata，后续 review 可以解释样本为何进入该 split。
         case.metadata["stage2_split_seed"] = config.seed
         case.metadata["stage2_split_key"] = _split_key(case)
         counts[split] += 1
@@ -152,6 +154,7 @@ def classify_trace_tool_policy(trace: AgentTrace) -> str:
             try:
                 content = json.loads(content)
             except json.JSONDecodeError:
+                # tool_response 不可解析本身就是 failed-tool slice，便于人工 review。
                 return "failed_tool"
         if isinstance(content, dict) and content.get("success") is False:
             return "failed_tool"
@@ -260,6 +263,7 @@ def sample_stage2_review_rows(
         key = (record["split"], record["tool_policy"], record["op"])
         if counts.get(key, 0) >= per_slice:
             continue
+        # 每个 split/tool_policy/op 最多抽 per_slice 条，避免 review 样本被高频 op 淹没。
         counts[key] = counts.get(key, 0) + 1
         final_text = _final_assistant_text(trace)
         phase1_response = str(case.ground_truth.get("phase1_response") or "")
@@ -382,6 +386,7 @@ def write_stage2_split_outputs(
     root.mkdir(parents=True, exist_ok=True)
     outputs: dict[str, dict[str, Any]] = {}
     for split in STAGE2_SPLITS:
+        # split 输出同时写 cases/traces/ms-swift rows，保证训练与审计数据一一对应。
         split_cases = [case for case in cases if case.split == split]
         split_traces = [trace for case, trace in zip(cases, traces) if case.split == split]
         split_rows = [row for case, row in zip(cases, rows) if case.split == split]
@@ -426,6 +431,7 @@ def _split_key(case: AgentStage2Case) -> str:
         for key in ("source_id", "phase1_id", "clip_id", "frame_name", "frame_idx"):
             value = payload.get(key) if isinstance(payload, dict) else None
             if value not in (None, ""):
+                # 优先使用数据源稳定字段，减少同一 clip/frame 被分到不同 split 的风险。
                 return str(value)
     return case.case_id
 
@@ -450,6 +456,7 @@ def _records(
         call = first_trace_tool_call(trace)
         policy = classify_trace_tool_policy(trace)
         all_valid = bool(case_val.get("valid")) and bool(trace_val.get("valid")) and bool(row_val.get("valid"))
+        # records 是 slice report 的最小单位，后续 summary/review CSV 都从这里派生。
         records.append(
             {
                 "case_id": case.case_id,
