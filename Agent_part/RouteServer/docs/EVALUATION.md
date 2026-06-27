@@ -2,7 +2,7 @@
 
 本文档定义 UrbanNav 当前核心离线评估口径。我们不再把 CitySeeker 的 `from/to/complete_route` 离散图像节点格式作为主格式；CitySeeker 和 SpotAgent 只作为设计参考。
 
-更完整的分层 benchmark 设计见 [TASK_INSTRUCTION_ROUTE_EVAL_DESIGN.md](/home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer/docs/TASK_INSTRUCTION_ROUTE_EVAL_DESIGN.md)。
+更完整的 benchmark 任务定义、真值构造和 Agent baseline 设计见 [URBANNAV_BENCHMARK_TECHNICAL_DESIGN.md](URBANNAV_BENCHMARK_TECHNICAL_DESIGN.md)。
 
 本评估框架参考 MobilityBench 的可复现 sandbox 思想：地图 API 查询、POI 候选和路线响应必须在
 GT 构建阶段冻结，评估阶段只读 `ground-truth`、`predictions` 和可选 replay cache，不访问
