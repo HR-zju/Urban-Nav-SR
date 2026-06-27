@@ -17,11 +17,10 @@ Agent_part/
 ```text
 Agent_part/RouteServer/README.md        # RouteServer 能力和 examples
 Agent_part/RouteServer/tools/README.md  # SideWalk 数据处理与模型处理命令速查
+Agent_part/RouteServer/docs/README.md   # RouteServer 文档索引和维护状态
 Agent_part/RouteServer/docs/FRAMEWORK_MATH_MODEL.md  # 当前框架数学模型和数据/地图接口边界
-Agent_part/RouteServer/docs/MCP_SERVER_PIPELINE.md  # MCP Server 从指令理解到 waypoints 的流程图
+Agent_part/RouteServer/docs/URBANNAV_BENCHMARK_TECHNICAL_DESIGN.md  # UrbanNav benchmark 技术设计
 Agent_part/RouteServer/docs/EVALUATION.md  # 目的地推荐和路线规划评估指标
-Agent_part/RouteServer/docs/DATASET_TASK_DESIGN.md  # 参考 CitySeeker 的任务类型、指令和真值制作方案
-Agent_part/RouteServer/docs/INSTRUCTION_REVIEW_EXAMPLES.md  # 第一版需求指令 review 样例
 Agent_part/SideWalkNav/README.md        # Phase1 数据、CoT、baseline 和指标口径
 ```
 

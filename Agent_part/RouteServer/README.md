@@ -80,9 +80,19 @@ BEV proposal / PoV candidates 仍然保留，但定位为：
 
 - [docs/architecture.md](docs/architecture.md)
 - [docs/FRAMEWORK_MATH_MODEL.md](docs/FRAMEWORK_MATH_MODEL.md)
-- [docs/MCP_SERVER_PIPELINE.md](docs/MCP_SERVER_PIPELINE.md)
+- [docs/URBANNAV_BENCHMARK_TECHNICAL_DESIGN.md](docs/URBANNAV_BENCHMARK_TECHNICAL_DESIGN.md)
 - [docs/EVALUATION.md](docs/EVALUATION.md)
-- [docs/DATASET_TASK_DESIGN.md](docs/DATASET_TASK_DESIGN.md)
+- [docs/README.md](docs/README.md)
+
+UrbanNav Module 1 的标准 benchmark 入口是：
+
+```bash
+PYTHONPATH=src python tools/evaluation/run_urbannav_module1_benchmark.py \
+  --dataset data/benchmark/urbannav_global_osm_local_full_en_v1/task_gt.jsonl \
+  --runner external \
+  --predictions /path/to/model_predictions.jsonl \
+  --output-dir data/benchmark/urbannav_module1_runs/<model_name>
+```
 
 调试工具、测试建议和性能参数见：
 

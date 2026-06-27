@@ -10,6 +10,54 @@ live map API。这样同一批 case 在不同模型、不同时间运行时仍�
 
 ## 1. 评估入口
 
+### 1.1 UrbanNav Module 1 一体化入口
+
+Module 1 专门评估：
+
+```text
+instruction + origin -> destination + route
+```
+
+默认 GT 是当前 10K English global OSM-local split：
+
+```text
+data/benchmark/urbannav_global_osm_local_full_en_v1/task_gt.jsonl
+```
+
+如果模型已经输出 `UrbanNavPrediction` JSONL，使用：
+
+```bash
+cd /home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer
+
+PYTHONPATH=src python tools/evaluation/run_urbannav_module1_benchmark.py \
+  --dataset data/benchmark/urbannav_global_osm_local_full_en_v1/task_gt.jsonl \
+  --runner external \
+  --predictions /path/to/model_predictions.jsonl \
+  --output-dir data/benchmark/urbannav_module1_runs/<model_name>
+```
+
+如果要跑 RouteServer replay baseline，使用冻结 replay cache：
+
+```bash
+PYTHONPATH=src python tools/evaluation/run_urbannav_module1_benchmark.py \
+  --dataset data/benchmark/urbannav_global_osm_local_full_en_v1/task_gt.jsonl \
+  --runner routeserver-replay \
+  --poi-cache data/benchmark/urbannav_global_osm_local_full_en_v1/poi_cache.jsonl \
+  --route-cache data/benchmark/urbannav_global_osm_local_full_en_v1/route_cache.jsonl \
+  --output-dir data/benchmark/urbannav_module1_runs/routeserver_replay
+```
+
+该入口会写出：
+
+```text
+predictions.jsonl
+eval_rows.jsonl
+summary.json
+manifest.json
+```
+
+### 1.2 底层 evaluator 入口
+
 ```bash
 cd /home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer
 
@@ -213,6 +261,40 @@ SPL = RS \cdot \frac{L(P^*_{\mathrm{matched}})}{\max(L(P^*_{\mathrm{matched}}), 
 | `route_success` | 是否成功规划到 matched 合理目的地 |
 | `median_route_ratio` | 成功路线是否绕路 |
 | `spl` | 到达率和效率综合分 |
+
+## 5.1 Prediction Contract
+
+外部模型只需要输出 `UrbanNavPrediction` JSONL，每行对应一个 GT case。最小字段：
+
+```json
+{
+  "id": "urbannav-case-id",
+  "chosen_destination": {
+    "provider_poi_id": "osm:node/123",
+    "name": "Target POI",
+    "type": "shop:convenience",
+    "lat": 52.3642,
+    "lng": 4.9053
+  },
+  "candidate_destinations": [
+    {"provider_poi_id": "osm:node/123", "name": "Target POI"}
+  ],
+  "route_polyline": [
+    {"lat": 52.3651, "lng": 4.9120},
+    {"lat": 52.3642, "lng": 4.9053}
+  ],
+  "route_summary": {
+    "distance_m": 512.3
+  },
+  "trace": {
+    "model": "your-model-name"
+  }
+}
+```
+
+`id` 和 `chosen_destination` 是目的地评估的必要字段。`candidate_destinations`
+用于 `hit@5`，`route_polyline` 和 `route_summary.distance_m` 用于
+`route_success / route_ratio / SPL`。`trace` 只用于诊断，不参与主指标。
 
 按以下维度切分即可：
 

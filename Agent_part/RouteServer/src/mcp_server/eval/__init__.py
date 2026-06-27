@@ -16,6 +16,13 @@ from mcp_server.eval.exporters import (
     write_traces_jsonl,
 )
 from mcp_server.eval.metrics import compute_trace_metrics
+from mcp_server.eval.urbannav_module1_benchmark import (
+    URBANNAV_MODULE1_BENCHMARK_VERSION,
+    UrbanNavModule1BenchmarkConfig,
+    UrbanNavModule1BenchmarkResult,
+    module1_prediction_contract,
+    run_module1_benchmark,
+)
 from mcp_server.eval.online_agent_runner import (
     CallableModelAdapter,
     ModelAdapter,
@@ -48,6 +55,11 @@ __all__ = [
     "PHASE1_ARCHIVE_STAGE2_ADAPTER_VERSION",
     "Stage2ValidationResult",
     "compute_trace_metrics",
+    "URBANNAV_MODULE1_BENCHMARK_VERSION",
+    "UrbanNavModule1BenchmarkConfig",
+    "UrbanNavModule1BenchmarkResult",
+    "module1_prediction_contract",
+    "run_module1_benchmark",
     "CallableModelAdapter",
     "iter_eval_cases",
     "iter_phase1_archive_stage2_cases",
