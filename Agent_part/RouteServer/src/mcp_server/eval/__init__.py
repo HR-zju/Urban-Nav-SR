@@ -16,13 +16,6 @@ from mcp_server.eval.exporters import (
     write_traces_jsonl,
 )
 from mcp_server.eval.metrics import compute_trace_metrics
-from mcp_server.eval.urbannav_module1_benchmark import (
-    URBANNAV_MODULE1_BENCHMARK_VERSION,
-    UrbanNavModule1BenchmarkConfig,
-    UrbanNavModule1BenchmarkResult,
-    module1_prediction_contract,
-    run_module1_benchmark,
-)
 from mcp_server.eval.online_agent_runner import (
     CallableModelAdapter,
     ModelAdapter,
@@ -48,6 +41,43 @@ from mcp_server.eval.stage2_validator import (
     validate_stage2_trace,
 )
 
+_LAZY_EXPORTS = {
+    "URBANNAV_MODULE1_BENCHMARK_VERSION": "mcp_server.eval.urbannav_module1_benchmark",
+    "UrbanNavModule1BenchmarkConfig": "mcp_server.eval.urbannav_module1_benchmark",
+    "UrbanNavModule1BenchmarkResult": "mcp_server.eval.urbannav_module1_benchmark",
+    "module1_prediction_contract": "mcp_server.eval.urbannav_module1_benchmark",
+    "run_module1_benchmark": "mcp_server.eval.urbannav_module1_benchmark",
+    "MODULE1_COMPARISON_VERSION": "mcp_server.eval.urbannav_module1_compare",
+    "Module1ComparisonConfig": "mcp_server.eval.urbannav_module1_compare",
+    "Module1RunSpec": "mcp_server.eval.urbannav_module1_compare",
+    "compare_module1_runs": "mcp_server.eval.urbannav_module1_compare",
+    "comparison_to_markdown": "mcp_server.eval.urbannav_module1_compare",
+}
+
+
+def __getattr__(name: str):
+    """Resolve heavy UrbanNav exports lazily.
+
+    Args:
+        name: Attribute requested from ``mcp_server.eval``.
+
+    Returns:
+        Exported object from the owning submodule.
+
+    Raises:
+        AttributeError: If the name is not a package export.
+    """
+
+    module_name = _LAZY_EXPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from importlib import import_module
+
+    value = getattr(import_module(module_name), name)
+    globals()[name] = value
+    return value
+
+
 __all__ = [
     "AgentRunner",
     "RouteServerTeacherRunner",
@@ -60,6 +90,11 @@ __all__ = [
     "UrbanNavModule1BenchmarkResult",
     "module1_prediction_contract",
     "run_module1_benchmark",
+    "MODULE1_COMPARISON_VERSION",
+    "Module1ComparisonConfig",
+    "Module1RunSpec",
+    "compare_module1_runs",
+    "comparison_to_markdown",
     "CallableModelAdapter",
     "iter_eval_cases",
     "iter_phase1_archive_stage2_cases",

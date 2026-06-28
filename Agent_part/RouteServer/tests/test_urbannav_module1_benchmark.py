@@ -79,7 +79,28 @@ class UrbanNavModule1BenchmarkTest(unittest.TestCase):
 
             self.assertEqual(result.summary["summary"]["destination_success"], 1.0)
             self.assertEqual(result.summary["summary"]["hit@5"], 1.0)
-            self.assertEqual(result.summary["summary"]["spl"], 1.0)
+        self.assertEqual(result.summary["summary"]["spl"], 1.0)
+
+    def test_oracle_runner_records_concurrency_in_manifest(self) -> None:
+        """Concurrency config should be recorded for reproducibility."""
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp = Path(tmp_dir)
+            dataset = tmp / "task_gt.jsonl"
+            output = tmp / "module1_oracle"
+            write_urbannav_cases([_case()], dataset)
+
+            run_module1_benchmark(
+                UrbanNavModule1BenchmarkConfig(
+                    dataset_path=dataset,
+                    output_dir=output,
+                    runner="oracle",
+                    runner_concurrency=4,
+                )
+            )
+
+            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["config"]["runner_concurrency"], 4)
 
     def test_prediction_contract_documents_model_interface(self) -> None:
         """Contract should expose the fields needed by external model runners."""

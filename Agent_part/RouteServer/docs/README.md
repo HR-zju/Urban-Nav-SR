@@ -9,7 +9,7 @@
 | [architecture.md](architecture.md) | RouteServer 模块边界、核心链路和服务结构。 |
 | [FRAMEWORK_MATH_MODEL.md](FRAMEWORK_MATH_MODEL.md) | Agent 框架数学模型、数据接口和地图接口边界。 |
 | [URBANNAV_BENCHMARK_TECHNICAL_DESIGN.md](URBANNAV_BENCHMARK_TECHNICAL_DESIGN.md) | UrbanNav benchmark 的任务定义、真值构造、采样策略、指标和 Agent baseline。 |
-| [EVALUATION.md](EVALUATION.md) | UrbanNav Module 1 一体化评测入口、prediction contract、核心指标、runner smoke 和扩展任务指标。 |
+| [EVALUATION.md](EVALUATION.md) | UrbanNav Module 1 一体化评测入口、prediction contract、核心指标、内部相对分数比较和扩展任务指标。 |
 | [SIDEWALK_AGENT_EVAL_PROTOCOL.md](SIDEWALK_AGENT_EVAL_PROTOCOL.md) | SideWalk Agentic Stage2 评估协议。 |
 | [SIDEWALK_PHASE1_DATA_PIPELINE.md](SIDEWALK_PHASE1_DATA_PIPELINE.md) | SideWalk Phase1 数据生成与标注流水线。 |
 

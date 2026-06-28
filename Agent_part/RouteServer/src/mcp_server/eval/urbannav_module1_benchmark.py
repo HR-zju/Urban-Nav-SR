@@ -32,6 +32,7 @@ from mcp_server.eval.urbannav_runners import (
     run_urbannav_cases_async,
 )
 from mcp_server.eval.urbannav_schema import UrbanNavCase, UrbanNavPrediction
+from mcp_server.utils.async_batch import run_ordered_bounded
 
 
 URBANNAV_MODULE1_BENCHMARK_VERSION = "urbannav_module1_benchmark_v1"
@@ -70,6 +71,9 @@ class UrbanNavModule1BenchmarkConfig:
         destination_radius_m: Coordinate fallback radius for destination
             identity matching when stable POI ids are unavailable.
         endpoint_radius_m: Route endpoint tolerance for route success.
+        runner_concurrency: Maximum concurrent case runners for async
+            RouteServer baselines.  This controls benchmark-side concurrency,
+            not provider-internal retry behavior.
         run_id: Optional stable run id.  Defaults to the output directory name.
         metadata: Extra user-supplied metadata persisted in the manifest.
     """
@@ -90,6 +94,7 @@ class UrbanNavModule1BenchmarkConfig:
     selection_strategy: str = "route_distance"
     destination_radius_m: float = 30.0
     endpoint_radius_m: float = 30.0
+    runner_concurrency: int = 1
     run_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -117,6 +122,7 @@ class UrbanNavModule1BenchmarkConfig:
             "selection_strategy": self.selection_strategy,
             "destination_radius_m": self.destination_radius_m,
             "endpoint_radius_m": self.endpoint_radius_m,
+            "runner_concurrency": self.runner_concurrency,
             "run_id": self.run_id,
             "metadata": dict(self.metadata),
         }
@@ -344,7 +350,13 @@ def _load_or_generate_predictions(
             )
         )
         runner = RouteServerUrbanNavRunner(backend=backend, config=_runner_config(config))
-        return run_urbannav_cases_async(runner, cases)
+        if config.runner_concurrency <= 1:
+            return run_urbannav_cases_async(runner, cases)
+        return _run_async_runner_concurrent(
+            runner=runner,
+            cases=cases,
+            concurrency=config.runner_concurrency,
+        )
     if config.runner == "routeserver-live":
         return _run_live_baseline(config, cases)
     raise ValueError(f"Unsupported runner: {config.runner}")
@@ -369,11 +381,85 @@ def _run_live_baseline(
         runner = RouteServerUrbanNavRunner(backend=backend, config=_runner_config(config))
         await backend.connect()
         try:
-            return [await runner.run_case_async(case) for case in cases]
+            if config.runner_concurrency <= 1:
+                return [await runner.run_case_async(case) for case in cases]
+            return await _run_async_runner_concurrent_async(
+                runner=runner,
+                cases=cases,
+                concurrency=config.runner_concurrency,
+            )
         finally:
             await backend.disconnect()
 
     return asyncio.run(_run())
+
+
+def _run_async_runner_concurrent(
+    *,
+    runner: RouteServerUrbanNavRunner,
+    cases: list[UrbanNavCase],
+    concurrency: int,
+) -> list[UrbanNavPrediction]:
+    """Run an async UrbanNav runner with bounded concurrency.
+
+    Args:
+        runner: Async RouteServer runner.
+        cases: GT cases.
+        concurrency: Maximum concurrent case tasks.
+
+    Returns:
+        Prediction list in the same order as ``cases``.
+    """
+
+    return asyncio.run(
+        _run_async_runner_concurrent_async(
+            runner=runner,
+            cases=cases,
+            concurrency=concurrency,
+        )
+    )
+
+
+async def _run_async_runner_concurrent_async(
+    *,
+    runner: RouteServerUrbanNavRunner,
+    cases: list[UrbanNavCase],
+    concurrency: int,
+) -> list[UrbanNavPrediction]:
+    """Run an async UrbanNav runner with bounded concurrency.
+
+    Args:
+        runner: Async RouteServer runner.
+        cases: GT cases.
+        concurrency: Maximum concurrent case tasks.
+
+    Returns:
+        Prediction list in stable input order.  Worker exceptions are converted
+        to error predictions so the evaluator can report them per case.
+    """
+
+    async def _worker(_index: int, case: UrbanNavCase) -> UrbanNavPrediction:
+        return await runner.run_case_async(case)
+
+    results = await run_ordered_bounded(cases, _worker, concurrency=concurrency)
+    predictions: list[UrbanNavPrediction] = []
+    for result in results:
+        if result.ok and result.value is not None:
+            predictions.append(result.value)
+            continue
+        case = result.item if isinstance(result.item, UrbanNavCase) else None
+        predictions.append(
+            UrbanNavPrediction(
+                case_id=case.case_id if case is not None else f"worker-error-{result.index:06d}",
+                trace={
+                    "runner": "routeserver",
+                    "error": "runner_exception",
+                    "detail": result.error,
+                    "concurrency": int(concurrency),
+                },
+            )
+        )
+    return predictions
 
 
 def _runner_config(config: UrbanNavModule1BenchmarkConfig) -> RouteServerRunnerConfig:

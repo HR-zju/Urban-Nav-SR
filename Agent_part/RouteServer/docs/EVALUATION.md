@@ -44,6 +44,7 @@ PYTHONPATH=src python tools/evaluation/run_urbannav_module1_benchmark.py \
   --runner routeserver-replay \
   --poi-cache data/benchmark/urbannav_global_osm_local_full_en_v1/poi_cache.jsonl \
   --route-cache data/benchmark/urbannav_global_osm_local_full_en_v1/route_cache.jsonl \
+  --concurrency 8 \
   --output-dir data/benchmark/urbannav_module1_runs/routeserver_replay
 ```
 
@@ -295,6 +296,48 @@ SPL = RS \cdot \frac{L(P^*_{\mathrm{matched}})}{\max(L(P^*_{\mathrm{matched}}), 
 `id` 和 `chosen_destination` 是目的地评估的必要字段。`candidate_destinations`
 用于 `hit@5`，`route_polyline` 和 `route_summary.distance_m` 用于
 `route_success / route_ratio / SPL`。`trace` 只用于诊断，不参与主指标。
+
+## 5.2 内部相对分数比较
+
+正式论文主表仍报告 `destination_success / hit@5 / route_success /
+median_route_ratio / SPL`。内部模型组比较可以额外使用相对指数，把多个
+Module 1 run 放在同一张表中比较：
+
+```bash
+PYTHONPATH=src python tools/evaluation/compare_urbannav_module1_runs.py \
+  --run base=data/benchmark/urbannav_module1_runs/routeserver_replay_smoke100 \
+  --run model_a=data/benchmark/urbannav_module1_runs/model_a \
+  --baseline base \
+  --output-json data/benchmark/urbannav_module1_runs/relative_comparison.json \
+  --output-md data/benchmark/urbannav_module1_runs/relative_comparison.md
+```
+
+内部质量分数定义为：
+
+\[
+Q = w_D D + w_H H + w_R R + w_S SPL + w_E E
+\]
+
+其中 \(D\) 是 destination success，\(H\) 是 Hit@5，\(R\) 是 route
+success，\(E=\min(1,1/\mathrm{median\_route\_ratio})\)。默认权重是：
+
+```text
+destination_success: 0.30
+hit@5:               0.10
+route_success:       0.25
+spl:                 0.30
+route_efficiency:    0.05
+```
+
+相对指数以 baseline 为分母：
+
+\[
+I_m = 100 \cdot Q_m / Q_b
+\]
+
+比较器还会基于 `eval_rows.jsonl` 做 paired win/draw/loss，只在共享
+case 上比较每条样本的内部分数差。该相对指数用于组内模型迭代，不替代
+benchmark 主指标。
 
 按以下维度切分即可：
 

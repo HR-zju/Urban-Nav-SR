@@ -55,6 +55,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--destination-radius-m", type=float, default=30.0)
     parser.add_argument("--endpoint-radius-m", type=float, default=30.0)
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help="Maximum concurrent case runners for routeserver-replay/live.",
+    )
     parser.add_argument("--run-id", default=None)
     parser.add_argument(
         "--print-contract",
@@ -93,6 +99,7 @@ def main() -> None:
             selection_strategy=args.selection_strategy,
             destination_radius_m=args.destination_radius_m,
             endpoint_radius_m=args.endpoint_radius_m,
+            runner_concurrency=args.concurrency,
             run_id=args.run_id,
         )
     )

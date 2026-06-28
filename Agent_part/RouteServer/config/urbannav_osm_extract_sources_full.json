@@ -26,8 +26,8 @@
       "valhalla_port": 6014
     },
     "london_soho": {
-      "url": "https://download.geofabrik.de/europe/great-britain/england-latest.osm.pbf",
-      "raw_filename": "england-latest.osm.pbf",
+      "url": "https://download.geofabrik.de/europe/great-britain-latest.osm.pbf",
+      "raw_filename": "great-britain-latest.osm.pbf",
       "osrm_port": 5015,
       "valhalla_port": 6015
     },
@@ -50,8 +50,8 @@
       "valhalla_port": 6018
     },
     "barcelona_eixample": {
-      "url": "https://download.geofabrik.de/europe/spain/catalonia-latest.osm.pbf",
-      "raw_filename": "catalonia-latest.osm.pbf",
+      "url": "https://download.geofabrik.de/europe/spain-latest.osm.pbf",
+      "raw_filename": "spain-latest.osm.pbf",
       "osrm_port": 5019,
       "valhalla_port": 6019
     },

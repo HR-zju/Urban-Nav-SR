@@ -577,7 +577,7 @@ def iter_global_collection_pairs(
         for task_offset, task in enumerate(tasks):
             template_count = max(1, len(task.get("templates") or [""]))
             template_index = (origin_offset + task_offset) % template_count
-        for city in cities:
+            for city in cities:
                 origins = origins_by_city[city]
                 if origin_offset >= len(origins):
                     continue
