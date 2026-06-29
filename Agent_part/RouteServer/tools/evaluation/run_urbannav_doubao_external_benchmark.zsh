@@ -38,6 +38,7 @@ CANDIDATE_LIMIT="${CANDIDATE_LIMIT:-10}"
 SELECTION_STRATEGY="${SELECTION_STRATEGY:-semantic_then_route}"
 PROGRESS_INTERVAL="${PROGRESS_INTERVAL:-100}"
 HEARTBEAT_INTERVAL_S="${HEARTBEAT_INTERVAL_S:-15}"
+CHUNK_SIZE="${CHUNK_SIZE:-50}"
 LLM_PROVIDER_NAME="${LLM_PROVIDER_NAME:-ark}"
 LLM_MODEL_NAME="${LLM_MODEL_NAME:-doubao-seed-2-0-lite-260428}"
 LLM_BASE_URL="${LLM_BASE_URL:-https://ark.cn-beijing.volces.com/api/v3}"
@@ -65,6 +66,7 @@ _print_config() {
   print "model=${LLM_MODEL_NAME}"
   print "llm_timeout_s=${LLM_TIMEOUT_S}"
   print "llm_max_retries=${LLM_MAX_RETRIES}"
+  print "chunk_size=${CHUNK_SIZE}"
   if [[ -n "${MAX_CASES}" ]]; then
     print "max_cases=${MAX_CASES}"
   fi
@@ -89,6 +91,7 @@ _write_worker_script() {
 #!/usr/bin/env zsh
 set -euo pipefail
 cd "${ROUTE_ROOT}"
+trap 'status=\$?; print "[urbannav-doubao] worker exit status=\${status} at \$(date "+%Y-%m-%d %H:%M:%S")" 2>&1 | tee -a "${PREDICT_LOG}"' EXIT
 
 {
 print "[urbannav-doubao] worker started at \$(date '+%Y-%m-%d %H:%M:%S')"
@@ -98,6 +101,7 @@ print "[urbannav-doubao] dataset=${DATASET}"
 print "[urbannav-doubao] concurrency=${CONCURRENCY}"
 print "[urbannav-doubao] progress_interval=${PROGRESS_INTERVAL}"
 print "[urbannav-doubao] heartbeat_interval_s=${HEARTBEAT_INTERVAL_S}"
+print "[urbannav-doubao] chunk_size=${CHUNK_SIZE}"
 } 2>&1 | tee -a "${PREDICT_LOG}"
 
 PYTHONUNBUFFERED=1 PYTHONPATH=src "${PYTHON_BIN}" tools/evaluation/generate_urbannav_external_predictions.py \\
@@ -119,6 +123,8 @@ PYTHONUNBUFFERED=1 PYTHONPATH=src "${PYTHON_BIN}" tools/evaluation/generate_urba
   --llm-max-retries "${LLM_MAX_RETRIES}" \\
   --progress-interval "${PROGRESS_INTERVAL}" \\
   --heartbeat-interval-s "${HEARTBEAT_INTERVAL_S}" \\
+  --chunk-size "${CHUNK_SIZE}" \\
+  --resume \\
 EOF
   if [[ -n "${MAX_CASES}" ]]; then
     print "  --max-cases \"${MAX_CASES}\" \\\\" >> "${WORKER_SCRIPT}"

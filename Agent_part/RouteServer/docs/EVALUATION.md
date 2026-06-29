@@ -8,6 +8,32 @@
 GT 构建阶段冻结，评估阶段只读 `ground-truth`、`predictions` 和可选 replay cache，不访问
 live map API。这样同一批 case 在不同模型、不同时间运行时仍可比较。
 
+## 0. Module 1 主结果表
+
+当前记录表中的 10K 结果使用 `urbannav_global_osm_local_full_en_v1` English global
+single-stop split。该 split 只覆盖 `poi_navigation` 和 `implicit_need_navigation`，
+不包含 multi-stop 与 route-update。完整 benchmark 的指令计划由
+`build_urbannav_instruction_set.py` 从 taxonomy 和 `urbannav_10k_distribution_plan.json`
+生成；后续正式主表应切换到该 full instruction set 对应的 GT。评估阶段采用 replay backend：
+POI 候选和路线来自冻结 cache，模型主要负责 intent 解析、候选重排和目的地选择。
+
+| 日期 | 方法 | Runner | Backend | Cases | Destination Success | Hit@5 | Route Success | Median Route Ratio | SPL | Prediction Exception | Run |
+| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 2026-06-28 | `routeserver-replay` | `routeserver-replay` | `replay` | 10000 | 0.8351 | 1.0000 | 0.8351 | 1.0000 | 0.8351 | 0 | `data/benchmark/urbannav_module1_runs/routeserver_replay_concurrent_10k` |
+| 2026-06-28 | `heuristic` | `external` | `replay` | 10000 | 0.6136 | 1.0000 | 0.6136 | 1.0000 | 0.6134 | 0 | `data/benchmark/urbannav_module1_runs/heuristic_external_replay_10k/eval` |
+| 2026-06-28 | `doubao-seed-2-0-lite-260428` | `external` | `replay-strict` | 10000 | 0.5016 | 1.0000 | 0.5016 | 1.0000 | 0.5014 | 1335 | `data/benchmark/urbannav_module1_runs/doubao_external_replay_strict_10k_urbannavenv_v2` |
+
+内部相对指数以 `heuristic` 为 100，仅用于组内模型迭代。当前相对比较结果：
+
+| 方法 | Internal Score | Relative Index | Delta vs Heuristic | Common Cases | Wins | Draws | Losses | Win Rate | Mean Delta |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `routeserver-replay` | 0.8598 | 128.05 | +0.1883 | 10000 | 2299 | 7631 | 70 | 0.2299 | +0.1994 |
+| `heuristic` | 0.6715 | 100.00 | 0.0000 | 10000 | - | - | - | - | - |
+| `doubao-seed-2-0-lite-260428` | 0.5763 | 85.82 | -0.0952 | 10000 | 64 | 8256 | 1680 | 0.0064 | -0.1141 |
+
+论文主表应优先报告
+`Destination Success / Hit@5 / Route Success / Median Route Ratio / SPL`。
+
 ## 1. 评估入口
 
 ### 1.1 UrbanNav Module 1 一体化入口

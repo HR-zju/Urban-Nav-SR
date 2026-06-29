@@ -99,6 +99,13 @@ def parse_args() -> argparse.Namespace:
         help="Print a heartbeat every N seconds while prediction is running. Set 0 to disable.",
     )
     parser.add_argument("--manifest-json", type=Path, default=None, help="Optional manifest JSON output.")
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=50,
+        help="Write predictions after each chunk so long external runs keep partial results. Set 0 to write only at end.",
+    )
+    parser.add_argument("--resume", action="store_true", help="Skip case ids already present in --output-jsonl.")
     return parser.parse_args()
 
 
@@ -137,8 +144,19 @@ def main() -> None:
         flush=True,
     )
 
-    predictions = asyncio.run(_generate_predictions(args=args, cases=cases, api_keys=keys))
-    write_urbannav_predictions(predictions, args.output_jsonl)
+    if int(args.chunk_size or 0) > 0:
+        prediction_count = asyncio.run(
+            _generate_predictions_chunked(
+                args=args,
+                cases=cases,
+                api_keys=keys,
+                output_path=args.output_jsonl,
+            )
+        )
+    else:
+        predictions = asyncio.run(_generate_predictions(args=args, cases=cases, api_keys=keys))
+        write_urbannav_predictions(predictions, args.output_jsonl)
+        prediction_count = len(predictions)
     if args.manifest_json:
         _write_json(
             {
@@ -146,7 +164,7 @@ def main() -> None:
                 "cases": str(args.cases),
                 "output_jsonl": str(args.output_jsonl),
                 "case_count": len(cases),
-                "prediction_count": len(predictions),
+                "prediction_count": prediction_count,
                 "backend": args.backend,
                 "map_provider": args.map_provider,
                 "concurrency": max(1, int(args.concurrency)),
@@ -157,6 +175,8 @@ def main() -> None:
                 "llm_provider": args.llm_provider or os.getenv("LLM_PROVIDER", ""),
                 "llm_model": args.llm_model or os.getenv("LLM_MODEL", ""),
                 "api_key_count": len(keys),
+                "chunk_size": int(args.chunk_size or 0),
+                "resume": bool(args.resume),
             },
             args.manifest_json,
         )
@@ -164,7 +184,7 @@ def main() -> None:
         json.dumps(
             {
                 "case_count": len(cases),
-                "prediction_count": len(predictions),
+                "prediction_count": prediction_count,
                 "output_jsonl": str(args.output_jsonl),
                 "manifest_json": str(args.manifest_json) if args.manifest_json else None,
             },
@@ -173,6 +193,80 @@ def main() -> None:
             sort_keys=True,
         )
     )
+
+
+async def _generate_predictions_chunked(
+    *,
+    args: argparse.Namespace,
+    cases: list[UrbanNavCase],
+    api_keys: list[str],
+    output_path: Path,
+) -> int:
+    r"""Generate predictions in chunks and append them to disk.
+
+    For expensive external model calls, this changes the persistence model from
+    one all-or-nothing write:
+
+    \[
+    \{\hat y_i\}_{i=1}^{N} \rightarrow file
+    \]
+
+    to periodic durable chunks:
+
+    \[
+    \{\hat y_i\}_{i=b}^{b+B-1} \rightarrow file
+    \]
+
+    Args:
+        args: Parsed CLI arguments.
+        cases: Frozen UrbanNav cases.
+        api_keys: API keys used for LLM-backed workers.
+        output_path: JSONL file to append chunk predictions to.
+
+    Returns:
+        Number of prediction rows present in the output file after completion.
+    """
+
+    existing_ids = _existing_prediction_ids(output_path) if args.resume else set()
+    pending_cases = [case for case in cases if case.case_id not in existing_ids]
+    if not args.resume:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text("", encoding="utf-8")
+    elif existing_ids:
+        print(
+            json.dumps(
+                {
+                    "event": "prediction_resume",
+                    "existing_predictions": len(existing_ids),
+                    "pending_cases": len(pending_cases),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+
+    chunk_size = max(1, int(args.chunk_size or 1))
+    written = len(existing_ids)
+    for start in range(0, len(pending_cases), chunk_size):
+        chunk = pending_cases[start : start + chunk_size]
+        chunk_predictions = await _generate_predictions(args=args, cases=chunk, api_keys=api_keys)
+        _append_predictions(chunk_predictions, output_path)
+        written += len(chunk_predictions)
+        print(
+            json.dumps(
+                {
+                    "event": "prediction_chunk_written",
+                    "chunk_size": len(chunk_predictions),
+                    "written": written,
+                    "target_total": len(cases),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+    return written
 
 
 async def _generate_predictions(
@@ -464,6 +558,52 @@ def _write_json(payload: dict[str, Any], path: Path) -> None:
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _append_predictions(predictions: list[UrbanNavPrediction], path: Path) -> None:
+    """Append prediction rows to JSONL.
+
+    Args:
+        predictions: Predictions to append.
+        path: Target JSONL path.
+
+    Returns:
+        None.
+    """
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        for prediction in predictions:
+            handle.write(json.dumps(prediction.to_dict(), ensure_ascii=False) + "\n")
+        handle.flush()
+
+
+def _existing_prediction_ids(path: Path) -> set[str]:
+    """Read existing prediction ids from a partial output JSONL.
+
+    Args:
+        path: Prediction JSONL path.
+
+    Returns:
+        Set of already written prediction ids.
+    """
+
+    if not path.exists() or path.stat().st_size == 0:
+        return set()
+    existing: set[str] = set()
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            case_id = str(payload.get("id") or payload.get("case_id") or "").strip()
+            if case_id:
+                existing.add(case_id)
+    return existing
 
 
 if __name__ == "__main__":
