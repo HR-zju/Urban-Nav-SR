@@ -46,9 +46,50 @@ benchmark 使用五类任务。
 
 主 benchmark 报告 `poi_navigation`、`implicit_need_navigation`、`multi_stop_route` 和 `route_update_add_via`。`semantic_preference` 作为分析集，只有在数据源能提供可靠偏好属性或人工审核证据时，才进入正式主表。
 
-## 4. 真值构建
+## 4. 指令集合生成
 
-### 4.1 候选检索
+正式 benchmark 不直接使用采集脚本中的手写任务模板。所有用户指令先由任务 taxonomy、城市配额、任务族配额和 provider ontology 编译为一个冻结的 instruction set，然后 GT builder 只消费该 instruction set 中的任务定义。这样可以把“benchmark 任务设计”和“地图采集执行”解耦，避免因为调试脚本或 smoke config 造成数据分布漂移。
+
+设任务族配额为 \(\{N_c\}_{c\in C}\)，某任务族 \(c\) 下的 taxonomy 子类集合为 \(S_c\)，每个子类权重为 \(w_s\)。子类计划样本数为：
+
+\[
+N_s=\operatorname{round}\left(N_c\frac{w_s}{\sum_{j\in S_c}w_j}\right)
+\]
+
+城市配额 \(\{M_u\}_{u\in U}\) 独立展开为 city slots，并与任务 slots 交错分配。最终指令集合为：
+
+\[
+\mathcal I=\{(q_i,u_i,c_i,s_i,T_i,G_i)\}_{i=1}^{N}
+\]
+
+其中 \(q_i\) 来自 taxonomy 模板，\(u_i\) 是计划城市，\(T_i\) 是单目标任务的目标类型集合，\(G_i\) 是多途经点任务的有序目标类型序列。provider ontology 只负责把 \(T_i\) 或 \(G_i\) 映射到 OSM/TomTom/AMap 等 provider 的检索标签，不允许在代码里重新定义用户指令。
+
+当前实现入口为：
+
+```bash
+PYTHONPATH=src python tools/dataset_processing/build_urbannav_instruction_set.py \
+  --taxonomy config/yelp_demand_taxonomy.json \
+  --distribution config/urbannav_10k_distribution_plan.json \
+  --provider-map config/urbannav_target_type_provider_map.json \
+  --output-root data/benchmark/urbannav_instruction_set_full_en_v1 \
+  --language en \
+  --overwrite
+```
+
+该入口写出：
+
+```text
+instruction_set.jsonl                  # 逐样本指令计划，覆盖完整 10K 分布
+task_catalog.json                      # taxonomy 子类级任务目录
+collection_config_full_single_stop.json # 单目标 GT builder 可消费的采集配置
+manifest.json                          # 城市、任务族、子类和模板分布审计
+```
+
+`multi_stop_route` 和 `route_update_add_via` 不应被单目标 collector 当作普通 POI 任务处理。它们在 `instruction_set.jsonl` 中保留完整计划，由对应的 multi-stop builder 和 route-update builder 构造真值。
+
+## 5. 真值构建
+
+### 5.1 候选检索
 
 对于样例 \((q,o)\)，构建器首先将指令映射为结构化约束：
 
@@ -72,7 +113,7 @@ H(d,z)\in\{0,1\}
 
 对于显式 POI 任务，\(H\) 检查类型和可选品牌 alias；对于隐式需求任务，\(H\) 检查该 POI 类型是否能满足需求；对于语义偏好任务，\(H\) 必须依赖冻结属性、标签或人工审核证据。
 
-### 4.2 路线感知排序
+### 5.2 路线感知排序
 
 对每个满足约束的候选，构建器调用 route provider：
 
@@ -111,7 +152,7 @@ s(d\mid q,o)=w_{\mathrm{rel}}\operatorname{rel}(d,q)
 
 如果使用该形式，则 \(d^*\) 是 \(s(d\mid q,o)\) 的最大值对应目的地，`score_breakdown` 必须记录每个得分项。
 
-### 4.3 可接受目的地集合
+### 5.3 可接受目的地集合
 
 部分指令不存在唯一正确答案。例如“我有点渴”可以由便利店、饮品店或咖啡店满足。UrbanNav 用可接受目的地集合处理这类多合理答案：
 
@@ -133,7 +174,7 @@ L(R(o,d_i)) \le (1+\delta)L(R(o,d^*))
 
 这点是评估设计的关键：如果预测选择了非 rank-1 但仍然合理的目的地，路线指标应使用该 matched destination 自己的参考路线，而不是强行使用 rank-1 路线。
 
-### 4.4 多途经点真值
+### 5.4 多途经点真值
 
 对于有序目标序列 \(G=(g_1,\ldots,g_K)\)，构建器从当前点逐段选择 stop：
 
@@ -155,7 +196,7 @@ P^*=R(p_0,d_1^*)\oplus R(d_1^*,d_2^*)\oplus\cdots\oplus R(d_{K-1}^*,d_K^*)
 
 样例保存 `gt_destination_sequence`、`gt_route_legs` 和合并后的 `gt_route`。
 
-### 4.5 Route Update 真值
+### 5.5 Route Update 真值
 
 route-update 任务评估已有路线状态上的增量修改。一个样例包含旧路线、当前位置 \(o_t\)、最终目的地 \(d_f\)、更新指令 \(q_t\)，以及新增途经点 \(v^*\)：
 
@@ -169,7 +210,7 @@ route-update 任务评估已有路线状态上的增量修改。一个样例包�
 P_{\mathrm{updated}}^*=R(o_t,v^*)\oplus R(v^*,d_f)
 \]
 
-## 5. 数据格式
+## 6. 数据格式
 
 单目标样例以 JSONL 存储，每行一个 case：
 
@@ -231,7 +272,7 @@ P_{\mathrm{updated}}^*=R(o_t,v^*)\oplus R(v^*,d_f)
 
 `acceptable_destinations` 和 `ranked_destinations` 必须分开理解。前者定义正确答案集合，后者是构建和审计证据。
 
-## 6. 采样策略
+## 7. 采样策略
 
 UrbanNav 不应从无关视觉数据的采样分布中直接继承 origin。origin 是 benchmark 构造变量，应该服务于目的地歧义度、路线长度、路线形态和城市覆盖。
 
@@ -259,7 +300,7 @@ UrbanNav 不应从无关视觉数据的采样分布中直接继承 origin。orig
 
 这些系数不参与最终评分，只用于平衡采样和分组报告。
 
-## 7. 预测格式
+## 8. 预测格式
 
 runner 输出与真值分开保存：
 
@@ -288,7 +329,7 @@ runner 输出与真值分开保存：
 
 评估器使用 `id` 对齐预测和真值。工具调用过程不要求与 GT 构建过程一致，除非后续版本单独定义工具调用质量指标。
 
-## 8. 评估方法
+## 9. 评估方法
 
 ### 8.1 目的地匹配
 
@@ -404,7 +445,7 @@ final\_destination\_preserved=
 
 `updated_route_success` 使用更新后的路线和 matched destination 计算。
 
-## 9. 可复现性和验证
+## 10. 可复现性和验证
 
 正式发布的 benchmark split 目录包含：
 
@@ -431,7 +472,7 @@ validator 检查以下内容：
 | Cache 可追溯性 | `cache_keys` 能在 POI 和 route replay cache 中找到 |
 | Reject 覆盖 | 被丢弃候选或失败样例包含 reject reason |
 
-## 10. Agent 测评框架
+## 11. Agent 测评框架
 
 UrbanNav 的评估对象不是 GT builder，而是在冻结 benchmark 上运行的导航智能体。二者的输入相同，职责不同：
 
@@ -469,7 +510,7 @@ Agent 的错误可以分解为三类：
 
 这种分解也是 UrbanNav 与普通 POI 推荐或静态路线规划 benchmark 的区别：系统必须同时完成语义约束理解、空间候选选择和可执行路线生成。
 
-## 11. RouteServer Agent Baseline
+## 12. RouteServer Agent Baseline
 
 除 benchmark 本身外，我们实现了一个与 UrbanNav 任务定义对齐的 RouteServer Agent baseline。该 baseline 不把 GT 构建器作为预测器使用，而是模拟真实导航系统的决策链路：从自然语言需求出发，解析意图，检索候选目的地，基于语义与路线代价选择目标，并输出可执行路线。它的设计目标不是追求特定地图 provider 上的启发式最优，而是提供一个结构清晰、可复现、可替换模块的 agentic baseline。
 
@@ -554,7 +595,7 @@ GT 构建器和 RouteServer Agent 使用相似的地图工具，但优化目标�
 
 因此，RouteServer Agent 的高分并不来自复用 GT，而来自在相同任务约束下重新完成需求理解、候选选择和路线规划。这个边界是 UrbanNav 评估成立的前提。
 
-## 12. 报告方式
+## 13. 报告方式
 
 主表报告总体指标和切分指标：
 

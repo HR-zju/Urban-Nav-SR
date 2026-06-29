@@ -709,3 +709,75 @@ normalized_unique: 400
 template_source: manual_expanded 310, base 90
 max_template_share_by_subcategory: all <= 0.143
 ```
+
+## 12. Demand Mining 闭环
+
+最终 benchmark 不应继续靠手工扩模板扩展需求种类。当前实现把 Yelp 作为需求证据源，先挖候选需求组，再筛选进入可评测 taxonomy。
+
+实现入口：
+
+```bash
+PYTHONPATH=src python tools/dataset_processing/mine_yelp_urbannav_demands.py \
+  --yelp-root "/media/ubuntu/data2/SR-Nav Dataset/archive/yelp_dataset" \
+  --rules config/urbannav_yelp_demand_mining_rules.json \
+  --taxonomy config/yelp_demand_taxonomy.json \
+  --provider-map config/urbannav_target_type_provider_map.json \
+  --output-root data/benchmark/urbannav_yelp_demand_mining_v1 \
+  --taxonomy-output config/yelp_demand_taxonomy_mined_v2.json \
+  --provider-map-output config/urbannav_target_type_provider_map_mined_v2.json \
+  --instruction-output-root data/benchmark/urbannav_instruction_set_full_en_v2 \
+  --review-limit 500000 \
+  --tip-limit 500000 \
+  --build-instruction-set \
+  --build-review-html \
+  --overwrite
+```
+
+候选需求定义在：
+
+```text
+config/urbannav_yelp_demand_mining_rules.json
+```
+
+每个候选需求组会统计：
+
+| 字段 | 含义 |
+| --- | --- |
+| `business_count` | Yelp business 类别证据数量 |
+| `city_count` | 覆盖 Yelp 城市数量 |
+| `review_evidence_count` | review 文本命中数量 |
+| `tip_evidence_count` | tip 文本命中数量 |
+| `missing_target_types` | 是否缺少 OSM/AMap/TomTom provider 映射 |
+| `decision` | `accept_main`、`accept_analysis` 或 `reject` |
+
+筛选原则是：需求必须有足够的 Yelp 证据，并且所有目标类型都能映射到 provider ontology。主集只接收可自动检索和可规划的类型；依赖主观属性的需求进入 `semantic_preference` analysis split。
+
+当前 mining 产物：
+
+```text
+data/benchmark/urbannav_yelp_demand_mining_v1/demand_mining_report.json
+data/benchmark/urbannav_yelp_demand_mining_v1/demand_mining_report.md
+config/yelp_demand_taxonomy_mined_v2.json
+config/urbannav_target_type_provider_map_mined_v2.json
+data/benchmark/urbannav_instruction_set_full_en_v2/
+data/benchmark/urbannav_instruction_set_full_en_v2/review/index.html
+```
+
+当前运行结果：
+
+```text
+candidate_rules: 36
+accepted_main: 33
+accepted_analysis: 3
+rejected: 0
+taxonomy_specs: 101
+provider_target_types: 80
+instruction_rows: 10000
+unique_instruction_count: 10000
+compiled_task_count: 91
+template_count: 500
+```
+
+新增主集需求包括早餐/早午餐、外带、酒吧、面包店、书店、博物馆、洗衣/干洗、邮寄、理发、美甲、SPA/按摩、宠物用品、兽医、服装、鞋店、酒类商店、加油站、自行车店、手机维修、寄包裹、洗衣需求，以及更多多途经点和 route-update 类型。
+
+注意：`semantic_preference` 仍不默认进入主 10K 指标。它保留在 mined taxonomy 中，用于后续 analysis split 或人工审核集。
