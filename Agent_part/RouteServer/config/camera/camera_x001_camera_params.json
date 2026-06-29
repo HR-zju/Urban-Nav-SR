@@ -1,0 +1,34 @@
+{
+  "schema_version": "camera_x001_calibrated_camera_params_v1",
+  "camera_name": "camera_x001",
+  "image_width": 1920,
+  "image_height": 1080,
+  "camera_height_meters": 0.6,
+  "K": [
+    [
+      749.2058,
+      0.0,
+      1003.1
+    ],
+    [
+      0.0,
+      749.2058,
+      526.5258
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "D": [
+    1.5847e-05,
+    -1.3585e-07,
+    4.7386e-11
+  ],
+  "distortion_model": "radial_3",
+  "reprojection_error_pixels": 0.69,
+  "source": "user_provided_calibration",
+  "height_source": "user_approximate_measurement",
+  "note": "Calibrated intrinsics for camera_x001. camera_height_meters is the approximate physical installation height provided by the user."
+}

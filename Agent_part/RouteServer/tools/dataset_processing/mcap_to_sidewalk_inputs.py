@@ -372,18 +372,47 @@ def _parse_message_record(record_payload: bytes) -> tuple[int, int, bytes]:
     return int(channel_id), int(log_time), record_payload[offset:]
 
 
-def _parse_navsatfix(payload: bytes, *, timestamp_ns: int, source_topic: str) -> GpsSample:
-    # We manually verified that these offsets work for the CoCo dataset.
-    # The CDR reader didn't correctly handle the message format, so we use
-    # direct struct unpacking with known offsets:
-    #   - status at offset 19 (int8)
-    #   - latitude at offset 22 (little-endian double)
-    #   - longitude at offset 30 (little-endian double)
-    #   - altitude at offset 38 (little-endian double)
-    lat = struct.unpack_from("<d", payload, 22)[0]
-    lng = struct.unpack_from("<d", payload, 30)[0]
-    altitude = struct.unpack_from("<d", payload, 38)[0]
-    status = struct.unpack_from("<b", payload, 19)[0] if len(payload) > 19 else -1
+def _gps_values_are_plausible(lat: float, lng: float, altitude: float | None) -> bool:
+    """Return whether decoded NavSatFix values are physically plausible."""
+
+    if not math.isfinite(lat) or not math.isfinite(lng):
+        return False
+    if not (-90.0 <= float(lat) <= 90.0 and -180.0 <= float(lng) <= 180.0):
+        return False
+    if altitude is not None and (not math.isfinite(float(altitude)) or abs(float(altitude)) > 20000.0):
+        return False
+    return True
+
+
+def _parse_navsatfix_standard_cdr(
+    payload: bytes,
+    *,
+    timestamp_ns: int,
+    source_topic: str,
+    message_encoding: str,
+) -> GpsSample:
+    """Parse a standard ROS ``sensor_msgs/msg/NavSatFix`` message.
+
+    The message layout is ``Header``, ``NavSatStatus``, then latitude,
+    longitude, and altitude as float64 values.  CDR alignment depends on the
+    variable-length ``header.frame_id``, so fixed offsets are not reliable for
+    standard ROS2 MCAP files.
+    """
+
+    reader = _make_reader(payload, message_encoding)
+    if isinstance(reader, Ros1Reader):
+        _ = reader.uint32()  # header.seq
+    _ = reader.int32()  # header.stamp.sec
+    _ = reader.uint32()  # header.stamp.nanosec
+    _ = reader.string()  # header.frame_id
+    status = reader.int8()
+    service = reader.uint16()
+    _ = service
+    lat = reader.float64()
+    lng = reader.float64()
+    altitude = reader.float64()
+    if not _gps_values_are_plausible(float(lat), float(lng), float(altitude)):
+        raise RuntimeError(f"Implausible NavSatFix values lat={lat} lng={lng} altitude={altitude}")
     return GpsSample(
         timestamp_ns=int(timestamp_ns),
         lat=float(lat),
@@ -392,6 +421,51 @@ def _parse_navsatfix(payload: bytes, *, timestamp_ns: int, source_topic: str) ->
         status=int(status),
         source_topic=source_topic,
     )
+
+
+def _parse_navsatfix_legacy_offsets(payload: bytes, *, timestamp_ns: int, source_topic: str) -> GpsSample:
+    """Parse the legacy fixed-offset NavSatFix variant used by older CoCo data."""
+
+    lat = struct.unpack_from("<d", payload, 22)[0]
+    lng = struct.unpack_from("<d", payload, 30)[0]
+    altitude = struct.unpack_from("<d", payload, 38)[0]
+    status = struct.unpack_from("<b", payload, 19)[0] if len(payload) > 19 else -1
+    if not _gps_values_are_plausible(float(lat), float(lng), float(altitude)):
+        raise RuntimeError(f"Implausible legacy NavSatFix values lat={lat} lng={lng} altitude={altitude}")
+    return GpsSample(
+        timestamp_ns=int(timestamp_ns),
+        lat=float(lat),
+        lng=float(lng),
+        altitude_m=float(altitude),
+        status=int(status),
+        source_topic=source_topic,
+    )
+
+
+def _parse_navsatfix(
+    payload: bytes,
+    *,
+    timestamp_ns: int,
+    source_topic: str,
+    message_encoding: str = "cdr",
+) -> GpsSample:
+    """Parse NavSatFix with a standard CDR path and legacy fallback."""
+
+    try:
+        return _parse_navsatfix_standard_cdr(
+            payload,
+            timestamp_ns=timestamp_ns,
+            source_topic=source_topic,
+            message_encoding=message_encoding,
+        )
+    except Exception as standard_exc:
+        try:
+            return _parse_navsatfix_legacy_offsets(payload, timestamp_ns=timestamp_ns, source_topic=source_topic)
+        except Exception as legacy_exc:
+            raise RuntimeError(
+                f"Failed to parse NavSatFix on {source_topic}: "
+                f"standard={standard_exc}; legacy={legacy_exc}"
+            ) from legacy_exc
 
 
 def _parse_float64(payload: bytes, *, timestamp_ns: int, source_topic: str) -> HeadingSample:
@@ -1096,7 +1170,14 @@ def extract_mcap_inputs(
                         continue
             elif channel_id == gps_channel.channel_id:
                 try:
-                    gps_samples.append(_parse_navsatfix(message_payload, timestamp_ns=timestamp_ns, source_topic=channel.topic))
+                    gps_samples.append(
+                        _parse_navsatfix(
+                            message_payload,
+                            timestamp_ns=timestamp_ns,
+                            source_topic=channel.topic,
+                            message_encoding=channel.message_encoding,
+                        )
+                    )
                 except Exception:
                     continue
             elif heading_channel is not None and channel_id == heading_channel.channel_id:

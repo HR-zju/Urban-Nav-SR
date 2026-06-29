@@ -42,8 +42,31 @@ def mcap_to_chunk_format(
     heading_topic: str = "auto",
     imu_topic: str = "auto",
     pose_topic: str = "auto",
+    generate_bev: bool = True,
 ):
-    """Convert a single MCAP file to chunk_0 format."""
+    """Convert a single MCAP file to SideWalk chunk format.
+
+    Args:
+        mcap_path: Input MCAP file to decode.
+        output_chunk_dir: Parent directory that receives one clip directory per
+            MCAP stem.
+        temp_extract_dir: Temporary directory for extracted frames and
+            intermediate ffmpeg lists.
+        sample_fps: Target frame sampling rate for extracted FPV images.
+        image_topic: Image topic name, or ``auto``.
+        gps_topic: NavSatFix topic name, or ``auto``.
+        heading_topic: Heading topic name, or ``auto``.
+        imu_topic: Optional IMU topic name, ``auto``, or ``none``.
+        pose_topic: Optional pose topic name, ``auto``, or ``none``.
+        generate_bev: Whether to run the downstream BEV generation stage.
+
+    Returns:
+        The created clip directory.
+
+    Raises:
+        RuntimeError: If MCAP extraction fails or required extracted artifacts
+            are missing.
+    """
 
     print(f"\n{'='*80}")
     print(f"Processing: {mcap_path.name}")
@@ -86,6 +109,13 @@ def mcap_to_chunk_format(
 
     trajectory = json.loads(trajectory_path.read_text())
     print(f"Extracted {len(trajectory)} frames")
+
+    # Keep extraction metadata with the prepared clip.  Downstream Phase1
+    # builders use it to recover conventions such as quaternion storage order.
+    for sidecar_name in ("mcap_extract_meta.json", "frames_manifest.json"):
+        sidecar_path = extract_dir / sidecar_name
+        if sidecar_path.is_file():
+            shutil.copy2(sidecar_path, output_dir / sidecar_name)
 
     # Step 2: Build npy files
     print("\n[2/5] Creating npy files...")
@@ -208,6 +238,16 @@ def mcap_to_chunk_format(
         print(f"Created: {front_mp4}")
 
     # Step 4: Generate BEV using process_sidewalk_dataset.py
+    if not generate_bev:
+        print("\n[4/5] Skipping BEV generation (--skip-bev)")
+        print(f"\n[5/5] Done!")
+        print(f"Output directory: {output_dir}")
+        print(f"Files created:")
+        for f in sorted(output_dir.iterdir()):
+            size_mb = f.stat().st_size / (1024 * 1024)
+            print(f"  - {f.name} ({size_mb:.2f} MB)")
+        return output_dir
+
     print("\n[4/5] Generating BEV video...")
 
     # Use a temporary output dir for process_sidewalk_dataset.py
@@ -294,6 +334,11 @@ def main():
         default="none",
         help="Pose topic",
     )
+    parser.add_argument(
+        "--skip-bev",
+        action="store_true",
+        help="Only decode MCAP into SideWalk clip files; do not generate BEV maps/videos.",
+    )
     args = parser.parse_args()
 
     # Find MCAP files
@@ -324,6 +369,7 @@ def main():
                     heading_topic=args.heading_topic,
                     imu_topic=args.imu_topic,
                     pose_topic=args.pose_topic,
+                    generate_bev=not args.skip_bev,
                 )
             else:
                 print(f"\nnpy files already exist for: {mcap_path.name}")

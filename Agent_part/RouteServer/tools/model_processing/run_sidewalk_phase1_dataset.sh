@@ -20,6 +20,7 @@ FUTURE_HORIZON_SEC="${FUTURE_HORIZON_SEC:-2.5}"
 NUM_POINTS="${NUM_POINTS:-16}"
 LIMIT="${LIMIT:-}"
 MAX_CLIPS="${MAX_CLIPS:-}"
+FRAME_SUBSET_JSON="${FRAME_SUBSET_JSON:-}"
 WRITE_OVERLAYS="${WRITE_OVERLAYS:-0}"
 ALLOW_MISSING_BEV="${ALLOW_MISSING_BEV:-0}"
 ALLOW_HEURISTIC_TRAJECTORY="${ALLOW_HEURISTIC_TRAJECTORY:-0}"
@@ -48,6 +49,9 @@ if [[ -n "${LIMIT}" ]]; then
 fi
 if [[ -n "${MAX_CLIPS}" ]]; then
   cmd+=(--max-clips "${MAX_CLIPS}")
+fi
+if [[ -n "${FRAME_SUBSET_JSON}" ]]; then
+  cmd+=(--frame-subset-json "${FRAME_SUBSET_JSON}")
 fi
 if [[ "${WRITE_OVERLAYS}" == "1" || "${WRITE_OVERLAYS}" == "true" ]]; then
   cmd+=(--write-overlays)

@@ -50,6 +50,7 @@ class Phase1Config:
     trajectory_min_y_step: float = 0.005
     max_bev_time_delta_ms: float = 300.0
     frame_rate_hz: float = 20.0
+    odom_yaw_offset_deg: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -173,7 +174,11 @@ def _positions_are_static(
     return displacement <= float(max_displacement_m) and path_length <= float(max_path_length_m)
 
 
-def _load_camera_params(clip_dir: Path) -> CameraParams | None:
+def _load_camera_params(clip_dir: Path, override_path: Path | None = None) -> CameraParams | None:
+    if override_path is not None:
+        if not override_path.is_file():
+            raise FileNotFoundError(f"camera params override not found: {override_path}")
+        return CameraParams.from_json(override_path)
     for path in (clip_dir / "camera_params.json", clip_dir.parent / "camera_params.json"):
         if path.is_file():
             return CameraParams.from_json(path)
@@ -258,15 +263,40 @@ def build_phase1_dataset(
     config: Phase1Config | None = None,
     limit: int | None = None,
     max_clips: int | None = None,
+    frame_subset_json: str | None = None,
     allow_missing_bev: bool = False,
     allow_heuristic_trajectory: bool = False,
+    camera_params_path: str | None = None,
     write_overlays: bool = False,
 ) -> dict[str, Any]:
-    """Build source JSONL and offline QA artifacts for Phase1 training."""
+    """Build source JSONL and offline QA artifacts for Phase1 training.
+
+    Args:
+        sidewalk_root: Root containing prepared SideWalk clip directories.
+        output_root: Destination root for manifests, sidecars, and optional overlays.
+        split_name: Output manifest split name.
+        config: Phase1 sampling and trajectory-label configuration.
+        limit: Optional maximum number of source samples to write.
+        max_clips: Optional maximum number of discovered clips to scan.
+        frame_subset_json: Optional clip-to-frame-index subset JSON.
+        allow_missing_bev: Whether samples without BEV images are allowed.
+        allow_heuristic_trajectory: Whether legacy uncalibrated fallback trajectories may be used.
+        camera_params_path: Optional calibrated camera parameter JSON outside the data tree.
+        write_overlays: Whether to write FPV trajectory overlay images.
+
+    Returns:
+        A report dictionary with output paths, counts, and skip reasons.
+
+    Raises:
+        FileNotFoundError: If ``camera_params_path`` is provided but missing.
+    """
 
     cfg = config or Phase1Config()
     input_root = Path(sidewalk_root).expanduser().resolve()
     output = Path(output_root).expanduser().resolve()
+    camera_params_override = Path(camera_params_path).expanduser().resolve() if camera_params_path else None
+    if camera_params_override is not None and not camera_params_override.is_file():
+        raise FileNotFoundError(f"camera params override not found: {camera_params_override}")
     manifest_dir = output / "manifests"
     manifest_dir.mkdir(parents=True, exist_ok=True)
     source_jsonl = manifest_dir / f"phase1_source_{split_name}.jsonl"
@@ -274,12 +304,17 @@ def build_phase1_dataset(
 
     source_rows: list[dict[str, Any]] = []
     qa_index_rows: list[dict[str, Any]] = []
+    frame_subset = load_frame_subset(Path(frame_subset_json).expanduser()) if frame_subset_json else None
     report: dict[str, Any] = {
         "schema_version": "sidewalk_phase1_dataset_v1",
         "sidewalk_root": str(input_root),
         "output_root": str(output),
         "split_name": split_name,
+        "frame_subset_json": str(Path(frame_subset_json).expanduser()) if frame_subset_json else None,
+        "frame_subset_clips": len(frame_subset) if frame_subset is not None else None,
+        "frame_subset_frames": sum(len(indices) for indices in frame_subset.values()) if frame_subset is not None else None,
         "allow_heuristic_trajectory": bool(allow_heuristic_trajectory),
+        "camera_params_path": str(camera_params_override) if camera_params_override is not None else None,
         "max_clips": max_clips,
         "clips_total": 0,
         "clips_used": 0,
@@ -295,6 +330,9 @@ def build_phase1_dataset(
             break
         if max_clips is not None and int(report["clips_total"]) >= int(max_clips):
             break
+        if frame_subset is not None and clip_dir.name not in frame_subset:
+            _inc(report["skip_reasons"], "clip_not_in_frame_subset")
+            continue
         report["clips_total"] += 1
         try:
             frame_records = list(
@@ -304,6 +342,7 @@ def build_phase1_dataset(
                     allow_missing_bev=allow_missing_bev,
                     allow_heuristic_trajectory=allow_heuristic_trajectory,
                     max_bev_time_delta_ms=cfg.max_bev_time_delta_ms,
+                    camera_params_override=camera_params_override,
                 )
             )
         except Exception as exc:
@@ -314,7 +353,19 @@ def build_phase1_dataset(
             continue
 
         clip_rows_before = len(source_rows)
-        for local_idx in range(0, len(frame_records), max(int(cfg.frame_step), 1)):
+        if frame_subset is not None:
+            wanted = frame_subset.get(clip_dir.name, set())
+            local_indices = [
+                idx
+                for idx, record in enumerate(frame_records)
+                if int(record.frame_idx) in wanted
+            ]
+            if len(local_indices) < len(wanted):
+                report["frames_skipped"] += int(len(wanted) - len(local_indices))
+                _inc(report["skip_reasons"], "frame_subset_missing_records")
+        else:
+            local_indices = list(range(0, len(frame_records), max(int(cfg.frame_step), 1)))
+        for local_idx in local_indices:
             if limit is not None and len(source_rows) >= limit:
                 break
             record = frame_records[local_idx]
@@ -356,6 +407,30 @@ def build_phase1_dataset(
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     report["report_path"] = str(report_path)
     return report
+
+
+def load_frame_subset(path: Path) -> dict[str, set[int]]:
+    """Load a clip_id -> frame_idx subset emitted by FrodoBots intent sampling."""
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    raw = payload.get("clip_frame_indices") if isinstance(payload, dict) else None
+    if not isinstance(raw, dict):
+        raise ValueError(f"frame subset JSON must contain clip_frame_indices: {path}")
+    subset: dict[str, set[int]] = {}
+    for clip_id, values in raw.items():
+        if not isinstance(values, list):
+            continue
+        indices: set[int] = set()
+        for value in values:
+            try:
+                indices.add(int(value))
+            except Exception:
+                continue
+        if indices:
+            subset[str(clip_id)] = indices
+    if not subset:
+        raise ValueError(f"frame subset JSON has no usable frame indices: {path}")
+    return subset
 
 
 def select_future_records(frame_records: list[FrameRecord], current_index: int, *, config: Phase1Config) -> list[FrameRecord]:
@@ -513,6 +588,7 @@ def build_phase1_sample(
         "trajectory_source": trajectory_source,
         "pose_source": record.pose_source,
         "pose_fallback_reason": record.pose_fallback_reason,
+        "projection": target_pack.get("projection", {}),
         "bev_patch_meta_path": str(bev_meta_path),
         "trajectory_label_path": str(label_path),
         "qa_bundle_path": str(qa_path),
@@ -576,7 +652,7 @@ def build_phase1_targets(
 
     if record.position_xy is not None and record.orientation_wxyz is not None:
         sampled_future = sample_future_records(future, config.num_points)
-        local_path = pose_local_path_right_front(record, sampled_future)
+        local_path = pose_local_path_right_front(record, sampled_future, config=config)
         if local_path.shape[0] == 0:
             local_path = np.asarray([[0.0, 1.0], [0.0, 3.0], [0.0, 6.0]], dtype=np.float32)
             local_path = resample_polyline(local_path, config.num_points)
@@ -597,6 +673,7 @@ def build_phase1_targets(
                 "trajectory_source": "calibrated_pose_projection",
                 "projection": {
                     "coordinate_chain": "map_pose_to_robot_to_camera_to_fpv",
+                    "odom_yaw_offset_deg": float(config.odom_yaw_offset_deg),
                     "camera_height_meters": record.camera_params.camera_height_meters,
                     "camera_image_size": [record.camera_params.image_width, record.camera_params.image_height],
                     "postprocess": {
@@ -847,14 +924,19 @@ def sample_future_records(future: list[FrameRecord], num_points: int) -> list[Fr
     return [future[int(idx)] for idx in indices]
 
 
-def pose_local_path_right_front(record: FrameRecord, sampled_future: list[FrameRecord]) -> np.ndarray:
+def pose_local_path_right_front(record: FrameRecord, sampled_future: list[FrameRecord], *, config: Phase1Config) -> np.ndarray:
     if record.position_xy is None or record.orientation_wxyz is None:
         return np.zeros((0, 2), dtype=np.float32)
     points = []
     for item in sampled_future:
         if item.position_xy is None:
             continue
-        forward_m, left_m = robot_forward_left_m(record.position_xy, record.orientation_wxyz, item.position_xy)
+        forward_m, left_m = robot_forward_left_m(
+            record.position_xy,
+            record.orientation_wxyz,
+            item.position_xy,
+            yaw_offset_deg=config.odom_yaw_offset_deg,
+        )
         points.append([-left_m, forward_m])
     return np.asarray(points, dtype=np.float32).reshape(-1, 2)
 
@@ -867,7 +949,13 @@ def calibrated_fpv_trajectory(record: FrameRecord, sampled_future: list[FrameRec
     for item in sampled_future:
         if item.position_xy is None:
             continue
-        u, v = project_pose_to_fpv(record.position_xy, record.orientation_wxyz, item.position_xy, cp)
+        u, v = project_pose_to_fpv(
+            record.position_xy,
+            record.orientation_wxyz,
+            item.position_xy,
+            cp,
+            yaw_offset_deg=config.odom_yaw_offset_deg,
+        )
         points.append([u / float(cp.image_width), v / float(cp.image_height)])
     if not points:
         points = [[0.5, 0.9] for _ in range(int(config.num_points))]
@@ -1106,6 +1194,7 @@ def _iter_clip_frame_records(
     allow_missing_bev: bool,
     allow_heuristic_trajectory: bool,
     max_bev_time_delta_ms: float | None,
+    camera_params_override: Path | None = None,
 ) -> Iterable[FrameRecord]:
     if _is_internnav_clip(clip_dir):
         positions = np.asarray(np.load(clip_dir / "frame_positions.npy"), dtype=np.float64)
@@ -1128,6 +1217,7 @@ def _iter_clip_frame_records(
             output_root=output_root,
             allow_missing_bev=allow_missing_bev,
             max_bev_time_delta_ms=max_bev_time_delta_ms,
+            camera_params_override=camera_params_override,
         )
         return
     if not allow_heuristic_trajectory:
@@ -1211,6 +1301,7 @@ def _iter_internnav_frame_records(
     output_root: Path,
     allow_missing_bev: bool,
     max_bev_time_delta_ms: float | None,
+    camera_params_override: Path | None = None,
 ) -> Iterable[FrameRecord]:
     clip_id = clip_dir.name
     positions = np.asarray(np.load(clip_dir / "frame_positions.npy"), dtype=np.float64)
@@ -1219,7 +1310,7 @@ def _iter_internnav_frame_records(
         raise ValueError(f"frame_positions.npy must have shape [N, >=2]: {clip_dir}")
     if orientations.ndim != 2 or orientations.shape[1] < 4:
         raise ValueError(f"frame_orientations.npy must have shape [N, >=4]: {clip_dir}")
-    camera_params = _load_camera_params(clip_dir)
+    camera_params = _load_camera_params(clip_dir, override_path=camera_params_override)
     orientation_order = _load_frame_orientation_order(clip_dir)
     front_video_fps = _load_front_video_fps(clip_dir)
     frame_times = _load_optional_array(clip_dir / "frame_times.npy")
@@ -1627,10 +1718,12 @@ def robot_forward_left_m(
     current_xy: tuple[float, float],
     current_quat_wxyz: tuple[float, float, float, float],
     target_xy: tuple[float, float],
+    *,
+    yaw_offset_deg: float = 0.0,
 ) -> tuple[float, float]:
     """Transform map/odom XY into current robot frame, x=forward, y=left."""
 
-    yaw = quat_to_yaw(current_quat_wxyz)
+    yaw = quat_to_yaw(current_quat_wxyz) + math.radians(float(yaw_offset_deg))
     dx = float(target_xy[0]) - float(current_xy[0])
     dy = float(target_xy[1]) - float(current_xy[1])
     cos_yaw = math.cos(yaw)
@@ -1645,10 +1738,17 @@ def project_pose_to_fpv(
     current_quat_wxyz: tuple[float, float, float, float],
     target_xy: tuple[float, float],
     camera: CameraParams,
+    *,
+    yaw_offset_deg: float = 0.0,
 ) -> tuple[float, float]:
     """Project one future odom/map point to FPV pixels with InternNav convention."""
 
-    x_forward, y_left = robot_forward_left_m(current_xy, current_quat_wxyz, target_xy)
+    x_forward, y_left = robot_forward_left_m(
+        current_xy,
+        current_quat_wxyz,
+        target_xy,
+        yaw_offset_deg=yaw_offset_deg,
+    )
     z_cam = x_forward
     x_cam = -y_left
     y_cam = -float(camera.camera_height_meters)
@@ -1919,6 +2019,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--split-name", default="train", help="Manifest split name")
     parser.add_argument("--limit", type=int, default=None, help="Maximum number of source samples to write across all clips.")
     parser.add_argument("--max-clips", type=int, default=None, help="Maximum number of discovered clips to process, after sorted discovery order.")
+    parser.add_argument(
+        "--frame-subset-json",
+        default=None,
+        help="Optional JSON with clip_frame_indices mapping; only those frame_idx values are generated.",
+    )
     parser.add_argument("--frame-step", type=int, default=10, help="Generate one sample every N FPV frames. Default 10 gives about 2fps for 20Hz FPV clips.")
     parser.add_argument("--future-frames", type=int, default=50, help="Fallback number of future frames when timestamps are unavailable or --future-horizon-sec <= 0.")
     parser.add_argument(
@@ -1944,6 +2049,20 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Allow legacy GNSS/HFOV or uncalibrated pose fallback. Disabled by default for production labels.",
     )
+    parser.add_argument(
+        "--camera-params-path",
+        default=None,
+        help="Optional calibrated camera_params.json path outside the data tree.",
+    )
+    parser.add_argument(
+        "--odom-yaw-offset-deg",
+        type=float,
+        default=0.0,
+        help=(
+            "Yaw offset applied to odometry orientation before local-path and FPV projection. "
+            "Use this when the odom/body frame forward axis is rotated from the camera/robot forward axis."
+        ),
+    )
     parser.add_argument("--write-overlays", action="store_true")
     return parser.parse_args()
 
@@ -1960,6 +2079,7 @@ def main() -> None:
         trajectory_min_y_step=float(args.trajectory_min_y_step),
         max_bev_time_delta_ms=float(args.max_bev_time_delta_ms),
         frame_rate_hz=float(args.frame_rate_hz),
+        odom_yaw_offset_deg=float(args.odom_yaw_offset_deg),
     )
     report = build_phase1_dataset(
         args.sidewalk_root,
@@ -1968,8 +2088,10 @@ def main() -> None:
         config=config,
         limit=args.limit,
         max_clips=args.max_clips,
+        frame_subset_json=args.frame_subset_json,
         allow_missing_bev=bool(args.allow_missing_bev),
         allow_heuristic_trajectory=bool(args.allow_heuristic_trajectory),
+        camera_params_path=args.camera_params_path,
         write_overlays=bool(args.write_overlays),
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))

@@ -45,6 +45,23 @@ def _should_use_pose_ekf_from_meta(meta: Optional[dict[str, Any]]) -> bool:
     return False
 
 
+def _bev_ready(output_dir: Path) -> bool:
+    """Return whether minimal Phase1 BEV artifacts already exist.
+
+    Args:
+        output_dir: SideWalk clip output directory.
+
+    Returns:
+        True when a BEV index and at least one BEV image are present.
+    """
+
+    bev_index = output_dir / "bev_index.json"
+    if not bev_index.exists():
+        bev_index = output_dir / "bev_images" / "bev_index.json"
+    bev_images = output_dir / "bev_images"
+    return bev_index.exists() and bev_images.is_dir() and any(bev_images.glob("*_bev.jpg"))
+
+
 def _quat_xyzw_from_euler(roll: float, pitch: float, yaw: float) -> tuple[float, float, float, float]:
     qx = np.sin(roll / 2) * np.cos(pitch / 2) * np.cos(yaw / 2) - np.cos(roll / 2) * np.sin(pitch / 2) * np.sin(yaw / 2)
     qy = np.cos(roll / 2) * np.sin(pitch / 2) * np.cos(yaw / 2) + np.sin(roll / 2) * np.cos(pitch / 2) * np.sin(yaw / 2)
@@ -65,7 +82,8 @@ def process_single_mcap(
      image_topic, gps_topic, heading_topic, imu_topic, pose_topic,
      generate_bev, bev_output_root, generate_phase2, generate_walkgpt,
      checkpoint_path, sam3_env_name, gpus, skip_existing,
-    use_pose_ekf, ekf_q_pos, ekf_q_theta, ekf_r_xy, ekf_r_theta, force_reextract) = args_tuple
+    use_pose_ekf, ekf_q_pos, ekf_q_theta, ekf_r_xy, ekf_r_theta, force_reextract,
+    drop_extracted_images, cleanup_temp_extract) = args_tuple
 
     try:
         mcap_to_sidewalk_format(
@@ -87,6 +105,8 @@ def process_single_mcap(
             ekf_r_xy=ekf_r_xy,
             ekf_r_theta=ekf_r_theta,
             force_reextract=force_reextract,
+            drop_extracted_images=drop_extracted_images,
+            cleanup_temp_extract=cleanup_temp_extract,
         )
 
         # Generate Phase2 annotations if needed
@@ -134,9 +154,37 @@ def mcap_to_sidewalk_format(
     ekf_r_xy: float = 9.0,
     ekf_r_theta: float = 0.5,
     force_reextract: bool = False,
+    drop_extracted_images: bool = False,
+    cleanup_temp_extract: bool = False,
     quiet: bool = False,
 ):
-    """Convert a single MCAP file to sidewalk format."""
+    """Convert a single MCAP file to sidewalk format.
+
+    Args:
+        mcap_path: Input MCAP file.
+        output_dir: Destination clip directory.
+        temp_extract_dir: Temporary extraction directory.
+        sample_fps: FPV sampling rate.
+        image_topic: Image topic name or auto.
+        gps_topic: GPS topic name or auto.
+        heading_topic: Heading topic name or auto.
+        imu_topic: Optional IMU topic name or auto.
+        pose_topic: Optional pose topic name or auto.
+        generate_bev: Whether to generate BEV artifacts.
+        bev_output_root: Legacy BEV output root.
+        use_pose_ekf: Whether to smooth heading with pose EKF.
+        ekf_q_pos: EKF process noise for x/y.
+        ekf_q_theta: EKF process noise for heading.
+        ekf_r_xy: EKF GPS observation variance.
+        ekf_r_theta: EKF yaw observation variance.
+        force_reextract: Whether to refresh existing extracted outputs.
+        drop_extracted_images: Remove full extracted JPG directory after front.mp4 is created.
+        cleanup_temp_extract: Remove temporary extracted MCAP files after successful processing.
+        quiet: Suppress verbose logging.
+
+    Returns:
+        The processed clip output directory.
+    """
 
     if not quiet:
         print(f"\n{'='*80}")
@@ -386,6 +434,11 @@ def mcap_to_sidewalk_format(
     elif not quiet:
         print(f"Created: {front_mp4}")
 
+    if drop_extracted_images and front_mp4.exists() and output_images_dir.exists():
+        shutil.rmtree(output_images_dir)
+        if not quiet:
+            print(f"Dropped extracted FPV images after front.mp4 creation: {output_images_dir}")
+
     effective_use_pose_ekf = bool(use_pose_ekf or _should_use_pose_ekf_from_meta(extract_meta))
     if not quiet:
         if effective_use_pose_ekf:
@@ -423,6 +476,11 @@ def mcap_to_sidewalk_format(
         elif not quiet:
             print(f"BEV generation complete")
 
+    if cleanup_temp_extract and extract_dir.exists():
+        shutil.rmtree(extract_dir)
+        if not quiet:
+            print(f"Cleaned temporary extraction directory: {extract_dir}")
+
     if not quiet:
         print(f"\nDone!")
         print(f"Output directory: {output_dir}")
@@ -454,6 +512,8 @@ def process_chunk(
     ekf_r_xy: float = 9.0,
     ekf_r_theta: float = 0.5,
     force_reextract: bool = False,
+    drop_extracted_images: bool = False,
+    cleanup_temp_extract: bool = False,
 ):
     """Process all MCAP files in a chunk directory with parallel processing."""
 
@@ -483,7 +543,7 @@ def process_chunk(
             if frame_gps.exists() and front_mp4.exists():
                 # Check if we need to run Phase2 or BEV
                 need_more = False
-                bev_ready = (output_dir / "bev_video.mp4").exists()
+                bev_ready = _bev_ready(output_dir)
 
                 if generate_bev and not bev_ready:
                     need_more = True
@@ -508,7 +568,8 @@ def process_chunk(
             generate_bev, sidewalk_root / chunk_dir.name,
             generate_phase2, generate_walkgpt,
             checkpoint_path, sam3_env_name, gpus, skip_existing,
-            use_pose_ekf, ekf_q_pos, ekf_q_theta, ekf_r_xy, ekf_r_theta, force_reextract
+            use_pose_ekf, ekf_q_pos, ekf_q_theta, ekf_r_xy, ekf_r_theta, force_reextract,
+            drop_extracted_images, cleanup_temp_extract
         ))
 
     print(f"Skipped {skipped_count} already processed files")
@@ -626,6 +687,16 @@ def main():
         help="Rerun MCAP extraction even when frame_gps.npy/front.mp4 already exist",
     )
     parser.add_argument(
+        "--drop-extracted-images",
+        action="store_true",
+        help="Delete full extracted FPV JPG images after front.mp4 is created to save space.",
+    )
+    parser.add_argument(
+        "--cleanup-temp-extract",
+        action="store_true",
+        help="Delete per-clip temporary MCAP extraction directories after successful processing.",
+    )
+    parser.add_argument(
         "--num-workers",
         type=int,
         default=max(1, multiprocessing.cpu_count() // 2),
@@ -672,6 +743,8 @@ def main():
             ekf_r_xy=args.ekf_r_xy,
             ekf_r_theta=args.ekf_r_theta,
             force_reextract=args.force_reextract,
+            drop_extracted_images=args.drop_extracted_images,
+            cleanup_temp_extract=args.cleanup_temp_extract,
         )
 
     print(f"\n{'='*80}")
