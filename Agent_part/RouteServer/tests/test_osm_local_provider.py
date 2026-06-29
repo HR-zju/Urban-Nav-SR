@@ -194,3 +194,69 @@ def test_local_osm_provider_supports_valhalla_router(tmp_path, monkeypatch) -> N
         assert len(route_record.polyline) == 2
 
     asyncio.run(run_test())
+
+
+def test_local_osm_provider_rejects_graph_router_for_benchmark(tmp_path) -> None:
+    """Benchmark provider must reject self-implemented graph routing."""
+
+    async def run_test() -> None:
+        index_path = tmp_path / "tokyo_shinjuku.jsonl"
+        index_path.write_text(
+            json.dumps(
+                {
+                    "osm_id": "node/1",
+                    "name": "Cafe A",
+                    "lat": 35.0008,
+                    "lng": 139.0,
+                    "tags": {"amenity": "cafe", "name": "Cafe A"},
+                    "city": "tokyo",
+                    "region_id": "tokyo_shinjuku",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        router_config = tmp_path / "routers.json"
+        router_config.write_text(
+            json.dumps(
+                {
+                    "default_router_type": "graph",
+                    "indexes": {"tokyo_shinjuku": "tokyo_shinjuku.jsonl"},
+                    "routers": {
+                        "tokyo_shinjuku": {
+                            "router_type": "graph",
+                            "graph_path": str(tmp_path / "tokyo_shinjuku.walk_graph.pkl"),
+                            "profile": "foot",
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        provider = LocalOsmOsrmProvider(poi_index_root=tmp_path, router_config=router_config)
+        poi_record = await provider.search_pois(
+            cache_key="poi:graph",
+            request=UrbanNavPoiSearchRequest(
+                origin=UrbanNavPoint(lat=35.0, lng=139.0),
+                query="cafe",
+                tags=["amenity=cafe"],
+                radius_m=200,
+                limit=5,
+                raw={"region_id": "tokyo_shinjuku", "city": "tokyo"},
+            ),
+        )
+        try:
+            await provider.plan_route(
+                cache_key="route:graph",
+                request=UrbanNavRouteRequest(
+                    origin=UrbanNavPoint(lat=35.0, lng=139.0),
+                    destination=poi_record.candidates[0],
+                    mode="foot",
+                ),
+            )
+        except ValueError as exc:
+            assert "router_type=graph is not allowed" in str(exc)
+        else:
+            raise AssertionError("graph router must be rejected for benchmark GT construction")
+
+    asyncio.run(run_test())

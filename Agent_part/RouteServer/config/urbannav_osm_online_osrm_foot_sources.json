@@ -1,0 +1,34 @@
+{
+  "description": "Online OSRM foot router config for UrbanNav review collection. Routes must come from an OSRM foot endpoint; self-implemented graph routing is not allowed.",
+  "poi_index_root": "data/osm/index",
+  "default_router_type": "osrm",
+  "default_osrm_url": "https://routing.openstreetmap.de/routed-foot",
+  "default_osrm_profile": "foot",
+  "indexes": {
+    "default": "all.jsonl",
+    "new_york_midtown": "new_york_midtown.jsonl",
+    "san_francisco_downtown": "san_francisco_downtown.jsonl",
+    "chicago_loop": "chicago_loop.jsonl",
+    "toronto_downtown": "toronto_downtown.jsonl",
+    "london_soho": "london_soho.jsonl",
+    "paris_latin_quarter": "paris_latin_quarter.jsonl",
+    "berlin_mitte": "berlin_mitte.jsonl",
+    "amsterdam_centrum": "amsterdam_centrum.jsonl",
+    "barcelona_eixample": "barcelona_eixample.jsonl",
+    "tokyo_shinjuku": "tokyo_shinjuku.jsonl",
+    "osaka_namba": "osaka_namba.jsonl",
+    "seoul_myeongdong": "seoul_myeongdong.jsonl",
+    "singapore_orchard": "singapore_orchard.jsonl",
+    "bangkok_siam": "bangkok_siam.jsonl",
+    "sydney_cbd": "sydney_cbd.jsonl",
+    "mexico_city_roma": "mexico_city_roma.jsonl",
+    "sao_paulo_paulista": "sao_paulo_paulista.jsonl"
+  },
+  "routers": {
+    "default": {
+      "router_type": "osrm",
+      "url": "https://routing.openstreetmap.de/routed-foot",
+      "profile": "foot"
+    }
+  }
+}

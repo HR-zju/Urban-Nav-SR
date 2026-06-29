@@ -91,6 +91,8 @@ def _case_card(*, index: int, case: UrbanNavCase) -> str:
     route = [_point_pair(point) for point in case.gt_route]
     origin = _point_pair(case.origin) if case.origin else (route[0] if route else None)
     destination = _point_pair(case.gt_route[-1]) if case.gt_route else None
+    markers = _review_markers(case)
+    old_route = _route_update_old_route(case)
     gt_dest = case.gt_destination.to_dict() if case.gt_destination else {}
     acceptable = [destination_item.to_dict() for destination_item in case.acceptable_destinations]
     metadata = dict(case.metadata or {})
@@ -114,6 +116,14 @@ def _case_card(*, index: int, case: UrbanNavCase) -> str:
         <div><strong>Destination</strong><span>{_esc(gt_dest.get("name"))}</span></div>
         <div><strong>Acceptable</strong><span>{len(case.acceptable_destinations)}</span></div>
       </section>
+      <div class="legend">
+        <span><i class="dot start"></i>Start/current origin</span>
+        <span><i class="dot stop"></i>Waypoint</span>
+        <span><i class="dot via"></i>Route update via</span>
+        <span><i class="dot end"></i>Final destination</span>
+        <span><i class="line current"></i>GT route</span>
+        <span><i class="line old"></i>Old route</span>
+      </div>
       <div id="{map_id}" class="map"></div>
       <section class="details">
         <div>
@@ -136,7 +146,7 @@ def _case_card(*, index: int, case: UrbanNavCase) -> str:
         </div>
       </section>
       <script>
-        renderRouteMap("{map_id}", {json.dumps(route)}, {json.dumps(origin)}, {json.dumps(destination)});
+        renderRouteMap("{map_id}", {json.dumps(route)}, {json.dumps(origin)}, {json.dumps(destination)}, {json.dumps(markers)}, {json.dumps(old_route)});
       </script>
     </article>
     """
@@ -182,12 +192,21 @@ def _html_page(*, title: str, gt_path: str, cards: list[str], case_count: int) -
     .meta-grid span {{ font-size: 14px; }}
     .map {{ height: 420px; border: 1px solid #dce3e8; border-radius: 6px; margin: 14px 0; background: #eef3f5; }}
     .map-error {{ display: grid; place-items: center; color: #8a3b12; background: #fff4e8; font-size: 13px; padding: 12px; text-align: center; }}
+    .legend {{ display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 10px 0 0; color: #44545f; font-size: 13px; }}
+    .legend span {{ display: inline-flex; gap: 6px; align-items: center; }}
+    .dot {{ width: 11px; height: 11px; border-radius: 50%; display: inline-block; border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.22); }}
+    .dot.start {{ background: #1b8a5a; }}
+    .dot.stop {{ background: #1769aa; }}
+    .dot.via {{ background: #7c3aed; }}
+    .dot.end {{ background: #c43c39; }}
+    .line {{ width: 22px; height: 0; display: inline-block; border-top: 4px solid #1769aa; }}
+    .line.old {{ border-top: 3px dashed #6b7280; }}
     .details {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 14px; }}
     pre {{ margin: 0; max-height: 340px; overflow: auto; background: #0f1720; color: #e7edf3; border-radius: 6px; padding: 12px; font-size: 12px; line-height: 1.45; }}
     @media (max-width: 900px) {{ .meta-grid, .details {{ grid-template-columns: 1fr; }} .case-card header {{ flex-direction: column; }} }}
   </style>
   <script>
-    function renderRouteMap(id, route, origin, destination) {{
+    function renderRouteMap(id, route, origin, destination, markers, oldRoute) {{
       const container = document.getElementById(id);
       if (!container) return;
       if (!window.L) {{
@@ -210,9 +229,50 @@ def _html_page(*, title: str, gt_path: str, cards: list[str], case_count: int) -
         map.setView([0, 0], 2);
         return;
       }}
+      if (oldRoute && oldRoute.length > 1) {{
+        L.polyline(oldRoute, {{color: '#6b7280', weight: 4, opacity: 0.72, dashArray: '7,8'}}).addTo(map);
+      }}
       const line = L.polyline(route, {{color: '#1769aa', weight: 5, opacity: 0.9}}).addTo(map);
-      if (origin) L.marker(origin).addTo(map).bindPopup('S');
-      if (destination) L.marker(destination).addTo(map).bindPopup('D');
+      const colorByKind = {{
+        start: '#1b8a5a',
+        current: '#f59e0b',
+        stop: '#1769aa',
+        via: '#7c3aed',
+        previous: '#6b7280',
+        final: '#c43c39',
+        end: '#c43c39'
+      }};
+      const labelByKind = {{
+        start: 'S',
+        current: 'C',
+        stop: 'W',
+        via: 'V',
+        previous: 'P',
+        final: 'D',
+        end: 'D'
+      }};
+      function addMarker(point, kind, label) {{
+        if (!point) return;
+        const color = colorByKind[kind] || '#1769aa';
+        L.circleMarker(point, {{
+          radius: 8,
+          color: '#ffffff',
+          weight: 2,
+          fillColor: color,
+          fillOpacity: 0.96
+        }}).addTo(map).bindTooltip(label || labelByKind[kind] || kind, {{
+          permanent: true,
+          direction: 'top',
+          offset: [0, -8],
+          className: 'marker-label'
+        }}).bindPopup(label || kind);
+      }}
+      if (markers && markers.length) {{
+        markers.forEach(function(item) {{ addMarker(item.point, item.kind, item.label); }});
+      }} else {{
+        addMarker(origin, 'start', 'S');
+        addMarker(destination, 'end', 'D');
+      }}
       map.fitBounds(line.getBounds(), {{padding: [24, 24]}});
       setTimeout(() => map.invalidateSize(), 100);
     }}
@@ -245,6 +305,104 @@ def _point_pair(point: UrbanNavPoint | None) -> list[float] | None:
     if point is None:
         return None
     return [point.lat, point.lng]
+
+
+def _review_markers(case: UrbanNavCase) -> list[dict[str, Any]]:
+    """Build colored review markers for one case.
+
+    Args:
+        case: UrbanNav case.
+
+    Returns:
+        Marker dictionaries consumed by the Leaflet renderer.
+    """
+
+    markers: list[dict[str, Any]] = []
+    if case.origin:
+        markers.append({"point": _point_pair(case.origin), "kind": "start", "label": "S"})
+
+    sequence = case.raw.get("gt_destination_sequence")
+    if isinstance(sequence, list) and sequence:
+        for index, item in enumerate(sequence, start=1):
+            point = _point_from_payload(item)
+            if point is None:
+                continue
+            kind = "end" if index == len(sequence) else "stop"
+            label = "D" if kind == "end" else f"W{index}"
+            markers.append({"point": _point_pair(point), "kind": kind, "label": label})
+        return markers
+
+    route_update = case.metadata.get("route_update") if isinstance(case.metadata, dict) else None
+    if isinstance(route_update, dict):
+        original = _point_from_payload(route_update.get("original_origin"))
+        current = _point_from_payload(route_update.get("current_origin"))
+        previous = _point_from_payload(route_update.get("previous_destination"))
+        via = _point_from_payload(route_update.get("via_destination"))
+        final = _point_from_payload(route_update.get("final_destination"))
+        if original:
+            markers.append({"point": _point_pair(original), "kind": "start", "label": "S0"})
+        if current:
+            markers.append({"point": _point_pair(current), "kind": "current", "label": "C"})
+        if previous:
+            markers.append({"point": _point_pair(previous), "kind": "previous", "label": "OLD"})
+        if via:
+            markers.append({"point": _point_pair(via), "kind": "via", "label": "V"})
+        if final:
+            markers.append({"point": _point_pair(final), "kind": "final", "label": "D"})
+        if markers:
+            return markers
+
+    if case.gt_destination and case.gt_destination.point:
+        markers.append({"point": _point_pair(case.gt_destination.point), "kind": "end", "label": "D"})
+    elif case.gt_route:
+        markers.append({"point": _point_pair(case.gt_route[-1]), "kind": "end", "label": "D"})
+    return markers
+
+
+def _route_update_old_route(case: UrbanNavCase) -> list[list[float]]:
+    """Return an old route polyline for route-update review cases.
+
+    Args:
+        case: UrbanNav case.
+
+    Returns:
+        Leaflet coordinate pairs.
+    """
+
+    route_update = case.metadata.get("route_update") if isinstance(case.metadata, dict) else None
+    if not isinstance(route_update, dict):
+        return []
+    route = route_update.get("old_route")
+    if not isinstance(route, list):
+        return []
+    points: list[list[float]] = []
+    for item in route:
+        point = _point_from_payload(item)
+        if point:
+            points.append(_point_pair(point))
+    return points
+
+
+def _point_from_payload(value: Any) -> UrbanNavPoint | None:
+    """Parse a point from a raw payload.
+
+    Args:
+        value: Raw point or destination payload.
+
+    Returns:
+        Parsed point, or ``None``.
+    """
+
+    if not isinstance(value, dict):
+        return None
+    lat = value.get("lat") or value.get("latitude")
+    lng = value.get("lng") or value.get("lon") or value.get("longitude")
+    try:
+        if lat is None or lng is None:
+            return None
+        return UrbanNavPoint(lat=float(lat), lng=float(lng))
+    except Exception:
+        return None
 
 
 def _point_text(point: UrbanNavPoint | None) -> str:

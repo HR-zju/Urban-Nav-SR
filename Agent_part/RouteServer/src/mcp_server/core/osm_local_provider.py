@@ -192,7 +192,7 @@ class LocalOsmOsrmProvider(UrbanNavLiveProvider):
                 "mode": request.mode,
                 "scope_key": scope_key,
                 "router_type": router["router_type"],
-                "router_url": router["url"],
+                "router_url": router.get("url"),
                 "profile": router["profile"],
             },
             response=data,
@@ -251,6 +251,11 @@ class LocalOsmOsrmProvider(UrbanNavLiveProvider):
         if isinstance(entry, str):
             return {"router_type": "osrm", "url": entry.rstrip("/"), "profile": self.osrm_profile}
         router_type = str(entry.get("router_type") or self.default_router_type or "osrm").lower()
+        if router_type == "graph":
+            raise ValueError(
+                "router_type=graph is not allowed for benchmark GT construction; "
+                "use OSRM or Valhalla pedestrian routing instead."
+            )
         if router_type == "valhalla":
             url = str(entry.get("valhalla_url") or entry.get("url") or self.default_valhalla_url).rstrip("/")
             profile = str(entry.get("costing") or entry.get("profile") or self.valhalla_costing)

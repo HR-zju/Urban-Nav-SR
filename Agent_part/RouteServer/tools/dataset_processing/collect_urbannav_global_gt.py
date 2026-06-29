@@ -59,6 +59,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-root", required=True, type=Path, help="Output benchmark package directory.")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Global collection config JSON.")
+    parser.add_argument(
+        "--instruction-set",
+        type=Path,
+        default=None,
+        help="Optional UrbanNav instruction_set.jsonl. When set, single-stop rows are collected in instruction-plan order.",
+    )
     parser.add_argument("--target-cases", type=int, default=100, help="Target valid cases.")
     parser.add_argument("--seed", type=int, default=20260623, help="Sampling seed.")
     parser.add_argument("--origins-per-region", type=int, default=12, help="Origins sampled per region.")
@@ -137,7 +143,10 @@ async def collect_global_gt(args: argparse.Namespace) -> dict[str, Any]:
     case_concurrency = max(1, int(args.case_concurrency))
     await provider.connect()
     try:
-        pairs = iter(iter_global_collection_pairs(plan, seed=args.seed))
+        if args.instruction_set:
+            pairs = iter(iter_instruction_collection_pairs(plan, instruction_set=args.instruction_set, seed=args.seed))
+        else:
+            pairs = iter(iter_global_collection_pairs(plan, seed=args.seed))
         pending: set[asyncio.Task[dict[str, Any]]] = set()
         exhausted = False
 
@@ -584,6 +593,85 @@ def iter_global_collection_pairs(
                 yield origins[origin_offset], task, template_index
 
 
+def iter_instruction_collection_pairs(
+    plan: GlobalCollectionPlan,
+    *,
+    instruction_set: Path,
+    seed: int,
+) -> Iterable[tuple[dict[str, Any], dict[str, Any], int]]:
+    r"""Yield collection triples directly from a compiled instruction set.
+
+    Args:
+        plan: Expanded collection plan with sampled origins.
+        instruction_set: ``instruction_set.jsonl`` path.
+        seed: Deterministic origin assignment seed.
+
+    Returns:
+        Iterable of origin/task/template-index triples.
+
+    This mode preserves the instruction-plan identity:
+
+    \[
+    x_i=(I_i, c_i, s_i, T_i)
+    \]
+
+    instead of reducing the benchmark back to a small template pool.
+    """
+
+    rng = random.Random(seed)
+    origins_by_city: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for origin in plan.origins:
+        origins_by_city[_norm_city(str(origin["city"]))].append(origin)
+    for origins in origins_by_city.values():
+        rng.shuffle(origins)
+    for row in iter_json_records(instruction_set):
+        if row.get("category") not in {"poi_navigation", "implicit_need_navigation", "public_poi_navigation"}:
+            continue
+        planned_city = row.get("planned_city") if isinstance(row.get("planned_city"), dict) else {}
+        city_key = _norm_city(str(planned_city.get("city") or row.get("city") or ""))
+        origins = origins_by_city.get(city_key)
+        if not origins:
+            continue
+        index = int(row.get("global_index") or 0)
+        origin = origins[index % len(origins)]
+        task = _task_from_instruction_row(row)
+        yield origin, task, int(row.get("template_index") or 0)
+
+
+def _task_from_instruction_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Convert one instruction-set row into a collector task.
+
+    Args:
+        row: Instruction-set row.
+
+    Returns:
+        Collector-compatible task dictionary.
+    """
+
+    query_terms = [str(item) for item in row.get("query_terms") or [] if str(item).strip()]
+    if not query_terms:
+        query_terms = [str(row.get("subcategory") or "")]
+    category = str(row.get("category") or "")
+    return {
+        "case_id": str(row.get("instruction_id") or row.get("id") or ""),
+        "category": "poi_navigation" if category == "public_poi_navigation" else category,
+        "source_category": row.get("source_category"),
+        "subcategory": str(row.get("subcategory") or row.get("task_id") or "unknown"),
+        "templates": [str(row.get("instruction") or row.get("canonical_instruction") or row.get("subcategory") or "")],
+        "target_types": list(row.get("target_types") or []),
+        "ordered_target_types": list(row.get("ordered_target_types") or []),
+        "queries_by_locale": {"default": query_terms, "en": query_terms},
+        "osm_tags": list(row.get("osm_tags") or []),
+        "provider_category_map": row.get("provider_category_map") or {},
+        "semantic_tags": list(row.get("semantic_tags") or []),
+        "route_update_action": row.get("route_update_action"),
+        "allow_alternatives": category != "poi_navigation",
+        "acceptance_policy": row.get("acceptance_policy"),
+        "instruction_id": row.get("instruction_id"),
+        "global_index": row.get("global_index"),
+    }
+
+
 def _sample_region_origins(region: dict[str, Any], *, max_origins: int, rng: random.Random) -> list[dict[str, Any]]:
     """Sample local origins around a region.
 
@@ -761,7 +849,22 @@ def _case_id(origin: dict[str, Any], task: dict[str, Any], template_index: int) 
         Stable case id.
     """
 
+    if task.get("case_id"):
+        return str(task["case_id"])
     return f"urbannav-global-{origin['city']}-{origin['region_id']}-o{int(origin['origin_index']):03d}-{task['subcategory']}-t{template_index:02d}"
+
+
+def _norm_city(value: str) -> str:
+    """Normalize city names across configs.
+
+    Args:
+        value: City label.
+
+    Returns:
+        Normalized city key.
+    """
+
+    return value.strip().lower().replace(" ", "_").replace("-", "_")
 
 
 def _reject(case_id: str, origin: dict[str, Any], task: dict[str, Any], reason: str, detail: str | None = None) -> dict[str, Any]:
