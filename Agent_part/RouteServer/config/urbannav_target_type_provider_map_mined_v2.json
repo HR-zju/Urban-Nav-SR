@@ -1,0 +1,968 @@
+{
+  "version": "urbannav_target_type_provider_map_mined_v2",
+  "description": "Provider ontology used to compile UrbanNav taxonomy target types into searchable map-provider constraints.",
+  "target_types": {
+    "airport": {
+      "query_terms": [
+        "airport"
+      ],
+      "osm_tags": [
+        "aeroway=aerodrome",
+        "aeroway=terminal"
+      ],
+      "tomtom_category_set": [
+        "7380"
+      ]
+    },
+    "airport_terminal": {
+      "query_terms": [
+        "airport terminal"
+      ],
+      "osm_tags": [
+        "aeroway=terminal"
+      ],
+      "tomtom_category_set": [
+        "7380"
+      ]
+    },
+    "atm": {
+      "query_terms": [
+        "ATM",
+        "cash machine"
+      ],
+      "osm_tags": [
+        "amenity=atm"
+      ],
+      "tomtom_category_set": [
+        "7397"
+      ]
+    },
+    "attraction": {
+      "query_terms": [
+        "attraction"
+      ],
+      "osm_tags": [
+        "tourism=attraction"
+      ],
+      "tomtom_category_set": [
+        "7315"
+      ]
+    },
+    "bakery": {
+      "query_terms": [
+        "bakery"
+      ],
+      "osm_tags": [
+        "shop=bakery"
+      ],
+      "tomtom_category_set": [
+        "9362"
+      ]
+    },
+    "bank": {
+      "query_terms": [
+        "bank"
+      ],
+      "osm_tags": [
+        "amenity=bank"
+      ],
+      "tomtom_category_set": [
+        "7397"
+      ]
+    },
+    "bar": {
+      "query_terms": [
+        "bar"
+      ],
+      "osm_tags": [
+        "amenity=bar",
+        "amenity=pub"
+      ],
+      "tomtom_category_set": [
+        "9376"
+      ]
+    },
+    "beverage_shop": {
+      "query_terms": [
+        "drink shop",
+        "beverage shop"
+      ],
+      "osm_tags": [
+        "shop=beverages",
+        "amenity=cafe"
+      ],
+      "tomtom_category_set": [
+        "9362"
+      ]
+    },
+    "brand_store": {
+      "query_terms": [
+        "brand store",
+        "chain store",
+        "retail store"
+      ],
+      "osm_tags": [
+        "shop=clothes",
+        "shop=electronics",
+        "shop=mall",
+        "shop=convenience",
+        "amenity=cafe",
+        "amenity=restaurant"
+      ],
+      "tomtom_category_set": [
+        "9362"
+      ]
+    },
+    "bus_station": {
+      "query_terms": [
+        "bus station"
+      ],
+      "osm_tags": [
+        "amenity=bus_station",
+        "public_transport=station"
+      ],
+      "tomtom_category_set": [
+        "7376"
+      ]
+    },
+    "bus_stop": {
+      "query_terms": [
+        "bus stop"
+      ],
+      "osm_tags": [
+        "highway=bus_stop",
+        "public_transport=platform"
+      ],
+      "tomtom_category_set": [
+        "7376"
+      ]
+    },
+    "cafe": {
+      "query_terms": [
+        "cafe"
+      ],
+      "osm_tags": [
+        "amenity=cafe"
+      ],
+      "tomtom_category_set": [
+        "9376"
+      ]
+    },
+    "cinema": {
+      "query_terms": [
+        "cinema"
+      ],
+      "osm_tags": [
+        "amenity=cinema"
+      ],
+      "tomtom_category_set": [
+        "7315"
+      ]
+    },
+    "clinic": {
+      "query_terms": [
+        "clinic"
+      ],
+      "osm_tags": [
+        "amenity=clinic",
+        "healthcare=clinic"
+      ],
+      "tomtom_category_set": [
+        "7321"
+      ]
+    },
+    "coffee_shop": {
+      "query_terms": [
+        "coffee shop",
+        "cafe"
+      ],
+      "osm_tags": [
+        "amenity=cafe",
+        "shop=coffee"
+      ],
+      "tomtom_category_set": [
+        "9376"
+      ]
+    },
+    "convenience_store": {
+      "query_terms": [
+        "convenience store"
+      ],
+      "osm_tags": [
+        "shop=convenience"
+      ],
+      "tomtom_category_set": [
+        "9361"
+      ]
+    },
+    "coworking_space": {
+      "query_terms": [
+        "coworking space",
+        "shared office"
+      ],
+      "osm_tags": [
+        "office=coworking",
+        "amenity=coworking_space"
+      ],
+      "tomtom_category_set": [
+        "7374"
+      ]
+    },
+    "dessert_shop": {
+      "query_terms": [
+        "dessert",
+        "cake shop"
+      ],
+      "osm_tags": [
+        "shop=confectionery",
+        "amenity=cafe"
+      ],
+      "tomtom_category_set": [
+        "9362"
+      ]
+    },
+    "drugstore": {
+      "query_terms": [
+        "drugstore",
+        "chemist"
+      ],
+      "osm_tags": [
+        "amenity=pharmacy",
+        "shop=chemist"
+      ],
+      "tomtom_category_set": [
+        "9365"
+      ]
+    },
+    "education_center": {
+      "query_terms": [
+        "education center",
+        "school"
+      ],
+      "osm_tags": [
+        "amenity=school",
+        "amenity=college",
+        "amenity=university"
+      ],
+      "tomtom_category_set": [
+        "7377"
+      ]
+    },
+    "electronics_store": {
+      "query_terms": [
+        "electronics store"
+      ],
+      "osm_tags": [
+        "shop=electronics"
+      ],
+      "tomtom_category_set": [
+        "9362"
+      ]
+    },
+    "fast_food": {
+      "query_terms": [
+        "fast food"
+      ],
+      "osm_tags": [
+        "amenity=fast_food"
+      ],
+      "tomtom_category_set": [
+        "7315"
+      ]
+    },
+    "fitness_center": {
+      "query_terms": [
+        "fitness center",
+        "gym"
+      ],
+      "osm_tags": [
+        "leisure=fitness_centre",
+        "leisure=sports_centre"
+      ],
+      "tomtom_category_set": [
+        "9362"
+      ]
+    },
+    "food_court": {
+      "query_terms": [
+        "food court"
+      ],
+      "osm_tags": [
+        "amenity=food_court"
+      ],
+      "tomtom_category_set": [
+        "7315"
+      ]
+    },
+    "government_office": {
+      "query_terms": [
+        "government office"
+      ],
+      "osm_tags": [
+        "office=government",
+        "amenity=townhall"
+      ],
+      "tomtom_category_set": [
+        "7391"
+      ]
+    },
+    "grocery_store": {
+      "query_terms": [
+        "grocery store"
+      ],
+      "osm_tags": [
+        "shop=supermarket",
+        "shop=grocery"
+      ],
+      "tomtom_category_set": [
+        "9361"
+      ]
+    },
+    "gym": {
+      "query_terms": [
+        "gym"
+      ],
+      "osm_tags": [
+        "leisure=fitness_centre",
+        "leisure=sports_centre"
+      ],
+      "tomtom_category_set": [
+        "9362"
+      ]
+    },
+    "hospital": {
+      "query_terms": [
+        "hospital"
+      ],
+      "osm_tags": [
+        "amenity=hospital",
+        "healthcare=hospital"
+      ],
+      "tomtom_category_set": [
+        "7321"
+      ]
+    },
+    "hotel": {
+      "query_terms": [
+        "hotel"
+      ],
+      "osm_tags": [
+        "tourism=hotel"
+      ],
+      "tomtom_category_set": [
+        "7314"
+      ]
+    },
+    "ice_cream": {
+      "query_terms": [
+        "ice cream"
+      ],
+      "osm_tags": [
+        "amenity=ice_cream",
+        "shop=ice_cream"
+      ],
+      "tomtom_category_set": [
+        "9362"
+      ]
+    },
+    "library": {
+      "query_terms": [
+        "library"
+      ],
+      "osm_tags": [
+        "amenity=library"
+      ],
+      "tomtom_category_set": [
+        "7377"
+      ]
+    },
+    "lodging": {
+      "query_terms": [
+        "lodging",
+        "hotel"
+      ],
+      "osm_tags": [
+        "tourism=hotel",
+        "tourism=hostel",
+        "tourism=guest_house"
+      ],
+      "tomtom_category_set": [
+        "7314"
+      ]
+    },
+    "market": {
+      "query_terms": [
+        "market"
+      ],
+      "osm_tags": [
+        "amenity=marketplace",
+        "shop=supermarket",
+        "shop=grocery"
+      ],
+      "tomtom_category_set": [
+        "9361"
+      ]
+    },
+    "medical_center": {
+      "query_terms": [
+        "medical center"
+      ],
+      "osm_tags": [
+        "amenity=clinic",
+        "amenity=hospital",
+        "healthcare=clinic",
+        "healthcare=hospital"
+      ],
+      "tomtom_category_set": [
+        "7321"
+      ]
+    },
+    "metro_station": {
+      "query_terms": [
+        "metro station",
+        "subway station"
+      ],
+      "osm_tags": [
+        "railway=station",
+        "station=subway"
+      ],
+      "tomtom_category_set": [
+        "7376"
+      ]
+    },
+    "mobile_phone_store": {
+      "query_terms": [
+        "mobile phone store"
+      ],
+      "osm_tags": [
+        "shop=mobile_phone"
+      ],
+      "tomtom_category_set": [
+        "9362"
+      ]
+    },
+    "movie_theater": {
+      "query_terms": [
+        "movie theater",
+        "cinema"
+      ],
+      "osm_tags": [
+        "amenity=cinema"
+      ],
+      "tomtom_category_set": [
+        "7315"
+      ]
+    },
+    "park": {
+      "query_terms": [
+        "park"
+      ],
+      "osm_tags": [
+        "leisure=park"
+      ],
+      "tomtom_category_set": [
+        "9362"
+      ]
+    },
+    "parking": {
+      "query_terms": [
+        "parking"
+      ],
+      "osm_tags": [
+        "amenity=parking"
+      ],
+      "tomtom_category_set": [
+        "7369"
+      ]
+    },
+    "parking_lot": {
+      "query_terms": [
+        "parking lot"
+      ],
+      "osm_tags": [
+        "amenity=parking"
+      ],
+      "tomtom_category_set": [
+        "7369"
+      ]
+    },
+    "pharmacy": {
+      "query_terms": [
+        "pharmacy"
+      ],
+      "osm_tags": [
+        "amenity=pharmacy",
+        "shop=chemist"
+      ],
+      "tomtom_category_set": [
+        "9365"
+      ]
+    },
+    "playground": {
+      "query_terms": [
+        "playground"
+      ],
+      "osm_tags": [
+        "leisure=playground"
+      ],
+      "tomtom_category_set": [
+        "9362"
+      ]
+    },
+    "print_shop": {
+      "query_terms": [
+        "printing service",
+        "copy shop",
+        "print shop"
+      ],
+      "osm_tags": [
+        "shop=copyshop",
+        "shop=stationery",
+        "amenity=library"
+      ],
+      "tomtom_category_set": [
+        "9362"
+      ]
+    },
+    "public_service": {
+      "query_terms": [
+        "public service",
+        "government office"
+      ],
+      "osm_tags": [
+        "office=government",
+        "amenity=townhall"
+      ],
+      "tomtom_category_set": [
+        "7391"
+      ]
+    },
+    "public_toilet": {
+      "query_terms": [
+        "public toilet",
+        "restroom"
+      ],
+      "osm_tags": [
+        "amenity=toilets"
+      ],
+      "tomtom_category_set": [
+        "9362"
+      ]
+    },
+    "restaurant": {
+      "query_terms": [
+        "restaurant"
+      ],
+      "osm_tags": [
+        "amenity=restaurant"
+      ],
+      "tomtom_category_set": [
+        "7315"
+      ]
+    },
+    "restroom": {
+      "query_terms": [
+        "restroom",
+        "public toilet"
+      ],
+      "osm_tags": [
+        "amenity=toilets"
+      ],
+      "tomtom_category_set": [
+        "9362"
+      ]
+    },
+    "salad": {
+      "query_terms": [
+        "salad restaurant",
+        "healthy restaurant"
+      ],
+      "osm_tags": [
+        "amenity=restaurant"
+      ],
+      "tomtom_category_set": [
+        "7315"
+      ]
+    },
+    "school": {
+      "query_terms": [
+        "school"
+      ],
+      "osm_tags": [
+        "amenity=school",
+        "amenity=college",
+        "amenity=university"
+      ],
+      "tomtom_category_set": [
+        "7377"
+      ]
+    },
+    "shopping_center": {
+      "query_terms": [
+        "shopping center"
+      ],
+      "osm_tags": [
+        "shop=mall"
+      ],
+      "tomtom_category_set": [
+        "9362"
+      ]
+    },
+    "shopping_mall": {
+      "query_terms": [
+        "shopping mall"
+      ],
+      "osm_tags": [
+        "shop=mall"
+      ],
+      "tomtom_category_set": [
+        "9362"
+      ]
+    },
+    "store": {
+      "query_terms": [
+        "store"
+      ],
+      "osm_tags": [
+        "shop=convenience",
+        "shop=supermarket"
+      ],
+      "tomtom_category_set": [
+        "9362"
+      ]
+    },
+    "subway_station": {
+      "query_terms": [
+        "subway station"
+      ],
+      "osm_tags": [
+        "railway=station",
+        "station=subway"
+      ],
+      "tomtom_category_set": [
+        "7376"
+      ]
+    },
+    "supermarket": {
+      "query_terms": [
+        "supermarket"
+      ],
+      "osm_tags": [
+        "shop=supermarket"
+      ],
+      "tomtom_category_set": [
+        "9361"
+      ]
+    },
+    "takeout": {
+      "query_terms": [
+        "takeout food"
+      ],
+      "osm_tags": [
+        "amenity=fast_food",
+        "amenity=restaurant"
+      ],
+      "tomtom_category_set": [
+        "7315"
+      ]
+    },
+    "train_station": {
+      "query_terms": [
+        "train station"
+      ],
+      "osm_tags": [
+        "railway=station"
+      ],
+      "tomtom_category_set": [
+        "7376"
+      ]
+    },
+    "urgent_care": {
+      "query_terms": [
+        "urgent care",
+        "clinic"
+      ],
+      "osm_tags": [
+        "amenity=clinic",
+        "healthcare=clinic"
+      ],
+      "tomtom_category_set": [
+        "7321"
+      ]
+    },
+    "vegetarian_restaurant": {
+      "query_terms": [
+        "vegetarian restaurant"
+      ],
+      "osm_tags": [
+        "amenity=restaurant"
+      ],
+      "tomtom_category_set": [
+        "7315"
+      ]
+    },
+    "barber": {
+      "query_terms": [
+        "barber",
+        "barber shop"
+      ],
+      "osm_tags": [
+        "shop=hairdresser"
+      ],
+      "tomtom_category_set": [
+        "9362"
+      ]
+    },
+    "beauty_salon": {
+      "query_terms": [
+        "beauty salon"
+      ],
+      "osm_tags": [
+        "shop=beauty"
+      ],
+      "tomtom_category_set": [
+        "9362"
+      ]
+    },
+    "bike_shop": {
+      "query_terms": [
+        "bike shop",
+        "bicycle shop"
+      ],
+      "osm_tags": [
+        "shop=bicycle"
+      ],
+      "tomtom_category_set": [
+        "9362"
+      ]
+    },
+    "bookstore": {
+      "query_terms": [
+        "bookstore",
+        "book shop"
+      ],
+      "osm_tags": [
+        "shop=books"
+      ],
+      "tomtom_category_set": [
+        "9362"
+      ]
+    },
+    "breakfast_restaurant": {
+      "query_terms": [
+        "breakfast restaurant",
+        "brunch restaurant"
+      ],
+      "osm_tags": [
+        "amenity=restaurant",
+        "amenity=cafe"
+      ],
+      "tomtom_category_set": [
+        "7315",
+        "9376"
+      ]
+    },
+    "car_rental": {
+      "query_terms": [
+        "car rental"
+      ],
+      "osm_tags": [
+        "amenity=car_rental"
+      ],
+      "tomtom_category_set": [
+        "7312"
+      ]
+    },
+    "clothing_store": {
+      "query_terms": [
+        "clothing store"
+      ],
+      "osm_tags": [
+        "shop=clothes"
+      ],
+      "tomtom_category_set": [
+        "9362"
+      ]
+    },
+    "dry_cleaner": {
+      "query_terms": [
+        "dry cleaner",
+        "dry cleaning"
+      ],
+      "osm_tags": [
+        "shop=dry_cleaning"
+      ],
+      "tomtom_category_set": [
+        "9362"
+      ]
+    },
+    "gas_station": {
+      "query_terms": [
+        "gas station",
+        "petrol station"
+      ],
+      "osm_tags": [
+        "amenity=fuel"
+      ],
+      "tomtom_category_set": [
+        "7311"
+      ]
+    },
+    "hair_salon": {
+      "query_terms": [
+        "hair salon",
+        "hairdresser"
+      ],
+      "osm_tags": [
+        "shop=hairdresser"
+      ],
+      "tomtom_category_set": [
+        "9362"
+      ]
+    },
+    "laundromat": {
+      "query_terms": [
+        "laundromat",
+        "laundry"
+      ],
+      "osm_tags": [
+        "shop=laundry"
+      ],
+      "tomtom_category_set": [
+        "9362"
+      ]
+    },
+    "liquor_store": {
+      "query_terms": [
+        "liquor store",
+        "wine shop"
+      ],
+      "osm_tags": [
+        "shop=alcohol",
+        "shop=wine"
+      ],
+      "tomtom_category_set": [
+        "9362"
+      ]
+    },
+    "massage": {
+      "query_terms": [
+        "massage"
+      ],
+      "osm_tags": [
+        "shop=massage"
+      ],
+      "tomtom_category_set": [
+        "9362"
+      ]
+    },
+    "museum": {
+      "query_terms": [
+        "museum"
+      ],
+      "osm_tags": [
+        "tourism=museum"
+      ],
+      "tomtom_category_set": [
+        "7315"
+      ]
+    },
+    "nail_salon": {
+      "query_terms": [
+        "nail salon"
+      ],
+      "osm_tags": [
+        "shop=beauty"
+      ],
+      "tomtom_category_set": [
+        "9362"
+      ]
+    },
+    "pet_store": {
+      "query_terms": [
+        "pet store",
+        "pet supplies"
+      ],
+      "osm_tags": [
+        "shop=pet"
+      ],
+      "tomtom_category_set": [
+        "9362"
+      ]
+    },
+    "post_office": {
+      "query_terms": [
+        "post office"
+      ],
+      "osm_tags": [
+        "amenity=post_office"
+      ],
+      "tomtom_category_set": [
+        "7391"
+      ]
+    },
+    "shoe_store": {
+      "query_terms": [
+        "shoe store"
+      ],
+      "osm_tags": [
+        "shop=shoes"
+      ],
+      "tomtom_category_set": [
+        "9362"
+      ]
+    },
+    "shipping_center": {
+      "query_terms": [
+        "shipping center",
+        "parcel shipping"
+      ],
+      "osm_tags": [
+        "amenity=post_office",
+        "shop=copyshop"
+      ],
+      "tomtom_category_set": [
+        "7391",
+        "9362"
+      ]
+    },
+    "smoothie_shop": {
+      "query_terms": [
+        "smoothie shop",
+        "juice bar"
+      ],
+      "osm_tags": [
+        "amenity=cafe",
+        "shop=beverages"
+      ],
+      "tomtom_category_set": [
+        "9376",
+        "9362"
+      ]
+    },
+    "spa": {
+      "query_terms": [
+        "spa"
+      ],
+      "osm_tags": [
+        "shop=beauty",
+        "leisure=spa"
+      ],
+      "tomtom_category_set": [
+        "9362"
+      ]
+    },
+    "veterinarian": {
+      "query_terms": [
+        "veterinarian",
+        "animal hospital"
+      ],
+      "osm_tags": [
+        "amenity=veterinary"
+      ],
+      "tomtom_category_set": [
+        "7321"
+      ]
+    }
+  }
+}
