@@ -312,6 +312,924 @@ class AsyncVideoWriter:
 
 
 # -----------------------------------------------------------------------------
+# Offline ROS2 bag rendering helpers
+# -----------------------------------------------------------------------------
+
+
+def create_onnx_session(model_path: str) -> ort.InferenceSession:
+    available_providers = ort.get_available_providers()
+    providers = []
+    provider_options = []
+
+    if "CUDAExecutionProvider" in available_providers:
+        providers.append("CUDAExecutionProvider")
+        provider_options.append(
+            {
+                "gpu_mem_limit": str(8 * 1024 * 1024 * 1024),
+                "arena_extend_strategy": "kSameAsRequested",
+                "cudnn_conv_algo_search": "DEFAULT",
+            }
+        )
+
+    if "CPUExecutionProvider" in available_providers:
+        providers.append("CPUExecutionProvider")
+        provider_options.append({})
+
+    if not providers:
+        providers = ["CPUExecutionProvider"]
+        provider_options = [{}]
+
+    print(f"[onnx] loading model from {model_path} with providers {providers}")
+    try:
+        return ort.InferenceSession(
+            model_path,
+            providers=providers,
+            provider_options=provider_options,
+        )
+    except Exception as e:  # noqa: BLE001
+        if providers != ["CPUExecutionProvider"]:
+            print(f"[onnx] provider initialization failed ({e}); falling back to CPU")
+            return ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
+        raise
+
+
+def build_onnx_feed_from_names(model_input_names, observation: np.ndarray):
+    metric_spacing = np.array([[0.0, 0.51, -0.26, 0.26]], dtype=np.float32).reshape(1, 4)
+    embodiment_id = np.array([[0]], dtype=np.int64)
+
+    input_names = set(model_input_names)
+    feed = {}
+    if "observation" in input_names:
+        feed["observation"] = observation
+    elif model_input_names:
+        feed[model_input_names[0]] = observation
+    else:
+        raise RuntimeError("ONNX model has no inputs")
+
+    if "metric_spacing" in input_names:
+        feed["metric_spacing"] = metric_spacing
+    if "embodiment_id" in input_names:
+        feed["embodiment_id"] = embodiment_id
+    return feed
+
+
+def stamp_to_sec(stamp, fallback_nsec: Optional[int] = None) -> float:
+    sec = int(getattr(stamp, "sec", 0))
+    nanosec = int(getattr(stamp, "nanosec", 0))
+    if sec != 0 or nanosec != 0:
+        return sec + nanosec * 1e-9
+    if fallback_nsec is not None:
+        return float(fallback_nsec) * 1e-9
+    return time.time()
+
+
+def open_rosbag_reader(bag_path: str):
+    from rosbag2_py import ConverterOptions, SequentialReader, StorageOptions
+
+    storage_id = "sqlite3"
+    norm_path = os.path.normpath(bag_path)
+    if os.path.isfile(norm_path):
+        lower_path = norm_path.lower()
+        if lower_path.endswith(".mcap"):
+            storage_id = "mcap"
+        elif lower_path.endswith(".db3"):
+            storage_id = "sqlite3"
+    elif os.path.isdir(norm_path):
+        try:
+            entries = os.listdir(norm_path)
+        except OSError:
+            entries = []
+        if any(entry.lower().endswith(".mcap") for entry in entries):
+            storage_id = "mcap"
+
+    reader = SequentialReader()
+    reader.open(
+        StorageOptions(uri=bag_path, storage_id=storage_id),
+        ConverterOptions(
+            input_serialization_format="cdr",
+            output_serialization_format="cdr",
+        ),
+    )
+    topic_types = {topic.name: topic.type for topic in reader.get_all_topics_and_types()}
+    return reader, topic_types
+
+
+def collect_camera_timing(bag_path: str, image_topic: str):
+    from rclpy.serialization import deserialize_message
+    from rosidl_runtime_py.utilities import get_message
+
+    reader, topic_types = open_rosbag_reader(bag_path)
+    if image_topic not in topic_types:
+        raise RuntimeError(
+            f"Image topic {image_topic!r} not found in bag. Available topics: "
+            f"{sorted(topic_types)}"
+        )
+    image_msg_type = get_message(topic_types[image_topic])
+
+    count = 0
+    first_time = None
+    last_time = None
+    while reader.has_next():
+        topic, data, bag_time_nsec = reader.read_next()
+        if topic != image_topic:
+            continue
+        msg = deserialize_message(data, image_msg_type)
+        msg_time = stamp_to_sec(msg.header.stamp, bag_time_nsec)
+        if first_time is None:
+            first_time = msg_time
+        last_time = msg_time
+        count += 1
+
+    if count == 0 or first_time is None or last_time is None:
+        raise RuntimeError(f"No camera frames found on topic {image_topic!r}")
+    duration_sec = max(last_time - first_time, 1e-6)
+    fps = count / duration_sec
+    return count, first_time, last_time, duration_sec, fps
+
+
+def get_session_observation_hw(session: ort.InferenceSession):
+    selected_input = None
+    inputs = session.get_inputs()
+    for inp in inputs:
+        if inp.name == "observation":
+            selected_input = inp
+            break
+    if selected_input is None and inputs:
+        selected_input = inputs[0]
+
+    if selected_input is not None:
+        shape = list(selected_input.shape)
+        if len(shape) >= 5:
+            h, w = shape[-2], shape[-1]
+            if isinstance(h, int) and isinstance(w, int) and h > 0 and w > 0:
+                return int(h), int(w)
+    return 288, 512
+
+
+def preprocess_frame_for_observation(frame_bgr: np.ndarray, target_hw=(288, 512)) -> np.ndarray:
+    frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+    h, w = frame_rgb.shape[:2]
+    if (w, h) != (1920, 1080):
+        frame_rgb = cv2.resize(frame_rgb, (1920, 1080), interpolation=cv2.INTER_LINEAR)
+
+    target_h, target_w = target_hw
+    frame_t = torch.from_numpy(frame_rgb).permute(2, 0, 1).float().unsqueeze(0) / 255.0
+    frame_small = torch.nn.functional.interpolate(
+        frame_t,
+        size=(target_h, target_w),
+        mode="bilinear",
+        align_corners=False,
+    )[0]
+    return frame_small.cpu().numpy().astype(np.float32)
+
+
+def decode_waypoints_from_outputs(outputs):
+    traj_raw = outputs[0]
+    score_raw = outputs[1] if len(outputs) > 1 else None
+
+    if traj_raw.ndim == 3:
+        traj_raw = traj_raw[:, np.newaxis, :, :]
+    if traj_raw.ndim != 4:
+        raise RuntimeError(f"Unexpected trajectory output shape: {traj_raw.shape}")
+    if traj_raw.shape[-1] < 2:
+        raise RuntimeError(f"Trajectory output must have at least 2 coordinates: {traj_raw.shape}")
+
+    if score_raw is None:
+        score_raw = np.zeros((traj_raw.shape[0], traj_raw.shape[1]), dtype=np.float32)
+    else:
+        score_raw = np.asarray(score_raw, dtype=np.float32)
+        if score_raw.ndim == 1:
+            score_raw = score_raw.reshape(1, -1)
+        if score_raw.ndim == 0:
+            score_raw = score_raw.reshape(1, 1)
+        if score_raw.shape[1] != traj_raw.shape[1]:
+            score_raw = np.zeros((traj_raw.shape[0], traj_raw.shape[1]), dtype=np.float32)
+
+    if (
+        traj_raw.ndim >= 3
+        and score_raw.ndim >= 2
+        and traj_raw.shape[1] > 1
+        and score_raw.shape[1] > 1
+    ):
+        traj_raw = traj_raw[:, 1:]
+        score_raw = score_raw[:, 1:]
+
+    traj_raw_t = torch.from_numpy(np.asarray(traj_raw, dtype=np.float32))
+    score_raw_t = torch.from_numpy(np.asarray(score_raw, dtype=np.float32))
+
+    if traj_raw_t.shape[1] == 1:
+        traj_final = traj_raw_t[0, 0]
+    else:
+        traj, score = trajectory_nms(traj_raw_t, score_raw_t)
+        traj = traj[0]
+        score = torch.softmax(score[0], dim=0)
+        traj_final = traj[torch.argmax(score)]
+
+    wp_pred = traj_final[..., :2].unsqueeze(0)
+    wp_pred = torch.cat(
+        [
+            torch.zeros_like(wp_pred[..., 0:1, :]),
+            wp_pred[..., :-1, :],
+        ],
+        dim=-2,
+    )
+    wp_pred[..., 0] = wp_pred[..., 0].clamp(0.1, 20.0)
+    return wp_pred.detach()[0, :, :2].cpu().numpy()
+
+
+def run_onnx_on_frame_window(session: ort.InferenceSession, frame_window) -> np.ndarray:
+    model_input_names = [inp.name for inp in session.get_inputs()]
+    observation = np.stack(list(frame_window), axis=0)[np.newaxis].astype(np.float32)
+    feed = build_onnx_feed_from_names(model_input_names, observation)
+    outputs = session.run(None, feed)
+    return decode_waypoints_from_outputs(outputs)
+
+
+def render_overlay_for_frame(
+    frame_bgr: np.ndarray,
+    wp_np: Optional[np.ndarray],
+    overlay_camera_pitch_deg: float,
+    target_size=(1920, 1080),
+    color=None,
+    base_alpha: float = 0.15,
+) -> np.ndarray:
+    target_w, target_h = target_size
+    frame_resized = cv2.resize(frame_bgr, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
+    if wp_np is None:
+        return frame_resized
+
+    rgb_img = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
+    scale_x = float(target_w) / 1920.0
+    scale_y = float(target_h) / 1080.0
+    return project_waypoints_to_fisheye_image_with_polygon_new(
+        wp_np,
+        [790.0 * scale_x, float(target_w) / 2.0, float(target_h) / 2.0, 0.0],
+        rgb_img,
+        save_fig=False,
+        camera_pitch_deg=overlay_camera_pitch_deg,
+        color=color,
+        base_alpha=base_alpha,
+    )
+
+
+def draw_video_label(frame_bgr: np.ndarray, label: str) -> np.ndarray:
+    if not label:
+        return frame_bgr
+    out = frame_bgr.copy()
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    scale = 1.0
+    thickness = 2
+    (tw, th), baseline = cv2.getTextSize(label, font, scale, thickness)
+    x, y = 24, 42
+    cv2.rectangle(
+        out,
+        (x - 10, y - th - 12),
+        (x + tw + 10, y + baseline + 10),
+        (0, 0, 0),
+        -1,
+    )
+    cv2.putText(out, label, (x, y), font, scale, (255, 255, 255), thickness, cv2.LINE_AA)
+    return out
+
+
+def model_overlay_color_bgr(label: str):
+    name = label.lower()
+    if "vint" in name:
+        return (70, 190, 70)
+    if "citywalker" in name:
+        return (230, 95, 50)
+    if "gnm" in name:
+        return (40, 175, 245)
+    if "nomad" in name:
+        return (220, 75, 220)
+    return (255, 255, 255)
+
+
+def draw_top_right_legend(frame_bgr: np.ndarray, labels, colors_bgr):
+    if not labels:
+        return frame_bgr
+
+    out = frame_bgr.copy()
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    scale = 0.82
+    thickness = 2
+    margin = 18
+    pad_x = 16
+    pad_y = 14
+    swatch = 18
+    gap = 10
+    line_h = 34
+
+    text_sizes = [cv2.getTextSize(label, font, scale, thickness)[0] for label in labels]
+    max_text_w = max(w for w, _h in text_sizes)
+    box_w = pad_x * 2 + swatch + gap + max_text_w
+    box_h = pad_y * 2 + line_h * len(labels)
+    x0 = max(margin, out.shape[1] - margin - box_w)
+    y0 = margin
+
+    overlay = out.copy()
+    cv2.rectangle(overlay, (x0, y0), (x0 + box_w, y0 + box_h), (0, 0, 0), -1)
+    out = cv2.addWeighted(overlay, 0.72, out, 0.28, 0)
+
+    for idx, (label, color) in enumerate(zip(labels, colors_bgr)):
+        y = y0 + pad_y + idx * line_h + line_h // 2
+        sx0 = x0 + pad_x
+        sy0 = y - swatch // 2
+        cv2.rectangle(out, (sx0, sy0), (sx0 + swatch, sy0 + swatch), color, -1)
+        cv2.rectangle(out, (sx0, sy0), (sx0 + swatch, sy0 + swatch), (255, 255, 255), 1)
+        cv2.putText(
+            out,
+            label,
+            (sx0 + swatch + gap, y + 9),
+            font,
+            scale,
+            (255, 255, 255),
+            thickness,
+            cv2.LINE_AA,
+        )
+    return out
+
+
+def build_overlay_affine_layer(
+    wp_np: np.ndarray,
+    color_bgr,
+    overlay_camera_pitch_deg: float,
+    target_size=(1920, 1080),
+    base_alpha: float = 0.08,
+):
+    target_w, target_h = target_size
+    black = np.zeros((target_h, target_w, 3), dtype=np.uint8)
+    white = np.full((target_h, target_w, 3), 255, dtype=np.uint8)
+    black_out = render_overlay_for_frame(
+        black,
+        wp_np,
+        overlay_camera_pitch_deg=overlay_camera_pitch_deg,
+        target_size=target_size,
+        color=color_bgr,
+        base_alpha=base_alpha,
+    ).astype(np.float32)
+    white_out = render_overlay_for_frame(
+        white,
+        wp_np,
+        overlay_camera_pitch_deg=overlay_camera_pitch_deg,
+        target_size=target_size,
+        color=color_bgr,
+        base_alpha=base_alpha,
+    ).astype(np.float32)
+    gain = (white_out - black_out) / 255.0
+    bias = black_out
+    return gain, bias
+
+
+def apply_overlay_affine_layers(frame_bgr: np.ndarray, affine_layers):
+    out = frame_bgr.astype(np.float32)
+    for gain, bias in affine_layers:
+        out = out * gain + bias
+    return np.clip(out, 0, 255).astype(np.uint8)
+
+
+def render_bag_overlay_video(
+    bag_path: str,
+    image_topic: str,
+    model_path: str,
+    out_dir: str,
+    frames: int,
+    output_fps: float,
+    offline_inference_fps: float,
+    overlay_camera_pitch_deg: float,
+    max_frames: Optional[int] = None,
+):
+    from rclpy.serialization import deserialize_message
+    from rosidl_runtime_py.utilities import get_message
+
+    total_count, first_time, last_time, duration_sec, camera_fps = collect_camera_timing(
+        bag_path,
+        image_topic,
+    )
+    if max_frames is not None:
+        total_count = min(total_count, int(max_frames))
+        if total_count > 0:
+            duration_sec = max(total_count / max(camera_fps, 1e-6), 1e-6)
+    video_fps = camera_fps if camera_fps > 0 else float(output_fps)
+
+    reader, topic_types = open_rosbag_reader(bag_path)
+    image_msg_type = get_message(topic_types[image_topic])
+
+    session = create_onnx_session(model_path)
+    input_hw = get_session_observation_hw(session)
+    model_name = os.path.splitext(os.path.basename(model_path))[0]
+    bag_name = os.path.splitext(os.path.basename(os.path.normpath(bag_path)))[0]
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, f"{bag_name}_{model_name}_overlay.mp4")
+
+    writer = cv2.VideoWriter(
+        out_path,
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        video_fps,
+        (1920, 1080),
+    )
+    if not writer.isOpened():
+        raise RuntimeError(f"Failed to open VideoWriter: {out_path}")
+
+    frame_window = deque(maxlen=frames)
+    sample_period = 0.0 if offline_inference_fps <= 0 else 1.0 / offline_inference_fps
+    last_sample_time = None
+    last_wp_np = None
+    frame_idx = 0
+    infer_count = 0
+    t0 = time.perf_counter()
+
+    print(
+        f"[offline] {model_name}: {total_count} camera frames, "
+        f"camera_duration={last_time - first_time:.3f}s, video_fps={video_fps:.6f}"
+    )
+    try:
+        while reader.has_next():
+            topic, data, bag_time_nsec = reader.read_next()
+            if topic != image_topic:
+                continue
+            if max_frames is not None and frame_idx >= int(max_frames):
+                break
+
+            msg = deserialize_message(data, image_msg_type)
+            image_data = np.frombuffer(msg.data, dtype=np.uint8)
+            frame_bgr = cv2.imdecode(image_data, cv2.IMREAD_COLOR)
+            if frame_bgr is None:
+                print(f"[offline] {model_name}: failed to decode frame {frame_idx}, skipping")
+                continue
+
+            frame_time = stamp_to_sec(msg.header.stamp, bag_time_nsec)
+            should_sample = (
+                last_sample_time is None
+                or sample_period <= 0.0
+                or frame_time - last_sample_time >= sample_period - 1e-6
+            )
+            if should_sample:
+                frame_window.append(preprocess_frame_for_observation(frame_bgr, input_hw))
+                last_sample_time = frame_time
+                if len(frame_window) == frames:
+                    last_wp_np = run_onnx_on_frame_window(session, frame_window)
+                    infer_count += 1
+
+            overlay = render_overlay_for_frame(
+                frame_bgr,
+                last_wp_np,
+                overlay_camera_pitch_deg=overlay_camera_pitch_deg,
+            )
+            writer.write(overlay)
+            frame_idx += 1
+
+            if frame_idx % 100 == 0:
+                elapsed = max(time.perf_counter() - t0, 1e-6)
+                print(
+                    f"[offline] {model_name}: wrote {frame_idx}/{total_count} frames, "
+                    f"inferences={infer_count}, speed={frame_idx / elapsed:.2f} fps"
+                )
+    finally:
+        writer.release()
+
+    elapsed = max(time.perf_counter() - t0, 1e-6)
+    print(
+        f"[offline] saved {out_path} ({frame_idx} frames, "
+        f"{infer_count} inferences, {elapsed:.1f}s wall time)"
+    )
+    return out_path, video_fps, frame_idx
+
+
+def stitch_overlay_videos(
+    video_paths,
+    out_path: str,
+    labels,
+    fps: float,
+    scale: float = 0.5,
+    cols: Optional[int] = None,
+):
+    if not video_paths:
+        raise ValueError("stitch_overlay_videos requires at least one video")
+
+    caps = [cv2.VideoCapture(path) for path in video_paths]
+    try:
+        for path, cap in zip(video_paths, caps):
+            if not cap.isOpened():
+                raise RuntimeError(f"Failed to open video for stitching: {path}")
+
+        counts = [int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0) for cap in caps]
+        frame_count = min(c for c in counts if c > 0) if any(c > 0 for c in counts) else 0
+        ret, first_frame = caps[0].read()
+        if not ret:
+            raise RuntimeError(f"Failed to read first frame from {video_paths[0]}")
+        caps[0].set(cv2.CAP_PROP_POS_FRAMES, 0)
+
+        h0, w0 = first_frame.shape[:2]
+        tile_w = max(2, int(round(w0 * scale)))
+        tile_h = max(2, int(round(h0 * scale)))
+        video_count = len(video_paths)
+        if cols is None or cols <= 0:
+            cols = int(np.ceil(np.sqrt(video_count)))
+        cols = max(1, min(int(cols), video_count))
+        rows = int(np.ceil(video_count / cols))
+        canvas_size = (tile_w * cols, tile_h * rows)
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        writer = cv2.VideoWriter(
+            out_path,
+            cv2.VideoWriter_fourcc(*"mp4v"),
+            fps,
+            canvas_size,
+        )
+        if not writer.isOpened():
+            raise RuntimeError(f"Failed to open stitched VideoWriter: {out_path}")
+
+        written = 0
+        try:
+            while True:
+                frames_bgr = []
+                for cap in caps:
+                    ret, frame = cap.read()
+                    if not ret:
+                        frames_bgr = []
+                        break
+                    frame = cv2.resize(frame, (tile_w, tile_h), interpolation=cv2.INTER_AREA)
+                    frames_bgr.append(frame)
+                if not frames_bgr:
+                    break
+
+                labeled = [
+                    draw_video_label(frame, labels[idx] if idx < len(labels) else "")
+                    for idx, frame in enumerate(frames_bgr)
+                ]
+                blank = np.zeros((tile_h, tile_w, 3), dtype=np.uint8)
+                grid_rows = []
+                for row_idx in range(rows):
+                    row_tiles = []
+                    for col_idx in range(cols):
+                        idx = row_idx * cols + col_idx
+                        if idx < len(labeled):
+                            row_tiles.append(labeled[idx])
+                        else:
+                            row_tiles.append(blank.copy())
+                    grid_rows.append(np.hstack(row_tiles))
+                writer.write(np.vstack(grid_rows))
+                written += 1
+                if written % 100 == 0:
+                    print(f"[stitch] wrote {written}/{frame_count} frames")
+        finally:
+            writer.release()
+    finally:
+        for cap in caps:
+            cap.release()
+
+    print(f"[stitch] saved {out_path}")
+    return out_path
+
+
+def render_bag_composite_video(
+    bag_path: str,
+    image_topic: str,
+    model_paths,
+    out_dir: str,
+    frames: int,
+    output_fps: float,
+    offline_inference_fps: float,
+    overlay_camera_pitch_deg: float,
+    max_frames: Optional[int] = None,
+    stitch_scale: float = 0.5,
+    stitch_cols: Optional[int] = None,
+):
+    from rclpy.serialization import deserialize_message
+    from rosidl_runtime_py.utilities import get_message
+
+    if not model_paths:
+        raise ValueError("render_bag_composite_video requires at least one model")
+
+    total_count, first_time, last_time, _duration_sec, camera_fps = collect_camera_timing(
+        bag_path,
+        image_topic,
+    )
+    if max_frames is not None:
+        total_count = min(total_count, int(max_frames))
+    video_fps = camera_fps if camera_fps > 0 else float(output_fps)
+
+    reader, topic_types = open_rosbag_reader(bag_path)
+    image_msg_type = get_message(topic_types[image_topic])
+
+    labels = [os.path.splitext(os.path.basename(path))[0] for path in model_paths]
+    sessions = [create_onnx_session(path) for path in model_paths]
+    input_hws = [get_session_observation_hw(session) for session in sessions]
+    last_wp_list = [None for _ in sessions]
+    affine_layers = []
+    infer_counts = [0 for _ in sessions]
+
+    bag_name = os.path.splitext(os.path.basename(os.path.normpath(bag_path)))[0]
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, f"{bag_name}_{len(model_paths)}_models_stitched.mp4")
+
+    tile_w = max(2, int(round(1920 * stitch_scale)))
+    tile_h = max(2, int(round(1080 * stitch_scale)))
+    if stitch_cols is None or stitch_cols <= 0:
+        stitch_cols = int(np.ceil(np.sqrt(len(model_paths))))
+    stitch_cols = max(1, min(int(stitch_cols), len(model_paths)))
+    rows = int(np.ceil(len(model_paths) / stitch_cols))
+    canvas_size = (tile_w * stitch_cols, tile_h * rows)
+
+    writer = cv2.VideoWriter(
+        out_path,
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        video_fps,
+        canvas_size,
+    )
+    if not writer.isOpened():
+        raise RuntimeError(f"Failed to open composite VideoWriter: {out_path}")
+
+    frame_windows = [deque(maxlen=frames) for _ in sessions]
+    sample_period = 0.0 if offline_inference_fps <= 0 else 1.0 / offline_inference_fps
+    last_sample_time = None
+    frame_idx = 0
+    t0 = time.perf_counter()
+
+    print(
+        f"[composite] {bag_name}: {total_count} camera frames, "
+        f"camera_duration={last_time - first_time:.3f}s, video_fps={video_fps:.6f}, "
+        f"models={labels}"
+    )
+    try:
+        while reader.has_next():
+            topic, data, bag_time_nsec = reader.read_next()
+            if topic != image_topic:
+                continue
+            if max_frames is not None and frame_idx >= int(max_frames):
+                break
+
+            msg = deserialize_message(data, image_msg_type)
+            image_data = np.frombuffer(msg.data, dtype=np.uint8)
+            frame_bgr = cv2.imdecode(image_data, cv2.IMREAD_COLOR)
+            if frame_bgr is None:
+                print(f"[composite] {bag_name}: failed to decode frame {frame_idx}, skipping")
+                continue
+
+            frame_time = stamp_to_sec(msg.header.stamp, bag_time_nsec)
+            should_sample = (
+                last_sample_time is None
+                or sample_period <= 0.0
+                or frame_time - last_sample_time >= sample_period - 1e-6
+            )
+            if should_sample:
+                for frame_window, input_hw in zip(frame_windows, input_hws):
+                    frame_window.append(preprocess_frame_for_observation(frame_bgr, input_hw))
+                last_sample_time = frame_time
+                for idx, session in enumerate(sessions):
+                    frame_window = frame_windows[idx]
+                    if len(frame_window) == frames:
+                        last_wp_list[idx] = run_onnx_on_frame_window(session, frame_window)
+                        infer_counts[idx] += 1
+
+            tiles = []
+            for label, wp_np in zip(labels, last_wp_list):
+                overlay = render_overlay_for_frame(
+                    frame_bgr,
+                    wp_np,
+                    overlay_camera_pitch_deg=overlay_camera_pitch_deg,
+                    target_size=(tile_w, tile_h),
+                )
+                tiles.append(draw_video_label(overlay, label))
+
+            blank = np.zeros((tile_h, tile_w, 3), dtype=np.uint8)
+            grid_rows = []
+            for row_idx in range(rows):
+                row_tiles = []
+                for col_idx in range(stitch_cols):
+                    idx = row_idx * stitch_cols + col_idx
+                    if idx < len(tiles):
+                        row_tiles.append(tiles[idx])
+                    else:
+                        row_tiles.append(blank.copy())
+                grid_rows.append(np.hstack(row_tiles))
+            writer.write(np.vstack(grid_rows))
+            frame_idx += 1
+
+            if frame_idx % 100 == 0:
+                elapsed = max(time.perf_counter() - t0, 1e-6)
+                print(
+                    f"[composite] {bag_name}: wrote {frame_idx}/{total_count} frames, "
+                    f"inferences={infer_counts}, speed={frame_idx / elapsed:.2f} fps"
+                )
+    finally:
+        writer.release()
+
+    elapsed = max(time.perf_counter() - t0, 1e-6)
+    print(
+        f"[composite] saved {out_path} ({frame_idx} frames, "
+        f"inferences={infer_counts}, {elapsed:.1f}s wall time)"
+    )
+    return out_path, video_fps, frame_idx
+
+
+def render_bag_multi_overlay_video(
+    bag_path: str,
+    image_topic: str,
+    model_paths,
+    model_labels,
+    out_dir: str,
+    frames: int,
+    output_fps: float,
+    offline_inference_fps: float,
+    overlay_camera_pitch_deg: float,
+    max_frames: Optional[int] = None,
+):
+    from rclpy.serialization import deserialize_message
+    from rosidl_runtime_py.utilities import get_message
+
+    if not model_paths:
+        raise ValueError("render_bag_multi_overlay_video requires at least one model")
+
+    total_count, first_time, last_time, _duration_sec, camera_fps = collect_camera_timing(
+        bag_path,
+        image_topic,
+    )
+    if max_frames is not None:
+        total_count = min(total_count, int(max_frames))
+    video_fps = camera_fps if camera_fps > 0 else float(output_fps)
+
+    reader, topic_types = open_rosbag_reader(bag_path)
+    image_msg_type = get_message(topic_types[image_topic])
+
+    labels = list(model_labels) if model_labels else [
+        os.path.splitext(os.path.basename(path))[0] for path in model_paths
+    ]
+    colors_bgr = [model_overlay_color_bgr(label) for label in labels]
+    sessions = [create_onnx_session(path) for path in model_paths]
+    input_hws = [get_session_observation_hw(session) for session in sessions]
+    last_wp_list = [None for _ in sessions]
+    affine_layers = []
+    infer_counts = [0 for _ in sessions]
+
+    bag_name = os.path.splitext(os.path.basename(os.path.normpath(bag_path)))[0]
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, f"{bag_name}_{len(model_paths)}_models_multi_overlay.mp4")
+
+    writer = cv2.VideoWriter(
+        out_path,
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        video_fps,
+        (1920, 1080),
+    )
+    if not writer.isOpened():
+        raise RuntimeError(f"Failed to open multi-overlay VideoWriter: {out_path}")
+
+    frame_windows = [deque(maxlen=frames) for _ in sessions]
+    sample_period = 0.0 if offline_inference_fps <= 0 else 1.0 / offline_inference_fps
+    last_sample_time = None
+    frame_idx = 0
+    t0 = time.perf_counter()
+
+    print(
+        f"[multi-overlay] {bag_name}: {total_count} camera frames, "
+        f"camera_duration={last_time - first_time:.3f}s, video_fps={video_fps:.6f}, "
+        f"models={labels}"
+    )
+    try:
+        while reader.has_next():
+            topic, data, bag_time_nsec = reader.read_next()
+            if topic != image_topic:
+                continue
+            if max_frames is not None and frame_idx >= int(max_frames):
+                break
+
+            msg = deserialize_message(data, image_msg_type)
+            image_data = np.frombuffer(msg.data, dtype=np.uint8)
+            frame_bgr = cv2.imdecode(image_data, cv2.IMREAD_COLOR)
+            if frame_bgr is None:
+                print(f"[multi-overlay] {bag_name}: failed to decode frame {frame_idx}, skipping")
+                continue
+
+            frame_time = stamp_to_sec(msg.header.stamp, bag_time_nsec)
+            should_sample = (
+                last_sample_time is None
+                or sample_period <= 0.0
+                or frame_time - last_sample_time >= sample_period - 1e-6
+            )
+            if should_sample:
+                for frame_window, input_hw in zip(frame_windows, input_hws):
+                    frame_window.append(preprocess_frame_for_observation(frame_bgr, input_hw))
+                last_sample_time = frame_time
+                for idx, session in enumerate(sessions):
+                    frame_window = frame_windows[idx]
+                    if len(frame_window) == frames:
+                        last_wp_list[idx] = run_onnx_on_frame_window(session, frame_window)
+                        infer_counts[idx] += 1
+                    affine_layers = [
+                        build_overlay_affine_layer(
+                            wp_np,
+                            color,
+                            overlay_camera_pitch_deg=overlay_camera_pitch_deg,
+                            target_size=(1920, 1080),
+                            base_alpha=0.08,
+                        )
+                        for wp_np, color in zip(last_wp_list, colors_bgr)
+                        if wp_np is not None
+                    ]
+
+            overlay = cv2.resize(frame_bgr, (1920, 1080), interpolation=cv2.INTER_LINEAR)
+            if affine_layers:
+                overlay = apply_overlay_affine_layers(overlay, affine_layers)
+            overlay = draw_top_right_legend(overlay, labels, colors_bgr)
+            writer.write(overlay)
+            frame_idx += 1
+
+            if frame_idx % 100 == 0:
+                elapsed = max(time.perf_counter() - t0, 1e-6)
+                print(
+                    f"[multi-overlay] {bag_name}: wrote {frame_idx}/{total_count} frames, "
+                    f"inferences={infer_counts}, speed={frame_idx / elapsed:.2f} fps"
+                )
+    finally:
+        writer.release()
+
+    elapsed = max(time.perf_counter() - t0, 1e-6)
+    print(
+        f"[multi-overlay] saved {out_path} ({frame_idx} frames, "
+        f"inferences={infer_counts}, {elapsed:.1f}s wall time)"
+    )
+    return out_path, video_fps, frame_idx
+
+
+def run_offline_bag_mode(args):
+    model_paths = []
+    if args.onnx_models:
+        model_paths.extend(args.onnx_models)
+    if args.onnx:
+        model_paths.append(args.onnx)
+    if not model_paths:
+        raise SystemExit("--bag mode requires --onnx or --onnx_models")
+    model_labels = args.onnx_labels or None
+    if model_labels and len(model_labels) != len(model_paths):
+        raise SystemExit(
+            f"--onnx_labels count ({len(model_labels)}) must match model count ({len(model_paths)})"
+        )
+
+    out_dir = os.path.abspath(args.offline_output_dir)
+    if args.multi_overlay_only:
+        render_bag_multi_overlay_video(
+            bag_path=args.bag,
+            image_topic=args.image_topic,
+            model_paths=model_paths,
+            model_labels=model_labels,
+            out_dir=out_dir,
+            frames=args.frames,
+            output_fps=args.output_fps,
+            offline_inference_fps=args.offline_inference_fps,
+            overlay_camera_pitch_deg=args.overlay_camera_pitch_deg,
+            max_frames=args.max_frames,
+        )
+        return
+
+    if args.composite_only:
+        render_bag_composite_video(
+            bag_path=args.bag,
+            image_topic=args.image_topic,
+            model_paths=model_paths,
+            out_dir=out_dir,
+            frames=args.frames,
+            output_fps=args.output_fps,
+            offline_inference_fps=args.offline_inference_fps,
+            overlay_camera_pitch_deg=args.overlay_camera_pitch_deg,
+            max_frames=args.max_frames,
+            stitch_scale=args.stitch_scale,
+            stitch_cols=args.stitch_cols,
+        )
+        return
+
+    rendered = []
+    rendered_fps = None
+    for model_path in model_paths:
+        out_path, video_fps, _frame_count = render_bag_overlay_video(
+            bag_path=args.bag,
+            image_topic=args.image_topic,
+            model_path=model_path,
+            out_dir=out_dir,
+            frames=args.frames,
+            output_fps=args.output_fps,
+            offline_inference_fps=args.offline_inference_fps,
+            overlay_camera_pitch_deg=args.overlay_camera_pitch_deg,
+            max_frames=args.max_frames,
+        )
+        rendered.append(out_path)
+        rendered_fps = video_fps
+
+    if args.stitch_videos:
+        labels = [os.path.splitext(os.path.basename(path))[0] for path in model_paths]
+        bag_name = os.path.splitext(os.path.basename(os.path.normpath(args.bag)))[0]
+        stitched_path = os.path.join(out_dir, f"{bag_name}_{len(rendered)}_models_stitched.mp4")
+        stitch_overlay_videos(
+            rendered,
+            stitched_path,
+            labels=labels,
+            fps=rendered_fps or args.output_fps,
+            scale=args.stitch_scale,
+            cols=args.stitch_cols,
+        )
+
+
+# -----------------------------------------------------------------------------
 # Helpers from test_nav_flow_il_realsense
 # -----------------------------------------------------------------------------
 
@@ -1229,8 +2147,83 @@ def parse_args():
     parser.add_argument(
         "--onnx",
         type=str,
-        required=True,
+        default=None,
         help="Path to ONNX model (e.g., onnx_ckpts/s1_ours_coco_sft_stage2_goal_less.onnx)",
+    )
+    parser.add_argument(
+        "--onnx_models",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Offline bag mode: one or more ONNX models to render sequentially.",
+    )
+    parser.add_argument(
+        "--onnx_labels",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Offline bag mode: display labels for --onnx_models/--onnx in the same order.",
+    )
+    parser.add_argument(
+        "--bag",
+        type=str,
+        default=None,
+        help="Offline ROS2 bag directory. When set, the script renders from the bag and exits.",
+    )
+    parser.add_argument(
+        "--image_topic",
+        type=str,
+        default="/camera_x001/image_raw/compressed",
+        help="Offline bag compressed image topic.",
+    )
+    parser.add_argument(
+        "--offline_output_dir",
+        type=str,
+        default=os.path.join(_REPO_ROOT, "Policy_part", "vis", "bag_overlay"),
+        help="Offline bag output directory for individual and stitched videos.",
+    )
+    parser.add_argument(
+        "--offline_inference_fps",
+        type=float,
+        default=6.0,
+        help=(
+            "Offline bag model inference rate. Every camera frame is still "
+            "drawn and written; intermediate frames reuse the latest prediction. "
+            "Use <=0 to infer on every camera frame."
+        ),
+    )
+    parser.add_argument(
+        "--max_frames",
+        type=int,
+        default=None,
+        help="Offline debugging limit: render at most this many camera frames.",
+    )
+    parser.add_argument(
+        "--stitch_videos",
+        action="store_true",
+        help="Offline bag mode: stitch exactly four rendered videos into a 2x2 video.",
+    )
+    parser.add_argument(
+        "--composite_only",
+        action="store_true",
+        help="Offline bag mode: write only the stitched multi-model video, without individual model videos.",
+    )
+    parser.add_argument(
+        "--multi_overlay_only",
+        action="store_true",
+        help="Offline bag mode: draw all model trajectories on one camera frame with a top-right legend.",
+    )
+    parser.add_argument(
+        "--stitch_scale",
+        type=float,
+        default=0.5,
+        help="Scale for each tile in the stitched 2x2 video (default: 0.5 -> 1920x1080 output).",
+    )
+    parser.add_argument(
+        "--stitch_cols",
+        type=int,
+        default=None,
+        help="Offline bag mode: number of columns in stitched video. Defaults to a near-square grid.",
     )
     parser.add_argument(
         "--distance_threshold",
@@ -1311,6 +2304,13 @@ def parse_args():
 
 def main():
     args = parse_args()
+    if args.bag is not None:
+        run_offline_bag_mode(args)
+        return
+
+    if args.onnx is None:
+        raise SystemExit("--onnx is required unless --bag mode uses --onnx_models")
+
     if args.overlay_topic is None:
         if args.overlay_transport == "compressed":
             args.overlay_topic = "/navflow/overlay/image_raw/compressed"
@@ -1318,36 +2318,7 @@ def main():
             args.overlay_topic = "/navflow/overlay/image_raw"
 
     # ONNX session and device
-    available_providers = ort.get_available_providers()
-    providers = []
-    provider_options = []
-
-    if "CUDAExecutionProvider" in available_providers:
-        providers.append("CUDAExecutionProvider")
-        provider_options.append(
-            {
-                "gpu_mem_limit": str(8 * 1024 * 1024 * 1024),
-                "arena_extend_strategy": "kSameAsRequested",
-                "cudnn_conv_algo_search": "DEFAULT",
-            }
-        )
-
-    if "CPUExecutionProvider" in available_providers:
-        providers.append("CPUExecutionProvider")
-        provider_options.append({})
-
-    if not providers:
-        providers = ["CPUExecutionProvider"]
-        provider_options = [{}]
-
-    print(
-        f"[onnx] loading model from {args.onnx} with providers {providers}"
-    )
-    session = ort.InferenceSession(
-        args.onnx,
-        providers=providers,
-        provider_options=provider_options,
-    )
+    session = create_onnx_session(args.onnx)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[device] using {device}")
