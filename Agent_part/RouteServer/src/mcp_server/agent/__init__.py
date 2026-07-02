@@ -22,6 +22,13 @@ from mcp_server.agent.final_inference import (
     run_routeserver_final_inference,
     write_routeserver_final_inference_artifacts,
 )
+from mcp_server.agent.session_runtime import (
+    RouteSessionRunResult,
+    RouteSessionRuntime,
+    SESSION_TRACE_SCHEMA_VERSION,
+    SessionRuntimeConfig,
+    SessionTickResult,
+)
 from mcp_server.agent.tool_runtime import AgentToolRuntime, AgentToolRuntimeConfig, RuntimeTraceLogger, ToolBudget
 
 __all__ = [
@@ -47,4 +54,9 @@ __all__ = [
     "load_routeserver_final_inference_request",
     "run_routeserver_final_inference",
     "write_routeserver_final_inference_artifacts",
+    "SESSION_TRACE_SCHEMA_VERSION",
+    "RouteSessionRuntime",
+    "SessionRuntimeConfig",
+    "SessionTickResult",
+    "RouteSessionRunResult",
 ]
