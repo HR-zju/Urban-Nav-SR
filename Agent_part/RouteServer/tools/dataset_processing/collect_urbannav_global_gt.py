@@ -287,7 +287,6 @@ async def build_global_case(
     case_id = _case_id(origin_record, task, template_index)
     radius_m = int(_setting(args.search_radius_m, config, "search_radius_m", 1200))
     candidate_limit = int(_setting(args.candidate_limit, config, "candidate_limit", 5))
-    acceptable_ratio = float(_setting(args.acceptable_route_ratio, config, "acceptable_route_ratio", 1.15))
     min_distance = float(_setting(args.min_route_distance_m, config, "min_route_distance_m", 50))
     max_distance = float(_setting(args.max_route_distance_m, config, "max_route_distance_m", 2500))
     query = _task_query(task, locale=str(origin_record.get("locale") or "default"))
@@ -345,12 +344,10 @@ async def build_global_case(
     ranked = [_with_rank(destination, rank=rank) for rank, destination in enumerate(ranked, start=1)]
     gt = ranked[0]
     best_distance = gt.reference_route_distance_m or gt.route_distance_m or 0.0
-    acceptable = [
-        destination
-        for destination in ranked
-        if task.get("allow_alternatives", False)
-        and (destination.reference_route_distance_m or float("inf")) <= best_distance * max(1.0, acceptable_ratio)
-    ] or [gt]
+    acceptable = _acceptable_destinations(ranked=ranked, task=task, config=config, args=args)
+    if not acceptable:
+        return {"case": None, "reject": _reject(case_id, origin_record, task, "no_acceptable_destination_under_policy")}
+    acceptance = _acceptance_settings(task=task, config=config, args=args)
 
     case_payload = {
         "id": case_id,
@@ -374,6 +371,9 @@ async def build_global_case(
             "route_mode": "foot",
             "route_strategy": getattr(provider, "route_strategy", getattr(provider, "osrm_profile", "foot")),
             "cost": "route_distance_m",
+            "acceptance_policy": acceptance["policy"],
+            "acceptable_route_ratio": acceptance["ratio"],
+            "acceptable_route_limit_m": acceptance["limit_m"],
             "builder_version": BUILDER_VERSION,
         },
         "cache_keys": {"poi_search": [poi_key], "routes": [record.cache_key for record in route_records]},
@@ -387,6 +387,9 @@ async def build_global_case(
             "provider_tags": _provider_tags(task=task, provider_name=provider.capabilities.provider_name),
             "provider": provider.capabilities.raw,
             "route_features": _route_features(gt.reference_route, float(best_distance)),
+            "acceptance_policy": acceptance["policy"],
+            "allow_alternatives": acceptance["allow_alternatives"],
+            "acceptable_destination_count": len(acceptable),
         },
     }
     return {
@@ -665,8 +668,10 @@ def _task_from_instruction_row(row: dict[str, Any]) -> dict[str, Any]:
         "provider_category_map": row.get("provider_category_map") or {},
         "semantic_tags": list(row.get("semantic_tags") or []),
         "route_update_action": row.get("route_update_action"),
-        "allow_alternatives": category != "poi_navigation",
+        "allow_alternatives": bool(row.get("allow_alternatives", category != "poi_navigation")),
         "acceptance_policy": row.get("acceptance_policy"),
+        "acceptable_route_ratio": row.get("acceptable_route_ratio"),
+        "acceptable_route_limit_m": row.get("acceptable_route_limit_m"),
         "instruction_id": row.get("instruction_id"),
         "global_index": row.get("global_index"),
     }
@@ -757,6 +762,126 @@ def _with_rank(destination: UrbanNavDestination, *, rank: int) -> UrbanNavDestin
     payload = destination.to_dict()
     payload["rank"] = rank
     return UrbanNavDestination.from_dict(payload)
+
+
+def _acceptable_destinations(
+    *,
+    ranked: list[UrbanNavDestination],
+    task: dict[str, Any],
+    config: dict[str, Any],
+    args: argparse.Namespace,
+) -> list[UrbanNavDestination]:
+    r"""Select the GT acceptable destination set under the task policy.
+
+    Args:
+        ranked: Routeable destinations sorted by reference route distance.
+        task: Collector task record.
+        config: Raw collection config.
+        args: Parsed CLI arguments.
+
+    Returns:
+        Destinations acceptable for destination success. For a best destination
+        distance \(d^*\), a candidate with distance \(d_i\) is accepted when:
+
+        \[
+        d_i \leq \min(\lambda d^*, L)
+        \]
+
+        where \(\lambda\) is the policy ratio and \(L\) is the optional
+        absolute nearby limit.
+    """
+
+    if not ranked:
+        return []
+    acceptance = _acceptance_settings(task=task, config=config, args=args)
+    best_distance = ranked[0].reference_route_distance_m or ranked[0].route_distance_m or 0.0
+    if best_distance <= 0:
+        return [ranked[0]]
+
+    cutoff = best_distance * max(1.0, float(acceptance["ratio"]))
+    limit_m = acceptance.get("limit_m")
+    if limit_m is not None:
+        cutoff = min(cutoff, float(limit_m))
+
+    acceptable = [
+        item
+        for item in ranked
+        if (item.reference_route_distance_m or float("inf")) <= cutoff
+    ]
+    if not acceptable and acceptance["policy"] == "nearest_provider_route":
+        return [ranked[0]]
+    return acceptable
+
+
+def _acceptance_settings(
+    *,
+    task: dict[str, Any],
+    config: dict[str, Any],
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    """Resolve task-level acceptance policy parameters.
+
+    Args:
+        task: Collector task record.
+        config: Raw collection config.
+        args: Parsed CLI arguments.
+
+    Returns:
+        Dictionary with ``policy``, ``ratio``, ``limit_m``, and
+        ``allow_alternatives``.
+    """
+
+    acceptance_config = config.get("acceptance") if isinstance(config.get("acceptance"), dict) else {}
+    policy = str(task.get("acceptance_policy") or "").strip()
+    category = str(task.get("category") or "")
+    if not policy:
+        policy = "semantic_nearby_with_route_efficiency" if category == "implicit_need_navigation" else "nearest_provider_route"
+
+    if policy == "nearest_provider_route":
+        default_ratio = _float_or_none(acceptance_config.get("nearest_route_ratio"))
+        default_limit = _float_or_none(acceptance_config.get("nearest_route_limit_m"))
+    elif policy == "semantic_nearby_poi":
+        default_ratio = _float_or_none(acceptance_config.get("nearby_route_ratio"))
+        default_limit = _float_or_none(acceptance_config.get("nearby_route_limit_m"))
+    elif policy == "semantic_nearby_with_route_efficiency":
+        default_ratio = _float_or_none(acceptance_config.get("implicit_route_ratio"))
+        default_limit = _float_or_none(acceptance_config.get("implicit_route_limit_m"))
+    else:
+        default_ratio = None
+        default_limit = None
+
+    global_ratio = float(_setting(args.acceptable_route_ratio, config, "acceptable_route_ratio", 1.15))
+    ratio = _float_or_none(task.get("acceptable_route_ratio"))
+    if ratio is None:
+        ratio = default_ratio if default_ratio is not None else global_ratio
+    limit = _float_or_none(task.get("acceptable_route_limit_m"))
+    if limit is None:
+        limit = default_limit
+
+    return {
+        "policy": policy,
+        "ratio": max(1.0, float(ratio)),
+        "limit_m": limit,
+        "allow_alternatives": bool(task.get("allow_alternatives", True)),
+    }
+
+
+def _float_or_none(value: Any) -> float | None:
+    """Parse optional float values.
+
+    Args:
+        value: Input value.
+
+    Returns:
+        Parsed float or ``None``.
+    """
+
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _dedupe_destinations(candidates: Iterable[UrbanNavDestination]) -> list[UrbanNavDestination]:

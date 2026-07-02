@@ -1,0 +1,128 @@
+{
+  "version": "urbannav_22k_distribution_plan_v1",
+  "target_cases": 22000,
+  "city_distribution": [
+    {
+      "country": "China",
+      "city": "Beijing",
+      "count": 1100
+    },
+    {
+      "country": "China",
+      "city": "Shanghai",
+      "count": 1100
+    },
+    {
+      "country": "China",
+      "city": "Shenzhen",
+      "count": 1100
+    },
+    {
+      "country": "China",
+      "city": "Hangzhou",
+      "count": 1100
+    },
+    {
+      "country": "Japan",
+      "city": "Tokyo",
+      "count": 1100
+    },
+    {
+      "country": "Japan",
+      "city": "Osaka",
+      "count": 1100
+    },
+    {
+      "country": "South Korea",
+      "city": "Seoul",
+      "count": 1100
+    },
+    {
+      "country": "Singapore",
+      "city": "Singapore",
+      "count": 1100
+    },
+    {
+      "country": "Thailand",
+      "city": "Bangkok",
+      "count": 1100
+    },
+    {
+      "country": "USA",
+      "city": "New York",
+      "count": 1100
+    },
+    {
+      "country": "USA",
+      "city": "San Francisco",
+      "count": 1100
+    },
+    {
+      "country": "USA",
+      "city": "Chicago",
+      "count": 1100
+    },
+    {
+      "country": "Canada",
+      "city": "Toronto",
+      "count": 1100
+    },
+    {
+      "country": "UK",
+      "city": "London",
+      "count": 1100
+    },
+    {
+      "country": "France",
+      "city": "Paris",
+      "count": 1100
+    },
+    {
+      "country": "Germany",
+      "city": "Berlin",
+      "count": 1100
+    },
+    {
+      "country": "Netherlands",
+      "city": "Amsterdam",
+      "count": 1100
+    },
+    {
+      "country": "Spain",
+      "city": "Barcelona",
+      "count": 1100
+    },
+    {
+      "country": "Australia",
+      "city": "Sydney",
+      "count": 1100
+    },
+    {
+      "country": "Brazil",
+      "city": "Sao Paulo",
+      "count": 1100
+    }
+  ],
+  "task_distribution": [
+    {
+      "category": "poi_navigation",
+      "label": "Explicit POI navigation",
+      "count": 8800
+    },
+    {
+      "category": "implicit_need_navigation",
+      "label": "Implicit need navigation",
+      "count": 7700
+    },
+    {
+      "category": "multi_stop_route",
+      "label": "Ordered multi-stop route",
+      "count": 3300
+    },
+    {
+      "category": "route_update_add_via",
+      "label": "Route update / reroute",
+      "count": 2200
+    }
+  ]
+}

@@ -17,6 +17,15 @@ COMPLEX_SHARDS="${URBANNAV_COMPLEX_SHARDS:-2}"
 SINGLE_TARGET_PER_SHARD="${URBANNAV_SINGLE_TARGET_PER_SHARD:-8}"
 MULTISTOP_TARGET_PER_SHARD="${URBANNAV_MULTISTOP_TARGET_PER_SHARD:-2}"
 UPDATE_TARGET_PER_SHARD="${URBANNAV_UPDATE_TARGET_PER_SHARD:-1}"
+RESUME="${URBANNAV_RESUME:-0}"
+OVERWRITE="${URBANNAV_OVERWRITE:-1}"
+
+COLLECT_MODE_ARGS=()
+if [[ "$RESUME" == "1" || "$RESUME" == "true" ]]; then
+  COLLECT_MODE_ARGS+=(--resume)
+elif [[ "$OVERWRITE" == "1" || "$OVERWRITE" == "true" ]]; then
+  COLLECT_MODE_ARGS+=(--overwrite)
+fi
 
 if [[ ! -x "$PY" ]]; then
   echo "UrbanNav python not found or not executable: $PY" >&2
@@ -90,7 +99,7 @@ for shard in $(seq 0 $((SINGLE_SHARDS - 1))); do
       --route-concurrency 1 \
       --retry 1 \
       --throttle-s 0.2 \
-      --overwrite
+      "${COLLECT_MODE_ARGS[@]}"
   ) > "$log" 2>&1 &
   echo "single shard $shard_id pid=$! log=$log"
 done
@@ -119,7 +128,7 @@ for shard in $(seq 0 $((COMPLEX_SHARDS - 1))); do
       --route-concurrency 1 \
       --retry 1 \
       --throttle-s 0.2 \
-      --overwrite
+      "${COLLECT_MODE_ARGS[@]}"
   ) > "$log" 2>&1 &
   echo "complex shard $shard_id pid=$! log=$log"
 done

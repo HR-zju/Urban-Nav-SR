@@ -33,6 +33,26 @@ DEFAULT_PROVIDER_MAP = ROUTE_SERVER_ROOT / "config" / "urbannav_target_type_prov
 DEFAULT_REGIONS = ROUTE_SERVER_ROOT / "config" / "urbannav_global_gt_collection_full_en.json"
 DEFAULT_OUTPUT_ROOT = ROUTE_SERVER_ROOT / "data" / "benchmark" / "urbannav_instruction_set_full_en_v2"
 BUILDER_VERSION = "urbannav_instruction_set_builder_v1"
+NEAREST_ACCEPTABLE_ROUTE_RATIO = 1.15
+NEARBY_ACCEPTABLE_ROUTE_RATIO = 1.75
+NEARBY_ACCEPTABLE_ROUTE_LIMIT_M = 1500.0
+IMPLICIT_ACCEPTABLE_ROUTE_RATIO = 1.75
+IMPLICIT_ACCEPTABLE_ROUTE_LIMIT_M = 1500.0
+
+IMPLICIT_ROUTE_RATIO_OVERRIDES = {
+    "restroom": 1.5,
+    "not_feeling_well": 1.5,
+    "charge_phone": 1.75,
+    "hungry": 1.75,
+    "thirsty": 1.75,
+    "buy_daily_goods": 1.75,
+    "buy_fruit": 1.75,
+    "quick_rest": 2.0,
+    "work_with_wifi": 2.0,
+    "family_kids": 2.0,
+    "parking_lot": 2.0,
+    "cheap_budget": 2.0,
+}
 
 
 @dataclass(frozen=True)
@@ -87,9 +107,11 @@ class CompiledTask:
             JSON-ready task dictionary.
         """
 
-        allow_alternatives = self.category != "poi_navigation"
-        if self.category in {"multi_stop_route", "route_update_add_via"}:
-            allow_alternatives = True
+        acceptance = _acceptance_settings(
+            category=self.category,
+            subcategory=self.subcategory,
+            instruction="",
+        )
         return {
             "task_id": self.task_id,
             "category": self.category,
@@ -108,8 +130,10 @@ class CompiledTask:
             "route_update_action": self.route_update_action,
             "quota_weight": self.quota_weight,
             "planned_count": self.planned_count,
-            "allow_alternatives": allow_alternatives,
-            "acceptance_policy": _acceptance_policy(self.category, self.subcategory),
+            "allow_alternatives": acceptance["allow_alternatives"],
+            "acceptance_policy": acceptance["acceptance_policy"],
+            "acceptable_route_ratio": acceptance["acceptable_route_ratio"],
+            "acceptable_route_limit_m": acceptance["acceptable_route_limit_m"],
         }
 
 
@@ -210,7 +234,7 @@ def build_instruction_set(
     regions_config = _load_json(regions_config_path) if regions_config_path and regions_config_path.exists() else {}
 
     task_quotas = _task_quotas(distribution, include_semantic_analysis=include_semantic_analysis)
-    city_slots = _city_slots(distribution, seed=seed)
+    city_slots = _city_slots(distribution, regions_config=regions_config, seed=seed)
     compiled = compile_tasks(
         taxonomy=taxonomy,
         provider_map=provider_map,
@@ -343,6 +367,11 @@ def build_instruction_rows(
             seen_instructions.add(instruction)
             task_offsets[task.task_id] += 1
             category_offsets[task.category] += 1
+            acceptance = _acceptance_settings(
+                category=task.category,
+                subcategory=task.subcategory,
+                instruction=instruction,
+            )
             rows.append(
                 {
                     "instruction_id": f"urbannav-{task.category}-{category_offsets[task.category]:05d}",
@@ -364,7 +393,10 @@ def build_instruction_rows(
                         "osm": list(task.osm_tags),
                         "tomtom": list(task.tomtom_category_set),
                     },
-                    "acceptance_policy": _acceptance_policy(task.category, task.subcategory),
+                    "acceptance_policy": acceptance["acceptance_policy"],
+                    "allow_alternatives": acceptance["allow_alternatives"],
+                    "acceptable_route_ratio": acceptance["acceptable_route_ratio"],
+                    "acceptable_route_limit_m": acceptance["acceptable_route_limit_m"],
                     "route_update_action": task.route_update_action,
                 }
             )
@@ -528,16 +560,32 @@ def _task_quotas(distribution: dict[str, Any], *, include_semantic_analysis: boo
     return quotas
 
 
-def _city_slots(distribution: dict[str, Any], *, seed: int) -> list[dict[str, Any]]:
+def _city_slots(distribution: dict[str, Any], *, regions_config: dict[str, Any], seed: int) -> list[dict[str, Any]]:
     """Expand city quotas into one slot per planned case.
 
     Args:
         distribution: Raw distribution plan.
+        regions_config: Region config that defines actually collectable cities.
         seed: Deterministic assignment seed.
 
     Returns:
         City slot records.
     """
+
+    available = _collectable_city_records(regions_config)
+    if available:
+        target = int(distribution.get("target_cases") or 0)
+        if target <= 0:
+            target = sum(int(item.get("count") or 0) for item in distribution.get("city_distribution", []))
+        base = target // len(available)
+        remainder = target - base * len(available)
+        slots = []
+        for index, city in enumerate(available):
+            count = base + (1 if index < remainder else 0)
+            for _ in range(max(0, count)):
+                slots.append(dict(city))
+        random.Random(seed).shuffle(slots)
+        return slots
 
     slots: list[dict[str, Any]] = []
     for item in distribution.get("city_distribution", []):
@@ -546,6 +594,26 @@ def _city_slots(distribution: dict[str, Any], *, seed: int) -> list[dict[str, An
             slots.append({"country": item.get("country"), "city": item.get("city")})
     random.Random(seed).shuffle(slots)
     return slots
+
+
+def _collectable_city_records(regions_config: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return unique cities that have collection regions.
+
+    Args:
+        regions_config: Region config.
+
+    Returns:
+        Stable list of collectable city records.
+    """
+
+    records: dict[str, dict[str, Any]] = {}
+    for region in regions_config.get("regions") or []:
+        city = str(region.get("city") or "").strip()
+        if not city:
+            continue
+        key = city.lower().replace(" ", "_").replace("-", "_")
+        records[key] = {"country": region.get("country"), "city": city}
+    return [records[key] for key in sorted(records)]
 
 
 def _allocate_by_weight(specs: list[dict[str, Any]], *, total: int) -> list[int]:
@@ -596,6 +664,14 @@ def _collection_config(
     config["version"] = "urbannav_full_instruction_collection_config_v1"
     config["source_distribution"] = distribution.get("version")
     config["instruction_set_builder_version"] = BUILDER_VERSION
+    config["acceptance"] = {
+        "nearest_route_ratio": NEAREST_ACCEPTABLE_ROUTE_RATIO,
+        "nearby_route_ratio": NEARBY_ACCEPTABLE_ROUTE_RATIO,
+        "nearby_route_limit_m": NEARBY_ACCEPTABLE_ROUTE_LIMIT_M,
+        "implicit_route_ratio": IMPLICIT_ACCEPTABLE_ROUTE_RATIO,
+        "implicit_route_limit_m": IMPLICIT_ACCEPTABLE_ROUTE_LIMIT_M,
+        "implicit_route_ratio_overrides": dict(sorted(IMPLICIT_ROUTE_RATIO_OVERRIDES.items())),
+    }
     config["tasks"] = tasks
     config["planned_single_stop_cases"] = sum(int(task.get("planned_count") or 0) for task in tasks)
     config["planned_complex_cases"] = sum(
@@ -675,6 +751,8 @@ def _render_poi_instruction(task: CompiledTask, *, idx: int, city_name: str) -> 
         "While I am in {city_name}, find {article_target} close to my starting point. {modifier}",
         "Help me get to {article_target} without going far from here. {modifier}",
         "Find a walkable option for {target} from this location. {modifier}",
+        "Find the closest {target} by walking distance from here. {modifier}",
+        "Take me to the nearest routeable {target} on foot. {modifier}",
     ]
     return _pick(patterns, idx).format(
         opener=opener,
@@ -1101,19 +1179,63 @@ def _manifest(
     }
 
 
-def _acceptance_policy(category: str, subcategory: str) -> str:
+def _acceptance_settings(*, category: str, subcategory: str, instruction: str) -> dict[str, Any]:
+    """Return instruction-level destination acceptance settings.
+
+    Args:
+        category: Normalized task category.
+        subcategory: Task subcategory.
+        instruction: Rendered instruction text.
+
+    Returns:
+        Policy fields consumed by GT builders.
+    """
+
+    policy = _acceptance_policy(category=category, subcategory=subcategory, instruction=instruction)
+    if policy == "nearest_provider_route":
+        return {
+            "acceptance_policy": policy,
+            "allow_alternatives": True,
+            "acceptable_route_ratio": NEAREST_ACCEPTABLE_ROUTE_RATIO,
+            "acceptable_route_limit_m": None,
+        }
+    if policy == "semantic_nearby_with_route_efficiency":
+        ratio = IMPLICIT_ROUTE_RATIO_OVERRIDES.get(subcategory, IMPLICIT_ACCEPTABLE_ROUTE_RATIO)
+        return {
+            "acceptance_policy": policy,
+            "allow_alternatives": True,
+            "acceptable_route_ratio": ratio,
+            "acceptable_route_limit_m": IMPLICIT_ACCEPTABLE_ROUTE_LIMIT_M,
+        }
+    if policy == "semantic_nearby_poi":
+        return {
+            "acceptance_policy": policy,
+            "allow_alternatives": True,
+            "acceptable_route_ratio": NEARBY_ACCEPTABLE_ROUTE_RATIO,
+            "acceptable_route_limit_m": NEARBY_ACCEPTABLE_ROUTE_LIMIT_M,
+        }
+    return {
+        "acceptance_policy": policy,
+        "allow_alternatives": True,
+        "acceptable_route_ratio": NEAREST_ACCEPTABLE_ROUTE_RATIO,
+        "acceptable_route_limit_m": None,
+    }
+
+
+def _acceptance_policy(*, category: str, subcategory: str, instruction: str) -> str:
     """Return the target acceptance policy name.
 
     Args:
         category: Normalized task category.
         subcategory: Task subcategory.
+        instruction: Rendered instruction text.
 
     Returns:
         Policy label.
     """
 
     if category == "poi_navigation":
-        return "nearest_provider_route"
+        return "nearest_provider_route" if _is_explicit_nearest_instruction(instruction) else "semantic_nearby_poi"
     if category == "implicit_need_navigation":
         return "semantic_nearby_with_route_efficiency"
     if category == "multi_stop_route":
@@ -1121,6 +1243,32 @@ def _acceptance_policy(category: str, subcategory: str) -> str:
     if category == "route_update_add_via":
         return "route_session_update"
     return f"analysis:{subcategory}"
+
+
+def _is_explicit_nearest_instruction(instruction: str) -> bool:
+    """Detect whether an instruction explicitly asks for the nearest option.
+
+    Args:
+        instruction: Natural-language instruction.
+
+    Returns:
+        ``True`` when the instruction should be evaluated as nearest-target
+        selection instead of generic nearby satisfaction.
+    """
+
+    text = f" {str(instruction or '').lower()} "
+    nearest_markers = (
+        " closest ",
+        " nearest ",
+        " shortest ",
+        " shortest-route ",
+        " shortest route ",
+        " minimum walking ",
+        " least walking ",
+        " as near as possible ",
+        " nearest-route ",
+    )
+    return any(marker in text for marker in nearest_markers)
 
 
 def _normalize_category(category: str) -> str:

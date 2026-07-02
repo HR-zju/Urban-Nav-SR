@@ -39,11 +39,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--extract", action="store_true", help="Run osmium extract for city/region PBFs.")
     parser.add_argument("--build-poi-index", action="store_true", help="Build local POI JSONL indexes from extracted PBFs.")
     parser.add_argument("--write-osrm-scripts", action="store_true", help="Write OSRM build/run shell scripts.")
+    parser.add_argument("--write-docker-osrm-scripts", action="store_true", help="Write Docker-based extract/build/run scripts for OSRM.")
+    parser.add_argument("--write-docker-osmium-scripts", action="store_true", help="Write Docker osmium-tool extraction scripts.")
     parser.add_argument("--write-valhalla-scripts", action="store_true", help="Write Valhalla build/run shell scripts.")
     parser.add_argument("--write-router-config", action="store_true", help="Write osm_local router config JSON.")
     parser.add_argument("--router-type", choices=["osrm", "valhalla"], default="osrm", help="Router type written to generated config.")
     parser.add_argument("--osrm-profile", default="foot", help="OSRM profile name used by routed endpoints.")
     parser.add_argument("--osrm-profile-path", default="profiles/foot.lua", help="Path to OSRM profile for generated build scripts.")
+    parser.add_argument("--docker-osrm-image", default="osrm/osrm-backend:latest", help="Docker image for OSRM backend commands.")
+    parser.add_argument("--docker-osrm-profile-path", default="/opt/foot.lua", help="OSRM profile path inside the Docker image.")
+    parser.add_argument("--docker-osmium-image", default="urbannav-osmium-tool:bookworm", help="Docker image for osmium-tool extraction commands.")
     parser.add_argument("--valhalla-costing", default="pedestrian", help="Valhalla costing model written to generated config.")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite generated files when possible.")
     return parser.parse_args()
@@ -67,6 +72,15 @@ def main() -> None:
     # machine is missing osmium/OSRM/Valhalla dependencies.
     if args.write_osrm_scripts:
         _write_osrm_scripts(plan=plan, profile_path=args.osrm_profile_path, profile=args.osrm_profile, overwrite=args.overwrite)
+    if args.write_docker_osrm_scripts:
+        _write_docker_osrm_scripts(
+            plan=plan,
+            image=args.docker_osrm_image,
+            profile_path=args.docker_osrm_profile_path,
+            overwrite=args.overwrite,
+        )
+    if args.write_docker_osmium_scripts:
+        _write_docker_osmium_scripts(plan=plan, image=args.docker_osmium_image, overwrite=args.overwrite)
     if args.write_valhalla_scripts:
         _write_valhalla_scripts(plan=plan, costing=args.valhalla_costing, overwrite=args.overwrite)
     if args.write_router_config:
@@ -252,11 +266,14 @@ def _write_osrm_scripts(*, plan: list[dict[str, Any]], profile_path: str, profil
         city_pbf = shlex.quote(str(item["city_pbf"]))
         osrm_base = shlex.quote(str(item["osrm_base"]))
         osrm_dir = shlex.quote(str(Path(item["osrm_base"]).parent))
+        osrm_pbf = shlex.quote(str(Path(item["osrm_base"]).with_suffix(".osm.pbf")))
         profile_arg = shlex.quote(profile_path)
         build_lines.extend(
             [
                 f"mkdir -p {osrm_dir}",
-                f"osrm-extract -p {profile_arg} -o {osrm_base}.osrm {city_pbf}",
+                f"rm -f {osrm_base}.osrm*",
+                f"cp -f {city_pbf} {osrm_pbf}",
+                f"osrm-extract -p {profile_arg} {osrm_pbf}",
                 f"osrm-partition {osrm_base}.osrm",
                 f"osrm-customize {osrm_base}.osrm",
                 "",
@@ -268,6 +285,170 @@ def _write_osrm_scripts(*, plan: list[dict[str, Any]], profile_path: str, profil
     run_script.write_text("\n".join(run_lines) + "\n", encoding="utf-8")
     build_script.chmod(0o755)
     run_script.chmod(0o755)
+
+
+def _write_docker_osrm_scripts(*, plan: list[dict[str, Any]], image: str, profile_path: str, overwrite: bool) -> None:
+    """Write Docker scripts for local OSM extraction and OSRM service setup.
+
+    Args:
+        plan: Asset plan.
+        image: OSRM Docker image.
+        profile_path: Foot profile path inside the OSRM image.
+        overwrite: Whether to overwrite generated scripts.
+
+    Returns:
+        None.
+    """
+
+    script_dir = Path(plan[0]["osrm_base"]).parents[1] if plan else Path("data/osm/osrm")
+    script_dir.mkdir(parents=True, exist_ok=True)
+    extract_script = script_dir / "extract_city_pbf_all_docker.sh"
+    build_script = script_dir / "build_osrm_all_docker.sh"
+    run_script = script_dir / "run_osrm_all_docker.sh"
+    stop_script = script_dir / "stop_osrm_all_docker.sh"
+    for path in (extract_script, build_script, run_script, stop_script):
+        if path.exists() and not overwrite:
+            raise FileExistsError(f"{path} exists; pass --overwrite")
+
+    image_q = shlex.quote(image)
+    profile_q = shlex.quote(profile_path)
+    extract_lines = [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        'ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"',
+        'cd "$ROOT"',
+        'PY="${URBANNAV_PYTHON:-/home/ubuntu/anaconda3/envs/UrbanNav/bin/python}"',
+        "",
+    ]
+    build_lines = [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        'ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"',
+        'cd "$ROOT"',
+        f'IMAGE="${{URBANNAV_OSRM_IMAGE:-{image_q}}}"',
+        "",
+    ]
+    run_lines = [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        'ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"',
+        'cd "$ROOT"',
+        f'IMAGE="${{URBANNAV_OSRM_IMAGE:-{image_q}}}"',
+        "",
+    ]
+    stop_lines = [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        "",
+    ]
+
+    for item in plan:
+        region = str(item["region_id"])
+        raw_pbf = shlex.quote(str(item["raw_pbf"]))
+        city_pbf = shlex.quote(str(item["city_pbf"]))
+        bbox = ",".join(str(value) for value in item["bbox"])
+        osrm_base = shlex.quote(str(item["osrm_base"]))
+        osrm_dir = shlex.quote(str(Path(item["osrm_base"]).parent))
+        osrm_pbf = shlex.quote(str(Path(item["osrm_base"]).with_suffix(".osm.pbf")))
+        container = f"urbannav-osrm-{region}"
+        port = int(item["osrm_port"])
+        extract_lines.extend(
+            [
+                f"echo '[extract] {region}'",
+                f'"$PY" tools/dataset_processing/extract_osm_bbox_with_pyosmium.py --input {raw_pbf} --output {city_pbf} --bbox={shlex.quote(bbox)} --overwrite',
+                "",
+            ]
+        )
+        build_lines.extend(
+            [
+                f"echo '[osrm-build] {region}'",
+                f"mkdir -p {osrm_dir}",
+                f"rm -f {osrm_base}.osrm*",
+                f"cp -f {city_pbf} {osrm_pbf}",
+                f"docker run --rm -v \"$PWD:/work\" -w /work \"$IMAGE\" osrm-extract -p {profile_q} {osrm_pbf}",
+                f"docker run --rm -v \"$PWD:/work\" -w /work \"$IMAGE\" osrm-partition {osrm_base}.osrm",
+                f"docker run --rm -v \"$PWD:/work\" -w /work \"$IMAGE\" osrm-customize {osrm_base}.osrm",
+                "",
+            ]
+        )
+        run_lines.extend(
+            [
+                f"docker rm -f {shlex.quote(container)} >/dev/null 2>&1 || true",
+                (
+                    f"docker run -d --name {shlex.quote(container)} "
+                    f"-p 127.0.0.1:{port}:5000 "
+                    f"-v \"$PWD:/work\" -w /work \"$IMAGE\" "
+                    f"osrm-routed --algorithm mld --port 5000 {osrm_base}.osrm"
+                ),
+                "",
+            ]
+        )
+        stop_lines.append(f"docker rm -f {shlex.quote(container)} >/dev/null 2>&1 || true")
+
+    for path, lines in (
+        (extract_script, extract_lines),
+        (build_script, build_lines),
+        (run_script, run_lines),
+        (stop_script, stop_lines),
+    ):
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        path.chmod(0o755)
+
+
+def _write_docker_osmium_scripts(*, plan: list[dict[str, Any]], image: str, overwrite: bool) -> None:
+    """Write Docker scripts for robust city PBF extraction with osmium-tool.
+
+    Args:
+        plan: Asset plan.
+        image: Local Docker image containing ``osmium-tool``.
+        overwrite: Whether to overwrite generated scripts.
+
+    Returns:
+        None.
+    """
+
+    script_dir = Path(plan[0]["osrm_base"]).parents[1] if plan else Path("data/osm/osrm")
+    script_dir.mkdir(parents=True, exist_ok=True)
+    build_image_script = script_dir / "build_osmium_tool_image_docker.sh"
+    extract_script = script_dir / "extract_city_pbf_all_osmium_docker.sh"
+    for path in (build_image_script, extract_script):
+        if path.exists() and not overwrite:
+            raise FileExistsError(f"{path} exists; pass --overwrite")
+
+    image_q = shlex.quote(image)
+    build_lines = [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        'ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"',
+        'cd "$ROOT"',
+        f'IMAGE="${{URBANNAV_OSMIUM_IMAGE:-{image_q}}}"',
+        'docker build -t "$IMAGE" docker/osmium-tool',
+        "",
+    ]
+    extract_lines = [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        'ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"',
+        'cd "$ROOT"',
+        f'IMAGE="${{URBANNAV_OSMIUM_IMAGE:-{image_q}}}"',
+        "",
+    ]
+    for item in plan:
+        region = str(item["region_id"])
+        raw_pbf = shlex.quote(str(item["raw_pbf"]))
+        city_pbf = shlex.quote(str(item["city_pbf"]))
+        bbox = ",".join(str(value) for value in item["bbox"])
+        extract_lines.extend(
+            [
+                f"echo '[osmium-extract] {region}'",
+                f"docker run --rm -v \"$PWD:/work\" -w /work \"$IMAGE\" osmium extract --strategy=complete_ways --overwrite --bbox={shlex.quote(bbox)} -o {city_pbf} {raw_pbf}",
+                "",
+            ]
+        )
+
+    for path, lines in ((build_image_script, build_lines), (extract_script, extract_lines)):
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        path.chmod(0o755)
 
 
 def _write_valhalla_scripts(*, plan: list[dict[str, Any]], costing: str, overwrite: bool) -> None:

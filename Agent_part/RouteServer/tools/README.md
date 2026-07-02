@@ -516,7 +516,7 @@ python tools/dataset_processing/process_sidewalk_dataset.py \
 
 正式 Phase1 训练数据默认在 BEV 图上绘制完整路线。路线点和 OSM raster 共享同一套 Web-Mercator -> PIL rotate -> crop -> resize 坐标变换，因此起点、终点和路线应相对 OSM 地图保持锚定。若要做消融，可加 `--bev-route-scope local_future` 只画局部未来路线，或加 `--no-bev-route-overlay` 完全关闭路线。若希望 OSM 不随车头方向旋转，可以加 `--bev-alignment north_up`；但只要 agent 固定在中心，连续播放时背景仍会随位移平移，这是 centered BEV 的坐标系定义。
 
-正式 Phase1 trajectory label 默认来自 `frame_positions.npy + frame_orientations.npy + camera_params.json` 的标定投影。投影后会固定起点为 `(0.5, 0.9)`，并平滑过近 future pose 造成的贴底回折，使轨迹从 bottom-center 单调向前。旧 `trajectory.json`/GNSS smoke 数据必须显式打开：
+正式 Phase1 trajectory label 默认来自 `frame_positions.npy + frame_orientations.npy + camera_params.json` 的标定投影。自采 foxglove 的默认 `camera_x001_camera_params.json` 使用 `camera_height_meters=0.6`、`camera_pitch_deg=+15.0`、`camera_forward_offset_m=-0.1`；投影约定为 camera frame `x=right, y=down, z=forward`，正 pitch 表示光轴在 Phase1 投影中向下倾斜。旧 `trajectory.json`/GNSS smoke 数据必须显式打开：
 
 Phase1 label 现在同时写出时间条件轨迹：
 
