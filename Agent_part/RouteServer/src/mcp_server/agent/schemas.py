@@ -40,7 +40,7 @@ class ToolCall:
         ``{"name": "map_tool", "arguments": {"op": "search_poi", ...}}``。
 
     输出格式:
-        ``to_dict()`` 返回稳定 JSON，供 executor、metrics、exporter 共用。
+        ``to_dict()`` 返回稳定 JSON 供 executor、metrics、exporter 共用。
         ``to_ms_swift_dict()`` 返回 ``name/arguments`` 形态，供 ``tool_call`` role
         直接序列化为 JSON 字符串。
     """
@@ -131,8 +131,8 @@ class AgentTurn:
     role:
         ``system`` / ``user`` / ``assistant`` / ``tool_call`` / ``tool_response``。
     content:
-        原始文本或 JSON。Stage2 中 ``tool_call`` content 是 JSON object/string，
-        形如 ``{"name": "...", "arguments": {...}}``；assistant content 保留
+        原始文本或 JSON。Stage2 中 ``tool_call`` content 是 JSON object/string
+        形如 ``{"name": "...", "arguments": {...}}`` assistant content 保留
         ``<think>`` 和最终 ``<finish>`` 文本监督。
     metadata:
         解析结果、teacher 来源、时间戳等附加信息。
