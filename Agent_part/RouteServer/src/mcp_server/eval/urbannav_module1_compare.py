@@ -181,9 +181,9 @@ def score_summary(metrics: dict[str, Any], *, weights: dict[str, float] | None =
 
     active_weights = weights or DEFAULT_SCORE_WEIGHTS
     destination_success = _float(metrics.get("destination_success"))
-    hit_at_5 = _float(metrics.get("hit@5"))
+    hit_at_5 = _float(metrics.get("task_hit@5", metrics.get("hit@5")))
     route_success = _float(metrics.get("route_success"))
-    spl = _float(metrics.get("spl"))
+    spl = _float(metrics.get("task_spl", metrics.get("spl")))
     route_efficiency = _route_efficiency(metrics.get("median_route_ratio"), fallback=route_success)
     return (
         active_weights.get("destination_success", 0.0) * destination_success
@@ -207,12 +207,12 @@ def score_case(row: dict[str, Any], *, weights: dict[str, float] | None = None) 
 
     active_weights = weights or DEFAULT_SCORE_WEIGHTS
     route_success = _bool_float(row.get("route_success"))
-    route_efficiency = _route_efficiency(row.get("route_ratio"), fallback=route_success)
+    route_efficiency = _case_route_efficiency(row, fallback=route_success)
     return (
         active_weights.get("destination_success", 0.0) * _bool_float(row.get("destination_success"))
-        + active_weights.get("hit@5", 0.0) * _bool_float(row.get("hit@5"))
+        + active_weights.get("hit@5", 0.0) * _case_hit_at_5(row)
         + active_weights.get("route_success", 0.0) * route_success
-        + active_weights.get("spl", 0.0) * _float(row.get("spl"))
+        + active_weights.get("spl", 0.0) * _case_spl(row)
         + active_weights.get("route_efficiency", 0.0) * route_efficiency
     )
 
@@ -282,7 +282,7 @@ def comparison_to_markdown(report: dict[str, Any]) -> str:
         "",
         "## Ranking",
         "",
-        "| Rank | Run | Score | Relative Index | DS | Hit@5 | RS | SPL | Median Ratio | Cases |",
+        "| Rank | Run | Score | Relative Index | DS | Task Hit@5 | RS | Task SPL | Median Ratio | Cases |",
         "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for index, row in enumerate(report.get("ranking") or [], start=1):
@@ -294,9 +294,9 @@ def comparison_to_markdown(report: dict[str, Any]) -> str:
                 score=_fmt(row.get("score")),
                 relative=_fmt(row.get("relative_index")),
                 ds=_fmt(metrics.get("destination_success")),
-                hit=_fmt(metrics.get("hit@5")),
+                hit=_fmt(metrics.get("task_hit@5", metrics.get("hit@5"))),
                 rs=_fmt(metrics.get("route_success")),
-                spl=_fmt(metrics.get("spl")),
+                spl=_fmt(metrics.get("task_spl", metrics.get("spl"))),
                 ratio=_fmt(metrics.get("median_route_ratio")),
                 cases=metrics.get("total_cases"),
             )
@@ -410,6 +410,32 @@ def _route_efficiency(value: Any, *, fallback: float = 0.0) -> float:
     if ratio <= 0:
         return max(0.0, min(1.0, fallback))
     return max(0.0, min(1.0, 1.0 / max(1.0, ratio)))
+
+
+def _case_hit_at_5(row: dict[str, Any]) -> float:
+    if str(row.get("category") or "") == "multi_stop_route":
+        value = ((row.get("extended_metrics") or {}).get("multi_stop") or {}).get("stop_hit@5")
+        if value is not None:
+            return _float(value)
+    return _bool_float(row.get("hit@5"))
+
+
+def _case_spl(row: dict[str, Any]) -> float:
+    if str(row.get("category") or "") == "multi_stop_route":
+        value = ((row.get("extended_metrics") or {}).get("multi_stop") or {}).get("multi_stop_spl")
+        if value is not None:
+            return _float(value)
+    return _float(row.get("spl"))
+
+
+def _case_route_efficiency(row: dict[str, Any], *, fallback: float = 0.0) -> float:
+    if str(row.get("category") or "") == "multi_stop_route":
+        multi_stop = (row.get("extended_metrics") or {}).get("multi_stop") or {}
+        pred_total = _float(multi_stop.get("pred_total_distance_m"))
+        ref_total = _float(multi_stop.get("reference_total_distance_m"))
+        if pred_total > 0 and ref_total > 0:
+            return max(0.0, min(1.0, ref_total / max(ref_total, pred_total)))
+    return _route_efficiency(row.get("route_ratio"), fallback=fallback)
 
 
 def _float(value: Any, default: float = 0.0) -> float:

@@ -5,6 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 import asyncio
 from dataclasses import dataclass
+import math
 from typing import Any, Iterable
 
 from mcp_server.core.live_map_backend import LiveMapBackend, LiveRouteRequest
@@ -229,6 +230,12 @@ class RouteServerUrbanNavRunner(AsyncUrbanNavRunner):
                 trace={**trace, "error": "no_routeable_candidate"},
             )
         selected = _destination_with_route_distance(selected, selected_route)
+        selected_route = await self._extend_route_update_route(
+            case=case,
+            selected=selected,
+            selected_route=selected_route,
+            trace=trace,
+        )
         predicted_candidates = _attach_route_distances(candidates, route_records)
         return UrbanNavPrediction(
             case_id=case.case_id,
@@ -242,6 +249,93 @@ class RouteServerUrbanNavRunner(AsyncUrbanNavRunner):
                 "mode": self.config.mode,
             },
             trace=trace,
+        )
+
+    async def _extend_route_update_route(
+        self,
+        *,
+        case: UrbanNavCase,
+        selected: UrbanNavDestination,
+        selected_route: ReplayRouteResult,
+        trace: dict[str, Any],
+    ) -> ReplayRouteResult:
+        """Extend via/insert route-update predictions to the final destination.
+
+        Args:
+            case: Current case.
+            selected: Selected updated target. For via updates this is the
+                inserted stop.
+            selected_route: Route from current origin to ``selected``.
+            trace: Mutable prediction trace.
+
+        Returns:
+            ``selected_route`` for replacement updates, or a concatenated
+            current-origin -> via -> final route for add/insert updates.
+        """
+
+        update = _route_update_metadata(case)
+        if not _route_update_requires_final(update):
+            return selected_route
+        final_destination = _destination_from_mapping(update.get("final_destination"))
+        if final_destination is None or selected.point is None:
+            trace["route_update_extension"] = {
+                "status": "skipped",
+                "reason": "missing_final_destination_or_selected_point",
+            }
+            return selected_route
+
+        if isinstance(self.backend, ReplayUrbanNavBackendAdapter):
+            final_route = self.backend.plan_route(
+                case=case,
+                destination=final_destination,
+                origin=selected.point,
+                route_phase="via_to_final",
+            )
+        else:
+            try:
+                final_route = await self.backend.plan_route(
+                    cache_key=f"runner-route:{case.case_id}:via_to_final",
+                    request=LiveRouteRequest(origin=selected.point, destination=final_destination, mode=self.config.mode),
+                )
+            except Exception as exc:
+                trace["route_update_extension"] = {
+                    "status": "failed",
+                    "error": str(exc),
+                }
+                return selected_route
+
+        if not final_route.polyline or final_route.distance_m is None or final_route.distance_m <= 0:
+            trace["route_update_extension"] = {
+                "status": "failed",
+                "cache_key": final_route.cache_key,
+                "error": final_route.response.get("error") if isinstance(final_route.response, dict) else None,
+            }
+            return selected_route
+
+        trace["route_update_extension"] = {
+            "status": "extended_to_final",
+            "cache_key": final_route.cache_key,
+            "final_destination": final_destination.to_dict(),
+            "first_leg_distance_m": selected_route.distance_m,
+            "final_leg_distance_m": final_route.distance_m,
+        }
+        return ReplayRouteResult(
+            cache_key=f"{selected_route.cache_key}+{final_route.cache_key}",
+            provider=selected_route.provider or final_route.provider,
+            request={
+                "origin": selected_route.request.get("origin"),
+                "via_destination": selected.to_dict(),
+                "final_destination": final_destination.to_dict(),
+                "mode": self.config.mode,
+            },
+            response={"route_update_extension": "via_then_final"},
+            polyline=_append_route(list(selected_route.polyline), list(final_route.polyline)),
+            distance_m=float(selected_route.distance_m or 0.0) + float(final_route.distance_m or 0.0),
+            duration_s=(
+                float(selected_route.duration_s or 0.0) + float(final_route.duration_s or 0.0)
+                if selected_route.duration_s is not None or final_route.duration_s is not None
+                else None
+            ),
         )
 
     async def _run_multi_stop_case_async(
@@ -503,7 +597,15 @@ class RouteServerUrbanNavRunner(AsyncUrbanNavRunner):
         """
 
         if isinstance(self.backend, ReplayUrbanNavBackendAdapter):
-            return [self.backend.plan_route(case=case, destination=candidate) for candidate in candidates]
+            return [
+                self.backend.plan_route(
+                    case=case,
+                    destination=candidate,
+                    origin=origin,
+                    stop_index=stop_index,
+                )
+                for candidate in candidates
+            ]
         records: list[ReplayRouteResult] = []
         for index, candidate in enumerate(candidates, start=1):
             cache_key = (
@@ -572,22 +674,42 @@ class ReplayUrbanNavBackendAdapter:
             if 1 <= stop_index <= len(keys):
                 return self.replay_backend.search_destinations(cache_key=str(keys[stop_index - 1]))
             return ReplayPoiResult(cache_key="", provider=case.optimality_scope.poi_provider, candidates=[])
-        return self.replay_backend.search_destinations(cache_key=str(keys[0]))
+        selected_key = _select_poi_cache_key_for_case(case=case, keys=[str(key) for key in keys])
+        return self.replay_backend.search_destinations(cache_key=selected_key)
 
-    def plan_route(self, *, case: UrbanNavCase, destination: UrbanNavDestination) -> ReplayRouteResult:
+    def plan_route(
+        self,
+        *,
+        case: UrbanNavCase,
+        destination: UrbanNavDestination,
+        origin: UrbanNavPoint | None = None,
+        stop_index: int | None = None,
+        route_phase: str | None = None,
+    ) -> ReplayRouteResult:
         """Return the frozen route that corresponds to a candidate.
 
         Args:
             case: UrbanNav case with route cache keys.
             destination: Candidate destination.
+            origin: Effective route origin. Route-update and multi-stop replay
+                use this to avoid reusing an old leg for the same candidate.
+            stop_index: Optional one-based stop index for multi-stop cases.
+            route_phase: Optional explicit route phase such as
+                ``"via_to_final"``.
 
         Returns:
             Matching frozen route, or an error route record if absent.
         """
 
         destination_ids = destination.stable_ids
-        route_keys = [str(key) for key in case.cache_keys.get("routes") or []]
+        route_keys = _route_cache_keys_for_case(
+            case=case,
+            keys=[str(key) for key in case.cache_keys.get("routes") or []],
+            stop_index=stop_index,
+            route_phase=route_phase,
+        )
         fallback: ReplayRouteResult | None = None
+        destination_matches: list[ReplayRouteResult] = []
         for key in route_keys:
             try:
                 record = self.replay_backend.plan_route(cache_key=key)
@@ -597,7 +719,9 @@ class ReplayUrbanNavBackendAdapter:
                 fallback = record
             request_destination = UrbanNavDestination.from_dict(dict(record.request.get("destination") or {}))
             if destination_ids and request_destination.stable_ids & destination_ids:
-                return record
+                destination_matches.append(record)
+        if destination_matches:
+            return _best_origin_matched_route(destination_matches, origin=origin)
         return ReplayRouteResult(
             cache_key=f"missing-route:{case.case_id}:{destination.provider_poi_id or destination.name or 'unknown'}",
             provider=case.optimality_scope.route_provider,
@@ -680,6 +804,188 @@ def _route_update_metadata(case: UrbanNavCase) -> dict[str, Any]:
 
     update = case.metadata.get("route_update")
     return dict(update) if isinstance(update, dict) else {}
+
+
+def _select_poi_cache_key_for_case(*, case: UrbanNavCase, keys: list[str]) -> str:
+    """Select the replay POI cache key for a case phase.
+
+    Args:
+        case: UrbanNav case with metadata.
+        keys: Ordered POI cache keys from the case.
+
+    Returns:
+        Cache key to use for prediction search.
+
+    Route-update cases store two independent POI searches: ``previous`` for
+    the pre-update destination and ``update`` for the user's new target. The
+    runner prediction must search the updated target from the current origin,
+    so it prefers the ``update`` phase. Normal single-target cases preserve
+    the historical first-key behavior.
+    """
+
+    if not keys:
+        return ""
+    if _route_update_metadata(case):
+        for key in keys:
+            if _cache_key_has_phase(key, "update"):
+                return key
+        for key in reversed(keys):
+            if not _cache_key_has_phase(key, "previous"):
+                return key
+        return keys[-1]
+    return keys[0]
+
+
+def _route_cache_keys_for_case(
+    *,
+    case: UrbanNavCase,
+    keys: list[str],
+    stop_index: int | None,
+    route_phase: str | None = None,
+) -> list[str]:
+    """Select candidate route cache keys for the active prediction phase.
+
+    Args:
+        case: UrbanNav case.
+        keys: Ordered route cache keys from the case.
+        stop_index: Optional one-based multi-stop leg index.
+        route_phase: Optional explicit route phase.
+
+    Returns:
+        Route cache keys narrowed to the active leg/update phase when possible.
+    """
+
+    if not keys:
+        return []
+    if route_phase:
+        scoped = [key for key in keys if _cache_key_has_phase(key, route_phase)]
+        if scoped:
+            return scoped
+    if stop_index is not None:
+        phase = f"stop{stop_index:02d}"
+        scoped = [key for key in keys if _cache_key_has_phase(key, phase)]
+        return scoped or keys
+    if _route_update_metadata(case):
+        scoped = [key for key in keys if _cache_key_has_phase(key, "update")]
+        if scoped:
+            return scoped
+    return keys
+
+
+def _cache_key_has_phase(cache_key: str, phase: str) -> bool:
+    """Return whether a colon-delimited cache key contains a phase token.
+
+    Args:
+        cache_key: Replay cache key.
+        phase: Phase token such as ``"update"`` or ``"stop02"``.
+
+    Returns:
+        ``True`` when the key contains the exact phase token.
+    """
+
+    return phase in [item.strip() for item in str(cache_key).split(":")]
+
+
+def _route_update_requires_final(update: dict[str, Any]) -> bool:
+    """Return whether a route update must continue to the final destination.
+
+    Args:
+        update: Route-update metadata dictionary.
+
+    Returns:
+        ``True`` for add/insert updates where the selected updated target is a
+        via point rather than the final endpoint.
+    """
+
+    update_type = str(update.get("update_type") or "").strip()
+    return update_type in {"add_via", "insert_before_final"}
+
+
+def _destination_from_mapping(value: Any) -> UrbanNavDestination | None:
+    """Parse a destination from a mapping value.
+
+    Args:
+        value: Candidate destination payload.
+
+    Returns:
+        Parsed destination or ``None``.
+    """
+
+    if not isinstance(value, dict):
+        return None
+    try:
+        return UrbanNavDestination.from_dict(value)
+    except Exception:
+        return None
+
+
+def _best_origin_matched_route(
+    records: list[ReplayRouteResult],
+    *,
+    origin: UrbanNavPoint | None,
+) -> ReplayRouteResult:
+    """Choose the route whose stored request origin best matches ``origin``.
+
+    Args:
+        records: Route cache records already matched by destination.
+        origin: Effective route origin.
+
+    Returns:
+        Best route record. If no origin is provided, the first destination
+        match is returned.
+    """
+
+    if not records or origin is None:
+        return records[0]
+
+    scored: list[tuple[float, ReplayRouteResult]] = []
+    for record in records:
+        request_origin = _point_from_mapping(record.request.get("origin"))
+        if request_origin is None:
+            continue
+        scored.append((_distance_m(origin, request_origin), record))
+    if not scored:
+        return records[0]
+    scored.sort(key=lambda item: item[0])
+    return scored[0][1]
+
+
+def _point_from_mapping(value: Any) -> UrbanNavPoint | None:
+    """Parse a point from a mapping-like value.
+
+    Args:
+        value: Candidate point payload.
+
+    Returns:
+        Parsed point or ``None``.
+    """
+
+    if not isinstance(value, dict):
+        return None
+    try:
+        return UrbanNavPoint.from_dict(value)
+    except Exception:
+        return None
+
+
+def _distance_m(a: UrbanNavPoint, b: UrbanNavPoint) -> float:
+    """Compute great-circle distance in meters between two points.
+
+    Args:
+        a: First point.
+        b: Second point.
+
+    Returns:
+        Approximate WGS84 distance in meters.
+    """
+
+    radius_m = 6_371_000.0
+    lat1 = math.radians(a.lat)
+    lat2 = math.radians(b.lat)
+    dlat = math.radians(b.lat - a.lat)
+    dlng = math.radians(b.lng - a.lng)
+    hav = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlng / 2) ** 2
+    return 2 * radius_m * math.asin(math.sqrt(hav))
 
 
 def _is_multi_stop_case(case: UrbanNavCase) -> bool:

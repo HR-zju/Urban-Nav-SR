@@ -529,6 +529,45 @@ def _parse_json_object_from_text(text: str) -> dict[str, Any]:
     raise ValueError(f"No valid JSON object parsed from LLM response: {preview}")
 
 
+def _extract_json_array_field(text: str, field_name: str) -> list[Any] | None:
+    """Extract a complete top-level array field from partial JSON text.
+
+    This is intentionally narrow. It only recovers a syntactically complete
+    array value for a named field and does not synthesize missing model output.
+    """
+
+    pattern = re.compile(rf'"{re.escape(field_name)}"\s*:\s*(\[.*?\])', re.DOTALL)
+    for match in pattern.finditer(str(text or "")):
+        raw_array = _remove_trailing_commas(match.group(1))
+        try:
+            parsed = json.loads(raw_array)
+        except Exception:
+            continue
+        if isinstance(parsed, list):
+            return parsed
+    return None
+
+
+def _json_only_contract(schema: dict[str, Any]) -> str:
+    """Build a compact JSON-only instruction with an example schema.
+
+    Args:
+        schema: JSON-serializable example object.
+
+    Returns:
+        Prompt text that strongly discourages explanations or markdown.
+    """
+
+    return (
+        "Output requirements: return exactly one minified JSON object. "
+        "Do not output markdown, code fences, comments, analysis, natural-language explanations, "
+        "or any text before or after the JSON. "
+        "Use double quotes for all JSON strings. Use null for unknown numeric constraints. "
+        "The JSON object must follow this shape: "
+        f"{json.dumps(schema, ensure_ascii=True, separators=(',', ':'))}"
+    )
+
+
 def extract_explicit_destination_query(user_instruction: str) -> str:
     text = str(user_instruction or "").strip()
     if not text:
@@ -868,6 +907,23 @@ class IntentParser(BaseLLMService):
 
     def build_messages(self, user_instruction: str) -> list[dict[str, str]]:
         if self._prompt_profile() == "compact":
+            schema = {
+                "destination_type": "poi",
+                "destination_kind": "generic_poi",
+                "search_keywords": "restaurant|cafe",
+                "mode": "foot",
+                "radius_m": 2000,
+                "optimize_for": "distance",
+                "max_candidates": 10,
+                "hard_constraints": {
+                    "max_route_duration_min": None,
+                    "max_route_distance_m": None,
+                    "must_include_keywords": [],
+                    "exclude_keywords": [],
+                },
+                "confidence": 0.8,
+                "named_entity_confidence": 0.0,
+            }
             return [
                 {
                     "role": "system",
@@ -877,14 +933,18 @@ class IntentParser(BaseLLMService):
                         "max_candidates, hard_constraints, confidence, named_entity_confidence. "
                         "destination_kind must be one of generic_poi,named_landmark,regional_scenic_area,"
                         "administrative_area,road_or_route_label,specific_poi. mode is car/foot/bike. "
+                        "This UrbanNav benchmark is pedestrian navigation: use mode=foot unless the user "
+                        "explicitly asks to drive or use a car. "
                         "search_keywords must be concise provider-facing POI/place search text, pipe-delimited "
                         "when multiple categories are useful. hard_constraints has max_route_duration_min, "
                         "max_route_distance_m, must_include_keywords, exclude_keywords. JSON only."
+                        + " "
+                        + _json_only_contract(schema)
                     ),
                 },
                 {
                     "role": "user",
-                    "content": f"Request: {user_instruction}",
+                    "content": f"Request: {user_instruction}\nReturn the JSON object now.",
                 },
             ]
 
@@ -992,7 +1052,7 @@ class IntentParser(BaseLLMService):
         if max_tokens_env:
             payload["max_tokens"] = max(32, int(max_tokens_env))
         elif self._prompt_profile() == "compact":
-            payload["max_tokens"] = 256
+            payload["max_tokens"] = 768
         # ARK chat completions can reject JSON response_format on some endpoints/models.
         # Keep the prompt JSON-only and fall back to regex extraction instead.
         if self.settings.response_format and self.settings.provider != "ark":
@@ -1020,7 +1080,7 @@ class IntentParser(BaseLLMService):
         if max_tokens_env:
             payload["max_output_tokens"] = max(32, int(max_tokens_env))
         elif self._prompt_profile() == "compact":
-            payload["max_output_tokens"] = 256
+            payload["max_output_tokens"] = 768
         response = await client.responses.create(**payload)
         return _extract_text_from_responses_response(response)
 
@@ -1297,18 +1357,42 @@ class GoalDecomposer(BaseLLMService):
         }
 
     def build_messages(self, user_instruction: str) -> list[dict[str, str]]:
+        schema = {
+            "goals": [
+                {
+                    "goal_index": 0,
+                    "goal_type": "coffee_stop",
+                    "request_text": "buy coffee",
+                    "destination_type": "cafe",
+                    "destination_kind": "generic_poi",
+                    "search_keywords": "coffee|cafe",
+                    "mode": "foot",
+                    "radius_m": 2000,
+                    "optimize_for": "distance",
+                    "hard_constraints": {
+                        "max_route_duration_min": None,
+                        "max_route_distance_m": None,
+                        "must_include_keywords": [],
+                        "exclude_keywords": [],
+                    },
+                    "rationale": "coffee can be satisfied by a nearby cafe",
+                }
+            ],
+            "global_mode": "foot",
+            "notes": "ordered_goal_list",
+        }
         examples = [
             {
-                "request": "我今天累了，想先休息，吃顿晚餐，再看个电影",
+                "request": "I am tired, so first find somewhere to sit and rest, then dinner, then a movie.",
                 "output": {
                     "goals": [
                         {
                             "goal_index": 0,
                             "goal_type": "rest_stop",
-                            "request_text": "先找一个能坐下休息的地方",
+                            "request_text": "find somewhere to sit and rest",
                             "destination_type": "rest_stop",
                             "destination_kind": "generic_poi",
-                            "search_keywords": "咖啡馆|茶馆|书店|公园休息区",
+                            "search_keywords": "cafe|tea house|bookstore|park",
                             "mode": "foot",
                             "radius_m": 3000,
                             "optimize_for": "distance",
@@ -1323,10 +1407,10 @@ class GoalDecomposer(BaseLLMService):
                         {
                             "goal_index": 1,
                             "goal_type": "dinner",
-                            "request_text": "吃顿晚餐",
+                            "request_text": "eat dinner",
                             "destination_type": "dinner_restaurant",
                             "destination_kind": "generic_poi",
-                            "search_keywords": "餐厅|晚餐|美食|饭店",
+                            "search_keywords": "restaurant|dinner|food",
                             "mode": "foot",
                             "radius_m": 3000,
                             "optimize_for": "balanced",
@@ -1341,10 +1425,10 @@ class GoalDecomposer(BaseLLMService):
                         {
                             "goal_index": 2,
                             "goal_type": "movie",
-                            "request_text": "看个电影",
+                            "request_text": "watch a movie",
                             "destination_type": "cinema",
                             "destination_kind": "generic_poi",
-                            "search_keywords": "电影院|影院|影城",
+                            "search_keywords": "cinema|movie theater",
                             "mode": "foot",
                             "radius_m": 5000,
                             "optimize_for": "distance",
@@ -1399,21 +1483,25 @@ class GoalDecomposer(BaseLLMService):
                     "goals must be an ordered list. Each goal object must contain exactly: "
                     "goal_index, goal_type, request_text, destination_type, destination_kind, "
                     "search_keywords, mode, radius_m, optimize_for, hard_constraints, rationale. "
+                    "For English instructions, write request_text, goal_type, destination_type, search_keywords, and rationale in English. "
                     "Use open-vocabulary reasoning: goal_type and destination_type are semantic labels, not a closed taxonomy. "
                     "search_keywords must be a concise provider-facing query string, preferably pipe-delimited, that a domestic map API can retrieve. "
                     "For implicit human needs, infer the real-world POI/service supply that would satisfy the need, then write searchable keywords. "
                     "Use hard_constraints only for constraints that are explicitly stated by the user. "
                     "Allowed destination_kind values: generic_poi, named_landmark, regional_scenic_area, administrative_area, road_or_route_label, specific_poi. "
                     "Allowed mode values: car, foot, bike. Allowed optimize_for values: time, distance, balanced. "
+                    "This UrbanNav benchmark is pedestrian navigation: use mode=foot and global_mode=foot unless the user explicitly asks to drive or use a car. "
                     "If the request is single-goal, still return a one-item goals list. "
                     "Do not solve routing. Do not return destinations. Only decompose the user's instruction into ordered retrievable sub-goals."
+                    + " "
+                    + _json_only_contract(schema)
                 ),
             }
         ]
         for example in examples:
             messages.append({"role": "user", "content": f"request: {example['request']}"})
             messages.append({"role": "assistant", "content": json.dumps(example["output"], ensure_ascii=True)})
-        messages.append({"role": "user", "content": f"request: {user_instruction}"})
+        messages.append({"role": "user", "content": f"request: {user_instruction}\nReturn the JSON object now."})
         return messages
 
     def build_prompt(self, user_instruction: str) -> str:
@@ -1432,21 +1520,26 @@ class GoalDecomposer(BaseLLMService):
             "temperature": self.settings.temperature,
             "messages": self.build_messages(user_instruction),
         }
+        max_tokens_env = os.getenv("LLM_ITINERARY_MAX_TOKENS", "").strip()
+        payload["max_tokens"] = max(128, int(max_tokens_env)) if max_tokens_env else 1536
         if self.settings.response_format and self.settings.provider != "ark":
             payload["response_format"] = {"type": "json_object"}
         response = await client.chat.completions.create(**payload)
         return _extract_text_from_chat_response(response)
 
     async def _call_responses_api(self, client: Any, user_instruction: str) -> str:
-        response = await client.responses.create(
-            model=self.settings.model,
-            input=[
+        payload: dict[str, Any] = {
+            "model": self.settings.model,
+            "input": [
                 {
                     "role": "user",
                     "content": [{"type": "input_text", "text": self.build_prompt(user_instruction)}],
                 }
             ],
-        )
+        }
+        max_tokens_env = os.getenv("LLM_ITINERARY_MAX_TOKENS", "").strip()
+        payload["max_output_tokens"] = max(128, int(max_tokens_env)) if max_tokens_env else 1536
+        response = await client.responses.create(**payload)
         return _extract_text_from_responses_response(response)
 
     async def _call_llm_with_fallback(self, client: Any, user_instruction: str) -> tuple[str, str]:
@@ -1468,7 +1561,13 @@ class GoalDecomposer(BaseLLMService):
     def _normalize_output(self, user_instruction: str, parsed: dict[str, Any]) -> dict[str, Any]:
         heuristic = self.heuristic_decompose(user_instruction)
         parser = IntentParser(settings=self.settings)
-        raw_goals = parsed.get("goals")
+        raw_goals = (
+            parsed.get("goals")
+            or parsed.get("ordered_goals")
+            or parsed.get("stops")
+            or parsed.get("waypoints")
+            or parsed.get("destinations")
+        )
         if not isinstance(raw_goals, list) or not raw_goals:
             return heuristic
 
@@ -1476,7 +1575,15 @@ class GoalDecomposer(BaseLLMService):
         for index, raw_goal in enumerate(raw_goals[:4]):
             if not isinstance(raw_goal, dict):
                 continue
-            request_text = str(raw_goal.get("request_text") or "").strip()
+            request_text = str(
+                raw_goal.get("request_text")
+                or raw_goal.get("instruction")
+                or raw_goal.get("query")
+                or raw_goal.get("description")
+                or raw_goal.get("goal")
+                or raw_goal.get("name")
+                or ""
+            ).strip()
             if not request_text:
                 continue
             normalized_intent = parser._normalize_llm_output(  # type: ignore[attr-defined]
@@ -1800,6 +1907,7 @@ class CandidateReranker(BaseLLMService):
         parsed_intent: dict[str, Any],
         candidates: list[dict[str, Any]],
     ) -> list[dict[str, str]]:
+        candidate_ids = [str(item.get("id", "")).strip() for item in candidates if str(item.get("id", "")).strip()]
         simplified_candidates = [
             {
                 "id": str(item.get("id", "")),
@@ -1815,13 +1923,20 @@ class CandidateReranker(BaseLLMService):
             }
             for item in candidates
         ]
+        schema = {
+            "ranked_candidate_ids": candidate_ids[: min(len(candidate_ids), 5)] or ["candidate_id"],
+            "summary": "short",
+        }
         return [
             {
                 "role": "system",
                 "content": (
                     "You rank map destination candidates for an embodied navigation system. "
                     "Return JSON only with exactly two keys: ranked_candidate_ids and summary. "
-                    "ranked_candidate_ids must be an array of candidate ids ordered best to worst. "
+                    "ranked_candidate_ids must be a non-empty array of candidate ids ordered best to worst. "
+                    "The summary must be 12 words or fewer. "
+                    "Every id must be copied exactly from the candidate_ids list. Do not invent ids. "
+                    "Do not use candidate names, numeric ranks, coordinates, or explanations inside ranked_candidate_ids. "
                     "Prefer destinations that truly satisfy the user's semantic intent. "
                     "If the user asks for a landmark, scenic area, lake, park, tourist attraction, or named place, "
                     "rank concrete navigable scenic destinations ahead of administrative regions, roads, "
@@ -1829,6 +1944,8 @@ class CandidateReranker(BaseLLMService):
                     "words in their names or addresses. For regional scenic areas, prioritize the destination "
                     "itself or canonical sub-features directly attached to that area. Do not rank merely nearby "
                     "scenic places highly unless the candidate is clearly part of the requested area."
+                    + " "
+                    + _json_only_contract(schema)
                 ),
             },
             {
@@ -1837,7 +1954,9 @@ class CandidateReranker(BaseLLMService):
                     {
                         "user_instruction": user_instruction,
                         "parsed_intent": parsed_intent,
+                        "candidate_ids": candidate_ids,
                         "candidates": simplified_candidates,
+                        "instruction": "Rank all candidates. Return the JSON object now.",
                     },
                     ensure_ascii=True,
                 ),
@@ -1852,15 +1971,19 @@ class CandidateReranker(BaseLLMService):
         parsed_intent: dict[str, Any],
         candidates: list[dict[str, Any]],
     ) -> str:
-        response = await client.chat.completions.create(
-            model=self.settings.model,
-            temperature=self.settings.temperature,
-            messages=self.build_messages(
+        payload: dict[str, Any] = {
+            "model": self.settings.model,
+            "temperature": self.settings.temperature,
+            "messages": self.build_messages(
                 user_instruction=user_instruction,
                 parsed_intent=parsed_intent,
                 candidates=candidates,
             ),
-        )
+            "max_tokens": max(64, int(os.getenv("LLM_RERANK_MAX_TOKENS", "768") or 768)),
+        }
+        if self.settings.response_format and self.settings.provider != "ark":
+            payload["response_format"] = {"type": "json_object"}
+        response = await client.chat.completions.create(**payload)
         return _extract_text_from_chat_response(response)
 
     async def _call_responses_api(
@@ -1942,6 +2065,8 @@ class CandidateReranker(BaseLLMService):
             return None
 
         client = _create_async_client(self.settings)
+        content = ""
+        api_style_used = ""
         try:
             content, api_style_used = await self._call_llm_with_fallback(
                 client,
@@ -1950,16 +2075,56 @@ class CandidateReranker(BaseLLMService):
                 candidates=candidates,
             )
             parsed = _parse_json_object_from_text(content)
-        except Exception:
-            return None
+        except Exception as exc:
+            recovered_ids = _extract_json_array_field(content, "ranked_candidate_ids")
+            if recovered_ids:
+                parsed = {
+                    "ranked_candidate_ids": recovered_ids,
+                    "summary": "",
+                    "recovered_from_partial_json": True,
+                    "llm_parse_warning": str(exc),
+                }
+            else:
+                preview = str(content or "").strip().replace("\n", " ")
+                if len(preview) > 500:
+                    preview = preview[:500] + "..."
+                return {
+                    "ranked_candidate_ids": [],
+                    "summary": "",
+                    "error": "llm_parse_or_api_error",
+                    "llm_error": str(exc),
+                    "raw_response_preview": preview,
+                    "api_style": api_style_used,
+                }
         finally:
             await _close_async_client(client)
 
-        ranked_ids = [
-            str(item).strip()
-            for item in parsed.get("ranked_candidate_ids", [])
-            if str(item).strip()
-        ]
+        raw_ranked = (
+            parsed.get("ranked_candidate_ids")
+            or parsed.get("ranked_ids")
+            or parsed.get("candidate_ids")
+            or parsed.get("ranking")
+            or parsed.get("ranked_candidates")
+            or []
+        )
+        if isinstance(raw_ranked, str):
+            raw_ranked = [item.strip() for item in re.split(r"[,|\n]", raw_ranked) if item.strip()]
+        ranked_ids: list[str] = []
+        if isinstance(raw_ranked, list):
+            for item in raw_ranked:
+                if isinstance(item, dict):
+                    value = item.get("id") or item.get("candidate_id") or item.get("provider_poi_id") or item.get("poi_id")
+                else:
+                    value = item
+                value_text = str(value or "").strip()
+                if value_text:
+                    ranked_ids.append(value_text)
+        candidate_ids = [str(item.get("id", "")).strip() for item in candidates if str(item.get("id", "")).strip()]
+        if candidate_ids:
+            candidate_id_set = set(candidate_ids)
+            ranked_ids = [candidate_id for candidate_id in ranked_ids if candidate_id in candidate_id_set]
+            seen = set(ranked_ids)
+            ranked_ids.extend(candidate_id for candidate_id in candidate_ids if candidate_id not in seen)
         if not ranked_ids:
             return None
         return {

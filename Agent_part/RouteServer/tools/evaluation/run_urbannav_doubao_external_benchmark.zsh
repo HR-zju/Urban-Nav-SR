@@ -14,6 +14,7 @@ set -euo pipefail
 #   RUN_NAME=... SESSION=... CONCURRENCY=16 KEY_FILE=/path/key.txt
 #   PYTHON_BIN=/home/ubuntu/anaconda3/envs/UrbanNav/bin/python
 #   MAX_CASES=100  # optional smoke cap
+#   RESET_EVERY_CASES=500  # optional process restart interval for long LLM runs
 #   RESTART=1     # kill existing tmux session before start
 
 export PATH="${PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
@@ -39,6 +40,8 @@ SELECTION_STRATEGY="${SELECTION_STRATEGY:-semantic_then_route}"
 PROGRESS_INTERVAL="${PROGRESS_INTERVAL:-100}"
 HEARTBEAT_INTERVAL_S="${HEARTBEAT_INTERVAL_S:-15}"
 CHUNK_SIZE="${CHUNK_SIZE:-50}"
+RESET_EVERY_CASES="${RESET_EVERY_CASES:-0}"
+RESET_SLEEP_S="${RESET_SLEEP_S:-3}"
 LLM_PROVIDER_NAME="${LLM_PROVIDER_NAME:-ark}"
 LLM_MODEL_NAME="${LLM_MODEL_NAME:-doubao-seed-2-0-lite-260428}"
 LLM_BASE_URL="${LLM_BASE_URL:-https://ark.cn-beijing.volces.com/api/v3}"
@@ -67,6 +70,8 @@ _print_config() {
   print "llm_timeout_s=${LLM_TIMEOUT_S}"
   print "llm_max_retries=${LLM_MAX_RETRIES}"
   print "chunk_size=${CHUNK_SIZE}"
+  print "reset_every_cases=${RESET_EVERY_CASES}"
+  print "reset_sleep_s=${RESET_SLEEP_S}"
   if [[ -n "${MAX_CASES}" ]]; then
     print "max_cases=${MAX_CASES}"
   fi
@@ -102,37 +107,75 @@ print "[urbannav-doubao] concurrency=${CONCURRENCY}"
 print "[urbannav-doubao] progress_interval=${PROGRESS_INTERVAL}"
 print "[urbannav-doubao] heartbeat_interval_s=${HEARTBEAT_INTERVAL_S}"
 print "[urbannav-doubao] chunk_size=${CHUNK_SIZE}"
+print "[urbannav-doubao] reset_every_cases=${RESET_EVERY_CASES}"
+print "[urbannav-doubao] reset_sleep_s=${RESET_SLEEP_S}"
 } 2>&1 | tee -a "${PREDICT_LOG}"
 
-PYTHONUNBUFFERED=1 PYTHONPATH=src "${PYTHON_BIN}" tools/evaluation/generate_urbannav_external_predictions.py \\
-  --cases "${DATASET}" \\
-  --backend replay \\
-  --poi-cache "${POI_CACHE}" \\
-  --route-cache "${ROUTE_CACHE}" \\
-  --concurrency "${CONCURRENCY}" \\
-  --candidate-limit "${CANDIDATE_LIMIT}" \\
-  --selection-strategy "${SELECTION_STRATEGY}" \\
-  --use-llm-intent \\
-  --use-llm-reranker \\
-  --strict-llm \\
-  --api-keys-file "${KEY_FILE}" \\
-  --llm-provider "${LLM_PROVIDER_NAME}" \\
-  --llm-model "${LLM_MODEL_NAME}" \\
-  --llm-base-url "${LLM_BASE_URL}" \\
-  --llm-timeout-s "${LLM_TIMEOUT_S}" \\
-  --llm-max-retries "${LLM_MAX_RETRIES}" \\
-  --progress-interval "${PROGRESS_INTERVAL}" \\
-  --heartbeat-interval-s "${HEARTBEAT_INTERVAL_S}" \\
-  --chunk-size "${CHUNK_SIZE}" \\
-  --resume \\
+run_prediction_segment() {
+  local extra_args=("\$@")
+  PYTHONUNBUFFERED=1 PYTHONPATH=src "${PYTHON_BIN}" tools/evaluation/generate_urbannav_external_predictions.py \\
+    --cases "${DATASET}" \\
+    --backend replay \\
+    --poi-cache "${POI_CACHE}" \\
+    --route-cache "${ROUTE_CACHE}" \\
+    --concurrency "${CONCURRENCY}" \\
+    --candidate-limit "${CANDIDATE_LIMIT}" \\
+    --selection-strategy "${SELECTION_STRATEGY}" \\
+    --use-llm-intent \\
+    --use-llm-reranker \\
+    --strict-llm \\
+    --api-keys-file "${KEY_FILE}" \\
+    --llm-provider "${LLM_PROVIDER_NAME}" \\
+    --llm-model "${LLM_MODEL_NAME}" \\
+    --llm-base-url "${LLM_BASE_URL}" \\
+    --llm-timeout-s "${LLM_TIMEOUT_S}" \\
+    --llm-max-retries "${LLM_MAX_RETRIES}" \\
+    --progress-interval "${PROGRESS_INTERVAL}" \\
+    --heartbeat-interval-s "${HEARTBEAT_INTERVAL_S}" \\
+    --chunk-size "${CHUNK_SIZE}" \\
+    --resume \\
 EOF
   if [[ -n "${MAX_CASES}" ]]; then
     print "  --max-cases \"${MAX_CASES}\" \\\\" >> "${WORKER_SCRIPT}"
   fi
   cat >> "${WORKER_SCRIPT}" <<EOF
-  --output-jsonl "${PREDICTIONS_JSONL}" \\
-  --manifest-json "${PREDICT_MANIFEST}" \\
-  2>&1 | tee -a "${PREDICT_LOG}"
+    "\${extra_args[@]}" \\
+    --output-jsonl "${PREDICTIONS_JSONL}" \\
+    --manifest-json "${PREDICT_MANIFEST}" \\
+    2>&1 | tee -a "${PREDICT_LOG}"
+}
+
+target_total=\$(wc -l < "${DATASET}" | tr -d ' ')
+if [[ -n "${MAX_CASES}" ]]; then
+  target_total="${MAX_CASES}"
+fi
+
+if (( ${RESET_EVERY_CASES} > 0 )); then
+  while true; do
+    current_rows=0
+    if [[ -f "${PREDICTIONS_JSONL}" ]]; then
+      current_rows=\$(wc -l < "${PREDICTIONS_JSONL}" | tr -d ' ')
+    fi
+    if (( current_rows >= target_total )); then
+      print "[urbannav-doubao] prediction complete before segment: \${current_rows}/\${target_total}" 2>&1 | tee -a "${PREDICT_LOG}"
+      break
+    fi
+    print "[urbannav-doubao] starting reset segment at \$(date '+%Y-%m-%d %H:%M:%S'), rows=\${current_rows}/\${target_total}, limit=${RESET_EVERY_CASES}" 2>&1 | tee -a "${PREDICT_LOG}"
+    run_prediction_segment --stop-after-pending "${RESET_EVERY_CASES}"
+    new_rows=0
+    if [[ -f "${PREDICTIONS_JSONL}" ]]; then
+      new_rows=\$(wc -l < "${PREDICTIONS_JSONL}" | tr -d ' ')
+    fi
+    print "[urbannav-doubao] reset segment finished at \$(date '+%Y-%m-%d %H:%M:%S'), rows=\${new_rows}/\${target_total}" 2>&1 | tee -a "${PREDICT_LOG}"
+    if (( new_rows <= current_rows )); then
+      print "[urbannav-doubao] no new predictions were written; stopping to avoid an infinite loop" 2>&1 | tee -a "${PREDICT_LOG}"
+      exit 3
+    fi
+    sleep "${RESET_SLEEP_S}"
+  done
+else
+  run_prediction_segment
+fi
 
 PYTHONPATH=src "${PYTHON_BIN}" tools/evaluation/run_urbannav_module1_benchmark.py \\
   --dataset "${DATASET}" \\

@@ -60,6 +60,11 @@ class UrbanNavEvalRow:
             destination.
         extended_metrics: Optional category-specific metrics for tasks such as
             multi-stop route following and route-update rerouting.
+        prediction_exception: Whether the saved prediction row is an exception
+            placeholder emitted by a strict external runner rather than a valid
+            destination/route prediction.
+        prediction_exception_detail: Optional exception detail from the
+            prediction trace.
         errors: Non-fatal per-case evaluation errors.
         category: Task category copied from GT for slicing.
         subcategory: Task subcategory copied from GT for slicing.
@@ -81,6 +86,8 @@ class UrbanNavEvalRow:
     destination_match_method: str | None = None
     endpoint_error_m: float | None = None
     extended_metrics: dict[str, Any] = field(default_factory=dict)
+    prediction_exception: bool = False
+    prediction_exception_detail: str | None = None
     errors: list[str] = field(default_factory=list)
     category: str | None = None
     subcategory: str | None = None
@@ -109,6 +116,8 @@ class UrbanNavEvalRow:
             "destination_match_method": self.destination_match_method,
             "endpoint_error_m": self.endpoint_error_m,
             "extended_metrics": dict(self.extended_metrics),
+            "prediction_exception": self.prediction_exception,
+            "prediction_exception_detail": self.prediction_exception_detail,
             "errors": list(self.errors),
             "category": self.category,
             "subcategory": self.subcategory,
@@ -312,6 +321,10 @@ def evaluate_case(
             errors=errors,
         )
 
+    prediction_exception, prediction_exception_detail = _prediction_exception(prediction)
+    if prediction_exception:
+        errors.append("prediction_exception")
+
     match = match_destination(
         prediction.chosen_destination,
         acceptable,
@@ -365,6 +378,8 @@ def evaluate_case(
         destination_match_method=match.method if match else None,
         endpoint_error_m=endpoint_error,
         extended_metrics=extended_metrics,
+        prediction_exception=prediction_exception,
+        prediction_exception_detail=prediction_exception_detail,
         errors=errors,
     )
 
@@ -437,6 +452,8 @@ def evaluate_multi_stop_case(
 
     stop_results: list[dict[str, Any]] = []
     matched_count = 0
+    stop_hit_at_5_count = 0
+    stop_candidate_count = 0
     leg_route_success_count = 0
     reference_total = 0.0
     for index, leg in enumerate(gt_legs):
@@ -453,6 +470,14 @@ def evaluate_multi_stop_case(
         matched = match is not None
         if matched:
             matched_count += 1
+
+        leg_candidates = _leg_candidate_destinations(pred_legs[index]) if index < len(pred_legs) else []
+        stop_hit_at_5 = compute_hit_at_k(leg_candidates, acceptable, k=5, tolerance_m=cfg.destination_tolerance_m)
+        if stop_hit_at_5 is not None:
+            stop_candidate_count += 1
+            if stop_hit_at_5:
+                stop_hit_at_5_count += 1
+
         reference_distance = _leg_reference_distance(leg, match.destination if match else None)
         if reference_distance is not None and reference_distance > 0:
             reference_total += reference_distance
@@ -477,6 +502,7 @@ def evaluate_multi_stop_case(
                 "leg_index": int(leg.get("leg_index") or index + 1),
                 "destination_success": matched,
                 "route_success": leg_route_success,
+                "hit@5": stop_hit_at_5,
                 "matched_destination_rank": match.destination.rank if match else None,
                 "matched_destination_id": destination_identity(match.destination) if match else None,
                 "destination_match_method": match.method if match else None,
@@ -488,6 +514,7 @@ def evaluate_multi_stop_case(
 
     stop_count = len(gt_legs)
     sequence_success = stop_count > 0 and matched_count == stop_count and len(pred_sequence) == stop_count
+    sequence_hit_at_5 = stop_count > 0 and stop_candidate_count == stop_count and stop_hit_at_5_count == stop_count
     leg_route_success = stop_count > 0 and leg_route_success_count == stop_count
     pred_total = prediction.route_distance_m if prediction is not None else None
     if pred_total is None and prediction is not None:
@@ -500,6 +527,9 @@ def evaluate_multi_stop_case(
         "pred_stop_count": len(pred_sequence),
         "sequence_success": sequence_success,
         "stop_recall": matched_count / stop_count if stop_count else 0.0,
+        "stop_hit@5": stop_hit_at_5_count / stop_count if stop_count else 0.0,
+        "sequence_hit@5": sequence_hit_at_5,
+        "candidate_coverage": stop_candidate_count / stop_count if stop_count else 0.0,
         "leg_route_success": leg_route_success,
         "leg_route_success_rate": leg_route_success_count / stop_count if stop_count else 0.0,
         "multi_stop_spl": multi_stop_spl,
@@ -572,7 +602,7 @@ def evaluate_route_update_case(
     via_route_error = None
     final_endpoint_error = None
     final_destination_preserved = True
-    if update_type == "add_via" and prediction is not None and destination_match is not None:
+    if _route_update_requires_final(update_type) and prediction is not None and destination_match is not None:
         via_route_error = _route_min_error(prediction.route_polyline, destination_match.destination)
         final_endpoint_error = _endpoint_error(prediction.route_polyline, final_destination) if final_destination is not None else None
         final_destination_preserved = final_endpoint_error is not None and final_endpoint_error <= cfg.endpoint_tolerance_m
@@ -706,9 +736,14 @@ def summarize_rows(rows: list[UrbanNavEvalRow]) -> dict[str, Any]:
             "total_cases": 0,
             "destination_success": 0.0,
             "hit@5": 0.0,
+            "task_hit@5": 0.0,
             "route_success": 0.0,
             "median_route_ratio": None,
             "spl": 0.0,
+            "task_spl": 0.0,
+            "missing_prediction_count": 0,
+            "prediction_exception_count": 0,
+            "prediction_exception_rate": 0.0,
         }
 
     route_ratios = [row.route_ratio for row in rows if row.route_ratio is not None and row.route_success]
@@ -717,12 +752,75 @@ def summarize_rows(rows: list[UrbanNavEvalRow]) -> dict[str, Any]:
         "total_cases": total,
         "destination_success": _mean_bool(row.destination_success for row in rows),
         "hit@5": _mean_bool(row.hit_at_5 for row in hit_rows) if hit_rows else None,
+        "task_hit@5": _mean_float(_task_hit_at_5(row) for row in rows),
         "route_success": _mean_bool(row.route_success for row in rows),
         "median_route_ratio": median(route_ratios) if route_ratios else None,
         "spl": sum(row.spl for row in rows) / total,
+        "task_spl": sum(_task_spl(row) for row in rows) / total,
         "missing_prediction_count": sum(1 for row in rows if "missing_prediction" in row.errors),
+        "prediction_exception_count": sum(1 for row in rows if row.prediction_exception),
+        "prediction_exception_rate": _mean_bool(row.prediction_exception for row in rows),
         **_summarize_extended_rows(rows),
     }
+
+
+def _task_hit_at_5(row: UrbanNavEvalRow) -> float | None:
+    """Return the task-aware hit@5 value for aggregate reporting.
+
+    Args:
+        row: Per-case evaluation row.
+
+    Returns:
+        Per-stop hit@5 for multi-stop cases, ordinary hit@5 for other cases,
+        or ``None`` when no candidate list is available.
+    """
+
+    if row.category == "multi_stop_route":
+        multi_stop_metrics = row.extended_metrics.get("multi_stop", {})
+        value = multi_stop_metrics.get("stop_hit@5")
+        if isinstance(value, (int, float)):
+            return float(value)
+        return None
+    if row.hit_at_5 is None:
+        return None
+    return 1.0 if row.hit_at_5 else 0.0
+
+
+def _task_spl(row: UrbanNavEvalRow) -> float:
+    """Return the task-aware SPL value for aggregate reporting.
+
+    Args:
+        row: Per-case evaluation row.
+
+    Returns:
+        ``multi_stop_spl`` for ordered multi-stop cases, otherwise the generic
+        single-route SPL stored on the row.
+    """
+
+    if row.category == "multi_stop_route":
+        multi_stop_metrics = row.extended_metrics.get("multi_stop", {})
+        value = multi_stop_metrics.get("multi_stop_spl")
+        if isinstance(value, (int, float)):
+            return float(value)
+    return row.spl
+
+
+def _prediction_exception(prediction: UrbanNavPrediction) -> tuple[bool, str | None]:
+    """Return whether a prediction is a strict-run exception placeholder.
+
+    Args:
+        prediction: Saved prediction row.
+
+    Returns:
+        Pair ``(is_exception, detail)``. ``detail`` is the runner-provided
+        reason when available.
+    """
+
+    trace = prediction.trace if isinstance(prediction.trace, dict) else {}
+    if trace.get("error") != "prediction_exception":
+        return False, None
+    detail = trace.get("detail")
+    return True, str(detail) if detail is not None else None
 
 
 def summarize_by(rows: list[UrbanNavEvalRow], key: str) -> dict[str, dict[str, Any]]:
@@ -841,6 +939,9 @@ def _summarize_extended_rows(rows: list[UrbanNavEvalRow]) -> dict[str, Any]:
                 "multi_stop_case_count": len(multi_rows),
                 "multi_stop_sequence_success": _mean_bool(item.get("sequence_success") for item in multi_rows),
                 "multi_stop_stop_recall": _mean_float(item.get("stop_recall") for item in multi_rows),
+                "multi_stop_stop_hit@5": _mean_float(item.get("stop_hit@5") for item in multi_rows),
+                "multi_stop_sequence_hit@5": _mean_bool(item.get("sequence_hit@5") for item in multi_rows),
+                "multi_stop_candidate_coverage": _mean_float(item.get("candidate_coverage") for item in multi_rows),
                 "multi_stop_leg_route_success": _mean_bool(item.get("leg_route_success") for item in multi_rows),
                 "multi_stop_leg_route_success_rate": _mean_float(item.get("leg_route_success_rate") for item in multi_rows),
                 "multi_stop_spl": _mean_float(item.get("multi_stop_spl") for item in multi_rows),
@@ -906,6 +1007,20 @@ def _route_update_metadata(case: UrbanNavCase) -> dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
 
 
+def _route_update_requires_final(update_type: str) -> bool:
+    """Return whether a route-update prediction should end at final destination.
+
+    Args:
+        update_type: Route-update action label.
+
+    Returns:
+        ``True`` for via/insert style updates, ``False`` for replacement
+        updates.
+    """
+
+    return str(update_type or "").strip() in {"add_via", "insert_before_final"}
+
+
 def _gt_destination_sequence(case: UrbanNavCase) -> list[UrbanNavDestination]:
     """Return GT destination sequence from raw multi-stop payload.
 
@@ -966,6 +1081,25 @@ def _parse_leg_route(leg: dict[str, Any] | Any) -> list[UrbanNavPoint]:
     from mcp_server.eval.urbannav_schema import parse_route
 
     return parse_route(leg.get("route") or leg.get("route_polyline") or [])
+
+
+def _leg_candidate_destinations(leg: dict[str, Any] | Any) -> list[UrbanNavDestination]:
+    """Parse ranked candidate destinations from a route-leg dictionary.
+
+    Args:
+        leg: Raw predicted leg.
+
+    Returns:
+        Candidate destinations in the model/reranker order.
+    """
+
+    if not isinstance(leg, dict):
+        return []
+    return [
+        destination
+        for destination in (UrbanNavDestination.from_dict(item) for item in _list_dicts(leg.get("candidate_destinations")))
+        if destination is not None
+    ]
 
 
 def _leg_pred_distance(leg: dict[str, Any] | Any) -> float | None:
