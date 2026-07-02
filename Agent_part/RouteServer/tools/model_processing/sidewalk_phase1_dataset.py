@@ -47,6 +47,7 @@ class Phase1Config:
     frame_step: int = 1
     hfov_deg: float = 90.0
     min_future_distance_m: float = 0.3
+    min_fpv_projection_forward_m: float = 1.0
     trajectory_min_y_step: float = 0.005
     max_bev_time_delta_ms: float = 300.0
     frame_rate_hz: float = 20.0
@@ -55,15 +56,43 @@ class Phase1Config:
 
 @dataclass(frozen=True)
 class CameraParams:
-    """Calibrated FPV camera parameters used for pose-to-image projection."""
+    """Calibrated FPV camera parameters used for pose-to-image projection.
+
+    Args:
+        K: Camera intrinsic matrix.
+        image_width: FPV image width in pixels.
+        image_height: FPV image height in pixels.
+        camera_height_meters: Camera height above the ground plane.
+        camera_pitch_deg: Camera pitch in degrees.  Positive values tilt the
+            optical axis downward in the projection convention used here.
+        camera_forward_offset_m: Camera origin offset from the robot/base frame
+            along the forward axis.
+        camera_left_offset_m: Camera origin offset from the robot/base frame
+            along the left axis.
+    """
 
     K: np.ndarray
     image_width: int
     image_height: int
     camera_height_meters: float
+    camera_pitch_deg: float = 0.0
+    camera_forward_offset_m: float = 0.0
+    camera_left_offset_m: float = 0.0
 
     @classmethod
     def from_json(cls, path: Path) -> "CameraParams":
+        """Load calibrated FPV camera parameters from JSON.
+
+        Args:
+            path: Path to a camera parameter JSON file.
+
+        Returns:
+            Parsed camera parameter object.
+
+        Raises:
+            ValueError: If the intrinsic matrix is missing.
+        """
+
         data = json.loads(path.read_text(encoding="utf-8"))
         if "K" in data:
             K = np.asarray(data["K"], dtype=np.float64)
@@ -72,11 +101,38 @@ class CameraParams:
         else:
             raise ValueError(f"camera_params.json missing K/camera_intrinsic: {path}")
         K = K.reshape(3, 3)
+        extrinsic = data.get("extrinsic") if isinstance(data.get("extrinsic"), dict) else {}
+
+        def first_float(*values: Any, default: float) -> float:
+            for value in values:
+                if value is None:
+                    continue
+                return float(value)
+            return float(default)
+
         return cls(
             K=K,
             image_width=int(data.get("image_width") or data.get("width")),
             image_height=int(data.get("image_height") or data.get("height")),
             camera_height_meters=float(data.get("camera_height_meters", 0.6)),
+            camera_pitch_deg=first_float(
+                data.get("camera_pitch_deg"),
+                data.get("pitch_deg"),
+                extrinsic.get("pitch_deg"),
+                default=0.0,
+            ),
+            camera_forward_offset_m=first_float(
+                data.get("camera_forward_offset_m"),
+                data.get("forward_offset_m"),
+                extrinsic.get("forward_offset_m"),
+                default=0.0,
+            ),
+            camera_left_offset_m=first_float(
+                data.get("camera_left_offset_m"),
+                data.get("left_offset_m"),
+                extrinsic.get("left_offset_m"),
+                default=0.0,
+            ),
         )
 
 
@@ -107,6 +163,14 @@ class FrameRecord:
     camera_params: CameraParams | None = None
     pose_source: str | None = None
     pose_fallback_reason: str | None = None
+
+
+class _SampleSkip(RuntimeError):
+    """Signal a deterministic frame-level data-quality skip."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = str(reason)
 
 
 def discover_clip_dirs(root: Path) -> list[Path]:
@@ -383,6 +447,10 @@ def build_phase1_dataset(
                     allow_heuristic_trajectory=allow_heuristic_trajectory,
                     write_overlay=write_overlays,
                 )
+            except _SampleSkip as exc:
+                report["frames_skipped"] += 1
+                _inc(report["skip_reasons"], exc.reason)
+                continue
             except Exception as exc:
                 report["frames_skipped"] += 1
                 _inc(report["skip_reasons"], f"sample_error:{type(exc).__name__}")
@@ -654,14 +722,69 @@ def build_phase1_targets(
         sampled_future = sample_future_records(future, config.num_points)
         local_path = pose_local_path_right_front(record, sampled_future, config=config)
         if local_path.shape[0] == 0:
-            local_path = np.asarray([[0.0, 1.0], [0.0, 3.0], [0.0, 6.0]], dtype=np.float32)
-            local_path = resample_polyline(local_path, config.num_points)
-        if record.camera_params is not None:
-            trajectory_norm = calibrated_fpv_trajectory(record, sampled_future, config=config)
-            time_pack = build_time_conditioned_targets(
+            raise _SampleSkip("no_pose_future_points")
+        future_extent_m = _future_path_extent_m(local_path)
+        if float(config.min_future_distance_m) > 0.0 and future_extent_m < float(config.min_future_distance_m):
+            trajectory_norm = stationary_fpv_trajectory(config=config)
+            local_path = stationary_local_path(config=config)
+            time_pack = build_stationary_time_conditioned_targets(
                 record,
                 sampled_future,
                 local_path=local_path,
+                trajectory_norm=trajectory_norm,
+                config=config,
+                trajectory_source="stationary_pose_hold",
+            )
+            return {
+                "local_path": local_path,
+                "trajectory_norm": trajectory_norm,
+                **time_pack,
+                "trajectory_source": "stationary_pose_hold",
+                "projection": {
+                    "coordinate_chain": "low_motion_pose_hold",
+                    "odom_yaw_offset_deg": float(config.odom_yaw_offset_deg),
+                    "future_extent_m": float(future_extent_m),
+                    "min_future_distance_m": float(config.min_future_distance_m),
+                    "postprocess": {
+                        "anchor_norm": [0.5, 0.9],
+                        "hold_position": True,
+                    },
+                },
+            }
+        if record.camera_params is not None:
+            fpv_local_path = stable_fpv_projection_local_path(local_path, config=config)
+            if fpv_local_path.shape[0] == 0:
+                trajectory_norm = stationary_fpv_trajectory(config=config)
+                local_path = stationary_local_path(config=config)
+                time_pack = build_stationary_time_conditioned_targets(
+                    record,
+                    sampled_future,
+                    local_path=local_path,
+                    trajectory_norm=trajectory_norm,
+                    config=config,
+                    trajectory_source="stationary_pose_hold",
+                )
+                return {
+                    "local_path": local_path,
+                    "trajectory_norm": trajectory_norm,
+                    **time_pack,
+                    "trajectory_source": "stationary_pose_hold",
+                    "projection": {
+                        "coordinate_chain": "no_stable_fpv_projection_hold",
+                        "odom_yaw_offset_deg": float(config.odom_yaw_offset_deg),
+                        "future_extent_m": float(future_extent_m),
+                        "min_fpv_projection_forward_m": float(config.min_fpv_projection_forward_m),
+                        "postprocess": {
+                            "anchor_norm": [0.5, 0.9],
+                            "hold_position": True,
+                        },
+                    },
+                }
+            trajectory_norm = calibrated_fpv_trajectory_from_local_path(fpv_local_path, record.camera_params, config=config)
+            time_pack = build_time_conditioned_targets(
+                record,
+                sampled_future,
+                local_path=fpv_local_path,
                 trajectory_norm=trajectory_norm,
                 config=config,
                 trajectory_source="calibrated_pose_projection",
@@ -675,10 +798,14 @@ def build_phase1_targets(
                     "coordinate_chain": "map_pose_to_robot_to_camera_to_fpv",
                     "odom_yaw_offset_deg": float(config.odom_yaw_offset_deg),
                     "camera_height_meters": record.camera_params.camera_height_meters,
+                    "camera_pitch_deg": record.camera_params.camera_pitch_deg,
+                    "camera_forward_offset_m": record.camera_params.camera_forward_offset_m,
+                    "camera_left_offset_m": record.camera_params.camera_left_offset_m,
                     "camera_image_size": [record.camera_params.image_width, record.camera_params.image_height],
                     "postprocess": {
                         "anchor_norm": [0.5, 0.9],
                         "monotonic_forward_y": True,
+                        "min_fpv_projection_forward_m": float(config.min_fpv_projection_forward_m),
                         "min_y_step": float(config.trajectory_min_y_step),
                     },
                 },
@@ -804,6 +931,98 @@ def build_time_conditioned_targets(
                     "free-space mask. Add dynamic masks/tracks before rewriting labels "
                     "around moving obstacles."
                 ),
+            },
+        },
+    }
+
+
+def stationary_local_path(*, config: Phase1Config) -> np.ndarray:
+    """Return a zero-motion local path for stop/hold supervision.
+
+    Args:
+        config: Phase1 generation configuration.
+
+    Returns:
+        Array of shape ``[num_points, 2]`` in ego-local meters where every
+        waypoint is ``[x_right=0, y_front=0]``.
+    """
+
+    return np.zeros((int(config.num_points), 2), dtype=np.float32)
+
+
+def stationary_fpv_trajectory(*, config: Phase1Config) -> np.ndarray:
+    """Return a fixed FPV anchor trajectory for stop/hold supervision.
+
+    Args:
+        config: Phase1 generation configuration.
+
+    Returns:
+        Array of shape ``[num_points, 2]`` where every waypoint is the current
+        robot anchor ``[0.5, 0.9]`` in normalized FPV coordinates.
+    """
+
+    anchor = np.asarray([[0.5, 0.9]], dtype=np.float32)
+    return np.repeat(anchor, int(config.num_points), axis=0)
+
+
+def build_stationary_time_conditioned_targets(
+    record: FrameRecord,
+    sampled_future: list[FrameRecord],
+    *,
+    local_path: np.ndarray,
+    trajectory_norm: np.ndarray,
+    config: Phase1Config,
+    trajectory_source: str,
+) -> dict[str, Any]:
+    """Build time-conditioned labels for low-motion stop/hold windows.
+
+    Args:
+        record: Current frame record.
+        sampled_future: Future records used only to preserve arrival timestamps.
+        local_path: Zero-motion local path in meters.
+        trajectory_norm: Fixed FPV anchor trajectory.
+        config: Phase1 generation configuration.
+        trajectory_source: Source label written into the trajectory policy.
+
+    Returns:
+        Time-conditioned FPV, FPV+speed, ego, and policy fields with zero speed.
+    """
+
+    traj = np.asarray(trajectory_norm, dtype=np.float32).reshape(-1, 2)
+    local = np.asarray(local_path, dtype=np.float32).reshape(-1, 2)
+    target_n = int(config.num_points)
+    if traj.shape[0] != target_n:
+        traj = resample_polyline(traj, target_n)
+    if local.shape[0] != target_n:
+        local = resample_polyline(local, target_n)
+    dt_values = _trajectory_dt_seconds(record, sampled_future, target_n, config=config)
+    speeds = [0.0 for _ in range(target_n)]
+    fpv_t = [[_round_float(traj[i, 0]), _round_float(traj[i, 1]), _round_float(dt_values[i])] for i in range(target_n)]
+    fpv_tv = [
+        [_round_float(traj[i, 0]), _round_float(traj[i, 1]), _round_float(dt_values[i]), 0.0]
+        for i in range(target_n)
+    ]
+    ego_t = [[_round_float(local[i, 0]), _round_float(local[i, 1]), _round_float(dt_values[i]), 0.0] for i in range(target_n)]
+    return {
+        "trajectory_fpv_t": fpv_t,
+        "trajectory_fpv_tv": fpv_tv,
+        "trajectory_ego_t": ego_t,
+        "trajectory_policy": {
+            "schema_version": "sidewalk_time_conditioned_policy_v1",
+            "primary_temporal_target": "trajectory_fpv_t",
+            "speed_target": "trajectory_fpv_tv",
+            "static_compatibility_target": "pixel_trajectory",
+            "trajectory_role": "low_motion_hold_position",
+            "trajectory_source": trajectory_source,
+            "time_unit": "seconds",
+            "speed_unit": "mps",
+            "frame_rate_hz_fallback": float(config.frame_rate_hz),
+            "speed_policy": speed_policy_from_profile(speeds),
+            "dynamic_obstacle_audit": {
+                "status": "not_evaluated_no_dynamic_masks",
+                "has_dynamic_masks": False,
+                "current_frame_conflict": "unknown",
+                "note": "Low-motion windows supervise stop/hold instead of a projected travel path.",
             },
         },
     }
@@ -941,6 +1160,120 @@ def pose_local_path_right_front(record: FrameRecord, sampled_future: list[FrameR
     return np.asarray(points, dtype=np.float32).reshape(-1, 2)
 
 
+def _future_path_extent_m(local_path: np.ndarray) -> float:
+    r"""Return the farthest future waypoint distance in ego-local meters.
+
+    The quality gate is computed as:
+
+    \[
+    d_\max = \max_i \sqrt{x_i^2 + y_i^2}
+    \]
+
+    where \(x_i\) is rightward meters and \(y_i\) is forward meters.
+    """
+
+    points = np.asarray(local_path, dtype=np.float32).reshape(-1, 2)
+    if points.shape[0] == 0:
+        return 0.0
+    distances = np.linalg.norm(points, axis=1)
+    return float(np.max(distances)) if distances.size else 0.0
+
+
+def stable_fpv_projection_local_path(local_path: np.ndarray, *, config: Phase1Config) -> np.ndarray:
+    r"""Return the future path subset that can be stably projected to FPV.
+
+    Args:
+        local_path: Ego-local path in ``[x_right, y_front]`` meters.
+        config: Phase1 generation configuration.
+
+    Returns:
+        Resampled path containing only points with forward distance
+        \(y_\text{front} \ge\) ``min_fpv_projection_forward_m``.
+    """
+
+    points = np.asarray(local_path, dtype=np.float32).reshape(-1, 2)
+    min_forward = max(float(config.min_fpv_projection_forward_m), 0.0)
+    if points.shape[0] == 0:
+        return np.zeros((0, 2), dtype=np.float32)
+    kept = points[points[:, 1] >= min_forward]
+    if kept.shape[0] == 0:
+        return np.zeros((0, 2), dtype=np.float32)
+    return resample_polyline(kept, int(config.num_points))
+
+
+def project_local_right_front_to_fpv(x_right_m: float, y_front_m: float, camera: CameraParams) -> tuple[float, float]:
+    r"""Project one ego-local ground point to FPV pixels.
+
+    Args:
+        x_right_m: Rightward local distance in meters.
+        y_front_m: Forward local distance in meters.
+        camera: Calibrated camera intrinsics and height.
+
+    Returns:
+        ``(u, v)`` pixel coordinates clipped to the image bounds.
+
+    The projection uses camera coordinates \(x\)=right, \(y\)=down,
+    \(z\)=forward.  For a ground point \(p=[x_r, h, y_f]\), pitch is applied as
+
+    \[
+    y' = \cos\theta \cdot h + \sin\theta \cdot y_f,\quad
+    z' = -\sin\theta \cdot h + \cos\theta \cdot y_f.
+    \]
+
+    This sign convention makes positive ``camera_pitch_deg`` move ground
+    projections lower in the image, matching the foxglove camera review.
+    """
+
+    z_forward = float(y_front_m) - float(camera.camera_forward_offset_m)
+    if z_forward <= 0.01:
+        return float(camera.image_width) / 2.0, float(camera.image_height) * 0.9
+    x_cam = float(x_right_m) + float(camera.camera_left_offset_m)
+    y_down = float(camera.camera_height_meters)
+    pitch = math.radians(float(camera.camera_pitch_deg))
+    cos_pitch = math.cos(pitch)
+    sin_pitch = math.sin(pitch)
+    y_cam = cos_pitch * y_down + sin_pitch * z_forward
+    z_cam = -sin_pitch * y_down + cos_pitch * z_forward
+    if z_cam <= 0.01:
+        return float(camera.image_width) / 2.0, float(camera.image_height) * 0.9
+    fx, fy = float(camera.K[0, 0]), float(camera.K[1, 1])
+    cx, cy = float(camera.K[0, 2]), float(camera.K[1, 2])
+    u = fx * x_cam / z_cam + cx
+    v = cy + fy * y_cam / z_cam
+    u = float(np.clip(u, 0.0, float(camera.image_width) - 1.0))
+    v = float(np.clip(v, 0.0, float(camera.image_height) - 1.0))
+    return u, v
+
+
+def calibrated_fpv_trajectory_from_local_path(
+    local_path: np.ndarray,
+    camera: CameraParams,
+    *,
+    config: Phase1Config,
+) -> np.ndarray:
+    """Project a stable ego-local path to normalized FPV waypoints.
+
+    Args:
+        local_path: Ego-local path in ``[x_right, y_front]`` meters.
+        camera: Calibrated camera intrinsics and height.
+        config: Phase1 generation configuration.
+
+    Returns:
+        Normalized FPV trajectory of shape ``[num_points, 2]``.
+    """
+
+    points = []
+    for x_right_m, y_front_m in np.asarray(local_path, dtype=np.float32).reshape(-1, 2):
+        u, v = project_local_right_front_to_fpv(float(x_right_m), float(y_front_m), camera)
+        points.append([u / float(camera.image_width), v / float(camera.image_height)])
+    if not points:
+        return stationary_fpv_trajectory(config=config)
+    trajectory = np.asarray(points, dtype=np.float32)
+    if trajectory.shape[0] != int(config.num_points):
+        trajectory = resample_polyline(trajectory, int(config.num_points))
+    return smooth_visible_fpv_trajectory(trajectory, config=config)
+
+
 def calibrated_fpv_trajectory(record: FrameRecord, sampled_future: list[FrameRecord], *, config: Phase1Config) -> np.ndarray:
     if record.position_xy is None or record.orientation_wxyz is None or record.camera_params is None:
         raise ValueError("calibrated projection requires position, orientation, and camera params")
@@ -1004,6 +1337,36 @@ def smooth_forward_fpv_trajectory(trajectory_norm: np.ndarray, *, config: Phase1
         replacement[1] = float(np.clip(replacement[1], 0.0, 1.0))
         arr[i] = replacement
 
+    return arr.astype(np.float32)
+
+
+def smooth_visible_fpv_trajectory(trajectory_norm: np.ndarray, *, config: Phase1Config) -> np.ndarray:
+    """Smooth visible FPV waypoints without adding an ego anchor.
+
+    Args:
+        trajectory_norm: Normalized FPV waypoints after near-field filtering.
+        config: Phase1 generation configuration.
+
+    Returns:
+        Normalized FPV waypoints with monotonic upward image progress.
+    """
+
+    arr = np.asarray(trajectory_norm, dtype=np.float32).reshape(-1, 2).copy()
+    target_n = int(config.num_points)
+    if arr.shape[0] == 0:
+        return stationary_fpv_trajectory(config=config)
+    if arr.shape[0] < target_n:
+        arr = np.concatenate([arr, np.repeat(arr[-1:], target_n - arr.shape[0], axis=0)], axis=0)
+    arr = np.clip(arr[:target_n], 0.0, 1.0)
+
+    min_step = max(float(config.trajectory_min_y_step), 0.0)
+    for i in range(1, arr.shape[0]):
+        previous = arr[i - 1].copy()
+        max_allowed_y = max(0.02, float(previous[1]) - min_step)
+        if float(arr[i, 1]) <= max_allowed_y:
+            continue
+        arr[i, 1] = max_allowed_y
+        arr[i, 0] = float(np.clip(arr[i, 0], 0.0, 1.0))
     return arr.astype(np.float32)
 
 
@@ -1710,8 +2073,25 @@ def bev_theta_deg(x_m: float, y_m: float) -> float:
 
 
 def quat_to_yaw(quat_wxyz: tuple[float, float, float, float]) -> float:
+    r"""Return full quaternion yaw in radians for a ``wxyz`` quaternion.
+
+    For a general 3D quaternion \(q=(w,x,y,z)\), the yaw angle about the
+    vertical axis is:
+
+    \[
+    \psi = \operatorname{atan2}(2(wz + xy), 1 - 2(y^2 + z^2))
+    \]
+
+    The old planar shortcut \(2\operatorname{atan2}(z,w)\) is only valid when
+    roll and pitch are zero.  Foxglove odometry carries non-zero roll/pitch, so
+    the full formula is required before applying any odom-to-base yaw offset.
+    """
+
     w, _x, _y, z = quat_wxyz
-    return float(2.0 * math.atan2(float(z), float(w)))
+    _w, x, y, _z = (float(w), float(_x), float(_y), float(z))
+    siny_cosp = 2.0 * (_w * _z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + _z * _z)
+    return float(math.atan2(siny_cosp, cosy_cosp))
 
 
 def robot_forward_left_m(
@@ -1741,7 +2121,18 @@ def project_pose_to_fpv(
     *,
     yaw_offset_deg: float = 0.0,
 ) -> tuple[float, float]:
-    """Project one future odom/map point to FPV pixels with InternNav convention."""
+    """Project one future odom/map point to FPV pixels.
+
+    Args:
+        current_xy: Current map/odom position in meters.
+        current_quat_wxyz: Current orientation quaternion in ``wxyz`` order.
+        target_xy: Future map/odom position in meters.
+        camera: Calibrated FPV camera parameters.
+        yaw_offset_deg: Additional yaw rotation from odom into base frame.
+
+    Returns:
+        ``(u, v)`` pixel coordinates clipped to the image bounds.
+    """
 
     x_forward, y_left = robot_forward_left_m(
         current_xy,
@@ -1749,18 +2140,7 @@ def project_pose_to_fpv(
         target_xy,
         yaw_offset_deg=yaw_offset_deg,
     )
-    z_cam = x_forward
-    x_cam = -y_left
-    y_cam = -float(camera.camera_height_meters)
-    if z_cam <= 0.01:
-        return float(camera.image_width) / 2.0, float(camera.image_height) * 0.9
-    fx, fy = float(camera.K[0, 0]), float(camera.K[1, 1])
-    cx, cy = float(camera.K[0, 2]), float(camera.K[1, 2])
-    u = fx * x_cam / z_cam + cx
-    v = cy - fy * y_cam / z_cam
-    u = float(np.clip(u, 0.0, float(camera.image_width) - 1.0))
-    v = float(np.clip(v, 0.0, float(camera.image_height) - 1.0))
-    return u, v
+    return project_local_right_front_to_fpv(-float(y_left), float(x_forward), camera)
 
 
 def intent_from_theta(theta_deg: float, *, distance_m: float) -> str:
@@ -2035,6 +2415,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-points", type=int, default=16)
     parser.add_argument("--hfov-deg", type=float, default=90.0)
     parser.add_argument("--min-future-distance-m", type=float, default=0.3)
+    parser.add_argument(
+        "--min-fpv-projection-forward-m",
+        type=float,
+        default=1.0,
+        help="Minimum y_front distance kept for moving FPV trajectory projection.",
+    )
     parser.add_argument("--trajectory-min-y-step", type=float, default=0.005)
     parser.add_argument("--frame-rate-hz", type=float, default=20.0, help="Fallback FPV frame rate used to derive dt when frame_times.npy is missing.")
     parser.add_argument(
@@ -2076,6 +2462,7 @@ def main() -> None:
         frame_step=int(args.frame_step),
         hfov_deg=float(args.hfov_deg),
         min_future_distance_m=float(args.min_future_distance_m),
+        min_fpv_projection_forward_m=float(args.min_fpv_projection_forward_m),
         trajectory_min_y_step=float(args.trajectory_min_y_step),
         max_bev_time_delta_ms=float(args.max_bev_time_delta_ms),
         frame_rate_hz=float(args.frame_rate_hz),

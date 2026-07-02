@@ -119,9 +119,9 @@ def render_html(samples: list[dict[str, Any]], source_jsonl: Path) -> str:
     .panel {{ background: #fff; border: 1px solid #d9dee7; border-radius: 8px; overflow: hidden; }}
     .panel h2 {{ font-size: 14px; margin: 0; padding: 9px 12px; border-bottom: 1px solid #e5e9f0; }}
     .media {{ padding: 10px; }}
-    .fpv-wrap {{ position: relative; width: 100%; background: #111; }}
+    .fpv-wrap {{ position: relative; width: 100%; background: #111; align-self: start; line-height: 0; }}
     .fpv-wrap img, .bev img {{ display: block; width: 100%; height: auto; }}
-    .fpv-wrap canvas {{ position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }}
+    .fpv-wrap canvas {{ position: absolute; left: 0; top: 0; pointer-events: none; }}
     .bev {{ background: #111; }}
     .meta {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 10px; font-size: 13px; }}
     .kv {{ border: 1px solid #e4e8ef; border-radius: 6px; padding: 7px 8px; min-width: 0; }}
@@ -207,6 +207,8 @@ def render_html(samples: list[dict[str, Any]], source_jsonl: Path) -> str:
       const dpr = window.devicePixelRatio || 1;
       canvas.width = Math.max(1, Math.round(rect.width * dpr));
       canvas.height = Math.max(1, Math.round(rect.height * dpr));
+      canvas.style.width = `${{rect.width}}px`;
+      canvas.style.height = `${{rect.height}}px`;
       const ctx = canvas.getContext('2d');
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, rect.width, rect.height);

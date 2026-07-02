@@ -1,0 +1,68 @@
+# Camera calibration for /camera_x001/image_raw/compressed.
+# Intrinsics were provided from offline calibration with reprojection error 0.69 px.
+camera_name: camera_x001
+image_width: 1920
+image_height: 1080
+camera_height_meters: 0.6
+camera_matrix:
+  rows: 3
+  cols: 3
+  data:
+    - 749.2058
+    - 0.0
+    - 1003.1
+    - 0.0
+    - 749.2058
+    - 526.5258
+    - 0.0
+    - 0.0
+    - 1.0
+distortion_model: radial_3
+distortion_coefficients:
+  rows: 1
+  cols: 3
+  data:
+    - 1.5847e-5
+    - -1.3585e-7
+    - 4.7386e-11
+distortion_coefficients_plumb_bob_compatible:
+  rows: 1
+  cols: 5
+  data:
+    - 1.5847e-5
+    - -1.3585e-7
+    - 0.0
+    - 0.0
+    - 4.7386e-11
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data:
+    - 1.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
+projection_matrix:
+  rows: 3
+  cols: 4
+  data:
+    - 749.2058
+    - 0.0
+    - 1003.1
+    - 0.0
+    - 0.0
+    - 749.2058
+    - 526.5258
+    - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
+    - 0.0
+reprojection_error_pixels: 0.69
+source: user_provided_calibration
+height_source: user_approximate_measurement

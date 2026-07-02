@@ -1,9 +1,13 @@
 {
-  "schema_version": "camera_x001_calibrated_camera_params_v1",
+  "schema_version": "camera_x001_calibrated_camera_params_v2",
   "camera_name": "camera_x001",
   "image_width": 1920,
   "image_height": 1080,
   "camera_height_meters": 0.6,
+  "camera_pitch_deg": 15.0,
+  "camera_forward_offset_m": -0.1,
+  "camera_left_offset_m": 0.0,
+  "extrinsic_convention": "Camera frame uses x=right, y=down, z=forward. Positive camera_pitch_deg tilts the optical axis downward in the Phase1 projection convention.",
   "K": [
     [
       749.2058,
@@ -30,5 +34,5 @@
   "reprojection_error_pixels": 0.69,
   "source": "user_provided_calibration",
   "height_source": "user_approximate_measurement",
-  "note": "Calibrated intrinsics for camera_x001. camera_height_meters is the approximate physical installation height provided by the user."
+  "note": "Calibrated intrinsics for camera_x001. camera_height_meters is the approximate physical installation height provided by the user. camera_pitch_deg=+15 was selected from foxglove self-collected FPV trajectory review."
 }

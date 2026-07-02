@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a self-contained multi-frame Frodobots Phase1 source JSONL.
+"""Build a self-contained multi-frame Phase1 source JSONL.
 
 The input is a Phase1 source JSONL produced by ``sidewalk_phase1_dataset.py``.
 Each row keeps its current-frame supervision unchanged, while this script
@@ -199,13 +199,14 @@ def _load_clip_context(clip_id: str, clip_dir: Path) -> ClipContext:
     front_video = clip_dir / "front.mp4"
     if not frame_times_path.is_file():
         raise FileNotFoundError(f"Missing frame_times.npy: {frame_times_path}")
-    if not frame_video_indices_path.is_file():
-        raise FileNotFoundError(f"Missing frame_video_indices.npy: {frame_video_indices_path}")
     if not front_video.exists():
         raise FileNotFoundError(f"Missing front.mp4: {front_video}")
 
     frame_times = np.load(frame_times_path).astype(np.int64)
-    frame_video_indices = np.load(frame_video_indices_path).astype(np.int64)
+    if frame_video_indices_path.is_file():
+        frame_video_indices = np.load(frame_video_indices_path).astype(np.int64)
+    else:
+        frame_video_indices = np.arange(frame_times.shape[0], dtype=np.int64)
     if frame_times.shape[0] != frame_video_indices.shape[0]:
         raise ValueError(f"frame_times/frame_video_indices length mismatch for {clip_id}")
 
@@ -468,7 +469,7 @@ def _process_clip(
         padded_frames += row_padded_frames
         meta.update(
             {
-                "multiframe_schema_version": "frodobots_phase1_source_multiframe_v1",
+                "multiframe_schema_version": "phase1_source_multiframe_v1",
                 "multiframe_source_clip_id": ctx.clip_id,
                 "multiframe_num_fpv_frames": len(history),
                 "multiframe_num_history_fpv_frames": len(history_fpv_paths),
@@ -566,7 +567,7 @@ def build_multiframe_source(args: argparse.Namespace) -> dict[str, Any]:
     write_jsonl(output_jsonl, ordered_rows)
 
     report = {
-        "schema_version": "frodobots_phase1_source_multiframe_report_v1",
+        "schema_version": "phase1_source_multiframe_report_v1",
         "source_jsonl": str(source_jsonl),
         "output_root": str(output_root),
         "output_jsonl": str(output_jsonl),

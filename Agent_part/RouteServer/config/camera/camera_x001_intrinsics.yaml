@@ -4,6 +4,10 @@ camera_name: camera_x001
 image_width: 1920
 image_height: 1080
 camera_height_meters: 0.6
+camera_pitch_deg: 15.0
+camera_forward_offset_m: -0.1
+camera_left_offset_m: 0.0
+extrinsic_convention: "Camera frame uses x=right, y=down, z=forward. Positive pitch tilts the optical axis downward in the Phase1 projection convention."
 camera_matrix:
   rows: 3
   cols: 3
@@ -66,3 +70,4 @@ projection_matrix:
 reprojection_error_pixels: 0.69
 source: user_provided_calibration
 height_source: user_approximate_measurement
+extrinsic_source: foxglove_self_collected_review

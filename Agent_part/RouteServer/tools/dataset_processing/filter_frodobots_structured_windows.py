@@ -139,13 +139,6 @@ def write_window_clip(src_clip: Path, dst_clip: Path, start: int, end: int, metr
         sliced = arr[start:end].copy()
         np.save(dst_clip / name, sliced)
 
-    # Reuse sampled BEV artifacts by symlink. The sliced frame indices stay local,
-    # but BEV matching falls back to nearest timestamp/index metadata.
-    for name in ("bev_images", "bev_images_ego_aligned"):
-        src = src_clip / name
-        if src.is_dir():
-            link_or_copy(src.resolve(), dst_clip / name)
-
     source_report = src_clip / "conversion_report.json"
     source_meta: dict[str, Any] = {}
     if source_report.is_file():
@@ -249,11 +242,15 @@ def main() -> None:
             if reason:
                 rejects[reason] = rejects.get(reason, 0) + 1
                 continue
+            turn_bonus = 6.0 * min(float(metrics["turn_count"]), 5.0)
+            turn_density_bonus = 0.02 * min(float(metrics.get("turn_window_count") or 0.0), 120.0)
             score = (
-                metrics["net_displacement_m"]
-                - 4.0 * max(0.0, metrics["tortuosity"] - 1.0)
-                + 3.0 * min(metrics["turn_count"], 2)
-                - 20.0 * metrics["revisit_rate"]
+                0.35 * float(metrics["net_displacement_m"])
+                + 0.15 * float(metrics["path_length_m"])
+                + turn_bonus
+                + turn_density_bonus
+                - 5.0 * max(0.0, float(metrics["tortuosity"]) - 1.0)
+                - 30.0 * float(metrics["revisit_rate"])
             )
             source_candidates.append(
                 {

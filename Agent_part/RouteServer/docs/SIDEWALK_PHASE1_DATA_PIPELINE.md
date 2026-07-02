@@ -62,7 +62,7 @@ clip/
 | --- | --- |
 | `frame_positions.npy` | `[N, 2 or 3]` odom/map 位置，作为未来轨迹来源。 |
 | `frame_orientations.npy` | `[N, 4]` 四元数 `[w,x,y,z]`，用于当前机器人坐标系变换。 |
-| `camera_params.json` | `K`、`image_width`、`image_height`、`camera_height_meters`，用于 FPV 投影。 |
+| `camera_params.json` | `K`、`image_width`、`image_height`、`camera_height_meters`、`camera_pitch_deg` 和相机到 base 的 offset，用于 FPV 投影。 |
 | `frame_times.npy` | 可选 `[N]` 时间戳，优先用于生成 trajectory waypoint 的 `dt`。常见单位为 ns。 |
 | `frame_speeds.npy` | 可选 `[N]` 速度，优先用于生成 `trajectory_fpv_tv` 的速度监督；缺失时由 local path 差分估计。 |
 | `images/` / `front_images/` / `front.mp4` | FPV 输入。若只有 `front.mp4`，构建器会把访问到的帧抽到输出目录。 |
@@ -195,6 +195,11 @@ ALLOW_HEURISTIC_TRAJECTORY=1 ./tools/model_processing/run_sidewalk_phase1_datase
   "pitch_deg": 0.0
 }
 ```
+
+当前自采 foxglove 数据默认使用仓库参数
+`config/camera/camera_x001_camera_params.json`，其中 `camera_pitch_deg=+15.0`、
+`camera_height_meters=0.6`、`camera_forward_offset_m=-0.1`。投影约定为 camera
+frame `x=right, y=down, z=forward`，正 pitch 表示光轴在 Phase1 投影中向下倾斜。
 
 如果缺 `bev_images/`，先运行 `process_sidewalk_dataset.py` 或已有 BEV 批处理脚本补齐。Phase1 最简模式只要求 2fps ego-aligned `bev_images/` 和 `bev_index.json`；FPV 可以继续引用 `front.mp4`，由 Phase1 exporter 对被采样的训练帧按需抽图。调试时可给 `sidewalk_phase1_dataset.py --allow-missing-bev`，但正式训练不建议这么做。
 
