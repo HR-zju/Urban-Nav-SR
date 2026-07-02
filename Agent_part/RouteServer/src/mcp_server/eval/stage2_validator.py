@@ -10,6 +10,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from mcp_server.agent.finish_schema import finish_trajectory_matches
 from mcp_server.agent.schemas import (
     AGENT_STAGE2_CASE_SCHEMA_VERSION,
     AGENT_STAGE2_TRACE_SCHEMA_VERSION,
@@ -148,8 +149,8 @@ def validate_stage2_trace(trace: AgentTrace, case: AgentStage2Case | None = None
             errors.extend(f"finish:{item}" for item in finish_errors)
             if finish is not None and case is not None:
                 expected_traj = case.ground_truth.get("pixel_trajectory")
-                if expected_traj and finish.get("trajectory") != expected_traj:
-                    # 文本 finish 和顶层 trajectory supervision 必须一致，否则 LM/traj loss 目标冲突。
+                if expected_traj and not finish_trajectory_matches(finish, expected_traj):
+                    # 文本 finish 和顶层 trajectory supervision 必须等价，否则 LM/traj loss 目标冲突。
                     errors.append("finish_trajectory_mismatch")
     else:
         errors.append("missing_final_assistant")
@@ -249,6 +250,11 @@ def validate_ms_swift_stage2_row(row: dict[str, Any]) -> Stage2ValidationResult:
         required_tags = FINAL_COT_REQUIRED_TOOL_TAGS if has_tool_roles else FINAL_COT_REQUIRED_BASE_TAGS
         if not isinstance(final_text, str) or not all(tag in final_text for tag in required_tags):
             errors.append("row_final_cot_invalid")
+        elif row.get("pixel_trajectory") is not None:
+            finish, finish_errors = parse_finish_text(final_text)
+            errors.extend(f"row_finish:{item}" for item in finish_errors)
+            if finish is not None and not finish_trajectory_matches(finish, row.get("pixel_trajectory")):
+                errors.append("row_finish_trajectory_mismatch")
     else:
         errors.append("row_missing_final_assistant")
     if not row.get("images"):

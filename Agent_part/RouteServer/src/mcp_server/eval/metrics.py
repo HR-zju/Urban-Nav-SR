@@ -10,6 +10,7 @@ import json
 import re
 from typing import Any
 
+from mcp_server.agent.finish_schema import finish_trajectory_matches
 from mcp_server.agent.schemas import AgentMetricResult, AgentStage2Case, AgentTrace, ToolCall, ToolResponse
 from mcp_server.agent.stage2 import NAVIGATION_READOUT_TOKENS
 from mcp_server.agent.tool_parser import parse_finish_text, parse_tool_call_text
@@ -238,9 +239,8 @@ def _finish_trajectory_consistent(
         return None
     if not finishes:
         return 0.0
-    actual = finishes[-1].get("trajectory")
-    # finish.trajectory 与顶层 pixel_trajectory 一致时，LM target 和 trajectory head target 不冲突。
-    return 1.0 if actual == expected else 0.0
+    # Text finish 与顶层 pixel_trajectory 等价时，LM target 和 trajectory head target 不冲突。
+    return 1.0 if finish_trajectory_matches(finishes[-1], expected) else 0.0
 
 
 def _expected_ops(case: AgentStage2Case | None, trace: AgentTrace) -> list[str]:

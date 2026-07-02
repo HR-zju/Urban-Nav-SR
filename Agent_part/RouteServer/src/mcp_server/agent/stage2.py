@@ -12,6 +12,11 @@ import json
 import re
 from typing import Any
 
+from mcp_server.agent.finish_schema import (
+    build_finish_payload,
+    canonicalize_finish_trajectory,
+    parse_finish_trajectory_norm,
+)
 from mcp_server.agent.schemas import AgentStage2Case, ToolCall, ToolResponse
 
 
@@ -361,20 +366,22 @@ def _finish_extra(
     response: ToolResponse | None,
     source: str,
 ) -> dict[str, Any]:
-    finish = {
+    finish_base = {
         "route_action": _route_action(call),
         "tool_used": call is not None,
         "tool": call.tool if call is not None else None,
         "op": call.op if call is not None else None,
         "route_session_id": _route_session_id(case, call, response),
-        "trajectory": _trajectory(case),
         "intent": case.ground_truth.get("intent") or case.observation.get("intent") or "follow_sidewalk_route",
         "confidence_level": case.ground_truth.get("confidence_level") or "medium",
         "trajectory_type": case.ground_truth.get("trajectory_type") or "local_navigation",
         "trajectory_validity": case.ground_truth.get("trajectory_validity") or "valid",
         "teacher_source": source,
     }
-    return {key: value for key, value in finish.items() if value is not None}
+    return build_finish_payload(
+        {key: value for key, value in finish_base.items() if value is not None},
+        trajectory_norm=_trajectory(case),
+    )
 
 
 def _tool_result_summary(*, call: ToolCall, response: ToolResponse) -> str:
@@ -557,8 +564,19 @@ def _augment_finish(text: str, extra: dict[str, Any]) -> str:
         return text
     if not isinstance(payload, dict):
         return text
+    if extra.get("trajectory_grid1000") is not None:
+        payload = canonicalize_finish_trajectory(payload, trajectory_norm=parse_finish_trajectory_norm(extra) or [])
     for key, value in extra.items():
-        if key in {"trajectory", "route_action", "tool_used", "tool", "op", "route_session_id", "teacher_source"}:
+        if key in {
+            "trajectory_grid1000",
+            "trajectory_coord_frame",
+            "route_action",
+            "tool_used",
+            "tool",
+            "op",
+            "route_session_id",
+            "teacher_source",
+        }:
             payload[key] = value
         else:
             payload.setdefault(key, value)

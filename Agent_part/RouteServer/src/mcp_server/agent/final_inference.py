@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from mcp_server.agent.finish_schema import parse_finish_trajectory_norm
 from mcp_server.agent.schemas import AgentStage2Case
 from mcp_server.agent.tool_executor import ToolExecutor
 from mcp_server.agent.tool_parser import parse_finish_text
@@ -254,7 +255,7 @@ async def run_routeserver_final_inference(
         final_assistant_text=final_text,
         finish=finish,
         finish_parse_errors=finish_errors,
-        trajectory=finish.get("trajectory") if isinstance(finish, dict) else None,
+        trajectory=parse_finish_trajectory_norm(finish) if isinstance(finish, dict) else None,
         trace=result.trace.to_dict(),
         ms_swift_row=result.ms_swift_row,
         validation_report={
