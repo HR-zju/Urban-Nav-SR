@@ -73,3 +73,4 @@ For new benchmark/evaluator behavior:
 - Prefer existing project patterns over introducing new abstractions.
 - Avoid broad refactors unless they are necessary for the requested work.
 - If a script grows to contain multiple versions or unrelated tools, split it before adding more functionality.
+- DO NOT send optional commentary
