@@ -10,29 +10,84 @@ live map API。这样同一批 case 在不同模型、不同时间运行时仍�
 
 ## 0. Module 1 主结果表
 
-当前记录表中的 10K 结果使用 `urbannav_global_osm_local_full_en_v1` English global
-single-stop split。该 split 只覆盖 `poi_navigation` 和 `implicit_need_navigation`，
-不包含 multi-stop 与 route-update。完整 benchmark 的指令计划由
-`build_urbannav_instruction_set.py` 从 taxonomy 和 `urbannav_10k_distribution_plan.json`
-生成；后续正式主表应切换到该 full instruction set 对应的 GT。评估阶段采用 replay backend：
-POI 候选和路线来自冻结 cache，模型主要负责 intent 解析、候选重排和目的地选择。
+当前 final 15K split 使用：
 
-| 日期 | 方法 | Runner | Backend | Cases | Destination Success | Hit@5 | Route Success | Median Route Ratio | SPL | Prediction Exception | Run |
-| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| 2026-06-28 | `routeserver-replay` | `routeserver-replay` | `replay` | 10000 | 0.8351 | 1.0000 | 0.8351 | 1.0000 | 0.8351 | 0 | `data/benchmark/urbannav_module1_runs/routeserver_replay_concurrent_10k` |
-| 2026-06-28 | `heuristic` | `external` | `replay` | 10000 | 0.6136 | 1.0000 | 0.6136 | 1.0000 | 0.6134 | 0 | `data/benchmark/urbannav_module1_runs/heuristic_external_replay_10k/eval` |
-| 2026-06-28 | `doubao-seed-2-0-lite-260428` | `external` | `replay-strict` | 10000 | 0.5016 | 1.0000 | 0.5016 | 1.0000 | 0.5014 | 1335 | `data/benchmark/urbannav_module1_runs/doubao_external_replay_strict_10k_urbannavenv_v2` |
+```text
+data/benchmark/urbannav_v2_osm_local_osrm_foot_final_15k/task_gt.jsonl
+```
 
-内部相对指数以 `heuristic` 为 100，仅用于组内模型迭代。当前相对比较结果：
+该 split 覆盖 `poi_navigation`、`implicit_need_navigation`、`multi_stop_route` 和
+`route_update_add_via`。评估仍采用 replay backend，POI 候选和路线来自冻结 cache。
 
-| 方法 | Internal Score | Relative Index | Delta vs Heuristic | Common Cases | Wins | Draws | Losses | Win Rate | Mean Delta |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `routeserver-replay` | 0.8598 | 128.05 | +0.1883 | 10000 | 2299 | 7631 | 70 | 0.2299 | +0.1994 |
-| `heuristic` | 0.6715 | 100.00 | 0.0000 | 10000 | - | - | - | - | - |
-| `doubao-seed-2-0-lite-260428` | 0.5763 | 85.82 | -0.0952 | 10000 | 64 | 8256 | 1680 | 0.0064 | -0.1141 |
+主表只记录当前 final 15K 上可比较的结果。历史实验、局部修复运行和调用异常运行
+不再放入主表。
 
-论文主表应优先报告
-`Destination Success / Hit@5 / Route Success / Median Route Ratio / SPL`。
+| 日期 | 方法 | Runner | Backend | Cases | Destination Success | Task Hit@5 | Route Success | Median Route Ratio | Task SPL | Internal Score | Relative Index | Multi-stop Seq. Success | Route-update Success | Prediction Exception Rate |
+| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2026-07-01 | `routeserver-replay-route-distance` | `routeserver-replay` | `replay` | 15000 | 0.8113 | 0.9784 | 0.8113 | 1.0000 | 0.8113 | 0.8374 | 100.0000 | 0.6555 | 0.9165 | 0.0000 |
+| TBD | `routeserver-llm-intent` | `routeserver-replay` | `replay-strict` | 15000 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+| TBD | `routeserver-llm-rerank` | `routeserver-replay` | `replay-strict` | 15000 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+| 2026-07-01 | `doubao-seed-2-0-lite-260428` | `external` | `replay-strict` | 15000 | 0.7703 | 0.9944 | 0.7703 | 1.0000 | 0.7402 | 0.7952 | 94.9566 | 0.5654 | 0.7513 | 0.0371 |
+| 2026-07-01 | `qwen3.7-max` | `external` | `replay-strict` | 15000 | 0.7588 | 0.9635 | 0.7588 | 1.0000 | 0.6519 | 0.7593 | 90.6687 | 0.5127 | 0.7026 | 0.0418 |
+| 2026-07-01 | `glm-5.2` | `external` | `replay-strict` | 15000 | 0.7426 | 0.9558 | 0.7426 | 1.0000 | 0.6385 | 0.7456 | 89.0327 | 0.4631 | 0.6932 | 0.0589 |
+| 2026-07-01 | `deepseek-v4-pro` | `external` | `replay-strict` | 15000 | 0.7084 | 0.9341 | 0.7084 | 1.0000 | 0.6042 | 0.7143 | 85.2985 | 0.4874 | 0.6511 | 0.0977 |
+| TBD | `qwen3.5-4b` | `external` | `replay-strict` | 15000 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+| TBD | `qwen3.5-4b-sft` | `external` | `replay-strict` | 15000 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+| TBD | `qwen3.5-9b` | `external` | `replay-strict` | 15000 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+| TBD | `qwen3.5-27b` | `external` | `replay-strict` | 15000 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+| TBD | `qwen3.5-35b-a3b` | `external` | `replay-strict` | 15000 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+| TBD | `qwen3.5-122b-a10b` | `external` | `replay-strict` | 15000 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+| TBD | `qwen3.5-397b-a17b` | `external` | `replay-strict` | 15000 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+| TBD | `llama-3.1-8b-instruct` | `external` | `replay-strict` | 15000 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+| TBD | `llama-3.1-70b-instruct` | `external` | `replay-strict` | 15000 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+| TBD | `mixtral-8x7b-instruct` | `external` | `replay-strict` | 15000 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+| TBD | `gemma-3-12b-it` | `external` | `replay-strict` | 15000 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+| TBD | `internvl3-8b` | `external` | `replay-strict` | 15000 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+
+
+`Task Hit@5` 和 `Task SPL` 是主表使用的任务感知口径。普通单目标和 route-update 使用常规单目标定义；multi-stop 使用逐站 `stop_hit@5` 和 `multi_stop_spl`。原始单目标口径的 `hit@5` / `spl` 仍保存在 `summary.json`，只用于兼容诊断。
+
+`Internal Score` 和 `Relative Index` 是组内相对比较指标，不作为论文主指标。当前以 `routeserver-replay-route-distance` 为 100，权重为 `DS=0.30`、`Task Hit@5=0.10`、`RS=0.25`、`Task SPL=0.30`、`route_efficiency=0.05`。
+
+`TBD` 表示该模型或消融配置的完整 15K 结果尚未记录到本文档。主表中的 Qwen3.7-Max、GLM 和 DeepSeek 行使用已完成的 overall 指标更新；RouteServer LLM ablation、Qwen3.5 系列和其他开源模型行是待测占位。InternVL 这类 VLM 在当前 Module 1 中仍按文本候选选择协议评估；若输入图像或 FPV/BEV，上表应迁移到多模态导航表。
+
+按任务类型，`final15k_corrected_v1` 的 Doubao 结果为：
+
+| Category | Cases | Destination Success | Task Hit@5 | Route Success | Task SPL | Extra |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `implicit_need_navigation` | 7573 | 0.7407 | 1.0000 | 0.7407 | 0.7407 | - |
+| `poi_navigation` | 4744 | 0.8153 | 1.0000 | 0.8153 | 0.8153 | - |
+| `multi_stop_route` | 2096 | 0.7810 | 0.9612 | 0.7810 | 0.5654 | `stop_hit@5=0.9612`, `sequence_hit@5=0.9518`, `sequence_success=0.5654`, `stop_recall=0.7514` |
+| `route_update_add_via` | 587 | 0.7513 | 1.0000 | 0.7513 | 0.7513 | `route_update_success=0.7513`, `current_origin_used=0.9983` |
+
+multi-stop 的主指标应看逐站召回、序列成功和任务 SPL。这里的 `Task Hit@5` 是逐站候选召回均值；`sequence_hit@5` 要求每一站的 top-5 候选都命中对应 GT。旧的单目标 `hit@5=0.2464` 和 `spl=0.2782` 只是兼容字段，不用于 multi-stop 主表。
+
+按任务类型，`qwen3.7-max` 的结果为：
+
+| Category | Cases | Destination Success | Task Hit@5 | Route Success | Task SPL |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `implicit_need_navigation` | 7573 | 0.7284 | 0.9688 | 0.7284 | 0.7284 |
+| `poi_navigation` | 4744 | 0.8047 | 0.9825 | 0.8047 | 0.8047 |
+| `multi_stop_route` | 2096 | 0.7621 | 0.9237 | 0.7621 | 0.5127 |
+| `route_update_add_via` | 587 | 0.7026 | 0.9702 | 0.7026 | 0.7026 |
+
+按任务类型，`glm-5.2` 的结果为：
+
+| Category | Cases | Destination Success | Task Hit@5 | Route Success | Task SPL |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `implicit_need_navigation` | 7573 | 0.7089 | 0.9475 | 0.7089 | 0.7089 |
+| `poi_navigation` | 4744 | 0.8018 | 0.9761 | 0.8018 | 0.8018 |
+| `multi_stop_route` | 2096 | 0.7415 | 0.9048 | 0.7415 | 0.4631 |
+| `route_update_add_via` | 587 | 0.6932 | 0.9589 | 0.6932 | 0.6932 |
+
+按任务类型，`deepseek-v4-pro` 的结果为：
+
+| Category | Cases | Destination Success | Task Hit@5 | Route Success | Task SPL |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `implicit_need_navigation` | 7573 | 0.6768 | 0.9187 | 0.6768 | 0.6768 |
+| `poi_navigation` | 4744 | 0.7752 | 0.9544 | 0.7752 | 0.7752 |
+| `multi_stop_route` | 2096 | 0.7316 | 0.8951 | 0.7316 | 0.4874 |
+| `route_update_add_via` | 587 | 0.6511 | 0.9358 | 0.6511 | 0.6511 |
 
 ## 1. 评估入口
 
@@ -44,10 +99,10 @@ Module 1 专门评估：
 instruction + origin -> destination + route
 ```
 
-默认 GT 是当前 10K English global OSM-local split：
+默认 GT 是当前 final 15K English global OSM-local split：
 
 ```text
-data/benchmark/urbannav_global_osm_local_full_en_v1/task_gt.jsonl
+data/benchmark/urbannav_v2_osm_local_osrm_foot_final_15k/task_gt.jsonl
 ```
 
 如果模型已经输出 `UrbanNavPrediction` JSONL，使用：
@@ -56,7 +111,7 @@ data/benchmark/urbannav_global_osm_local_full_en_v1/task_gt.jsonl
 cd /home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer
 
 PYTHONPATH=src python tools/evaluation/run_urbannav_module1_benchmark.py \
-  --dataset data/benchmark/urbannav_global_osm_local_full_en_v1/task_gt.jsonl \
+  --dataset data/benchmark/urbannav_v2_osm_local_osrm_foot_final_15k/task_gt.jsonl \
   --runner external \
   --predictions /path/to/model_predictions.jsonl \
   --output-dir data/benchmark/urbannav_module1_runs/<model_name>
@@ -66,10 +121,10 @@ PYTHONPATH=src python tools/evaluation/run_urbannav_module1_benchmark.py \
 
 ```bash
 PYTHONPATH=src python tools/evaluation/run_urbannav_module1_benchmark.py \
-  --dataset data/benchmark/urbannav_global_osm_local_full_en_v1/task_gt.jsonl \
+  --dataset data/benchmark/urbannav_v2_osm_local_osrm_foot_final_15k/task_gt.jsonl \
   --runner routeserver-replay \
-  --poi-cache data/benchmark/urbannav_global_osm_local_full_en_v1/poi_cache.jsonl \
-  --route-cache data/benchmark/urbannav_global_osm_local_full_en_v1/route_cache.jsonl \
+  --poi-cache data/benchmark/urbannav_v2_osm_local_osrm_foot_final_15k/poi_cache.jsonl \
+  --route-cache data/benchmark/urbannav_v2_osm_local_osrm_foot_final_15k/route_cache.jsonl \
   --concurrency 8 \
   --output-dir data/benchmark/urbannav_module1_runs/routeserver_replay
 ```
@@ -325,8 +380,8 @@ SPL = RS \cdot \frac{L(P^*_{\mathrm{matched}})}{\max(L(P^*_{\mathrm{matched}}), 
 
 ## 5.2 内部相对分数比较
 
-正式论文主表仍报告 `destination_success / hit@5 / route_success /
-median_route_ratio / SPL`。内部模型组比较可以额外使用相对指数，把多个
+正式论文主表仍报告 `destination_success / task_hit@5 / route_success /
+median_route_ratio / task_spl`。内部模型组比较可以额外使用相对指数，把多个
 Module 1 run 放在同一张表中比较：
 
 ```bash
@@ -344,8 +399,9 @@ PYTHONPATH=src python tools/evaluation/compare_urbannav_module1_runs.py \
 Q = w_D D + w_H H + w_R R + w_S SPL + w_E E
 \]
 
-其中 \(D\) 是 destination success，\(H\) 是 Hit@5，\(R\) 是 route
-success，\(E=\min(1,1/\mathrm{median\_route\_ratio})\)。默认权重是：
+其中 \(D\) 是 destination success，\(H\) 是 task-aware Hit@5，\(R\) 是 route
+success，\(SPL\) 是 task-aware SPL，\(E=\min(1,1/\mathrm{median\_route\_ratio})\)。
+默认权重是：
 
 ```text
 destination_success: 0.30
@@ -364,6 +420,12 @@ I_m = 100 \cdot Q_m / Q_b
 比较器还会基于 `eval_rows.jsonl` 做 paired win/draw/loss，只在共享
 case 上比较每条样本的内部分数差。该相对指数用于组内模型迭代，不替代
 benchmark 主指标。
+
+当前 final15K paired comparison：
+
+| Run | Baseline | Common Cases | Wins | Draws | Losses | Win Rate | Mean Delta |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `doubao-seed-2-0-lite-260428` | `routeserver-replay-route-distance` | 15000 | 942 | 12202 | 1856 | 0.0628 | -0.0493 |
 
 按以下维度切分即可：
 
