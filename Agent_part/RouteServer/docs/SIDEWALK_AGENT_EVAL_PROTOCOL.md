@@ -21,6 +21,7 @@ sidewalk_agent_stage2_case_v1
 src/mcp_server/agent/
   schemas.py
   stage2.py
+  session_runtime.py
   tool_schema.py
   tool_parser.py
   tool_executor.py
@@ -195,6 +196,11 @@ replace_destination
 replan_from_current_pose
 ```
 
+上述 op 名称是 student-visible canonical API。文档、teacher target、validator 和
+executor 必须统一使用这些名称；不要在训练 target 中混用 `create_route`、
+`route_session_id` 等早期别名。后端 RouteServer 函数名可以变化，但只能由
+`ToolExecutor` 内部适配。
+
 ### 4.2 image_tool
 
 用于对 FPV/BEV 图像做可审计操作，例如：
@@ -215,6 +221,38 @@ confirm_route_change
 ```
 
 离线 evaluator 不真正等待用户输入，只记录结构化动作和 synthetic tool response。
+
+### 4.4 ToolResponse
+
+`ToolResponse` 是工具执行后进入模型上下文的唯一外部事实来源。它必须作为独立
+`tool_response` role 出现，不得复制进 assistant target。canonical 字段：
+
+```json
+{
+  "tool": "map_tool",
+  "success": true,
+  "result": {},
+  "error": null,
+  "artifacts": [],
+  "call_id": "optional"
+}
+```
+
+失败也必须写成结构化 response，而不是抛出到 trace 外：
+
+```json
+{
+  "tool": "map_tool",
+  "success": false,
+  "error": {
+    "code": "missing_app_context",
+    "message": "map_tool requires RouteServer app_context"
+  }
+}
+```
+
+`tool_response` 不参与 assistant LM loss；最终 assistant 只能用
+`<ToolResultUse>` 总结“如何使用工具结果”。
 
 ## 5. AgentTrace
 
@@ -276,6 +314,122 @@ tool 路径最终 assistant 必须保留 Phase1 结构并追加工具使用结�
 `</think>` 之前；no-tool 路径不会插入。两条路径都会补齐 `<finish>` 中的 Stage2
 字段。没有 Phase1 response 时，会生成一个 deterministic fallback CoT，便于
 smoke/review。
+
+### 5.1 Canonical Finish Schema
+
+Agentic Stage2 的 final assistant 文本使用 ms-swift prompt 对齐的 canonical
+`<finish>` schema。文本 target 中的轨迹字段固定为 `trajectory_grid1000` 和
+`trajectory_coord_frame`：
+
+```json
+{
+  "route_action": "use_map_context",
+  "tool_used": true,
+  "tool": "map_tool",
+  "op": "search_poi",
+  "route_session_id": "route_demo",
+  "trajectory_grid1000": [[500, 900], [510, 840]],
+  "trajectory_coord_frame": "norm1000",
+  "intent": "go_straight",
+  "confidence_level": "medium",
+  "trajectory_type": "local_navigation",
+  "trajectory_validity": "valid",
+  "teacher_source": "routeserver_teacher"
+}
+```
+
+top-level row 继续保留 `pixel_trajectory`、`trajectory_fpv_t`、`trajectory_ego_t`
+等连续监督字段，供 SideWalk trajectory/action head 使用。validator 会把
+`trajectory_grid1000` 转回 norm01，并与 top-level `pixel_trajectory` 做等价比较。
+
+兼容期内 validator 仍接受旧 `<finish>{"trajectory": ...}</finish>` 或
+`trajectory_norm`，但新生成的 RouteServer Stage2 样本必须输出 canonical
+`trajectory_grid1000`，不得再把旧 `trajectory` 作为主字段。
+
+### 5.2 Session-Level Runtime
+
+session-level runtime 不改变单条 Stage2 trace / ms-swift row contract。它是在线
+推理外层薄调度器：
+
+```text
+RouteSessionRuntime
+  ordered AgentStage2Case ticks
+  -> OnlineAgentRunner / AgentRunner
+  -> AgentTrace per tick
+  -> validation + stop condition + session report
+```
+
+实现入口：
+
+```text
+src/mcp_server/agent/session_runtime.py
+  SessionRuntimeConfig
+  RouteSessionRuntime.run_tick()
+  RouteSessionRuntime.run_until_stop_condition()
+  RouteSessionRunResult
+```
+
+固定停止原因：
+
+```text
+completed_all_ticks
+max_ticks
+user_interaction
+invalid_trace
+```
+
+`user_interaction` 由三类信号触发：`user_interaction_tool` tool call、
+`ToolResponse.result.await_user=true`，或 canonical finish 中
+`route_action="request_user_input"`。session report 中每个 tick 仍保留原始
+`AgentTrace`，因此可以直接拆回 Stage2 rows 做 replay / SFT；session 层不构造
+`RouteContext`，也不把 pose-bound route fields 作为隐式模型输入。
+
+### 5.3 Live LLM Backend
+
+单 tick open-loop inference 支持三类模型后端：
+
+```text
+fake      deterministic protocol smoke
+ms-swift  local trained checkpoint smoke
+llm       OpenAI-compatible live API smoke, including Ark / Doubao
+```
+
+`llm` 后端使用 `LLMSettings.from_env()`，默认读取：
+
+```text
+LLM_PROVIDER
+ARK_API_KEY or LLM_API_KEY
+LLM_MODEL / ARK_MODEL
+LLM_API_BASE_URL
+```
+
+最小命令形态：
+
+```bash
+PYTHONPATH=src python tools/evaluation/run_sidewalk_agentic_stage2_inference.py \
+  --request-json examples/agent_eval/sidewalk_agentic_stage2_final_inference_canonical_request.json \
+  --output-dir /tmp/sidewalk_stage2_live_llm_open_loop \
+  --model-backend llm \
+  --llm-provider ark \
+  --llm-model doubao-seed-2-0-lite-260428 \
+  --llm-api-base-url https://ark.cn-beijing.volces.com/api/v3 \
+  --drop-supervision
+```
+
+如果还要让模型生成的 `map_tool` 真实打到地图 provider，加：
+
+```bash
+--execute-tools --tool-context provider --map-provider osm
+```
+
+`--map-provider osm` 使用 OpenStreetMap/Nominatim/OSM route backend，不需要 AMap key。
+如果不传 `--map-provider`，RouteServer 会读取 `MAP_PROVIDER`；仍未设置时默认也是
+`osm`。其他 provider 如 `amap` / `baidu` / `google` 仍可显式选择，并分别依赖
+对应环境变量密钥。密钥只从环境变量读取，不应写入 request JSON、trace 或命令日志。
+
+`--drop-supervision` 用于真实 open-loop smoke：它会忽略 request JSON 中的
+teacher `pixel_trajectory` 等监督标签，避免把 live LLM 自由输出轨迹和离线 GT
+轨迹做硬等价比较。离线 teacher / dataset smoke 不应使用该参数。
 
 ## 6. ms-swift JSONL Export
 
@@ -431,7 +585,8 @@ PYTHONPATH=src python tools/evaluation/build_sidewalk_agent_stage2_review_sample
 
 `--tool-context fake` 使用本地假地图客户端，但仍走真实 `ToolExecutor -> map_ops /
 route_session_ops` 调用路径，适合离线 smoke。`--tool-context provider` 会创建真实
-RouteServer map provider，可能依赖网络和 provider API key。默认不传
+RouteServer map provider；默认 `MAP_PROVIDER=osm`，也可通过 `--map-provider osm`
+显式选择 OSM。非 OSM provider 可能依赖网络和 provider API key。默认不传
 `--execute-tools` 时仍使用 synthetic tool response，便于协议 review 和单测。
 
 第 6 步完整流水线会额外输出：
@@ -443,7 +598,7 @@ RouteServer map provider，可能依赖网络和 provider API key。默认不传
 - report 中的 `slices` 会按 split、tool/no-tool/failed-tool、tool name、op、
   validation、Phase1 intent 聚合计数和协议 metrics。
 
-注意：真实 Phase1 CoT 中的 `<finish>.trajectory` 可能经过文本四舍五入。Stage2
-最终 assistant 会以 `ground_truth.pixel_trajectory` 覆盖 `<finish>.trajectory`，
-保证 LM 监督文本、ms-swift row 的 `pixel_trajectory`、trajectory head 监督三者
-严格一致。
+注意：真实 Phase1 CoT 中旧 `<finish>.trajectory` 可能经过文本四舍五入。Stage2
+最终 assistant 会以 `ground_truth.pixel_trajectory` 重建 canonical
+`trajectory_grid1000 + trajectory_coord_frame`，保证 LM 监督文本、ms-swift row 的
+`pixel_trajectory`、trajectory head 监督三者等价一致。

@@ -46,7 +46,9 @@ PYTHONPATH=src PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/test_agent_eval_
 
 - exported row 的 `tools` 是 JSON 字符串。
 - exported row 的 `tool_call.content` / `tool_response.content` 是 JSON 字符串。
-- `finish.trajectory == pixel_trajectory`。
+- 新生成样本的 final assistant 使用 canonical
+  `finish.trajectory_grid1000 + finish.trajectory_coord_frame=norm1000`。
+- validator 将 finish 轨迹转回 norm01，并与 top-level `pixel_trajectory` 做等价检查。
 - tool 路径中 `[TRAJ_i]` 在 `tool_response` 后。
 - no-tool 路径中 `[TRAJ_i]` 在 first assistant think 后。
 
@@ -213,9 +215,9 @@ Stage2 选择方案 A。`image_tool` 当前只提供可审计、确定性的图�
   和 train/val/heldout split 文件。
 - `--tool-context fake` 不访问外网，但会经过真实 `ToolExecutor -> map_ops /
   route_session_ops` 路径；`--tool-context provider` 是显式真实 provider 入口。
-- final assistant 的 `<finish>.trajectory` 会以 `ground_truth.pixel_trajectory`
-  覆盖 Phase1 CoT 中可能四舍五入的 trajectory，保证 LM target 与 trajectory
-  head 监督严格对齐。
+- final assistant 会以 `ground_truth.pixel_trajectory` 重建 canonical
+  `<finish>.trajectory_grid1000`，兼容 Phase1 CoT 中可能四舍五入的 legacy
+  `trajectory`，保证 LM target 与 trajectory head 监督等价对齐。
 
 验收输出：
 

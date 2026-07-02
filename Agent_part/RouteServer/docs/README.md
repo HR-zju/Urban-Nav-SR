@@ -10,6 +10,7 @@
 | [FRAMEWORK_MATH_MODEL.md](FRAMEWORK_MATH_MODEL.md) | Agent 框架数学模型、数据接口和地图接口边界。 |
 | [URBANNAV_BENCHMARK_TECHNICAL_DESIGN.md](URBANNAV_BENCHMARK_TECHNICAL_DESIGN.md) | UrbanNav benchmark 的任务定义、真值构造、采样策略、指标和 Agent baseline。 |
 | [EVALUATION.md](EVALUATION.md) | UrbanNav Module 1 一体化评测入口、prediction contract、核心指标、内部相对分数比较和扩展任务指标。 |
+| [ROUTE_BELIEF_GUIDED_AGENT_DESIGN.md](ROUTE_BELIEF_GUIDED_AGENT_DESIGN.md) | Route-Belief Guided Interactive Navigation Agent 的状态、工具、VoP 和全局-局部导航统一设计。 |
 | [YELP_INSTRUCTION_DATA_DESIGN.md](YELP_INSTRUCTION_DATA_DESIGN.md) | Yelp 需求挖掘、taxonomy 扩展和 instruction set 构造流程。 |
 | [SIDEWALK_AGENT_EVAL_PROTOCOL.md](SIDEWALK_AGENT_EVAL_PROTOCOL.md) | SideWalk Agentic Stage2 评估协议。 |
 | [SIDEWALK_PHASE1_DATA_PIPELINE.md](SIDEWALK_PHASE1_DATA_PIPELINE.md) | SideWalk Phase1 数据生成与标注流水线。 |
