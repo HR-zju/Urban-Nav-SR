@@ -80,10 +80,10 @@ def geo2rotation(lla):
 
 def discover_mcap_files(path):
     """Discover .mcap files from a path (file or directory).
-    Excludes files ending with '_repaired.mcap'.
+    Excludes files ending with '_repaired.mcap' or '.download'.
     """
     if os.path.isfile(path):
-        if path.endswith('.mcap'):
+        if path.endswith('.mcap') and not path.endswith('.download'):
             return [path]
         else:
             print(f"[WARN] Not an mcap file: {path}")
@@ -92,7 +92,7 @@ def discover_mcap_files(path):
         files = []
         for root, _, filenames in os.walk(path):
             for f in filenames:
-                if f.endswith('.mcap') and not f.endswith('_repaired.mcap'):
+                if f.endswith('.mcap') and not f.endswith('_repaired.mcap') and not f.endswith('.download'):
                     files.append(os.path.join(root, f))
         files.sort()
         return files
@@ -257,9 +257,9 @@ def repair_odom_data(odom_data):
     bad_reasons = []
 
     def estimate_expected_delta(i, dt):
-        prev_msg = odom_data[i - 1]['msg'].ros_msg
-        cur_msg = odom_data[i]['msg'].ros_msg
-        twist_delta = 0.5 * (odom_twist_to_enu(prev_msg) + odom_twist_to_enu(cur_msg)) * dt
+        prev_twist = odom_data[i - 1]['twist']
+        cur_twist = odom_data[i]['twist']
+        twist_delta = 0.5 * (prev_twist + cur_twist) * dt
 
         if np.all(np.isfinite(twist_delta)) and np.linalg.norm(twist_delta[:2]) <= ODOM_MAX_SPEED_2D_MPS * max(dt, 1e-3):
             return twist_delta
@@ -277,9 +277,9 @@ def repair_odom_data(odom_data):
         step_2d = np.linalg.norm(delta[:2])
         pose_speed = step_2d / dt if dt > 0 else np.inf
 
-        prev_msg = odom_data[i - 1]['msg'].ros_msg
-        cur_msg = odom_data[i]['msg'].ros_msg
-        twist_speed = np.linalg.norm(0.5 * (odom_twist_to_enu(prev_msg)[:2] + odom_twist_to_enu(cur_msg)[:2]))
+        prev_twist = odom_data[i - 1]['twist']
+        cur_twist = odom_data[i]['twist']
+        twist_speed = np.linalg.norm(0.5 * (prev_twist[:2] + cur_twist[:2]))
         speed_limit = max(ODOM_MAX_SPEED_2D_MPS, ODOM_TWIST_SPEED_RATIO * twist_speed + ODOM_TWIST_SPEED_MARGIN_MPS)
 
         bad = False
@@ -502,36 +502,28 @@ def repair_single(input_bag, output_bag=None, overwrite=False):
 
     raw_gnss = []
     odom_data = []
-    all_msgs = []
+    total_msg_count = 0
 
     navsat_schema_info = None
     navsat_template_msg = None
 
     for msg in read_ros2_messages(input_bag):
+        total_msg_count += 1
         topic = msg.channel.topic
         t_sec = msg.publish_time.timestamp()
         ros_msg = msg.ros_msg
-
-        # Store with native nanosecond timestamps to avoid precision loss
-        all_msgs.append((
-            topic,
-            msg.schema.name,
-            msg.schema.data,
-            ros_msg,
-            msg.log_time_ns,
-            msg.publish_time_ns,
-        ))
 
         if topic == SPP_FIX_RAW_TOPIC:
             raw_gnss.append({'t': t_sec, 'lat': ros_msg.latitude, 'lon': ros_msg.longitude, 'alt': ros_msg.altitude})
             if navsat_schema_info is None:
                 navsat_schema_info = (msg.schema.name, msg.schema.data)
-                navsat_template_msg = ros_msg
+                navsat_template_msg = clone_ros_msg(ros_msg)
         elif topic == ODOM_TOPIC:
             enu_pos = odom_msg_to_enu(ros_msg)
-            odom_data.append({'t': t_sec, 'x': enu_pos[0], 'y': enu_pos[1], 'z': enu_pos[2], 'msg': msg})
+            enu_twist = odom_twist_to_enu(ros_msg)
+            odom_data.append({'t': t_sec, 'x': enu_pos[0], 'y': enu_pos[1], 'z': enu_pos[2], 'twist': enu_twist})
 
-    print(f"Loaded {len(all_msgs)} total messages ({len(raw_gnss)} raw GNSS, {len(odom_data)} odometry).")
+    print(f"Loaded {total_msg_count} total messages ({len(raw_gnss)} raw GNSS, {len(odom_data)} odometry).")
 
     if not raw_gnss:
         print("[WARN] No raw GNSS data found, skipping repair.")
@@ -730,67 +722,92 @@ def repair_single(input_bag, output_bag=None, overwrite=False):
     print("Hybrid alignment (global + residual correction) computed successfully.")
     print(f"Writing repaired bag to: {output_bag}")
 
+    temp_output_bag = f"{output_bag}.download"
+    if os.path.exists(temp_output_bag):
+        os.remove(temp_output_bag)
     if os.path.exists(output_bag):
         os.remove(output_bag)
     os.makedirs(os.path.dirname(os.path.abspath(output_bag)), exist_ok=True)
 
-    writer = Writer(output_bag)
+    writer = Writer(temp_output_bag)
     schemas = {}
 
-    # Pre-register all schemas (including schemas from other topics)
-    for topic, s_name, s_data, ros_msg, log_ns, pub_ns in all_msgs:
-        if s_name not in schemas:
-            schemas[s_name] = writer.register_msgdef(s_name, s_data.decode())
+    try:
+        if navsat_schema_info is not None and navsat_schema_info[0] not in schemas:
+            schemas[navsat_schema_info[0]] = writer.register_msgdef(navsat_schema_info[0], navsat_schema_info[1].decode())
 
-    repaired_trajectory = []
-    odom_write_idx = 0
-    odom_fix_idx = 0
+        repaired_trajectory = []
+        odom_write_idx = 0
+        odom_fix_idx = 0
 
-    for topic, s_name, s_data, ros_msg, log_ns, pub_ns in all_msgs:
-        # If original spp_fix, rename to _orig so user can compare
-        if topic == SPP_FIX_TOPIC:
-            writer.write_message(SPP_FIX_ORIG_TOPIC, schemas[s_name], ros_msg, log_ns, pub_ns)
-        elif topic == ODOM_TOPIC:
-            repaired_odom_msg = make_repaired_odom_msg(ros_msg, repaired_odom_enu[odom_write_idx])
-            writer.write_message(ODOM_ORIG_TOPIC, schemas[s_name], ros_msg, log_ns, pub_ns)
-            writer.write_message(ODOM_TOPIC, schemas[s_name], repaired_odom_msg, log_ns, pub_ns)
-            writer.write_message(ODOM_REPAIRED_TOPIC, schemas[s_name], repaired_odom_msg, log_ns, pub_ns)
-            odom_write_idx += 1
-        else:
-            # All other topics (including non-target topics) are written as-is
-            writer.write_message(topic, schemas[s_name], ros_msg, log_ns, pub_ns)
+        for msg in read_ros2_messages(input_bag):
+            topic = msg.channel.topic
+            s_name = msg.schema.name
+            if s_name not in schemas:
+                schemas[s_name] = writer.register_msgdef(s_name, msg.schema.data.decode())
 
-        # When we encounter odometry, generate and publish the repaired spp_fix
-        if topic == ODOM_TOPIC and navsat_template_msg is not None:
-            t_sec = pub_ns / 1e9
-            oxy = repaired_odom_enu[odom_fix_idx, :2]
-            oz = repaired_odom_enu[odom_fix_idx, 2]
-            odom_fix_idx += 1
+            ros_msg = msg.ros_msg
+            log_ns = msg.log_time_ns
+            pub_ns = msg.publish_time_ns
 
-            # Apply global transform + smoothed residual correction
-            gxy = R_opt @ oxy + t_opt + get_correction(t_sec)
-            fused_enu = np.array([gxy[0], gxy[1], oz - odom_z0])
+            # If original spp_fix, rename to _orig so user can compare
+            if topic == SPP_FIX_TOPIC:
+                writer.write_message(SPP_FIX_ORIG_TOPIC, schemas[s_name], ros_msg, log_ns, pub_ns)
+            elif topic == ODOM_TOPIC:
+                if odom_write_idx < len(repaired_odom_enu):
+                    repaired_odom_msg = make_repaired_odom_msg(ros_msg, repaired_odom_enu[odom_write_idx])
+                    writer.write_message(ODOM_ORIG_TOPIC, schemas[s_name], ros_msg, log_ns, pub_ns)
+                    writer.write_message(ODOM_TOPIC, schemas[s_name], repaired_odom_msg, log_ns, pub_ns)
+                    writer.write_message(ODOM_REPAIRED_TOPIC, schemas[s_name], repaired_odom_msg, log_ns, pub_ns)
+                    odom_write_idx += 1
+                else:
+                    writer.write_message(topic, schemas[s_name], ros_msg, log_ns, pub_ns)
+            else:
+                # All other topics (including non-target topics) are written as-is
+                writer.write_message(topic, schemas[s_name], ros_msg, log_ns, pub_ns)
 
-            cur_ecef = origin_ecef + R_ecef2enu.T @ fused_enu
-            cur_lla = ecef2geo(cur_ecef)
+            # When we encounter odometry, generate and publish the repaired spp_fix
+            if topic == ODOM_TOPIC and navsat_template_msg is not None and odom_fix_idx < len(repaired_odom_enu):
+                t_sec = pub_ns / 1e9
+                oxy = repaired_odom_enu[odom_fix_idx, :2]
+                oz = repaired_odom_enu[odom_fix_idx, 2]
+                odom_fix_idx += 1
 
-            repaired_trajectory.append({'t': t_sec, 'lat': cur_lla[0], 'lon': cur_lla[1], 'alt': cur_lla[2]})
+                # Apply global transform + smoothed residual correction
+                gxy = R_opt @ oxy + t_opt + get_correction(t_sec)
+                fused_enu = np.array([gxy[0], gxy[1], oz - odom_z0])
 
-            # Construct repaired NavSatFix message
-            rep_msg = type(navsat_template_msg)()
-            for field in navsat_template_msg.__slots__:
-                setattr(rep_msg, field, getattr(navsat_template_msg, field))
+                cur_ecef = origin_ecef + R_ecef2enu.T @ fused_enu
+                cur_lla = ecef2geo(cur_ecef)
 
-            rep_msg.latitude = float(cur_lla[0])
-            rep_msg.longitude = float(cur_lla[1])
-            rep_msg.altitude = float(cur_lla[2])
-            rep_msg.header = ros_msg.header
+                repaired_trajectory.append({'t': t_sec, 'lat': cur_lla[0], 'lon': cur_lla[1], 'alt': cur_lla[2]})
 
-            navsat_schema = schemas[navsat_schema_info[0]]
-            writer.write_message(SPP_FIX_TOPIC, navsat_schema, rep_msg, log_ns, pub_ns)
-            writer.write_message(SPP_FIX_REPAIRED_TOPIC, navsat_schema, rep_msg, log_ns, pub_ns)
+                # Construct repaired NavSatFix message
+                rep_msg = type(navsat_template_msg)()
+                for field in navsat_template_msg.__slots__:
+                    setattr(rep_msg, field, getattr(navsat_template_msg, field))
 
-    writer.finish()
+                rep_msg.latitude = float(cur_lla[0])
+                rep_msg.longitude = float(cur_lla[1])
+                rep_msg.altitude = float(cur_lla[2])
+                rep_msg.header = ros_msg.header
+
+                navsat_schema = schemas[navsat_schema_info[0]]
+                writer.write_message(SPP_FIX_TOPIC, navsat_schema, rep_msg, log_ns, pub_ns)
+                writer.write_message(SPP_FIX_REPAIRED_TOPIC, navsat_schema, rep_msg, log_ns, pub_ns)
+
+        writer.finish()
+    except BaseException:
+        if os.path.exists(temp_output_bag):
+            try:
+                os.remove(temp_output_bag)
+            except OSError:
+                pass
+        raise
+    else:
+        if os.path.exists(output_bag):
+            os.remove(output_bag)
+        os.rename(temp_output_bag, output_bag)
     print("=======================================================================================")
     print("                     POST-PROCESSING REPAIR SUCCESSFULLY EXPORTED                      ")
     print("=======================================================================================")
