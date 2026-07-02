@@ -777,6 +777,62 @@ async def _close_async_client(client: Any) -> None:
             await maybe_awaitable
 
 
+def create_async_llm_client(settings: LLMSettings) -> Any:
+    """Create an OpenAI-compatible async LLM client.
+
+    Args:
+        settings: Provider, model, key, base URL, timeout, and retry settings.
+
+    Returns:
+        Async client object, or ``None`` when the optional OpenAI SDK is not
+        installed.
+    """
+
+    return _create_async_client(settings)
+
+
+async def close_async_llm_client(client: Any) -> None:
+    """Close an async LLM client if it exposes a close method.
+
+    Args:
+        client: Client returned by ``create_async_llm_client`` or a compatible
+            test double.
+
+    Returns:
+        ``None``.
+    """
+
+    await _close_async_client(client)
+
+
+def extract_chat_response_text(response: Any) -> str:
+    """Extract assistant text from a chat-completions response.
+
+    Args:
+        response: Response object returned by an OpenAI-compatible
+            ``chat.completions.create`` call.
+
+    Returns:
+        Assistant text, or an empty string if the response has no text content.
+    """
+
+    return _extract_text_from_chat_response(response)
+
+
+def apply_llm_reasoning_effort(payload: dict[str, Any], settings: LLMSettings) -> dict[str, Any]:
+    """Apply provider-specific reasoning-effort parameters.
+
+    Args:
+        payload: Chat-completions request payload.
+        settings: LLM settings that define provider and reasoning effort.
+
+    Returns:
+        Payload with provider-specific fields added when supported.
+    """
+
+    return _apply_reasoning_effort(payload, settings)
+
+
 class BaseLLMService:
     def __init__(self, settings: LLMSettings | None = None) -> None:
         self.settings = settings or LLMSettings.from_env()
@@ -2846,11 +2902,15 @@ __all__ = [
     "LLMSettings",
     "MapLocalizationService",
     "VisionAnalyzer",
+    "apply_llm_reasoning_effort",
     "analyze_image_with_llm",
     "analyze_local_image_with_llm",
     "arbitrate_local_pov_candidates_with_llm",
     "arbitrate_pov_candidates_with_llm",
+    "close_async_llm_client",
+    "create_async_llm_client",
     "extract_explicit_destination_query",
+    "extract_chat_response_text",
     "infer_destination_kind",
     "local_image_path_to_data_url",
     "parse_instruction_with_llm",

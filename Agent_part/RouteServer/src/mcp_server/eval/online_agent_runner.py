@@ -29,6 +29,13 @@ from mcp_server.eval.stage2_validator import (
     validate_ms_swift_stage2_row,
     validate_stage2_trace,
 )
+from mcp_server.llm import (
+    LLMSettings,
+    apply_llm_reasoning_effort,
+    close_async_llm_client,
+    create_async_llm_client,
+    extract_chat_response_text,
+)
 
 
 class ModelAdapter(Protocol):
@@ -236,6 +243,171 @@ class CallableModelAdapter:
 
 
 @dataclass(frozen=True)
+class OpenAICompatibleInferenceConfig:
+    """Configuration for OpenAI-compatible Stage2 inference.
+
+    Args:
+        settings: Optional LLM settings.  When omitted, settings are loaded from
+            environment variables such as ``LLM_PROVIDER`` and ``ARK_API_KEY``.
+        case: Optional Stage2 case whose non-supervision runtime context is
+            embedded in the live LLM prompt.
+        pre_tool_max_tokens: Token budget for the first tool-decision call.
+        final_max_tokens: Token budget for the final navigation call.
+        temperature: Optional generation temperature override.  If omitted,
+            ``LLMSettings.temperature`` is used.
+        client_factory: Optional test hook that returns an OpenAI-compatible
+            async client for the supplied settings.
+    """
+
+    settings: LLMSettings | None = None
+    case: AgentStage2Case | None = None
+    pre_tool_max_tokens: int = 512
+    final_max_tokens: int = 1024
+    temperature: float | None = None
+    client_factory: Callable[[LLMSettings], Any] | None = None
+
+
+class OpenAICompatibleStage2Adapter:
+    """ModelAdapter backed by an OpenAI-compatible chat-completions API.
+
+    Args:
+        config: LLM provider settings and generation controls.
+
+    This adapter is intended for live smoke tests with providers such as Ark /
+    Doubao.  It does not use provider function-calling; instead it prompts the
+    model to emit the same textual Stage2 protocol that ms-swift trains on.
+    """
+
+    def __init__(self, config: OpenAICompatibleInferenceConfig | None = None) -> None:
+        """Create the adapter.
+
+        Args:
+            config: Optional OpenAI-compatible inference config.
+        """
+
+        self.config = config or OpenAICompatibleInferenceConfig()
+        self.settings = self.config.settings or LLMSettings.from_env()
+
+    async def generate_pre_tool(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        images: list[str],
+    ) -> str:
+        """Generate the first Stage2 assistant turn through the LLM API.
+
+        Args:
+            messages: System and initial user messages.
+            tools: Student-visible tool schema.
+            images: FPV/BEV image paths associated with the case.
+
+        Returns:
+            Assistant content containing ``<think>`` and optionally one
+            sibling ``<tool_call>`` block.
+        """
+
+        return await self._generate(messages, tools, images, target="tool_decision")
+
+    async def generate_final(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        images: list[str],
+    ) -> str:
+        """Generate the final Stage2 navigation turn through the LLM API.
+
+        Args:
+            messages: Full prefix through optional tool response and trajectory
+                readout prompt.
+            tools: Student-visible tool schema.
+            images: FPV/BEV image paths associated with the case.
+
+        Returns:
+            Assistant content containing final CoT tags and ``<finish>``.
+        """
+
+        return await self._generate(messages, tools, images, target="final_navigation")
+
+    def build_chat_messages(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        images: list[str],
+        *,
+        target: str,
+    ) -> list[dict[str, str]]:
+        """Build one chat-completions request for a Stage2 generation target.
+
+        Args:
+            messages: RouteServer/ms-swift-style conversation prefix.
+            tools: Student-visible tool schema.
+            images: FPV/BEV image paths.  The API call is text-only; paths are
+                included for audit/context but image bytes are not uploaded.
+            target: ``tool_decision`` or ``final_navigation``.
+
+        Returns:
+            OpenAI-compatible chat messages.
+        """
+
+        has_tool_response = any(message.get("role") == "tool_response" for message in messages)
+        prompt = {
+            "target": target,
+            "runtime_context": _stage2_runtime_context(self.config.case),
+            "images": list(images),
+            "tools": list(tools),
+            "conversation_prefix": [_normalize_prompt_message(message) for message in messages],
+            "tool_response_available": has_tool_response,
+            "output_contract": _stage2_output_contract(target=target, has_tool_response=has_tool_response),
+        }
+        return [
+            {"role": "system", "content": _stage2_llm_system_prompt(target)},
+            {
+                "role": "user",
+                "content": (
+                    "Generate only the next assistant message for this RouteServer Stage2 prefix.\n"
+                    "Do not wrap the answer in markdown or code fences.\n"
+                    f"{json.dumps(prompt, ensure_ascii=False, sort_keys=True)}"
+                ),
+            },
+        ]
+
+    async def _generate(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        images: list[str],
+        *,
+        target: str,
+    ) -> str:
+        """Run one chat-completions request and return assistant text."""
+
+        if not self.settings.api_key:
+            raise RuntimeError("OpenAI-compatible LLM backend requires ARK_API_KEY or LLM_API_KEY.")
+        client_factory = self.config.client_factory or create_async_llm_client
+        client = client_factory(self.settings)
+        if client is None:
+            raise RuntimeError("OpenAI-compatible LLM backend requires the openai Python package.")
+        try:
+            payload = {
+                "model": self.settings.model,
+                "messages": self.build_chat_messages(messages, tools, images, target=target),
+                "temperature": self.config.temperature
+                if self.config.temperature is not None
+                else self.settings.temperature,
+                "max_tokens": self.config.pre_tool_max_tokens
+                if target == "tool_decision"
+                else self.config.final_max_tokens,
+            }
+            response = await client.chat.completions.create(**apply_llm_reasoning_effort(payload, self.settings))
+            text = extract_chat_response_text(response).strip()
+            if not text:
+                raise RuntimeError(f"OpenAI-compatible LLM returned empty text for target={target}.")
+            return text
+        finally:
+            await close_async_llm_client(client)
+
+
+@dataclass(frozen=True)
 class MsSwiftInferenceConfig:
     """Configuration for real ms-swift subprocess inference.
 
@@ -426,6 +598,117 @@ class MsSwiftInferenceAdapter:
             command.append("--enable-thinking")
         command.extend(self.config.extra_args)
         return command
+
+
+def _stage2_llm_system_prompt(target: str) -> str:
+    """Return the strict system prompt for a live Stage2 LLM backend."""
+
+    return (
+        "You are the live RouteServer Stage2 inference backend. "
+        "Return only the next assistant message content for the requested target. "
+        "Follow the XML-like tag grammar exactly. "
+        "Do not use markdown, code fences, prose outside the required tags, or provider function-calling. "
+        f"Current target: {target}."
+    )
+
+
+def _stage2_output_contract(*, target: str, has_tool_response: bool) -> dict[str, Any]:
+    """Return the JSON-serializable output contract embedded in the LLM prompt."""
+
+    if target == "tool_decision":
+        return {
+            "allowed_outputs": [
+                "no_tool: <think>\\n<AgentState>{json}</AgentState>\\n<ToolDecision>{\"should_call_tool\":false,...}</ToolDecision>\\n</think>, no <tool_call>",
+                "tool: <think>\\n<AgentState>{json}</AgentState>\\n<ToolDecision>{\"should_call_tool\":true,\"tool\":\"...\",\"op\":\"...\",...}</ToolDecision>\\n</think>, followed by sibling <tool_call>{...}</tool_call>",
+            ],
+            "rules": [
+                "Always emit <AgentState> and <ToolDecision> as XML-like tags; never write plain labels such as 'AgentState:' or 'ToolDecision:'.",
+                "<tool_call> must be outside <think>, immediately after </think>.",
+                "Do not emit <finish> in the tool_decision target.",
+                "Use only student-visible tool names and ops from tools.",
+                "For map_tool.search_poi, include op, query, location, and optional limit.",
+                "If runtime_context.current_location is available, copy it exactly as the map_tool.search_poi location value.",
+                "Never use placeholders such as 'current longitude,current latitude' or 'lon,lat'.",
+                "For map_tool.create_route_session, include op, origin, destination, and mode=foot unless the user asks otherwise.",
+                "If the visible route/image context is enough, set should_call_tool=false.",
+            ],
+            "tool_call_shape": {
+                "name": "map_tool",
+                "arguments": {"op": "search_poi", "query": "rest area", "location": "lon,lat", "limit": 3},
+            },
+        }
+    return {
+        "required_text_shape": (
+            "<think>\n"
+            "<Scene>{json}</Scene>\n"
+            "<FPVScene>{json}</FPVScene>\n"
+            "<BEVContext>{json}</BEVContext>\n"
+            "<CrossView>{json}</CrossView>\n"
+            "<Plan>{json}</Plan>\n"
+            + ("<ToolResultUse>{json}</ToolResultUse>\n" if has_tool_response else "")
+            + "</think>\n"
+            "<finish>{json}</finish>"
+        ),
+        "rules": [
+            "Every JSON block must be valid compact JSON.",
+            "<finish> must be outside <think>.",
+            "trajectory_grid1000 must contain exactly 16 [x,y] integer points in [0,1000].",
+            "trajectory_coord_frame must be \"norm1000\".",
+            "Do not emit legacy finish.trajectory or trajectory_norm.",
+            "Use route_action=request_user_input only when user_interaction_tool asks for clarification.",
+            "If a tool_response is available, include <ToolResultUse> summarizing tool_used, used_for, result_summary, route_update, and navigation_effect.",
+            "<ToolResultUse>.tool_used must be true when the prefix contains a tool_response.",
+        ],
+        "tool_result_use_shape": {
+            "tool_used": has_tool_response,
+            "used_for": "final_navigation_decision",
+            "result_summary": "summarize the tool_response success or failure",
+            "route_update": "none",
+            "navigation_effect": "state how the tool result affects the local trajectory",
+        },
+        "finish_shape": {
+            "route_action": "continue_navigation",
+            "tool_used": has_tool_response,
+            "tool": "map_tool" if has_tool_response else None,
+            "op": "search_poi" if has_tool_response else None,
+            "trajectory_grid1000": [[500, 900], [500, 875], [500, 850], [500, 825], [500, 800], [500, 775], [500, 750], [500, 725], [500, 700], [500, 675], [500, 650], [500, 625], [500, 600], [500, 575], [500, 550], [500, 525]],
+            "trajectory_coord_frame": "norm1000",
+            "intent": "follow_sidewalk_route",
+            "confidence_level": "medium",
+            "trajectory_type": "local_navigation",
+            "trajectory_validity": "valid",
+            "teacher_source": "openai_compatible_live_llm",
+        },
+    }
+
+
+def _normalize_prompt_message(message: dict[str, Any]) -> dict[str, Any]:
+    """Normalize one RouteServer prefix message for text-only LLM prompting."""
+
+    role = str(message.get("role") or "")
+    content = message.get("content")
+    if isinstance(content, str):
+        normalized_content: Any = content
+    else:
+        normalized_content = json.loads(json.dumps(content, ensure_ascii=False))
+    return {"role": role, "content": normalized_content}
+
+
+def _stage2_runtime_context(case: AgentStage2Case | None) -> dict[str, Any]:
+    """Return non-supervision runtime context for live LLM prompting."""
+
+    if case is None:
+        return {}
+    observation = dict(case.observation)
+    return {
+        "case_id": case.case_id,
+        "user_request": case.user_request,
+        "current_location": observation.get("current_location") or observation.get("origin"),
+        "route_session_id": observation.get("route_session_id") or observation.get("session_id"),
+        "route_state": observation.get("route_state") or {},
+        "observation": observation,
+        "metadata": dict(case.metadata),
+    }
 
 
 def build_initial_model_messages(case: AgentStage2Case, *, system_prompt: str = DEFAULT_AGENT_SYSTEM_PROMPT) -> list[dict[str, Any]]:

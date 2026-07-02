@@ -13,10 +13,13 @@ from mcp_server.agent.tool_runtime import AgentToolRuntime
 from mcp_server.eval.online_agent_runner import (
     MsSwiftInferenceAdapter,
     MsSwiftInferenceConfig,
+    OpenAICompatibleInferenceConfig,
+    OpenAICompatibleStage2Adapter,
     OnlineAgentRunner,
     build_initial_model_messages,
 )
 from mcp_server.eval.stage2_validator import validate_ms_swift_stage2_row, validate_stage2_trace
+from mcp_server.llm import LLMSettings
 
 
 class OnlineAgentRunnerTest(unittest.IsolatedAsyncioTestCase):
@@ -106,6 +109,102 @@ class MsSwiftInferenceAdapterTest(unittest.TestCase):
         self.assertIn("hermes", command)
         self.assertIn("--device-map", command)
         self.assertIn("cpu", command)
+
+
+class OpenAICompatibleStage2AdapterTest(unittest.IsolatedAsyncioTestCase):
+    async def test_openai_compatible_adapter_builds_protocol_chat_request(self) -> None:
+        fake_client = _FakeOpenAIClient(
+            response_text=(
+                "<think>\n"
+                '<AgentState>{"case_id":"online-case-1"}</AgentState>\n'
+                '<ToolDecision>{"should_call_tool":false,"reason":"test"}</ToolDecision>\n'
+                "</think>\n"
+            )
+        )
+        adapter = OpenAICompatibleStage2Adapter(
+            OpenAICompatibleInferenceConfig(
+                settings=LLMSettings(
+                    provider="ark",
+                    api_style="chat_completions",
+                    api_key="test-key",
+                    model="doubao-test",
+                    base_url="https://example.invalid/api/v3",
+                    reasoning_effort="minimal",
+                ),
+                case=_sample_case(),
+                client_factory=lambda settings: fake_client,
+                pre_tool_max_tokens=321,
+                final_max_tokens=654,
+                temperature=0.0,
+            )
+        )
+
+        text = await adapter.generate_pre_tool(
+            build_initial_model_messages(_sample_case()),
+            [{"type": "function", "function": {"name": "map_tool", "parameters": {"type": "object"}}}],
+            ["/data/fpv.jpg", "/data/bev.jpg"],
+        )
+
+        self.assertIn("<ToolDecision>", text)
+        payload = fake_client.payloads[0]
+        self.assertEqual(payload["model"], "doubao-test")
+        self.assertEqual(payload["max_tokens"], 321)
+        self.assertEqual(payload["reasoning_effort"], "minimal")
+        user_content = payload["messages"][1]["content"]
+        self.assertIn('"target": "tool_decision"', user_content)
+        self.assertIn('"current_location": "120.0,30.0"', user_content)
+        self.assertIn("map_tool", user_content)
+        self.assertIn("/data/fpv.jpg", user_content)
+        self.assertNotIn("pixel_trajectory", user_content)
+
+    async def test_openai_compatible_adapter_final_prompt_requires_canonical_finish(self) -> None:
+        fake_client = _FakeOpenAIClient(
+            response_text=(
+                "<think>\n"
+                '<Scene>{"summary":"test"}</Scene>\n'
+                '<FPVScene>{"navigable_area":"visible"}</FPVScene>\n'
+                '<BEVContext>{"mode":"foot"}</BEVContext>\n'
+                '<CrossView>{"alignment":"ok"}</CrossView>\n'
+                '<Plan>{"route_action":"continue_navigation"}</Plan>\n'
+                '<ToolResultUse>{"used_for":"final_navigation_decision"}</ToolResultUse>\n'
+                "</think>\n"
+                '<finish>{"route_action":"continue_navigation","trajectory_grid1000":[[500,900]],'
+                '"trajectory_coord_frame":"norm1000"}</finish>'
+            )
+        )
+        adapter = OpenAICompatibleStage2Adapter(
+            OpenAICompatibleInferenceConfig(
+                settings=LLMSettings(
+                    provider="ark",
+                    api_style="chat_completions",
+                    api_key="test-key",
+                    model="doubao-test",
+                    base_url="https://example.invalid/api/v3",
+                    reasoning_effort="minimal",
+                ),
+                client_factory=lambda settings: fake_client,
+                final_max_tokens=654,
+            )
+        )
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "<image>request"},
+            {"role": "assistant", "content": "<think></think>"},
+            {"role": "tool_call", "content": '{"name":"map_tool","arguments":{"op":"search_poi"}}'},
+            {"role": "tool_response", "content": '{"tool":"map_tool","success":true,"result":{}}'},
+            {"role": "user", "content": "Produce final [TRAJ_0]"},
+        ]
+
+        text = await adapter.generate_final(messages, [], [])
+
+        self.assertIn("<finish>", text)
+        payload = fake_client.payloads[0]
+        self.assertEqual(payload["max_tokens"], 654)
+        user_content = payload["messages"][1]["content"]
+        self.assertIn('"target": "final_navigation"', user_content)
+        self.assertIn("trajectory_grid1000", user_content)
+        self.assertIn("ToolResultUse", user_content)
+        self.assertIn('"tool_used": true', user_content)
 
 
 class _FakeOnlineModelAdapter:
@@ -239,6 +338,23 @@ class _FakeMapClient:
                 "source": "fake_test_map",
             }
         ]
+
+
+class _FakeOpenAIClient:
+    def __init__(self, *, response_text: str) -> None:
+        self.response_text = response_text
+        self.payloads: list[dict[str, Any]] = []
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+
+    async def _create(self, **payload: Any) -> Any:
+        self.payloads.append(payload)
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content=self.response_text),
+                )
+            ]
+        )
 
 
 if __name__ == "__main__":

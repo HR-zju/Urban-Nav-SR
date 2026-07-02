@@ -6,8 +6,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 from pathlib import Path
 import sys
+from dataclasses import replace
+from types import SimpleNamespace
 from typing import Any
 
 
@@ -34,7 +37,11 @@ from mcp_server.eval.online_agent_runner import (  # noqa: E402
     CallableModelAdapter,
     MsSwiftInferenceAdapter,
     MsSwiftInferenceConfig,
+    OpenAICompatibleInferenceConfig,
+    OpenAICompatibleStage2Adapter,
 )
+from mcp_server.llm import LLMSettings  # noqa: E402
+from mcp_server.map_providers import create_map_client  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -47,12 +54,36 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--request-json", required=True)
     parser.add_argument("--output-dir", required=True)
-    parser.add_argument("--model-backend", choices=["fake", "ms-swift"], default="fake")
+    parser.add_argument("--model-backend", choices=["fake", "ms-swift", "llm"], default="fake")
     parser.add_argument("--fake-policy", choices=["auto", "tool", "no_tool"], default="auto")
     parser.add_argument("--execute-tools", action="store_true", help="Use ToolExecutor instead of structured missing-executor responses.")
+    parser.add_argument(
+        "--tool-context",
+        choices=["none", "provider"],
+        default="none",
+        help="ToolExecutor context. Use provider to build a live map client from MAP_PROVIDER or --map-provider.",
+    )
+    parser.add_argument(
+        "--map-provider",
+        choices=["osm", "amap", "baidu", "google"],
+        default=None,
+        help="Optional live map provider override for --tool-context provider. Defaults to MAP_PROVIDER or osm.",
+    )
     parser.add_argument("--runtime-artifact-dir", default=None)
     parser.add_argument("--source", default="routeserver_final_inference")
     parser.add_argument("--max-tool-calls", type=int, default=1)
+    parser.add_argument(
+        "--drop-supervision",
+        action="store_true",
+        help="Ignore request supervision labels for live open-loop validation.",
+    )
+
+    parser.add_argument("--llm-provider", default=None, help="Optional LLM provider override, otherwise use LLM_PROVIDER.")
+    parser.add_argument("--llm-model", default=None, help="Optional LLM model override, otherwise use LLM_MODEL/ARK_MODEL.")
+    parser.add_argument("--llm-api-base-url", default=None, help="Optional OpenAI-compatible base URL override.")
+    parser.add_argument("--llm-max-tokens-pre-tool", type=int, default=512)
+    parser.add_argument("--llm-max-tokens-final", type=int, default=1024)
+    parser.add_argument("--llm-temperature", type=float, default=None)
 
     parser.add_argument("--ms-swift-root", default=None)
     parser.add_argument("--model", default=None)
@@ -81,18 +112,24 @@ async def async_main() -> None:
 
     args = parse_args()
     request = load_routeserver_final_inference_request(args.request_json)
+    if args.drop_supervision:
+        request = replace(request, supervision={})
     adapter = _build_model_adapter(args, request.to_case())
-    executor = ToolExecutor() if args.execute_tools else None
-    result = await run_routeserver_final_inference(
-        request,
-        model_adapter=adapter,
-        executor=executor,
-        config=RouteServerAgentInferenceConfig(
-            source=args.source,
-            max_tool_calls=args.max_tool_calls,
-            review_artifact_dir=args.runtime_artifact_dir,
-        ),
-    )
+    executor, map_client = await _build_tool_executor(args)
+    try:
+        result = await run_routeserver_final_inference(
+            request,
+            model_adapter=adapter,
+            executor=executor,
+            config=RouteServerAgentInferenceConfig(
+                source=args.source,
+                max_tool_calls=args.max_tool_calls,
+                review_artifact_dir=args.runtime_artifact_dir,
+            ),
+        )
+    finally:
+        if map_client is not None:
+            await map_client.disconnect()
     artifact_paths = write_routeserver_final_inference_artifacts(result, args.output_dir)
     print(
         json.dumps(
@@ -113,6 +150,16 @@ async def async_main() -> None:
 def _build_model_adapter(args: argparse.Namespace, case: AgentStage2Case):
     if args.model_backend == "fake":
         return _fake_model_adapter(case, policy=args.fake_policy)
+    if args.model_backend == "llm":
+        return OpenAICompatibleStage2Adapter(
+            OpenAICompatibleInferenceConfig(
+                settings=_llm_settings_from_args(args),
+                case=case,
+                pre_tool_max_tokens=args.llm_max_tokens_pre_tool,
+                final_max_tokens=args.llm_max_tokens_final,
+                temperature=args.llm_temperature,
+            )
+        )
     if not args.ms_swift_root or not args.model:
         raise ValueError("--ms-swift-root and --model are required for --model-backend ms-swift")
     return MsSwiftInferenceAdapter(
@@ -131,6 +178,38 @@ def _build_model_adapter(args: argparse.Namespace, case: AgentStage2Case):
             device_map=args.device_map,
         )
     )
+
+
+def _llm_settings_from_args(args: argparse.Namespace) -> LLMSettings:
+    settings = LLMSettings.from_env()
+    updates: dict[str, Any] = {}
+    if args.llm_provider:
+        updates["provider"] = str(args.llm_provider).strip().lower()
+    if args.llm_model:
+        updates["model"] = str(args.llm_model).strip()
+    if args.llm_api_base_url:
+        updates["base_url"] = str(args.llm_api_base_url).strip().rstrip("/")
+    if args.llm_temperature is not None:
+        updates["temperature"] = float(args.llm_temperature)
+    return replace(settings, **updates) if updates else settings
+
+
+async def _build_tool_executor(args: argparse.Namespace):
+    if not args.execute_tools:
+        if args.tool_context != "none":
+            raise ValueError("--tool-context requires --execute-tools")
+        if args.map_provider:
+            raise ValueError("--map-provider requires --execute-tools --tool-context provider")
+        return None, None
+    if args.tool_context == "provider":
+        if args.map_provider:
+            os.environ["MAP_PROVIDER"] = args.map_provider
+        map_client, provider = create_map_client()
+        await map_client.connect()
+        return ToolExecutor(app_context=SimpleNamespace(osm_client=map_client, provider=provider)), map_client
+    if args.map_provider:
+        raise ValueError("--map-provider requires --tool-context provider")
+    return ToolExecutor(), None
 
 
 def _fake_model_adapter(case: AgentStage2Case, *, policy: str) -> CallableModelAdapter:
