@@ -553,13 +553,13 @@ def repair_single(input_bag, output_bag=None, overwrite=False):
     init_ecef = [geo2ecef([p['lat'], p['lon'], p['alt']]) for p in raw_gnss[:10]]
     origin_ecef = np.mean(init_ecef, axis=0)
     origin_lla = ecef2geo(origin_ecef)
-    R_ecef2enu = geo2rotation(origin_lla)
+    R_enu2ecef = geo2rotation(origin_lla)
 
     # Convert raw_gnss to local ENU
     raw_enu = []
     for p in raw_gnss:
         ecef = geo2ecef([p['lat'], p['lon'], p['alt']])
-        enu = R_ecef2enu @ (ecef - origin_ecef)
+        enu = R_enu2ecef.T @ (ecef - origin_ecef)
         raw_enu.append({'t': p['t'], 'x': enu[0], 'y': enu[1], 'z': enu[2]})
 
     # 2. Match raw_gnss and odometry by timestamp
@@ -777,7 +777,7 @@ def repair_single(input_bag, output_bag=None, overwrite=False):
                 gxy = R_opt @ oxy + t_opt + get_correction(t_sec)
                 fused_enu = np.array([gxy[0], gxy[1], oz - odom_z0])
 
-                cur_ecef = origin_ecef + R_ecef2enu.T @ fused_enu
+                cur_ecef = origin_ecef + R_enu2ecef @ fused_enu
                 cur_lla = ecef2geo(cur_ecef)
 
                 repaired_trajectory.append({'t': t_sec, 'lat': cur_lla[0], 'lon': cur_lla[1], 'alt': cur_lla[2]})
