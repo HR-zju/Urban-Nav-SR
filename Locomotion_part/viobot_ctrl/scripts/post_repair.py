@@ -659,14 +659,14 @@ def repair_single(input_bag, output_bag=None, overwrite=False):
     print(f"Global transform: angle={np.degrees(np.arctan2(R_opt[1,0], R_opt[0,0])):.2f}°, "
           f"t=({t_opt[0]:.1f}, {t_opt[1]:.1f})")
 
-    # 4. Compute time-varying residual correction
+    # 4. Compute time-varying residual correction from RANSAC inliers only.
     #    The global transform gives good smoothness but has position bias that
-    #    varies over time (due to odometry drift). We compute the residual at
-    #    each matched GNSS point and smooth it to create a slowly-varying
-    #    correction signal.
+    #    varies over time (due to odometry drift). Outlier GNSS points must not
+    #    enter this low-frequency correction signal.
     global_pred = R_opt @ matched_odom + t_opt.reshape(2, 1)
-    residuals_x = matched_gnss[0] - global_pred[0]  # GNSS - predicted
-    residuals_y = matched_gnss[1] - global_pred[1]
+    correction_indices = np.sort(np.asarray(best_inliers, dtype=int))
+    residuals_x = matched_gnss[0, correction_indices] - global_pred[0, correction_indices]  # GNSS - predicted
+    residuals_y = matched_gnss[1, correction_indices] - global_pred[1, correction_indices]
 
     # Step 1: Median filter to reject GNSS outlier spikes
     def median_filter(arr, kernel=11):
@@ -695,15 +695,16 @@ def repair_single(input_bag, output_bag=None, overwrite=False):
     res_y_smooth = moving_average(res_y_med, window=51)
 
     # Build correction lookup: (time, correction_x, correction_y)
-    correction_t = matched_t
+    correction_t = matched_t[correction_indices]
     correction_x = res_x_smooth
     correction_y = res_y_smooth
 
-    # Verify correction quality
-    corrected_pred = global_pred + np.array([correction_x, correction_y])
-    final_err = np.linalg.norm(corrected_pred - matched_gnss, axis=0)
+    # Verify correction quality on the same RANSAC inliers used to build it.
+    corrected_pred = global_pred[:, correction_indices] + np.array([correction_x, correction_y])
+    final_err = np.linalg.norm(corrected_pred - matched_gnss[:, correction_indices], axis=0)
+    print(f"Residual correction uses {len(correction_indices)} RANSAC inliers.")
     print(f"Residual correction: mean={np.mean(np.sqrt(correction_x**2 + correction_y**2)):.2f}m")
-    print(f"After correction: mean_err={np.mean(final_err):.2f}m, max_err={np.max(final_err):.2f}m")
+    print(f"After correction on inliers: mean_err={np.mean(final_err):.2f}m, max_err={np.max(final_err):.2f}m")
 
     def get_correction(t_query):
         """Interpolate the smoothed residual correction at a given time."""
