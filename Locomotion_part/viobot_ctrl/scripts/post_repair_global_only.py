@@ -36,6 +36,8 @@ from post_repair import (
     repair_odom_data,
 )
 
+STATIC_ODOM_SPEED_MPS = 0.05
+
 
 def make_global_output_path(input_path, output_dir=None, input_root=None):
     base_name = os.path.basename(input_path)
@@ -106,6 +108,9 @@ def flatten_global_report_for_csv(report):
         "repaired_gnss_jumps_gt_1m": repaired_gnss.get("jumps_gt_1m", ""),
         "repaired_gnss_jumps_gt_2m": repaired_gnss.get("jumps_gt_2m", ""),
         "repaired_gnss_max_speed_mps": repaired_gnss.get("speed2d_max_mps", ""),
+        "alignment_total_matched_pairs": alignment.get("total_matched_pairs", ""),
+        "alignment_static_filtered_pairs": alignment.get("static_filtered_pairs", ""),
+        "alignment_static_speed_threshold_mps": alignment.get("static_speed_threshold_mps", ""),
         "alignment_matched_pairs": alignment.get("matched_pairs", ""),
         "alignment_inlier_count": alignment.get("inlier_count", ""),
         "alignment_inlier_ratio": alignment.get("inlier_ratio", ""),
@@ -142,6 +147,26 @@ def write_global_reports_from_jsonl(report_jsonl_path, output_dir, timestamp):
         writer.writerows(rows)
 
     return report_path, recheck_json_path, recheck_list_path, recheck_csv_path, recheck_reports
+
+
+def compute_odom_motion_speed(t, xyz):
+    t = np.asarray(t, dtype=float)
+    xyz = np.asarray(xyz, dtype=float)
+    n = len(t)
+    motion_speed = np.zeros(n, dtype=float)
+    if n < 2:
+        return motion_speed
+
+    dt = np.diff(t)
+    dxy = np.diff(xyz[:, :2], axis=0)
+    valid = np.isfinite(dt) & (dt > 0.0) & np.all(np.isfinite(dxy), axis=1)
+    segment_speed = np.zeros(n - 1, dtype=float)
+    segment_speed[valid] = np.linalg.norm(dxy[valid], axis=1) / dt[valid]
+
+    motion_speed[:-1] = np.maximum(motion_speed[:-1], segment_speed)
+    motion_speed[1:] = np.maximum(motion_speed[1:], segment_speed)
+
+    return motion_speed
 
 
 def compute_global_alignment(matched_odom, matched_gnss):
@@ -274,31 +299,58 @@ def repair_single_global(input_bag, output_bag=None, overwrite=False, odom_sourc
 
     odom_t = np.array([p["t"] for p in odom_data])
     odom_xy = output_odom_enu[:, :2]
+    odom_motion_speed = compute_odom_motion_speed(odom_t, output_odom_enu)
     matched_odom = []
     matched_gnss = []
+    matched_odom_indices = []
 
     for g in raw_enu:
         idx = np.argmin(np.abs(odom_t - g["t"]))
         if np.abs(odom_t[idx] - g["t"]) < 0.05:
             matched_odom.append(odom_xy[idx])
             matched_gnss.append([g["x"], g["y"]])
+            matched_odom_indices.append(idx)
 
-    matched_odom = np.array(matched_odom).T
-    matched_gnss = np.array(matched_gnss).T
+    total_matched_pairs = len(matched_odom)
+    matched_odom = np.asarray(matched_odom, dtype=float)
+    matched_gnss = np.asarray(matched_gnss, dtype=float)
+    matched_odom_indices = np.asarray(matched_odom_indices, dtype=int)
+
+    if total_matched_pairs:
+        moving_mask = odom_motion_speed[matched_odom_indices] >= STATIC_ODOM_SPEED_MPS
+        static_filtered_pairs = int(total_matched_pairs - np.sum(moving_mask))
+        matched_odom = matched_odom[moving_mask].T
+        matched_gnss = matched_gnss[moving_mask].T
+    else:
+        static_filtered_pairs = 0
+        matched_odom = np.empty((2, 0), dtype=float)
+        matched_gnss = np.empty((2, 0), dtype=float)
     n = matched_odom.shape[1]
 
-    print(f"Matched {n} odom-GNSS pairs for global alignment.")
+    print(
+        f"Matched {total_matched_pairs} odom-GNSS pairs; kept {n} moving pairs for global alignment "
+        f"(filtered {static_filtered_pairs} static, speed < {STATIC_ODOM_SPEED_MPS:.2f} m/s)."
+    )
     if n < 2:
-        print("[ERROR] Not enough matched odom-GNSS pairs for alignment.")
+        print("[ERROR] Not enough moving matched odom-GNSS pairs for alignment.")
         return build_quality_report(
             input_bag,
             output_bag,
-            "failed_not_enough_matches",
+            "failed_not_enough_moving_matches",
             {
                 "raw_odom": raw_odom_metrics,
                 "repaired_odom": repaired_odom_metrics,
                 "odom_repaired_transitions": len(odom_repair_stats["bad_reasons"]),
-                "alignment": {"matched_pairs": int(n), "inlier_count": 0, "inlier_ratio": 0.0},
+                "alignment": {
+                    "total_matched_pairs": int(total_matched_pairs),
+                    "static_filtered_pairs": int(static_filtered_pairs),
+                    "static_speed_threshold_mps": float(STATIC_ODOM_SPEED_MPS),
+                    "matched_pairs": int(n),
+                    "inlier_count": 0,
+                    "inlier_ratio": 0.0,
+                    "mode": "global_only",
+                    "odom_source": odom_source,
+                },
             },
         )
 
@@ -315,9 +367,14 @@ def repair_single_global(input_bag, output_bag=None, overwrite=False, odom_sourc
                 "repaired_odom": repaired_odom_metrics,
                 "odom_repaired_transitions": len(odom_repair_stats["bad_reasons"]),
                 "alignment": {
+                    "total_matched_pairs": int(total_matched_pairs),
+                    "static_filtered_pairs": int(static_filtered_pairs),
+                    "static_speed_threshold_mps": float(STATIC_ODOM_SPEED_MPS),
                     "matched_pairs": int(n),
                     "inlier_count": int(len(best_inliers)),
                     "inlier_ratio": float(len(best_inliers) / n if n else 0.0),
+                    "mode": "global_only",
+                    "odom_source": odom_source,
                 },
             },
         )
@@ -440,6 +497,9 @@ def repair_single_global(input_bag, output_bag=None, overwrite=False, odom_sourc
         "repaired_gnss": repaired_gnss_metrics,
         "odom_repaired_transitions": len(odom_repair_stats["bad_reasons"]),
         "alignment": {
+            "total_matched_pairs": int(total_matched_pairs),
+            "static_filtered_pairs": int(static_filtered_pairs),
+            "static_speed_threshold_mps": float(STATIC_ODOM_SPEED_MPS),
             "matched_pairs": int(n),
             "inlier_count": int(len(best_inliers)),
             "inlier_ratio": float(len(best_inliers) / n if n else 0.0),

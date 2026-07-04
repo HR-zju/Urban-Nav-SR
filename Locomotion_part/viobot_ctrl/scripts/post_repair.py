@@ -342,11 +342,14 @@ def build_quality_report(input_bag, output_bag, status, metrics=None, error=None
         report['reasons'].append(status)
         return report
 
-    repaired_odom = report['metrics'].get('repaired_odom', {})
     repaired_gnss = report['metrics'].get('repaired_gnss', {})
     alignment = report['metrics'].get('alignment', {})
+    repaired_odom = report['metrics'].get('repaired_odom', {})
+    odom_source = alignment.get('odom_source')
+    relax_global_only_raw_shape = alignment.get('mode') == 'global_only' and odom_source == 'raw'
+    check_repaired_odom = not relax_global_only_raw_shape
 
-    def check_metric(scope, data):
+    def check_metric(scope, data, check_motion_shape=True):
         reasons = []
         if data.get('count', 0) < 2:
             reasons.append(f'{scope}:not_enough_messages')
@@ -355,6 +358,8 @@ def build_quality_report(input_bag, output_bag, status, metrics=None, error=None
             reasons.append(f'{scope}:nonpositive_dt={data["nonpositive_dt_count"]}')
         if data.get('nonfinite_count', 0) > 0:
             reasons.append(f'{scope}:nonfinite={data["nonfinite_count"]}')
+        if not check_motion_shape:
+            return reasons
         if data.get('jumps_gt_1m', 0) > QA_MAX_JUMPS_GT_1M:
             reasons.append(f'{scope}:jumps_gt_1m={data["jumps_gt_1m"]}')
         if data.get('jumps_gt_2m', 0) > QA_MAX_JUMPS_GT_2M:
@@ -365,8 +370,11 @@ def build_quality_report(input_bag, output_bag, status, metrics=None, error=None
             reasons.append(f'{scope}:max_speed={data["speed2d_max_mps"]:.1f}mps')
         return reasons
 
-    report['reasons'].extend(check_metric('repaired_odom', repaired_odom))
-    report['reasons'].extend(check_metric('repaired_gnss', repaired_gnss))
+    if check_repaired_odom:
+        report['reasons'].extend(check_metric('repaired_odom', repaired_odom))
+    report['reasons'].extend(
+        check_metric('repaired_gnss', repaired_gnss, check_motion_shape=not relax_global_only_raw_shape)
+    )
 
     matched_pairs = alignment.get('matched_pairs', 0)
     inlier_count = alignment.get('inlier_count', 0)
