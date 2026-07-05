@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from mcp_server.agent.contracts import RUNTIME_STATE_WAITING_FOR_USER
 from mcp_server.agent.schemas import AGENT_STAGE2_CASE_SCHEMA_VERSION, AgentStage2Case, ToolCall, ToolResponse
 from mcp_server.agent.stage2 import build_agent_state, build_agent_think_text, build_final_assistant_text, build_tool_decision
 from mcp_server.agent.tool_executor import ToolExecutor
@@ -73,6 +74,38 @@ class OnlineAgentRunnerTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"failure_recovery"', result.trace.turns[5].content)
         self.assertTrue(result.trace_validation.valid, result.trace_validation.errors)
         self.assertTrue(result.row_validation.valid, result.row_validation.errors)
+
+    async def test_online_runner_user_interaction_report_exposes_pending_state(self) -> None:
+        case = _sample_case()
+        call = ToolCall(
+            tool="user_interaction_tool",
+            arguments={
+                "op": "present_options",
+                "message": "附近有两个入口，请选择。",
+                "options": [
+                    {"option_id": "entry_a", "label": "入口 A", "candidate_id": "poi_a"},
+                    {"option_id": "entry_b", "label": "入口 B", "candidate_id": "poi_b"},
+                ],
+                "recommended_option_id": "entry_a",
+                "requires_user_response": True,
+                "motion_policy_while_waiting": "stop",
+                "evidence_refs": ["poi_a", "poi_b"],
+            },
+            call_id="ui-choose-entry",
+        )
+        adapter = _FakeOnlineModelAdapter(case=case, call=call)
+        runner = OnlineAgentRunner(model_adapter=adapter, runtime=AgentToolRuntime(executor=ToolExecutor()))
+
+        result = await runner.run_case_with_report(case)
+        report = result.to_dict()
+
+        self.assertTrue(result.trace_validation.valid, result.trace_validation.errors)
+        self.assertEqual(result.trace.metadata["runtime_state"], RUNTIME_STATE_WAITING_FOR_USER)
+        pending = result.trace.metadata["dialogue_state"]["pending_user_interaction"]
+        self.assertEqual(pending["interaction_id"], "ui-choose-entry")
+        self.assertEqual(report["runtime_state"], RUNTIME_STATE_WAITING_FOR_USER)
+        self.assertEqual(report["dialogue_state"]["pending_user_interaction"]["recommended_option_id"], "entry_a")
+        self.assertEqual(report["agent_step_result"]["runtime_state"], RUNTIME_STATE_WAITING_FOR_USER)
 
 
 class MsSwiftInferenceAdapterTest(unittest.TestCase):

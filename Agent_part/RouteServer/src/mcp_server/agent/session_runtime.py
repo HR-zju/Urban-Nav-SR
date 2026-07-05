@@ -93,6 +93,9 @@ class SessionTickResult:
             Dictionary containing trace, validation, finish, and routing flags.
         """
 
+        agent_step_result = self.trace.to_agent_step_result(
+            validation=self.trace_validation.to_dict(),
+        ).to_dict()
         return {
             "tick_index": self.tick_index,
             "case_id": self.case_id,
@@ -103,6 +106,7 @@ class SessionTickResult:
             "row_validation": self.row_validation.to_dict() if self.row_validation else None,
             "trace": self.trace.to_dict(),
             "ms_swift_row": self.ms_swift_row,
+            "agent_step_result": agent_step_result,
         }
 
 
@@ -150,6 +154,11 @@ class RouteSessionRunResult:
         """
 
         return [tick.trace for tick in self.ticks]
+
+
+# Public compatibility name for the session-level replay contract.  The
+# underlying dataclass name stays unchanged to avoid breaking existing imports.
+SessionTrace = RouteSessionRunResult
 
 
 class RouteSessionRuntime:
@@ -326,6 +335,12 @@ def _extract_route_action(finish: dict[str, Any] | None) -> str | None:
 
 
 def _needs_user_interaction(trace: AgentTrace, finish: dict[str, Any] | None) -> bool:
+    runtime_state = trace.metadata.get("runtime_state") if isinstance(trace.metadata, dict) else None
+    if runtime_state == "WAITING_FOR_USER":
+        return True
+    dialogue_state = trace.metadata.get("dialogue_state") if isinstance(trace.metadata, dict) else None
+    if isinstance(dialogue_state, dict) and dialogue_state.get("pending_user_interaction"):
+        return True
     if isinstance(finish, dict):
         if finish.get("route_action") == "request_user_input":
             return True

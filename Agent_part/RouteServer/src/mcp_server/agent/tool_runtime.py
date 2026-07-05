@@ -283,6 +283,7 @@ class AgentToolRuntime:
                 metadata={"stage2_step": "tool_response"},
             )
             trace.artifacts.extend(_new_artifacts(trace.artifacts, response.artifacts))
+            _attach_tool_response_runtime_state(trace, response)
 
         # [TRAJ_i] readout 必须在 tool_response 后，trajectory head 的 hidden state 才能看到工具结果。
         trace.add_turn(
@@ -459,6 +460,8 @@ def _runtime_log_from_trace(
     errors.extend(response_errors)
     return {
         "case_id": trace.case_id,
+        "runtime_state": trace.metadata.get("runtime_state"),
+        "dialogue_state": trace.metadata.get("dialogue_state"),
         "runtime": "single_tool",
         "budget": budget.to_dict(),
         "conversation": conversation,
@@ -468,6 +471,30 @@ def _runtime_log_from_trace(
         "artifacts": list(trace.artifacts),
         "metrics": dict(trace.metrics),
     }
+
+
+def _attach_tool_response_runtime_state(trace: AgentTrace, response: ToolResponse) -> None:
+    """Promote tool-response runtime fields into trace metadata.
+
+    Args:
+        trace: Trace being assembled.
+        response: Tool response from the executor.
+
+    Returns:
+        None.  The function mutates ``trace.metadata`` only.  The role sequence
+        remains unchanged for Stage2 validator compatibility.
+    """
+
+    result = response.result if isinstance(response.result, dict) else {}
+    runtime_state = result.get("runtime_state")
+    if runtime_state is not None:
+        trace.metadata["runtime_state"] = runtime_state
+    dialogue_state = result.get("dialogue_state")
+    if isinstance(dialogue_state, dict) and dialogue_state:
+        trace.metadata.setdefault("dialogue_state", {}).update(dialogue_state)
+    context_assets = result.get("context_assets")
+    if isinstance(context_assets, list):
+        trace.metadata.setdefault("context_assets", []).extend(context_assets)
 
 
 def _safe_case_id(case_id: str) -> str:

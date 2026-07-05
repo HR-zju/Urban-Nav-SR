@@ -56,6 +56,8 @@ _print_config() {
   print "max_cases=${MAX_CASES}"
   print "concurrency=${CONCURRENCY}"
   print "llm_base_url=${LLM_BASE_URL}"
+  print "api_style=/chat/completions"
+  print "LLM_API_STYLE_FALLBACK=0"
 }
 
 _validate_inputs() {
@@ -78,7 +80,7 @@ _write_worker_script() {
 set -euo pipefail
 cd "${ROUTE_ROOT}"
 export LLM_RESPONSE_FORMAT_JSON=0
-export LLM_API_STYLE_FALLBACK=1
+export LLM_API_STYLE_FALLBACK=0
 
 {
   print "[proxy-smoke-one] model=${MODEL} started at \$(date '+%Y-%m-%d %H:%M:%S')"
@@ -86,7 +88,7 @@ export LLM_API_STYLE_FALLBACK=1
   print "[proxy-smoke-one] concurrency=${CONCURRENCY}"
 } 2>&1 | tee -a "${PREDICT_LOG}"
 
-LLM_RESPONSE_FORMAT_JSON=0 LLM_API_STYLE_FALLBACK=1 PYTHONUNBUFFERED=1 PYTHONPATH=src "${PYTHON_BIN}" \\
+LLM_RESPONSE_FORMAT_JSON=0 LLM_API_STYLE_FALLBACK=0 PYTHONUNBUFFERED=1 PYTHONPATH=src "${PYTHON_BIN}" \\
   tools/evaluation/generate_urbannav_external_predictions.py \\
   --cases "${DATASET}" \\
   --max-cases "${MAX_CASES}" \\

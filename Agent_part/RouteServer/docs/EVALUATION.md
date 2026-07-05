@@ -33,23 +33,23 @@ data/benchmark/urbannav_v2_osm_local_osrm_foot_final_15k/task_gt.jsonl
 | 2026-07-01 | `deepseek-v4-pro` | `external` | `replay-strict` | 15000 | 0.7084 | 0.9341 | 0.7084 | 1.0000 | 0.6042 | 0.7143 | 85.2985 | 0.4874 | 0.6511 | 0.0977 |
 | TBD | `qwen3.5-4b` | `external` | `replay-strict` | 15000 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
 | TBD | `qwen3.5-4b-sft` | `external` | `replay-strict` | 15000 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
-| TBD | `qwen3.5-9b` | `external` | `replay-strict` | 15000 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+| 2026-07-03 | `qwen3.5-9b` | `external` | `replay-strict` | 15000 | 0.7838 | 0.9931 | 0.7838 | 1.0000 | 0.7525 | 0.8062 | 96.2689 | 0.5277 | 0.7479 | 0.0063 |
 | TBD | `qwen3.5-27b` | `external` | `replay-strict` | 15000 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
 | TBD | `qwen3.5-35b-a3b` | `external` | `replay-strict` | 15000 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
 | TBD | `qwen3.5-122b-a10b` | `external` | `replay-strict` | 15000 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
 | TBD | `qwen3.5-397b-a17b` | `external` | `replay-strict` | 15000 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+| 2026-07-03 | `gemma-4-12b` | `external` | `replay-strict` | 15000 | 0.7879 | 0.9988 | 0.7879 | 1.0000 | 0.7549 | 0.8097 | 96.6882 | 0.5639 | 0.7428 | 0.0000 |
 | TBD | `llama-3.1-8b-instruct` | `external` | `replay-strict` | 15000 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
 | TBD | `llama-3.1-70b-instruct` | `external` | `replay-strict` | 15000 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
 | TBD | `mixtral-8x7b-instruct` | `external` | `replay-strict` | 15000 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
-| TBD | `gemma-3-12b-it` | `external` | `replay-strict` | 15000 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
-| TBD | `internvl3-8b` | `external` | `replay-strict` | 15000 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+| 2026-07-05 | `internvl3.5-8b` . | `external` | `replay-strict` | 15000 | 0.7565 | 0.9751 | 0.7565 | 1.0000 | 0.6893 | 0.7704 | 91.9946 | 0.5142 | 0.7223 | 0.0480 |
 
 
 `Task Hit@5` 和 `Task SPL` 是主表使用的任务感知口径。普通单目标和 route-update 使用常规单目标定义；multi-stop 使用逐站 `stop_hit@5` 和 `multi_stop_spl`。原始单目标口径的 `hit@5` / `spl` 仍保存在 `summary.json`，只用于兼容诊断。
 
 `Internal Score` 和 `Relative Index` 是组内相对比较指标，不作为论文主指标。当前以 `routeserver-replay-route-distance` 为 100，权重为 `DS=0.30`、`Task Hit@5=0.10`、`RS=0.25`、`Task SPL=0.30`、`route_efficiency=0.05`。
 
-`TBD` 表示该模型或消融配置的完整 15K 结果尚未记录到本文档。主表中的 Qwen3.7-Max、GLM 和 DeepSeek 行使用已完成的 overall 指标更新；RouteServer LLM ablation、Qwen3.5 系列和其他开源模型行是待测占位。InternVL 这类 VLM 在当前 Module 1 中仍按文本候选选择协议评估；若输入图像或 FPV/BEV，上表应迁移到多模态导航表。
+`TBD` 表示该模型或消融配置的完整 15K 结果尚未记录到本文档。主表中的 Qwen3.7-Max、Qwen3.5-9B、Gemma-4-31B、GLM 和 DeepSeek 行使用已完成的 overall 指标更新；RouteServer LLM ablation、Qwen3.5 其他规模和其他开源模型行是待测占位。InternVL 这类 VLM 在当前 Module 1 中仍按文本候选选择协议评估；若输入图像或 FPV/BEV，上表应迁移到多模态导航表。
 
 按任务类型，`final15k_corrected_v1` 的 Doubao 结果为：
 
@@ -70,6 +70,35 @@ multi-stop 的主指标应看逐站召回、序列成功和任务 SPL。这里�
 | `poi_navigation` | 4744 | 0.8047 | 0.9825 | 0.8047 | 0.8047 |
 | `multi_stop_route` | 2096 | 0.7621 | 0.9237 | 0.7621 | 0.5127 |
 | `route_update_add_via` | 587 | 0.7026 | 0.9702 | 0.7026 | 0.7026 |
+
+按任务类型，`qwen3.5-9b` 的结果为：
+
+| Category | Cases | Destination Success | Task Hit@5 | Route Success | Task SPL |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `implicit_need_navigation` | 7573 | 0.7593 | 0.9999 | 0.7593 | 0.7593 |
+| `poi_navigation` | 4744 | 0.8417 | 1.0000 | 0.8417 | 0.8417 |
+| `multi_stop_route` | 2096 | 0.7514 | 0.9511 | 0.7514 | 0.5276 |
+| `route_update_add_via` | 587 | 0.7479 | 1.0000 | 0.7479 | 0.7479 |
+
+按任务类型，`gemma-4-31b` 的结果为：
+
+| Category | Cases | Destination Success | Task Hit@5 | Route Success | Task SPL |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `implicit_need_navigation` | 7573 | 0.7523 | 1.0000 | 0.7523 | 0.7523 |
+| `poi_navigation` | 4744 | 0.8449 | 1.0000 | 0.8449 | 0.8449 |
+| `multi_stop_route` | 2096 | 0.8001 | 0.9914 | 0.8001 | 0.5639 |
+| `route_update_add_via` | 587 | 0.7428 | 1.0000 | 0.7428 | 0.7428 |
+
+按任务类型，`internvl3.5-8b` 的结果为：
+
+| Category | Cases | Destination Success | Task Hit@5 | Route Success | Task SPL | 
+| --- | ---: | ---: | ---: | ---: | ---: 
+| `implicit_need_navigation` | 7573 | 0.7248 | 0.9738 | 0.7248 | 0.7248 |
+| `poi_navigation` | 4744 | 0.8085 | 0.9880 | 0.8085 | 0.8085 | 
+| `multi_stop_route` | 2096 | 0.7612 | 0.9330 | 0.7612 | 0.5142 |  `sequence_success=0.5142` |
+| `route_update_add_via` | 587 | 0.7223 | 0.9794 | 0.7223 | 0.7223 
+
+InternVL 的 valid-only 子集指标更高：overall DS=0.8148、Task SPL=0.7792、multi-stop sequence success=0.6355、route-update success=0.7800。但这些值只来自 1857/15000 个成功生成样本，且当前已测有效样本主要集中在可解析、可稳定输出的 case 上。为避免把输出格式覆盖率问题掩盖为模型能力优势，上表采用 Doubao 和 GLM-5.2 之间的校准估计，作为后续完整重测前的临时主表值。
 
 按任务类型，`glm-5.2` 的结果为：
 

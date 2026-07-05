@@ -13,6 +13,11 @@ from mcp_server.agent.schemas import (
     AgentTrace,
     ToolCall,
 )
+from mcp_server.agent.contracts import (
+    ACTION_CONTRACT_VERSION,
+    NAV_OBSERVATION_CONTRACT_VERSION,
+    AgentStepResult,
+)
 from mcp_server.agent.tool_schema import get_tool_definitions
 
 
@@ -98,6 +103,14 @@ def trace_to_ms_swift_stage2_row(trace: AgentTrace, case: AgentStage2Case | None
         # case ground_truth 优先级更高，保证 Phase1 adapter 透传的 GT 覆盖 trace 临时值。
         supervision.update(case.ground_truth)
     tools = trace.tools or (case.tools if case is not None and case.tools else get_tool_definitions())
+    observation_meta = case.to_nav_observation().to_dict() if case is not None else {}
+    system2_supervision = _system2_supervision_from_trace(trace, supervision)
+    system1_supervision = _system1_supervision_from_supervision(supervision)
+    step_result = AgentStepResult.from_trace(
+        trace,
+        case=case,
+        validation={"metrics": dict(trace.metrics)},
+    )
     row = {
         "schema_version": MS_SWIFT_AGENTIC_STAGE2_SCHEMA_VERSION,
         "stage": "agentic_cold_start",
@@ -105,6 +118,14 @@ def trace_to_ms_swift_stage2_row(trace: AgentTrace, case: AgentStage2Case | None
         "messages": messages,
         "tools": json.dumps(tools, ensure_ascii=False, sort_keys=True),
         "images": case.images if case is not None else [],
+        "observation_meta": observation_meta,
+        "system2_supervision": system2_supervision,
+        "system1_supervision": system1_supervision,
+        "contract_meta": {
+            "observation_contract_version": NAV_OBSERVATION_CONTRACT_VERSION,
+            "action_contract_version": ACTION_CONTRACT_VERSION,
+            "agent_step_result_schema": step_result.schema_version,
+        },
         "sidewalk_meta": {
             "schema_version": MS_SWIFT_AGENTIC_STAGE2_SCHEMA_VERSION,
             "agent_trace_schema": trace.schema_version,
@@ -113,6 +134,7 @@ def trace_to_ms_swift_stage2_row(trace: AgentTrace, case: AgentStage2Case | None
             "metrics": dict(trace.metrics),
             "model_run": dict(trace.model_run),
             "artifacts": list(trace.artifacts),
+            "agent_step_result": step_result.to_dict(),
         },
     }
     if supervision.get("pixel_trajectory") is not None:
@@ -123,6 +145,9 @@ def trace_to_ms_swift_stage2_row(trace: AgentTrace, case: AgentStage2Case | None
         "trajectory_fpv_tv",
         "trajectory_ego_t",
         "trajectory_policy",
+        "action_ego_t",
+        "action_mask",
+        "action_stats",
         "semantic_segmentation_path",
         "semantic_mask_path",
     ):
@@ -130,6 +155,58 @@ def trace_to_ms_swift_stage2_row(trace: AgentTrace, case: AgentStage2Case | None
             # FPV/ego trajectory 与 segmentation 监督继续顶层透传，保持 Phase1 loss 接口不变。
             row[key] = supervision[key]
     return row
+
+
+def _system2_supervision_from_trace(trace: AgentTrace, supervision: dict) -> dict:
+    """Build text-layer supervision metadata for exported rows.
+
+    Args:
+        trace: Source trace.
+        supervision: Merged case/trace supervision dictionary.
+
+    Returns:
+        JSON-compatible metadata for tool decisions, final navigation decision,
+        and expected tool operations.  The canonical LM labels remain in
+        ``messages``; this object makes the mapping explicit for review.
+    """
+
+    tool_calls = [turn.content for turn in trace.turns if turn.role == "tool_call"]
+    return {
+        "target_type": "system2_text_actions",
+        "expected_tool_ops": supervision.get("expected_tool_ops") or [],
+        "tool_call_count": len(tool_calls),
+        "has_tool_call": bool(tool_calls),
+        "assistant_roles_are_lm_targets": True,
+        "tool_response_is_lm_target": False,
+    }
+
+
+def _system1_supervision_from_supervision(supervision: dict) -> dict:
+    """Build trajectory/action-head supervision metadata for exported rows.
+
+    Args:
+        supervision: Merged supervision dictionary.
+
+    Returns:
+        JSON-compatible metadata.  The flat top-level fields are kept for the
+        current ms-swift trainer, while this grouped view documents their
+        System1 role.
+    """
+
+    payload = {
+        "target_type": "system1_head_supervision",
+        "pixel_trajectory": supervision.get("pixel_trajectory"),
+        "trajectory_fpv_t": supervision.get("trajectory_fpv_t"),
+        "trajectory_fpv_tv": supervision.get("trajectory_fpv_tv"),
+        "trajectory_ego_t": supervision.get("trajectory_ego_t"),
+        "trajectory_policy": supervision.get("trajectory_policy"),
+        "action_ego_t": supervision.get("action_ego_t"),
+        "action_mask": supervision.get("action_mask"),
+        "action_stats": supervision.get("action_stats"),
+        "semantic_segmentation_path": supervision.get("semantic_segmentation_path"),
+        "semantic_mask_path": supervision.get("semantic_mask_path"),
+    }
+    return {key: value for key, value in payload.items() if value is not None}
 
 
 def trace_to_ms_swift_row(trace: AgentTrace, case: AgentEvalCase | None = None) -> dict:

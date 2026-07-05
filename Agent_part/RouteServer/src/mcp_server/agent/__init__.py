@@ -14,6 +14,17 @@ from mcp_server.agent.schemas import (
     ToolCall,
     ToolResponse,
 )
+from mcp_server.agent.contracts import (
+    ACTION_CONTRACT_VERSION,
+    AGENT_STEP_RESULT_SCHEMA_VERSION,
+    NAV_OBSERVATION_CONTRACT_VERSION,
+    AgentStepResult,
+    ContextAsset,
+    NavObservation,
+    NavigationDecision,
+    System1ControlOutput,
+    ToolAction,
+)
 from mcp_server.agent.final_inference import (
     RouteServerAgentInferenceConfig,
     RouteServerAgentInferenceRequest,
@@ -27,6 +38,7 @@ from mcp_server.agent.session_runtime import (
     RouteSessionRuntime,
     SESSION_TRACE_SCHEMA_VERSION,
     SessionRuntimeConfig,
+    SessionTrace,
     SessionTickResult,
 )
 from mcp_server.agent.tool_runtime import AgentToolRuntime, AgentToolRuntimeConfig, RuntimeTraceLogger, ToolBudget
@@ -44,6 +56,15 @@ __all__ = [
     "MS_SWIFT_AGENTIC_STAGE2_SCHEMA_VERSION",
     "ToolCall",
     "ToolResponse",
+    "ACTION_CONTRACT_VERSION",
+    "AGENT_STEP_RESULT_SCHEMA_VERSION",
+    "NAV_OBSERVATION_CONTRACT_VERSION",
+    "AgentStepResult",
+    "ContextAsset",
+    "NavObservation",
+    "NavigationDecision",
+    "System1ControlOutput",
+    "ToolAction",
     "AgentToolRuntime",
     "AgentToolRuntimeConfig",
     "RuntimeTraceLogger",
@@ -58,5 +79,6 @@ __all__ = [
     "RouteSessionRuntime",
     "SessionRuntimeConfig",
     "SessionTickResult",
+    "SessionTrace",
     "RouteSessionRunResult",
 ]

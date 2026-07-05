@@ -18,25 +18,55 @@ USER_INTERACTION_TOOL_NAME = "user_interaction_tool"
 MAP_TOOL_OPS = {
     "geocode",
     "reverse_geocode",
+    "search_destination",
     "search_poi",
     "search_category",
     "plan_route",
     "get_route",
+    "get_route_context",
     "create_route_session",
     "get_route_session",
+    "add_via",
     "add_via_and_replan",
     "remove_via_and_replan",
     "replace_destination",
     "replan_from_current_pose",
 }
 IMAGE_TOOL_OPS = {"crop", "zoom_in"}
-USER_INTERACTION_TOOL_OPS = {"ask_user", "request_clarification", "confirm_route_change"}
+USER_INTERACTION_TOOL_OPS = {
+    "ask_user",
+    "request_clarification",
+    "present_options",
+    "confirm_route_change",
+    "notify_issue",
+    "answer_query",
+}
 
 TOOL_OPS_BY_NAME = {
     MAP_TOOL_NAME: MAP_TOOL_OPS,
     IMAGE_TOOL_NAME: IMAGE_TOOL_OPS,
     USER_INTERACTION_TOOL_NAME: USER_INTERACTION_TOOL_OPS,
 }
+
+_DESTINATION_ID_ALIASES = (
+    "destination_id",
+    "candidate_id",
+    "chosen_destination_id",
+    "selected_destination_id",
+    "target_destination_id",
+    "target_id",
+    "new_destination_id",
+    "replacement_destination_id",
+    "via_destination_id",
+    "via_candidate_id",
+    "via_id",
+)
+
+_ROUTE_ID_ALIASES = ("route_id", "chosen_route_id", "selected_route_id", "last_route_id")
+_SESSION_ID_ALIASES = ("session_id", "route_session_id")
+_STOP_INDEX_ALIASES = ("stop_index", "goal_index", "goal_order", "leg_index", "stop_number")
+_MODE_ALIASES = ("mode", "travel_mode", "route_mode")
+_QUERY_ALIASES = ("query", "keywords", "keyword", "intent", "category", "target_type", "target_types")
 
 
 def get_tool_definitions() -> list[dict[str, Any]]:
@@ -66,8 +96,24 @@ def get_tool_definitions() -> list[dict[str, Any]]:
                         "location": {"type": ["string", "object"]},
                         "origin": {"type": ["string", "object"]},
                         "destination": {"type": ["string", "object"]},
+                        "destination_id": {"type": "string"},
+                        "candidate_id": {"type": "string"},
+                        "new_destination_id": {"type": "string"},
+                        "via_destination_id": {"type": "string"},
+                        "via_id": {"type": "string"},
+                        "route_id": {"type": "string"},
                         "session_id": {"type": "string"},
                         "via_point": {"type": "object"},
+                        "current_pose": {"type": "object"},
+                        "asset_types": {"type": "array", "items": {"type": "string"}},
+                        "horizon_m": {"type": "number"},
+                        "frame": {"type": "string"},
+                        "current_lat": {"type": "number"},
+                        "current_lng": {"type": "number"},
+                        "origin_lat": {"type": "number"},
+                        "origin_lng": {"type": "number"},
+                        "stop_index": {"type": "integer"},
+                        "goal_index": {"type": "integer"},
                         "mode": {"type": "string", "enum": ["foot", "bike", "car"]},
                     },
                     "required": ["op"],
@@ -108,7 +154,22 @@ def get_tool_definitions() -> list[dict[str, Any]]:
                     "properties": {
                         "op": {"type": "string", "enum": sorted(USER_INTERACTION_TOOL_OPS)},
                         "question": {"type": "string"},
+                        "message": {"type": "string"},
                         "choices": {"type": "array", "items": {"type": "string"}},
+                        "options": {"type": "array", "items": {"type": "object"}},
+                        "recommended_option_id": {"type": "string"},
+                        "requires_user_response": {"type": "boolean"},
+                        "interaction_mode": {"type": "string", "enum": ["blocking", "non_blocking"]},
+                        "motion_policy_while_waiting": {
+                            "type": "string",
+                            "enum": [
+                                "stop",
+                                "slow_down",
+                                "continue_previous_safe_policy",
+                                "handover_to_safety_controller",
+                            ],
+                        },
+                        "evidence_refs": {"type": "array", "items": {"type": "string"}},
                         "proposal": {"type": "object"},
                     },
                     "required": ["op"],
@@ -117,6 +178,73 @@ def get_tool_definitions() -> list[dict[str, Any]]:
             },
         },
     ]
+
+
+def normalize_map_tool_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Normalize model-emitted map-tool aliases into canonical fields.
+
+    The normalization is deliberately limited to schema-level aliases.  It does
+    not infer a destination, route, or operation that the model did not provide.
+    It only makes equivalent field spellings executable across parser,
+    validator, and replay executor.
+    """
+
+    args = dict(arguments or {})
+    op = _string_or_none(args.get("op") or args.get("operation") or args.get("action"))
+    if op:
+        args["op"] = op
+    _set_first_string(args, "query", _QUERY_ALIASES)
+    _set_first_string(args, "destination_id", _DESTINATION_ID_ALIASES)
+    _set_first_string(args, "candidate_id", ("candidate_id", "poi_id", "place_id"))
+    _set_first_string(args, "route_id", _ROUTE_ID_ALIASES)
+    _set_first_string(args, "session_id", _SESSION_ID_ALIASES)
+    _set_first_string(args, "mode", _MODE_ALIASES)
+    _set_first_int(args, "stop_index", _STOP_INDEX_ALIASES)
+    _set_point_from_scalar_aliases(
+        args,
+        "origin",
+        (
+            ("origin_lat", "origin_lng"),
+            ("origin_latitude", "origin_longitude"),
+            ("from_lat", "from_lng"),
+            ("from_latitude", "from_longitude"),
+            ("start_lat", "start_lng"),
+            ("start_latitude", "start_longitude"),
+        ),
+    )
+    _set_point_from_scalar_aliases(
+        args,
+        "destination",
+        (
+            ("destination_lat", "destination_lng"),
+            ("destination_latitude", "destination_longitude"),
+            ("to_lat", "to_lng"),
+            ("to_latitude", "to_longitude"),
+            ("target_lat", "target_lng"),
+            ("target_latitude", "target_longitude"),
+        ),
+    )
+    _set_point_from_scalar_aliases(
+        args,
+        "current_pose",
+        (
+            ("current_lat", "current_lng"),
+            ("current_latitude", "current_longitude"),
+            ("current_origin_lat", "current_origin_lng"),
+            ("current_origin_latitude", "current_origin_longitude"),
+        ),
+    )
+    _set_point_from_scalar_aliases(
+        args,
+        "via_point",
+        (
+            ("via_lat", "via_lng"),
+            ("via_latitude", "via_longitude"),
+            ("waypoint_lat", "waypoint_lng"),
+            ("waypoint_latitude", "waypoint_longitude"),
+        ),
+    )
+    return args
 
 
 def expected_ops_for_tool(tool: str) -> set[str]:
@@ -141,16 +269,26 @@ def validate_tool_call(call: ToolCall | dict[str, Any]) -> tuple[bool, list[str]
         # 未注册工具直接拒绝，避免模型调用 teacher-only 或历史内部工具。
         errors.append(f"unknown_tool:{call_obj.tool}")
         return False, errors
-    op = call_obj.op
+
+    args = call_obj.arguments
+    if call_obj.tool == MAP_TOOL_NAME:
+        args = normalize_map_tool_arguments(args)
+    op = str(args.get("op") or call_obj.op or "").strip() or None
     if not op:
         errors.append("missing_op")
     elif op not in TOOL_OPS_BY_NAME[call_obj.tool]:
         errors.append(f"unsupported_op:{call_obj.tool}.{op}")
 
-    args = call_obj.arguments
     if call_obj.tool == MAP_TOOL_NAME:
         # 这里只做轻量必填项校验；坐标范围/provider 细节交给 executor 和 map_ops。
-        if op in {"geocode", "search_poi"} and not (args.get("query") or args.get("address") or args.get("keywords")):
+        if op in {"geocode", "search_destination", "search_poi"} and not (
+            args.get("query")
+            or args.get("address")
+            or args.get("keywords")
+            or args.get("keyword")
+            or args.get("intent")
+            or args.get("category")
+        ):
             errors.append("missing_query")
         if op in {"reverse_geocode"} and not (args.get("latitude") is not None and args.get("longitude") is not None):
             errors.append("missing_latitude_longitude")
@@ -162,33 +300,122 @@ def validate_tool_call(call: ToolCall | dict[str, Any]) -> tuple[bool, list[str]
             )
             if not has_bbox:
                 errors.append("missing_bbox")
-        has_route_pair = bool(args.get("origin") and args.get("destination")) or all(
-            args.get(key) is not None
-            for key in ["from_latitude", "from_longitude", "to_latitude", "to_longitude"]
-        )
-        if op in {"plan_route", "create_route_session"} and not has_route_pair:
+        has_route_pair = bool(args.get("origin") and args.get("destination"))
+        has_destination_ref = bool(args.get("destination_id") or args.get("candidate_id"))
+        has_route_ref = bool(args.get("route_id"))
+        if op == "plan_route" and not (has_route_pair or has_destination_ref or has_route_ref):
             errors.append("missing_origin_destination")
-        if op == "add_via_and_replan" and not args.get("via_point"):
+        if op == "get_route_context" and not (args.get("route_id") or args.get("session_id")):
+            errors.append("missing_route_or_session_id")
+        if op in {"add_via", "add_via_and_replan"} and not (args.get("via_point") or has_destination_ref):
             errors.append("missing_via_point")
-        if op == "replace_destination" and not args.get("destination"):
+        if op == "replace_destination" and not (args.get("destination") or has_destination_ref):
             errors.append("missing_destination")
         if op == "replan_from_current_pose" and not (args.get("origin") or args.get("current_pose")):
             errors.append("missing_replan_origin")
         if op in {
-            "get_route_session",
+            "add_via",
             "add_via_and_replan",
             "remove_via_and_replan",
             "replace_destination",
             "replan_from_current_pose",
-        } and not args.get("session_id"):
+        } and not args.get("session_id") and not (
+            has_destination_ref or has_route_ref or args.get("destination") or args.get("via_point")
+        ):
             errors.append("missing_session_id")
     elif call_obj.tool == IMAGE_TOOL_NAME:
         # image_tool 当前只允许确定性图像操作，不暴露 inspect/视觉理解工具。
         if op in {"crop", "zoom_in"} and not (args.get("bbox") and (args.get("image") or args.get("image_path"))):
             errors.append("missing_image_or_bbox")
     elif call_obj.tool == USER_INTERACTION_TOOL_NAME:
-        # 离线场景不会真的等待用户，但 question 必须可审计。
-        if op in {"ask_user", "request_clarification", "confirm_route_change"} and not args.get("question"):
-            errors.append("missing_question")
+        # 离线场景不会真的等待用户，但面向用户的 message/question 必须可审计。
+        message = args.get("message") or args.get("question")
+        if op in USER_INTERACTION_TOOL_OPS and not message:
+            errors.append("missing_message")
+        if op == "present_options":
+            options = args.get("options") or args.get("choices") or []
+            if not isinstance(options, list) or not options:
+                errors.append("missing_options")
+            recommended = args.get("recommended_option_id")
+            if recommended is not None and isinstance(options, list):
+                option_ids = {
+                    str(item.get("option_id"))
+                    for item in options
+                    if isinstance(item, dict) and item.get("option_id") is not None
+                }
+                if option_ids and str(recommended) not in option_ids:
+                    errors.append("recommended_option_not_in_options")
+        requires_user = bool(args.get("requires_user_response", op not in {"answer_query", "notify_issue"}))
+        if requires_user:
+            mode = str(args.get("interaction_mode") or "")
+            if mode and mode != "blocking":
+                errors.append("requires_user_response_must_be_blocking")
+            # 旧 Stage2 样本没有显式 motion policy；executor 会补 stop 作为
+            # blocking interaction 的默认安全策略，schema 层保持向后兼容。
 
     return not errors, errors
+
+
+def _set_first_string(args: dict[str, Any], canonical: str, aliases: tuple[str, ...]) -> None:
+    if _string_or_none(args.get(canonical)):
+        return
+    for alias in aliases:
+        value = _string_or_none(args.get(alias))
+        if value:
+            args[canonical] = value
+            return
+
+
+def _set_first_int(args: dict[str, Any], canonical: str, aliases: tuple[str, ...]) -> None:
+    if _int_or_none(args.get(canonical)) is not None:
+        args[canonical] = _int_or_none(args.get(canonical))
+        return
+    for alias in aliases:
+        value = _int_or_none(args.get(alias))
+        if value is not None:
+            args[canonical] = value
+            return
+
+
+def _set_point_from_scalar_aliases(
+    args: dict[str, Any],
+    canonical: str,
+    aliases: tuple[tuple[str, str], ...],
+) -> None:
+    if isinstance(args.get(canonical), dict):
+        return
+    for lat_key, lng_key in aliases:
+        lat = _float_or_none(args.get(lat_key))
+        lng = _float_or_none(args.get(lng_key))
+        if lat is not None and lng is not None:
+            args[canonical] = {"lat": lat, "lng": lng}
+            return
+
+
+def _string_or_none(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, list):
+        items = [_string_or_none(item) for item in value]
+        items = [item for item in items if item]
+        return ", ".join(items) if items else None
+    text = str(value).strip()
+    return text or None
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        if value is None or value == "":
+            return None
+        return int(value)
+    except Exception:
+        return None
+
+
+def _float_or_none(value: Any) -> float | None:
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except Exception:
+        return None

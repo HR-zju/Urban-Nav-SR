@@ -261,18 +261,84 @@ class AgentStage2Case(AgentEvalCase):
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "AgentStage2Case":
+        nav_observation = payload.get("nav_observation") or payload.get("observation_contract")
+        observation = dict(payload.get("observation") or {})
+        metadata = dict(payload.get("metadata") or {})
+        if isinstance(nav_observation, dict):
+            # 新 contract 输入先折回旧 observation 字段，保证旧 builder/exporter 不需要
+            # 立刻重写；完整 NavObservation 原文放 metadata 便于审计。
+            observation = _observation_from_nav_contract(nav_observation, observation)
+            metadata.setdefault("nav_observation", nav_observation)
         return cls(
             case_id=str(payload.get("case_id") or payload.get("id") or ""),
             user_request=str(payload.get("user_request") or payload.get("instruction") or ""),
             task_type=str(payload.get("task_type") or "sidewalk_navigation_agent"),
             schema_version=str(payload.get("schema_version") or AGENT_STAGE2_CASE_SCHEMA_VERSION),
-            observation=dict(payload.get("observation") or {}),
+            observation=observation,
             dialogue_history=list(payload.get("dialogue_history") or payload.get("messages") or []),
             tools=list(payload.get("tools") or []),
             ground_truth=dict(payload.get("ground_truth") or {}),
             split=str(payload.get("split") or "eval"),
             locale=str(payload.get("locale") or "zh-CN"),
-            metadata=dict(payload.get("metadata") or {}),
+            metadata=metadata,
+        )
+
+    def to_nav_observation(self):
+        """Return the normalized runtime-visible observation contract.
+
+        Returns:
+            ``mcp_server.agent.contracts.NavObservation`` view over this case.
+            Supervision fields stay in ``ground_truth`` and are not copied into
+            the model-visible observation.
+        """
+
+        from mcp_server.agent.contracts import NavObservation
+
+        return NavObservation.from_case(self)
+
+    @classmethod
+    def from_nav_observation(
+        cls,
+        nav_observation: dict[str, Any],
+        *,
+        ground_truth: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        task_type: str = "sidewalk_navigation_agent",
+        split: str = "eval",
+        locale: str = "zh-CN",
+    ) -> "AgentStage2Case":
+        """Build a Stage2 case from a ``NavObservation`` payload.
+
+        Args:
+            nav_observation: Runtime-visible observation contract.
+            ground_truth: Optional supervision bundle.
+            tools: Optional student-visible tools; if omitted, available tools
+                are read from ``nav_observation.tool_context.available_tools``.
+            task_type: Task type written to the case.
+            split: Dataset split.
+            locale: Locale code.
+
+        Returns:
+            Backward-compatible ``AgentStage2Case``.
+        """
+
+        request = nav_observation.get("request") if isinstance(nav_observation.get("request"), dict) else {}
+        tool_context = nav_observation.get("tool_context") if isinstance(nav_observation.get("tool_context"), dict) else {}
+        return cls(
+            case_id=str(
+                nav_observation.get("observation_id")
+                or (nav_observation.get("runtime_meta") or {}).get("case_id")
+                or ""
+            ),
+            user_request=str(request.get("latest_user_utterance") or request.get("active_instruction") or ""),
+            task_type=task_type,
+            observation=_observation_from_nav_contract(nav_observation, {}),
+            dialogue_history=list(request.get("dialogue_history") or []),
+            tools=list(tools if tools is not None else tool_context.get("available_tools") or []),
+            ground_truth=dict(ground_truth or {}),
+            split=split,
+            locale=locale,
+            metadata={"nav_observation": dict(nav_observation)},
         )
 
 
@@ -358,6 +424,22 @@ class AgentTrace:
             }
         )
 
+    def to_agent_step_result(self, *, case: AgentStage2Case | None = None, validation: dict[str, Any] | None = None):
+        """Return the unified one-step runtime result contract.
+
+        Args:
+            case: Optional source Stage2 case.  When omitted, the trace request
+                metadata is used if possible.
+            validation: Optional validator result dictionary.
+
+        Returns:
+            ``mcp_server.agent.contracts.AgentStepResult``.
+        """
+
+        from mcp_server.agent.contracts import AgentStepResult
+
+        return AgentStepResult.from_trace(self, case=case, validation=validation)
+
 
 @dataclass(frozen=True)
 class AgentMetricResult:
@@ -371,3 +453,46 @@ class AgentMetricResult:
             "metrics": dict(self.metrics),
             "errors": list(self.errors),
         }
+
+
+def _observation_from_nav_contract(nav_observation: dict[str, Any], base: dict[str, Any]) -> dict[str, Any]:
+    """Fold ``NavObservation`` into legacy ``AgentStage2Case.observation``.
+
+    Args:
+        nav_observation: Observation contract payload.
+        base: Existing legacy observation fields.
+
+    Returns:
+        Observation dict preserving legacy accessors while keeping the full
+        contract under ``nav_observation``.
+    """
+
+    observation = dict(base)
+    observation["nav_observation"] = dict(nav_observation)
+    request = nav_observation.get("request") if isinstance(nav_observation.get("request"), dict) else {}
+    sensors = nav_observation.get("sensors") if isinstance(nav_observation.get("sensors"), dict) else {}
+    route_state = nav_observation.get("route_state") if isinstance(nav_observation.get("route_state"), dict) else {}
+    dialogue_state = nav_observation.get("dialogue_state") if isinstance(nav_observation.get("dialogue_state"), dict) else {}
+    tool_context = nav_observation.get("tool_context") if isinstance(nav_observation.get("tool_context"), dict) else {}
+
+    if request.get("active_instruction") is not None:
+        observation.setdefault("active_instruction", request.get("active_instruction"))
+    if request.get("latest_user_utterance") is not None:
+        observation.setdefault("latest_user_utterance", request.get("latest_user_utterance"))
+    images = sensors.get("images")
+    if images is not None:
+        observation.setdefault("images", images)
+    elif sensors.get("fpv_images") or sensors.get("bev_images"):
+        image_dict: dict[str, Any] = {}
+        if sensors.get("fpv_images"):
+            image_dict["fpv"] = list(sensors["fpv_images"])[-1]
+        if sensors.get("bev_images"):
+            image_dict["bev"] = list(sensors["bev_images"])[-1]
+        observation.setdefault("images", image_dict)
+    for key, value in route_state.items():
+        observation.setdefault(key, value)
+    if dialogue_state:
+        observation.setdefault("dialogue_state", dialogue_state)
+    if tool_context:
+        observation.setdefault("tool_context", tool_context)
+    return observation

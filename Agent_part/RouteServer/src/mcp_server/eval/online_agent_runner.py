@@ -102,11 +102,17 @@ class OnlineAgentRunResult:
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-serializable report dictionary."""
 
+        agent_step_result = self.trace.to_agent_step_result(
+            validation=self.trace_validation.to_dict(),
+        ).to_dict()
         return {
             "trace": self.trace.to_dict(),
             "ms_swift_row": dict(self.ms_swift_row),
             "trace_validation": self.trace_validation.to_dict(),
             "row_validation": self.row_validation.to_dict(),
+            "runtime_state": agent_step_result.get("runtime_state"),
+            "dialogue_state": self.trace.metadata.get("dialogue_state") or {},
+            "agent_step_result": agent_step_result,
         }
 
 
@@ -188,6 +194,14 @@ class OnlineAgentRunner(AgentRunner):
         row = trace_to_ms_swift_stage2_row(trace, case)
         trace_validation = validate_stage2_trace(trace, case)
         row_validation = validate_ms_swift_stage2_row(row)
+        agent_step_result = trace.to_agent_step_result(
+            case=case,
+            validation=trace_validation.to_dict(),
+        )
+        # online report 需要显式暴露 runtime state；真正的对话状态仍由
+        # AgentToolRuntime 从 tool_response 中提升，避免 runner 猜测业务含义。
+        trace.metadata.setdefault("runtime_state", agent_step_result.runtime_state)
+        trace.metadata["agent_step_result_schema"] = agent_step_result.schema_version
         trace.metadata["online_validation"] = {
             "trace": trace_validation.to_dict(),
             "ms_swift_row": row_validation.to_dict(),

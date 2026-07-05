@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from mcp_server.agent.schemas import ToolCall
-from mcp_server.agent.tool_schema import validate_tool_call
+from mcp_server.agent.tool_schema import MAP_TOOL_NAME, MAP_TOOL_OPS, normalize_map_tool_arguments, validate_tool_call
 
 
 _ACTION_BLOCK_RE = re.compile(r"<(tool_call|finish)>(.*?)</\1>", re.DOTALL)
@@ -44,13 +44,75 @@ class ParsedAgentAction:
 
 
 def _json_object_from_text(text: str) -> tuple[dict[str, Any] | None, list[str]]:
+    raw_text = text.strip()
     try:
-        payload = json.loads(text.strip())
+        payload = json.loads(raw_text)
     except json.JSONDecodeError as exc:
-        return None, [f"json_decode_error:{exc.msg}"]
+        payload, repaired = _json_object_with_trailing_brace_repair(raw_text)
+        if payload is None:
+            return None, [f"json_decode_error:{exc.msg}"]
+        if repaired:
+            return payload, []
     if not isinstance(payload, dict):
         return None, ["json_not_object"]
     return payload, []
+
+
+def _json_object_with_trailing_brace_repair(text: str) -> tuple[dict[str, Any] | None, bool]:
+    """Parse a JSON object when the only trailing garbage is extra ``}``.
+
+    Some small LLMs emit ``<tool_call>{"name": ...}}}</tool_call>``.  This is a
+    bracket-counting error around an otherwise complete object, not a missing
+    tool decision.  The repair is intentionally narrow: if the decoder leaves
+    anything other than whitespace and right braces, parsing still fails.
+    """
+
+    decoder = json.JSONDecoder()
+    try:
+        payload, end = decoder.raw_decode(text)
+    except json.JSONDecodeError:
+        return None, False
+    if not isinstance(payload, dict):
+        return None, False
+    trailing = text[end:].strip()
+    if trailing and set(trailing) <= {"}"}:
+        return payload, True
+    return None, False
+
+
+def _normalize_tool_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Normalize typed tool names into the stable RouteServer tool schema.
+
+    Args:
+        payload: Parsed JSON object from a ``<tool_call>`` block.
+
+    Returns:
+        Payload compatible with ``ToolCall.from_dict``.
+    """
+
+    tool_name = str(payload.get("tool") or payload.get("name") or "").strip()
+    arguments = payload.get("arguments")
+    if not isinstance(arguments, dict):
+        arguments = {
+            key: value
+            for key, value in payload.items()
+            if key not in {"tool", "name", "arguments", "call_id", "id"}
+        }
+    if tool_name in MAP_TOOL_OPS:
+        normalized_args = normalize_map_tool_arguments(dict(arguments))
+        normalized_args.setdefault("op", tool_name)
+        return {
+            "tool": MAP_TOOL_NAME,
+            "arguments": normalized_args,
+            "call_id": payload.get("call_id") or payload.get("id"),
+        }
+    if tool_name == MAP_TOOL_NAME:
+        return {
+            "tool": MAP_TOOL_NAME,
+            "arguments": normalize_map_tool_arguments(dict(arguments)),
+            "call_id": payload.get("call_id") or payload.get("id"),
+        }
+    return payload
 
 
 def _action_inside_reasoning(text: str, action_span: tuple[int, int]) -> bool:
@@ -82,7 +144,7 @@ def parse_tool_call_text(text: str) -> tuple[ToolCall | None, list[str]]:
         errors.extend(json_errors)
         if payload is None:
             return None, errors
-        call = ToolCall.from_dict(payload)
+        call = ToolCall.from_dict(_normalize_tool_payload(payload))
         _, schema_errors = validate_tool_call(call)
         errors.extend(schema_errors)
         return call, errors

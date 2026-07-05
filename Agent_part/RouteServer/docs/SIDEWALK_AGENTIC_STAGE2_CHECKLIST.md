@@ -71,16 +71,22 @@ fake store，不访问 live map API。
 | `map_tool.geocode` | Pending | success / empty / provider error | 坐标字段归一化 |
 | `map_tool.reverse_geocode` | Pending | success / provider error | address metadata 可序列化 |
 | `map_tool.search_category` | Pending | bbox success / empty / malformed bbox | bbox 参数校验稳定 |
+| `map_tool.get_route_context` | Basic Done | route_summary / route_instruction_text / next_waypoint / image placeholder | 返回 `context_assets`；图片资产只返回真实 `image_ref` 或 `render_status=not_implemented` |
 | `image_tool.crop` | Pending | normalized bbox / pixel bbox / missing image / artifact_dir | 返回 crop artifact metadata 或文件 |
 | `image_tool.zoom_in` | Pending | 与 crop alias 行为一致或明确区分 | 行为与 schema 文档一致 |
-| `user_interaction_tool.request_clarification` | Pending | question / choices / proposal | 返回 `await_user=true` 离线响应 |
-| `user_interaction_tool.ask_user` | Pending | question / choices | 返回 `await_user=true` 离线响应 |
-| `user_interaction_tool.confirm_route_change` | Pending | proposal accept/reject payload | 返回可审计 proposal |
+| `user_interaction_tool.request_clarification` | Basic Done | question / choices / proposal | 返回 `await_user=true`、`WAITING_FOR_USER`、pending dialogue state |
+| `user_interaction_tool.ask_user` | Basic Done | question / choices | 返回 `await_user=true`、blocking interaction、等待期间 motion policy |
+| `user_interaction_tool.present_options` | Basic Done | options / recommended option / candidate evidence | 返回可审计 options；validator 检查 recommended option 和 candidate evidence |
+| `user_interaction_tool.confirm_route_change` | Basic Done | proposal accept/reject payload | 返回可审计 proposal；等待用户确认 |
+| `user_interaction_tool.notify_issue` | Basic Done | message / non-blocking notification | 返回 `await_user=false`、`runtime_state=RUNNING` |
+| `user_interaction_tool.answer_query` | Basic Done | answer message / evidence refs | 返回非阻塞回答；validator 对 evidence refs 给出审计 warning |
 
 建议测试文件：
 
 ```text
 Agent_part/RouteServer/tests/test_agent_tool_executor_real_ops.py
+Agent_part/RouteServer/tests/test_agent_contracts.py
+Agent_part/RouteServer/tests/test_agent_online_runtime.py
 ```
 
 建议命令：

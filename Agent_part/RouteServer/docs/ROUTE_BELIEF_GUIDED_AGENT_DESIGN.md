@@ -131,7 +131,9 @@ assistant final CoT + <finish>
 [TRAJ_i] 必须出现在 tool_response 之后。
 ```
 
-ms-swift SideWalk trajectory/action head 从 `[TRAJ_i]` 的 hidden states 读出轨迹或 action chunk。自回归模型中当前位置 hidden state 只能看到之前 token，因此工具结果、route state、视觉上下文必须先进入上下文，再放 `[TRAJ_i]`。
+ms-swift SideWalk trajectory head 和 System1 CFM action head 从 `[TRAJ_i]` 的 hidden states
+读出轨迹或 action chunk。自回归模型中当前位置 hidden state 只能看到之前 token，因此工具结果、
+route state、视觉上下文必须先进入上下文，再放 `[TRAJ_i]`。
 
 ms-swift 训练侧已经支持：
 
@@ -139,9 +141,12 @@ ms-swift 训练侧已经支持：
 - `pixel_trajectory`
 - `trajectory_fpv_t`
 - `trajectory_ego_t`
+- `action_ego_t`
+- `action_mask`
+- `action_stats`
 - `semantic_segmentation_path`
 - trajectory head
-- optional action head
+- System1 CFM action head
 - optional segmentation head
 - `build_agentic_stage2_trainable_row()` 将 RouteServer canonical trace 转成模板兼容训练视图
 
@@ -163,7 +168,9 @@ instruction -> one-shot tool / route / visual prompt -> local trajectory
 - route session 已经存在，但还没有作为模型可交互的外部工具状态进入在线 E2E runtime。
 - multi-stop 的逐站状态机，离线能评测，在线还没有完整状态。
 - route-update、replan、ask-user 等动作还没有稳定地作为模型可学习 tool policy。
-- 全局工具结果如何影响局部 trajectory/action，还需要由训练样本显式对齐。
+- 全局工具结果如何影响局部 trajectory 和 System1 CFM action，还需要由训练样本显式对齐。
+- CFM action head 已在 ms-swift 中存在，但 RouteServer 在线 runtime 还没有把它作为
+  System1 fast local navigator 消费和记录。
 - 运行时 trace 回流训练的闭环数据标准。
 
 ### 2.2 训练缺口
@@ -176,7 +183,9 @@ instruction -> one-shot tool / route / visual prompt -> local trajectory
 - tool decision、tool arguments、tool result use 的监督。
 - route session op 序列监督，包括 active stop / active leg 的更新。
 - route-update / replan / ask-user 的失败恢复监督。
-- 工具返回到最终局部 trajectory/action 的端到端监督。
+- 工具返回到最终局部 trajectory 和 System1 CFM action 的端到端监督。
+- `action_ego_t/action_mask/action_stats` 在 Stage2 exporter、session replay 和
+  closed-loop validator 中还没有成为一等字段。
 - 在线失败样本的自动归档、教师修正和再训练流程。
 
 ## 3. 优化后总体架构
@@ -186,7 +195,7 @@ instruction -> one-shot tool / route / visual prompt -> local trajectory
 
 ```text
 Module I   Tool Environment and State
-Module II  End-to-End Agent Policy
+Module II  Dual-System End-to-End Agent Policy
 Module III Closed-Loop Trace Learning
 ```
 
@@ -216,19 +225,19 @@ Tool registry
         | tool schema / prior tool responses
         v
 ┌──────────────────────────────────────────────┐
-│ Module II: End-to-End Agent Policy            │
-│ multimodal LM decides whether to call tools   │
-│ consumes tool_response in context             │
-│ emits final trajectory / action / update      │
+│ Module II: Dual-System E2E Agent Policy       │
+│ System2 LM: tool decision / final navigation  │
+│ System1 CFM: fast local action chunk          │
+│ shared [TRAJ_i] causal readout after context  │
 └──────────────────────────────────────────────┘
         |
-        | action / tool_call / final answer
+        | tool_call / final answer / action chunk
         v
 ┌──────────────────────────────────────────────┐
 │ Module III: Closed-Loop Trace Learning        │
 │ validator / runtime logger / failure mining   │
 │ AgentTrace -> ms-swift row                    │
-│ LM loss + trajectory/action/seg loss          │
+│ LM loss + trajectory/CFM-action/seg loss      │
 └──────────────────────────────────────────────┘
         |
         v
@@ -277,9 +286,9 @@ and user-interaction APIs to an end-to-end navigation policy.
 model-generated tool_call -> deterministic executor -> tool_response -> model context
 ```
 
-### 3.3 模块二：End-to-End Agent Policy
+### 3.3 模块二：Dual-System End-to-End Agent Policy
 
-**目标**：用一个端到端多模态 agent policy 学习全局工具交互和局部动作输出。
+**目标**：用一个端到端多模态 agent policy 学习全局工具交互，并用同一段因果上下文驱动快速局部动作。
 
 输入：
 
@@ -298,7 +307,7 @@ ToolDecision
 optional tool_call
 final navigation CoT
 trajectory through [TRAJ_i] hidden states
-optional ego action chunk
+System1 ego action chunk through CFM action head
 optional route update or clarification request
 ```
 
@@ -327,8 +336,10 @@ request_clarification
 在论文中，这一层可以表述为：
 
 ```text
-EAP: an end-to-end multimodal agent policy that jointly learns tool use,
-tool-result interpretation, and local navigation action generation.
+DS-EAP: a dual-system end-to-end multimodal agent policy.  System2 is a
+tool-interactive LM for global task reasoning and route/session decisions;
+System1 is a conditional-flow local navigator that converts the shared
+navigation context into fast ego-frame action chunks.
 ```
 
 训练时保持 Stage2 的关键因果顺序：
@@ -339,10 +350,28 @@ user / images / tool schema
 -> optional tool_call
 -> optional tool_response
 -> [TRAJ_0] ... [TRAJ_15]
--> final trajectory/action
+-> System2 final trajectory text
+-> trajectory head / System1 CFM action head
 ```
 
-只有这样，trajectory/action head 的 hidden states 才能看到工具结果。没有工具时，模型直接根据 instruction + FPV/BEV 输出局部动作。
+只有这样，trajectory head 和 System1 CFM action head 的 hidden states 才能看到工具结果。
+没有工具时，模型直接根据 instruction + FPV/BEV 输出局部动作。
+
+System2 和 System1 不是两套互相隔离的模型。它们共享同一个 ms-swift 多模态 backbone 和
+同一组 prompt-side `[TRAJ_i]` readout token：
+
+```text
+System2:
+  LM tokens -> ToolDecision / tool_call / final CoT / <finish>
+
+System1:
+  H([TRAJ_i] | images, route state, tool_response, final readout prompt)
+  -> CFM action head
+  -> action_chunk_ego [T, 3]
+```
+
+因此 System1 的输入不应是手工 `RouteContext`，也不应绕过工具上下文。它应该读取工具返回之后的
+causal hidden states，使全局工具交互真正影响局部可执行动作。
 
 ### 3.4 模块三：Closed-Loop Trace Learning
 
@@ -382,7 +411,7 @@ AgentTrace
 
 ```text
 CTL: closed-loop trace learning that converts tool-interactive navigation
-runs into supervised multimodal language, tool-use, trajectory, action,
+runs into supervised multimodal language, tool-use, trajectory, CFM action,
 and segmentation training targets.
 ```
 
@@ -404,12 +433,14 @@ evaluation: 做 off-route、progress、maneuver 等诊断切片
 
 ```text
 1. Model observes instruction, images, history, tool registry.
-2. Model either emits a tool_call or directly emits final navigation output.
+2. System2 LM either emits a tool_call or directly enters final navigation.
 3. Runtime executes typed tool_call when present.
 4. tool_response is appended to context.
-5. Model emits final navigation CoT and [TRAJ_i]-conditioned trajectory/action.
-6. Validator checks parseability, safety, route/session consistency when applicable.
-7. Runtime logs replayable trace for training and failure mining.
+5. System2 LM emits final navigation CoT and <finish>.
+6. System1 CFM head reads post-context [TRAJ_i] hidden states and samples action_chunk_ego.
+7. Runtime adapter converts action chunk to executable commands.
+8. Validator checks parseability, safety, route/session consistency, and action feasibility.
+9. Runtime logs replayable trace and action payload for training and failure mining.
 ```
 
 ### 3.7 训练闭环
@@ -419,7 +450,7 @@ RouteServer online/replay execution
 -> AgentTrace / SessionTrace
 -> validation and failure slicing
 -> ms-swift agent-template row
--> LM loss + trajectory/action/seg loss
+-> LM loss + trajectory/CFM-action/seg loss
 -> checkpoint
 -> OnlineAgentRunner / RouteServer deployment
 ```
@@ -428,7 +459,7 @@ RouteServer online/replay execution
 
 ```text
 RouteServer 管工具环境、executor、route session、validator、日志和评测。
-ms-swift 管 E2E agent policy、trajectory/action/seg head、agent-template 编码和模型推理。
+ms-swift 管 System2 LM policy、System1 CFM action head、trajectory/seg head、agent-template 编码和模型推理。
 两者之间通过稳定 trace / row contract 连接。
 ```
 
@@ -545,9 +576,11 @@ Stage2/Stage3 新生成的 final assistant 使用 canonical `<finish>`。文本�
 }
 ```
 
-top-level `pixel_trajectory`、`trajectory_fpv_t`、`trajectory_ego_t` 等字段继续作为
-trajectory/action head 的连续监督。validator 会把 finish 轨迹转回 norm01 后与
-top-level `pixel_trajectory` 做等价比较。旧 `finish.trajectory` 只作为兼容输入，
+top-level `pixel_trajectory`、`trajectory_fpv_t`、`trajectory_ego_t`、
+`action_ego_t`、`action_mask`、`action_stats` 等字段继续作为 trajectory head 和
+System1 CFM action head 的连续监督。validator 会把 finish 轨迹转回 norm01 后与
+top-level `pixel_trajectory` 做等价比较。action label 不进入 assistant target，
+只在 ms-swift trainer 中作为 CFM loss target 使用。旧 `finish.trajectory` 只作为兼容输入，
 不再作为 RouteServer 新生成样本的 canonical 输出。
 
 ### 4.5 AgentTrace / SessionTrace
@@ -567,6 +600,9 @@ top-level `pixel_trajectory` 做等价比较。旧 `finish.trajectory` 只作为
   "supervision": {
     "pixel_trajectory": [],
     "trajectory_ego_t": null,
+    "action_ego_t": null,
+    "action_mask": null,
+    "action_stats": null,
     "semantic_segmentation_path": null
   }
 }
@@ -647,14 +683,14 @@ allowed_tools_by_stage = {
 
 ## 6. 工具返回到局部动作的接口
 
-新的全局到局部接口不是 `RouteContext Compiler`，而是模型上下文中的 `tool_response`。模型通过工具拿到外部信息，再端到端学习这些信息如何影响局部 trajectory/action。
+新的全局到局部接口不是 `RouteContext Compiler`，而是模型上下文中的 `tool_response`。模型通过工具拿到外部信息，再端到端学习这些信息如何影响局部 trajectory 和 System1 CFM action。
 
 ```text
 tool registry
 -> model-generated tool_call
 -> deterministic tool_response
 -> model consumes tool_response with FPV/BEV
--> final trajectory/action
+-> final trajectory / System1 action
 ```
 
 ### 6.1 工具返回是唯一强制外部上下文
@@ -729,14 +765,26 @@ Append ToolResponse
 
 Generate Final Navigation
   ms-swift Stage2/Stage3 model sees images + tool_response + [TRAJ_i]
-  -> final CoT + trajectory/action
+  -> System2 final CoT + <finish>.trajectory_grid1000
+
+Sample System1 Action Chunk
+  CFM action head reads the same post-context [TRAJ_i] hidden states
+  -> action_chunk_ego [T, 3]
+
+Adapt Runtime Action
+  ActionRuntimeAdapter -> discrete actions or v/omega commands
+  execute first M steps, then request the next observation
 
 Validate Local Output
-  parse finish, trajectory range, segmentation safety, tool-result consistency
+  parse finish, trajectory range, action feasibility, segmentation safety, tool-result consistency
 
 Act and Log
-  publish trajectory/action, persist canonical trace, update route session if a tool changed it
+  publish System1 commands, persist canonical trace and action payload, update route session if a tool changed it
 ```
+
+其中 System2 是慢速工具交互与路线决策，System1 是快速局部控制。System1 不应直接调用地图工具；
+它只消费已经进入上下文的 `tool_response`、route/session summary、FPV/BEV hidden states 和
+`[TRAJ_i]` readout 表示。
 
 ### 7.2 Backtracking 条件
 
@@ -870,6 +918,7 @@ trajectory rows:
 action rows:
   action_ego_t
   action_mask
+  action_stats
 
 segmentation rows:
   semantic_segmentation_path
@@ -907,9 +956,9 @@ tool_response context 在 [TRAJ_i] 之前
 ```
 
 其中 `[TRAJ_i]` 是 prompt-side readout query token：`attention_mask=1`，但
-`labels=-100`。它本身不参与 LM CE，只给 trajectory/action head 提供因果位置。
+`labels=-100`。它本身不参与 LM CE，只给 trajectory head 和 System1 CFM action head 提供因果位置。
 没有轨迹监督的 cold-start row 可以保留 `[TRAJ_i]` 以稳定格式，但必须关闭
-`L_traj/L_action` 或不提供对应 target。
+`L_traj/L_cfm` 或不提供对应 target。
 
 ### 8.4 Loss 归属与阶段化目标
 
@@ -954,7 +1003,7 @@ L_cold_start =
 
 `tool_response` 是 observation/context，只作为后续 token 的条件，不要求模型复现。
 这也是 Stage2-A 的正确口径：先训练会不会发起工具、发起什么工具、如何在 final answer
-里使用工具返回；不在这一阶段强行打开 trajectory/action/seg loss。
+里使用工具返回；不在这一阶段强行打开 trajectory/CFM-action/seg loss。
 
 #### 8.4.2 SideWalk head losses
 
@@ -966,10 +1015,11 @@ L_traj:
   readout = [TRAJ_i] hidden states
   default = curve / point / WTA candidate loss by head type
 
-L_action:
+L_cfm / L_action:
   source = action_ego_t + action_mask
   readout = same [TRAJ_i] hidden states
-  default = flow / CFM action loss
+  default = CFM action chunk loss
+  target = normalized ego-frame action [dx_right, dy_front, dtheta]
 
 L_seg:
   source = semantic_segmentation_path or semantic_segmentation
@@ -979,6 +1029,22 @@ L_seg:
 
 字段缺失时，不应把缺失字段当成负样本监督。当前 trainer 为了让 head 参数进入
 autograd graph 可能添加 zero-module loss，但这不是有效监督。
+这里理论目标记为 `L_cfm`；当前 ms-swift trainer/config 中的工程开关仍可能沿用
+`action_loss` / `sidewalk_action_loss_weight` 命名。
+
+System1 的 CFM action head 使用同一组 `[TRAJ_i]` hidden states 作为条件 `z`：
+
+```text
+x_1 = GT action_ego_t
+x_0 ~ N(0, I)
+t ~ U(0, 1)
+x_t = (1 - t) x_0 + t x_1
+v* = x_1 - x_0
+L_cfm = ||v_theta(x_t, t, z) - v*||_2^2 over action_mask
+```
+
+这里的 `z` 必须来自 `tool_response` 和 final readout prompt 之后的 causal context。否则
+System1 只是在做局部视觉 imitation，不能学习“工具结果如何改变下一步动作”。
 
 #### 8.4.3 Per-phase objective
 
@@ -986,10 +1052,11 @@ autograd graph 可能添加 zero-module loss，但这不是有效监督。
 
 | 阶段 | 目标函数 | 说明 |
 | --- | --- | --- |
-| Phase A mixed local E2E | `L_A = L_lm(VQA + nav CoT/finish) + 1_traj * lambda_traj * L_traj + 1_action * lambda_action * L_action + 1_seg * lambda_seg * L_seg + optional L_dense` | 一个训练里混合 FPV-only、FPV-BEV、VQA、trajectory CoT 和 trajectory/action head。按 row 字段决定哪些 loss 生效；不启用 tools。 |
+| Phase A mixed local E2E | `L_A = L_lm(VQA + nav CoT/finish) + 1_traj * lambda_traj * L_traj + 1_seg * lambda_seg * L_seg + optional L_dense` | 一个训练里混合 FPV-only、FPV-BEV、VQA、trajectory CoT 和 trajectory head。按 row 字段决定哪些 loss 生效；不启用 tools。 |
+| Phase A-S1 System1 CFM pretrain | `L_A-S1 = L_lm(optional nav CoT/finish) + lambda_action * L_cfm` | 在局部导航数据上训练快速 action chunk policy。可冻结 VLM/只训 action head，也可 LoRA + action head；仍不启用 tools。 |
 | Phase B tool cold start | `L_B = L_cold_start` | 对齐本地 SpotAgent cold-start 脚本：仍是 SFT token CE，只监督 assistant/tool_call/final answer token；tool_response、images、tools 不算 CE。 |
-| Phase B' tool + trajectory bridge | `L_B' = L_cold_start + 1_traj * lambda_traj * L_traj + 1_action * lambda_action * L_action` | 可选桥接阶段，只在 cold-start 已稳定且 row 有有效轨迹/action target 时启用，用来训练工具返回影响 `[TRAJ_i]` 后的动作。 |
-| Phase C joint route-session SFT | `L_C = L_lm + 1_traj * lambda_traj * L_traj + 1_action * lambda_action * L_action + 1_seg * lambda_seg * L_seg` | 混合 Phase A/B/B' 和 session rows；tool policy 仍主要通过 LM CE 学，除非未来新增独立 tool-policy head。 |
+| Phase B' tool + System1 bridge | `L_B' = L_cold_start + 1_traj * lambda_traj * L_traj + 1_action * lambda_action * L_cfm` | 可选桥接阶段，只在 cold-start 已稳定且 row 有有效轨迹或 action target 时启用，用来训练工具返回影响 `[TRAJ_i]` 后的轨迹和 CFM action。 |
+| Phase C joint route-session SFT | `L_C = L_lm + 1_traj * lambda_traj * L_traj + 1_action * lambda_action * L_cfm + 1_seg * lambda_seg * L_seg` | 混合 Phase A/A-S1/B/B' 和 session rows；tool policy 仍主要通过 LM CE 学，System1 通过 CFM action loss 学。 |
 | Phase D online / RL | `L_D = L_C` for curated SFT; optional `L_pref` or GRPO-style RL objective | DAgger 数据回流继续用 joint SFT；偏好/RL 只在 joint SFT 稳定后启用。 |
 
 不要把以下内容写入 assistant target：
@@ -1008,7 +1075,7 @@ autograd graph 可能添加 zero-module loss，但这不是有效监督。
 
 推荐分阶段训练，但阶段顺序应先建立端到端局部导航能力，再增量学习工具交互。
 不要一开始就把 route grounding / tool policy 当作主任务，否则模型会先学会输出
-map/tool 文本，却还没有稳定的 FPV/BEV 到 trajectory/action 的基础映射。
+map/tool 文本，却还没有稳定的 FPV/BEV 到 trajectory 和 System1 action 的基础映射。
 本地 SpotAgent 代码也是这个顺序：先 SFT basic alignment，再 cold-start SFT 注入
 tool trajectories，最后才用 GRPO/RL 做结果级优化。
 
@@ -1021,7 +1088,7 @@ instruction / VQA question / local navigation command
 + FPV-only or FPV+BEV
 -> VQA answer or final navigation CoT
 -> optional <finish>.trajectory_grid1000
--> optional trajectory/action head
+-> optional trajectory head
 -> optional segmentation / dense grounding
 ```
 
@@ -1034,7 +1101,6 @@ instruction / VQA question / local navigation command
 - `trajectory_fpv_only_cot` rows
 - teacher / human final navigation CoT and VQA answers
 - `pixel_trajectory` / `trajectory_fpv_t` / `trajectory_ego_t`, when available
-- optional action chunk
 - optional segmentation / dense grounding sidecars
 
 输出按 row 类型变化：
@@ -1042,7 +1108,7 @@ instruction / VQA question / local navigation command
 - VQA row：assistant 输出 answer / structured scene reasoning。
 - navigation CoT row：assistant 输出 `<think>` + `<finish>`。
 - trajectory text row：`<finish>.trajectory_grid1000` 作为 LM target 的一部分。
-- trajectory/action row：`[TRAJ_i]` hidden states 接 trajectory/action head。
+- trajectory row：`[TRAJ_i]` hidden states 接 trajectory head。
 - segmentation/dense row：只通过顶层 sidecar 监督，不写入 assistant target。
 
 Loss：
@@ -1050,7 +1116,6 @@ Loss：
 ```text
 L_A = L_lm(VQA answer + nav CoT/finish)
     + 1_traj * lambda_traj * L_traj
-    + 1_action * lambda_action * L_action
     + 1_seg * lambda_seg * L_seg
     + optional L_dense
 ```
@@ -1059,12 +1124,50 @@ L_A = L_lm(VQA answer + nav CoT/finish)
 
 - 这是一个 mixed SFT / multi-task E2E 训练，不需要拆成 FPV-only 和 FPV-BEV 两个 phase。
 - 通过 batch mix 或 dataset ratio 控制 FPV-only、FPV-BEV、VQA、trajectory CoT、trajectory head、
-  action head、seg/dense rows 的比例。
-- VQA row 只开 `L_lm`；没有 trajectory target 时不计算 `L_traj/L_action`。
+  seg/dense rows 的比例。
+- VQA row 只开 `L_lm`；没有 trajectory target 时不计算 `L_traj`。
 - trajectory row 同时训练文本 `<finish>.trajectory_grid1000` 和可选 head loss。
 - FPV-only row 使用 FPV-only prompt，并把 `<BEVContext>` 明确设为 unavailable。
 - FPV-BEV row 使用 BEV 作为拓扑/意图上下文，但局部安全仍以 FPV 为准。
 - 这一阶段不暴露 tools、不训练 route session，也不要求模型输出 map op。
+
+#### Phase A-S1：System1 CFM action pretrain
+
+目标：
+
+```text
+instruction / local navigation command
++ FPV-only or FPV+BEV
+-> optional navigation CoT / finish
+-> [TRAJ_i] causal readout
+-> CFM action head
+-> action_chunk_ego [T, 3]
+```
+
+数据：
+
+- 已有 `action_ego_t` / `action_mask` / `action_stats` 的 local navigation rows。
+- 可由 `trajectory_ego_t` 派生的 future ego action chunk。
+- CityWalker / FrodoBots / odometry-aligned local clips 中的未来 ego motion。
+- 不需要工具的 no-tool navigation replay，用于让 System1 学稳定局部控制。
+
+Loss：
+
+```text
+L_A-S1 = optional L_lm(nav CoT/finish)
+       + lambda_action * L_cfm
+```
+
+实现口径：
+
+- 不需要新增一种 assistant target；`action_ego_t`、`action_mask`、`action_stats`
+  继续作为 top-level supervision。
+- 在 ms-swift 中通过 `--sidewalk_enable_action_head true` 或
+  `--sidewalk_action_loss_weight > 0` 启用 CFM action head。
+- 可以做两个训练变体：
+  - `action_head_only`：冻结 VLM/LoRA，只训练 `sidewalk_action_head`，验证 CFM 本身。
+  - `lora_plus_action_head`：让 `L_cfm` 回传到 LoRA 和 `[TRAJ_i]` token embedding，训练端到端 System1 表示。
+- 这一阶段仍不启用 tools，避免模型还没有稳定局部控制时先学复杂 tool policy。
 
 #### Phase B：SpotAgent-style tool cold start
 
@@ -1074,7 +1177,7 @@ FPV/BEV + tool registry + optional route/session text
 -> at most one tool_call
 -> tool_response
 -> final navigation CoT
--> optional [TRAJ_i] trajectory/action bridge
+-> optional [TRAJ_i] trajectory / CFM action bridge
 ```
 
 数据：
@@ -1091,7 +1194,7 @@ FPV/BEV + tool registry + optional route/session text
 - `tool_call`
 - tool result use explanation
 - final navigation CoT
-- optional trajectory/action, only for Stage2-B bridge rows
+- optional trajectory / System1 action, only for bridge rows
 
 Loss：
 
@@ -1099,17 +1202,17 @@ Loss：
 Stage2-A / pure cold start:
   L_B = L_cold_start
 
-Stage2-B / tool-trajectory bridge:
+Stage2-B / tool-trajectory-System1 bridge:
   L_B' = L_cold_start
        + lambda_traj * L_traj
-       + optional lambda_action * L_action
+       + optional lambda_action * L_cfm
 ```
 
 这一阶段参考本地 SpotAgent，但只采用最小可控的 single-tool cold start：每条样本最多一个工具，
 失败写成 `tool_response.success=false`，并继续生成 final navigation。关键因果顺序保持不变：
 
 ```text
-tool_response context -> [TRAJ_i] -> trajectory/action head
+tool_response context -> [TRAJ_i] -> trajectory head / CFM action head
 ```
 
 工具冷启动应从 Phase A 的基础导航 checkpoint 继续训练，而不是从纯 route/tool 文本模型开始。
@@ -1126,12 +1229,13 @@ FPV/BEV + tool registry + session history + optional tool_response
 -> tool/no-tool decision
 -> route session op / replan / ask-user / continue
 -> final navigation CoT
--> trajectory/action
+-> trajectory / System1 action chunk
 ```
 
 数据：
 
 - Phase A mixed local navigation rows
+- Phase A-S1 System1 CFM action rows
 - Phase B single-tool rows
 - RouteSession multi-turn traces
 - route-update / active-stop / off-route replan replay
@@ -1142,20 +1246,20 @@ Loss：
 ```text
 L_C = L_lm
     + 1_traj * lambda_traj * L_traj
-    + 1_action * lambda_action * L_action
+    + 1_action * lambda_action * L_cfm
     + 1_seg * lambda_seg * L_seg
 ```
 
 训练方式：
 
-- 统一训练 `L_lm + L_traj + L_action + L_seg`，但按 batch mix 控制比例。
+- 统一训练 `L_lm + L_traj + L_cfm + L_seg`，但按 batch mix 控制比例。
 - session trace 仍可切成多条单步 agent rows，保持 ms-swift `[TRAJ_i]` 位置约束。
-- 对 tool-required 样本要求 final trajectory/action 使用工具结果。
+- 对 tool-required 样本要求 final trajectory 和 System1 action chunk 使用工具结果。
 - 对 no-tool 样本显式惩罚不必要工具调用，保护纯局部导航能力。
 
 这一阶段才开始真正训练闭环路线状态更新，包括 active stop、current origin、route-update、
 off-route replan、到达后停止或 ask-user。它不是单独的 route policy SFT，而是工具文本、
-工具返回使用和局部动作头的联合训练。
+工具返回使用、trajectory head 和 CFM action head 的联合训练。
 
 #### Phase D：Online failure mining + optional RL / preference optimization
 
@@ -1192,8 +1296,10 @@ RL:
 - tool parse / schema failure
 - tool result 未被 final navigation 使用
 - trajectory 被 segmentation validator 拒绝
+- CFM action chunk 与 trajectory / visible support 不一致
+- System1 连续输出 stop、急转或不可执行命令
 - 到达状态仍继续前进
-- 需要工具的样本中 trajectory 没随 tool_response 改变
+- 需要工具的样本中 trajectory 和 System1 action 没随 tool_response 改变
 - no-tool 场景中产生不必要 tool_call
 
 RL 或偏好优化只应在 Phase C 的 joint SFT 稳定后再考虑。奖励应来自可审计指标：
@@ -1205,6 +1311,8 @@ route-update success
 tool_op_accuracy
 tool_efficiency
 trajectory ADE/FDE
+action chunk error
+command smoothness / feasibility
 safety validator pass rate
 off-route recovery success
 clarification correctness
@@ -1225,6 +1333,7 @@ unnecessary tool-call penalty
 | Tool-result grounding | tool_response usage accuracy、failure recovery accuracy、route-result consistency、unnecessary tool-call rate |
 | Route-session tool use | active stop update、current origin usage、session update correctness、replan trigger precision/recall |
 | E2E local navigation | ADE/FDE、curve loss、validator pass rate、safe-support ratio、collision/social risk |
+| System1 CFM action | action L2/FDE、yaw error、command smoothness、stop/turn/forward accuracy、action feasibility |
 | Closed-loop recovery | recovery success、arrival success、steps to recovery、unnecessary replan rate |
 
 当前已有：
@@ -1246,8 +1355,8 @@ tool_result_grounding_eval.py
 TI-E2E-Nav 的价值不应只用单一 ADE 或单一 destination success 解释。它的收益来自“上层工具交互”和“下层局部动作”之间的耦合：
 
 ```text
-工具调用让模型能主动改变路线状态、获取全局信息和请求澄清；
-局部轨迹/action head 让工具结果真正影响下一步可执行动作；
+System2 工具调用让模型能主动改变路线状态、获取全局信息和请求澄清；
+System1 CFM action head 让工具结果真正影响下一步可执行动作；
 validator 和 replay trace 把失败闭环成下一轮训练数据。
 ```
 
@@ -1260,10 +1369,11 @@ validator 和 replay trace 把失败闭环成下一轮训练数据。
 | 假设 | 需要证明什么 | 主要指标 |
 | --- | --- | --- |
 | H1 工具交互提升路线更新能力 | add-via、replace-destination、replan case 上，训练后的 agent 比 no-tool 或 tool-untrained baseline 更会调用正确工具并使用结果 | route-update success、current origin usage、session update correctness、tool op accuracy |
-| H2 工具结果能影响局部动作 | 给定 route/session tool_response 后，final trajectory/action 更符合更新后的路线或用户目标 | tool-response grounding、route-result consistency、conditional ADE/FDE、validator pass |
+| H2 工具结果能影响局部动作 | 给定 route/session tool_response 后，final trajectory 和 System1 action 更符合更新后的路线或用户目标 | tool-response grounding、route-result consistency、conditional ADE/FDE、validator pass |
+| H2-S1 System1 可执行动作受工具约束 | tool_response 改变路线或目标后，CFM action chunk 也随之改变，而不是只改文本 finish | action error by slice、yaw error、command feasibility、action-tool consistency |
 | H3 训练闭环提升恢复能力 | off-route、工具失败、局部 validator reject 后，模型更会 replan、fallback 或 ask-user | recovery success、steps to recovery、failed-tool recovery accuracy |
 | H4 工具交互不会伤害纯局部导航 | 不需要工具的常规局部样本上，tool-trained 模型不应明显退化 | no-tool ADE/FDE、no-tool validator pass、unnecessary tool-call rate |
-| H5 端到端联合训练优于分离训练 | 只训练 tool text 或只训练 trajectory 都不如 LM+tool+trajectory/action 联合训练 | composite score、tool-needed ADE、route-update success、local safety |
+| H5 端到端联合训练优于分离训练 | 只训练 tool text、trajectory 或 CFM action 都不如 LM+tool+trajectory+CFM-action 联合训练 | composite score、tool-needed ADE、route-update success、local safety |
 
 ### 10.2 ADE 是否应该提升
 
@@ -1274,7 +1384,7 @@ ADE/FDE 不一定在所有样本上整体提升。更准确的判断是：
   ADE/FDE 应保持不退化，提升可能有限。
 
 需要工具的样本，例如 route_update、add_via、replace_destination、off-route replan：
-  如果 GT trajectory/action 是基于更新后路线或新目标生成的，
+  如果 GT trajectory / System1 action 是基于更新后路线或新目标生成的，
   tool-interactive E2E 模型应该在 conditional ADE/FDE 上提升。
 
 工具返回错误、过期或模型误调用工具：
@@ -1301,11 +1411,12 @@ FDE_* 同样分桶
 
 | 组别 | 描述 | 目的 |
 | --- | --- | --- |
-| `local-only` | FPV/BEV -> trajectory/action，不给 tools，不训练 tool roles | 局部端到端 baseline |
+| `local-only` | FPV/BEV -> trajectory / System1 action，不给 tools，不训练 tool roles | 局部端到端 baseline |
 | `tool-schema-only` | prompt 中有 tools，但未用 tool trace SFT | 测试工具 schema 暴露本身是否足够 |
-| `tool-sft-lm-only` | 训练 tool decision/tool_call/final text，但不开 trajectory/action head loss | 分离 tool 学习和局部动作学习 |
+| `system1-cfm-local` | 不给 tools，只训练/评测 CFM action head | 验证快速局部导航器本身 |
+| `tool-sft-lm-only` | 训练 tool decision/tool_call/final text，但不开 trajectory/CFM-action head loss | 分离 tool 学习和局部动作学习 |
 | `traj-only-with-route-text` | 给固定路线文本或人工 route hint，但不让模型调用工具 | 对比手工中间条件 |
-| `full-tool-e2e` | LM + tool_call + tool_response use + trajectory/action 联合训练 | 主方法 |
+| `full-tool-e2e` | LM + tool_call + tool_response use + trajectory + CFM action 联合训练 | 主方法 |
 | `full-tool-e2e-online-mined` | 主方法 + online failure mining / curated replay | 验证闭环数据收益 |
 
 ### 10.4 实验模块一：路线工具交互评测
@@ -1382,7 +1493,7 @@ tools/evaluation/run_tool_result_grounding_eval.py
 
 ### 10.6 实验模块三：局部 E2E 导航评测
 
-目标：验证工具交互是否改善局部 trajectory/action，而不是只改善文本工具指标。
+目标：验证工具交互是否改善局部 trajectory 和 System1 CFM action，而不是只改善文本工具指标。
 
 数据分桶：
 
@@ -1403,6 +1514,10 @@ ADE_no_tool_required / FDE_no_tool_required
 ADE_tool_required / FDE_tool_required
 ADE_route_update / FDE_route_update
 trajectory_curve_loss
+action_l2 / action_fde
+yaw_error
+command_smoothness
+System1 action feasibility
 validator_pass_rate
 safe_support_ratio
 collision/social_risk
@@ -1411,6 +1526,8 @@ collision/social_risk
 解释标准：
 
 - `full-tool-e2e` 在 `tool_required` 和 `route_update` slice 上应优于 `local-only`。
+- `system1-cfm-local` 应在 no-tool local slice 上提供稳定 action chunk；`full-tool-e2e`
+  应在 tool-required slice 上进一步改善 action consistency。
 - `no_tool_required` slice 不应明显退化。
 - 如果 overall ADE 提升不大，但 tool-required slice 提升明显，应按 slice 报告而不是否定框架。
 
@@ -1547,7 +1664,42 @@ route_update_add_via 不再只是输出 updated route，而是 session op。
 - duplicate via 不触发无意义重算。
 - replace destination / replan_from_current_pose 都记录 reason。
 
-### Step 4：在线日志回流 ms-swift
+### Step 4：接入 System1 / CFM action runtime
+
+目标：把 ms-swift 已有的 CFM action head 作为快速局部导航器接入 RouteServer
+runtime，而不是只停留在离线训练 loss。
+
+新增或修改：
+
+```text
+RouteServer exporter:
+  preserve action_ego_t / action_mask / action_stats in Stage2 rows
+
+ms-swift inference adapter:
+  call sidewalk_nav infer with enable-action-head and flow-steps
+  return action_chunk_ego plus text finish
+
+RouteServer runtime:
+  record system1_action_payload in AgentTrace / SessionTrace
+  convert action_chunk_ego to executable commands through ActionRuntimeAdapter
+  execute only a short receding-horizon prefix, then re-observe and replan
+
+validator:
+  check action feasibility, stop/turn consistency, command smoothness,
+  and action-tool consistency on tool-required slices
+```
+
+验收：
+
+- Stage2 canonical row 可同时携带 `trajectory_grid1000` 文本轨迹和
+  top-level `action_ego_t/action_mask/action_stats`。
+- ms-swift checkpoint 在同一条 prompt 上返回 final assistant 和 `action_chunk_ego`。
+- RouteServer 每个 tick 记录 `finish`、`tool_response`、`system1_action_payload`、
+  validator report，并能导出回训练 row。
+- closed-loop runtime 只执行 System1 action chunk 的前若干步，下一 tick 重新观察，
+  避免一次生成过长动作后脱离工具和视觉反馈。
+
+### Step 5：在线日志回流 ms-swift
 
 流程：
 
@@ -1564,14 +1716,17 @@ SessionTrace
 - tool/no-tool/failed-tool 三类 row 都能训练前 smoke。
 - `[TRAJ_i]` 位置通过 validator。
 - `pixel_trajectory` 等字段未进入 assistant target。
+- `action_ego_t/action_mask/action_stats` 只作为 top-level supervision，
+  不进入 assistant target。
 
-### Step 5：闭环评测与 failure mining
+### Step 6：闭环评测与 failure mining
 
 新增：
 
 ```text
 tools/evaluation/run_route_session_closed_loop_benchmark.py
 tools/evaluation/mine_tool_interactive_failures.py
+tools/evaluation/compare_tool_e2e_navigation_slices.py
 ```
 
 输出：
@@ -1580,6 +1735,7 @@ tools/evaluation/mine_tool_interactive_failures.py
 session_summary.json
 session_traces.jsonl
 failure_slices.json
+action_failure_slices.json
 curated_stage2_rows.jsonl
 ```
 
@@ -1591,22 +1747,25 @@ curated_stage2_rows.jsonl
 ToolRegistry 暴露地图、路线、图像和用户交互能力。
 ToolExecutor 把模型 tool_call 转成确定性 tool_response。
 RouteSession 只是 map_tool 维护的外部状态。
-ms-swift SideWalk E2E 模型学习 tool decision、tool-result use、final navigation、trajectory/action。
+ms-swift SideWalk E2E 模型同时学习 System2 的 tool decision/tool-result use/final navigation，
+以及 System1 的 CFM action chunk。
 Validator 和 AgentTrace/SessionTrace 把在线失败变成下一轮训练数据。
 ```
 
 这样可以同时满足：
 
 - 全局理解规划：通过 map tools 学习目的地、隐式需求、多站点、route update。
-- 局部导航：FPV/BEV、segmentation、SoM、trajectory/action。
+- 局部导航：FPV/BEV、segmentation、SoM、trajectory、System1 CFM action chunk。
 - 在线闭环：off-route、replan、ask-user、failure recovery。
 - 离线可复现：replay cache、canonical trace、validator、benchmark。
-- 训练闭环：RouteServer trace 到 ms-swift SFT/head loss，再回到 RouteServer online runner。
+- 训练闭环：RouteServer trace 到 ms-swift SFT/trajectory/CFM-action/head loss，
+  再回到 RouteServer online runner。
 
 短期最关键的工程判断：
 
 ```text
 不要把 Stage2 single-tool runtime 直接扩成无边界 ReAct。
 先稳定 tool runtime、tool_response contract 和 replay trace；
-把每个 tick 导出为稳定、可训练、可回放的 agent trace。
+把每个 tick 导出为稳定、可训练、可回放的 agent trace；
+不要把 CFM action label 写入 assistant target，只作为 top-level supervision。
 ```

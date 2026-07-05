@@ -63,6 +63,8 @@ _print_config() {
   print "shards=${SHARDS}"
   print "concurrency_per_shard=${CONCURRENCY}"
   print "llm_base_url=${LLM_BASE_URL}"
+  print "api_style=/chat/completions"
+  print "LLM_API_STYLE_FALLBACK=0"
   print "skip_llm_preflight=${SKIP_LLM_PREFLIGHT}"
   print "max_prediction_exception_rate=${MAX_PREDICTION_EXCEPTION_RATE}"
   print "resume=${RESUME}"
@@ -191,7 +193,7 @@ _write_worker_script() {
 set -euo pipefail
 cd "${ROUTE_ROOT}"
 export LLM_RESPONSE_FORMAT_JSON="${LLM_RESPONSE_FORMAT_JSON}"
-export LLM_API_STYLE_FALLBACK=1
+export LLM_API_STYLE_FALLBACK=0
 case "${LLM_BASE_URL}" in
   http://127.*|https://127.*|http://localhost*|https://localhost*|http://[::1]*|https://[::1]*)
     export NO_PROXY="127.0.0.1,localhost,::1,\${NO_PROXY:-}"
@@ -214,7 +216,7 @@ fi
   print "[proxy-shard] concurrency=${CONCURRENCY}"
 } 2>&1 | tee -a "${pred_log}" | tee -a "${GROUP_LOG}"
 
-LLM_RESPONSE_FORMAT_JSON="${LLM_RESPONSE_FORMAT_JSON}" LLM_API_STYLE_FALLBACK=1 PYTHONUNBUFFERED=1 PYTHONPATH=src "${PYTHON_BIN}" \\
+LLM_RESPONSE_FORMAT_JSON="${LLM_RESPONSE_FORMAT_JSON}" LLM_API_STYLE_FALLBACK=0 PYTHONUNBUFFERED=1 PYTHONPATH=src "${PYTHON_BIN}" \\
   tools/evaluation/generate_urbannav_external_predictions.py \\
   --cases "${shard_case}" \\
   --backend replay \\

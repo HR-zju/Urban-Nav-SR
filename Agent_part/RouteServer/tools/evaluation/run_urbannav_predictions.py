@@ -102,6 +102,7 @@ def _runner_config(args: argparse.Namespace) -> RouteServerRunnerConfig:
         selection_strategy=str(args.selection_strategy),
     )
 
+#在线测试API
 
 def _run_live_runner(
     runner: RouteServerUrbanNavRunner,

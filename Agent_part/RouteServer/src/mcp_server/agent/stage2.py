@@ -166,11 +166,37 @@ def synthetic_tool_response(
             "source": source,
         }
     elif call.tool == "user_interaction_tool":
+        requires_user = bool(args.get("requires_user_response", op not in {"answer_query", "notify_issue"}))
+        motion_policy = str(
+            args.get("motion_policy_while_waiting")
+            or ("stop" if requires_user else "continue_previous_safe_policy")
+        )
+        interaction_id = args.get("interaction_id") or call.call_id or f"ui:{op or 'interaction'}"
+        pending = None
+        if requires_user:
+            pending = {
+                "interaction_id": interaction_id,
+                "op": op,
+                "message": args.get("message") or args.get("question") or "",
+                "options": args.get("options") or args.get("choices") or [],
+                "recommended_option_id": args.get("recommended_option_id"),
+                "motion_policy_while_waiting": motion_policy,
+            }
         result = {
             "op": op,
-            "await_user": True,
+            "await_user": requires_user,
+            "interaction_id": interaction_id,
+            "message": args.get("message") or args.get("question") or "",
             "question": args.get("question"),
             "choices": args.get("choices") or [],
+            "options": args.get("options") or [],
+            "recommended_option_id": args.get("recommended_option_id"),
+            "requires_user_response": requires_user,
+            "interaction_mode": str(args.get("interaction_mode") or ("blocking" if requires_user else "non_blocking")),
+            "motion_policy_while_waiting": motion_policy,
+            "runtime_state": "WAITING_FOR_USER" if requires_user else "RUNNING",
+            "dialogue_state": {"pending_user_interaction": pending} if pending is not None else {},
+            "evidence_refs": args.get("evidence_refs") or [],
             "proposal": args.get("proposal") or {},
             "source": source,
         }
@@ -319,6 +345,21 @@ def _synthetic_map_result(
             "session_id": args.get("session_id") or case.observation.get("route_session_id"),
             "route_plan": {"status": "updated", "source": "synthetic_teacher"},
         }
+    if op == "get_route_context":
+        return {
+            "op": op,
+            "route_id": args.get("route_id") or args.get("session_id") or case.observation.get("route_id"),
+            "context_assets": [
+                {
+                    "asset_id": f"{case.case_id}:route_instruction_text",
+                    "asset_type": "route_instruction_text",
+                    "modality": "text",
+                    "visibility": "model_visible",
+                    "payload": {"text": "Use the available route context for the next local navigation decision."},
+                }
+            ],
+            "source": "synthetic_teacher",
+        }
     return {"op": op, "source": "synthetic_teacher"}
 
 
@@ -401,6 +442,9 @@ def _tool_result_summary(*, call: ToolCall, response: ToolResponse) -> str:
             return f"route session created: {session_id}" if session_id else "route session created"
         if call.op in {"add_via_and_replan", "remove_via_and_replan", "replace_destination", "replan_from_current_pose"}:
             return "route session updated"
+        if call.op == "get_route_context":
+            assets = result.get("context_assets") if isinstance(result.get("context_assets"), list) else []
+            return f"route context returned {len(assets)} asset(s)"
         return f"map operation succeeded: {call.op}"
     if call.tool == "image_tool":
         return f"image operation succeeded: {call.op}"
@@ -434,6 +478,10 @@ def _selected_tool_result(*, call: ToolCall, response: ToolResponse) -> str | No
     if call.tool == "map_tool" and call.op in {"create_route_session", "get_route_session"}:
         session_id = _nested_get(result, ("session", "session_id")) or result.get("session_id")
         return str(session_id) if session_id is not None else None
+    if call.tool == "map_tool" and call.op == "get_route_context":
+        assets = result.get("context_assets") if isinstance(result.get("context_assets"), list) else []
+        asset_types = [str(asset.get("asset_type")) for asset in assets if isinstance(asset, dict)]
+        return ", ".join(asset_types) if asset_types else None
     if call.tool == "image_tool":
         artifact = result.get("image") or result.get("image_path") or result.get("op")
         return str(artifact) if artifact is not None else None
@@ -462,6 +510,8 @@ def _navigation_effect_from_tool(*, call: ToolCall, response: ToolResponse) -> s
     if call.tool == "map_tool":
         if call.op in {"search_poi", "search_category"}:
             return "ground destination or nearby map context before local trajectory generation"
+        if call.op == "get_route_context":
+            return "condition local trajectory on returned route context assets"
         if call.op == "create_route_session":
             return "condition local trajectory on the newly created route session"
         if call.op in {"add_via_and_replan", "remove_via_and_replan", "replace_destination", "replan_from_current_pose"}:
@@ -513,7 +563,7 @@ def _route_action(call: ToolCall | None) -> str:
         return "create_route"
     if op in {"add_via_and_replan", "remove_via_and_replan", "replace_destination", "replan_from_current_pose"}:
         return "update_route"
-    if op in {"search_poi", "search_category", "geocode", "reverse_geocode"}:
+    if op in {"search_poi", "search_category", "geocode", "reverse_geocode", "get_route_context"}:
         return "use_map_context"
     return "continue_navigation"
 

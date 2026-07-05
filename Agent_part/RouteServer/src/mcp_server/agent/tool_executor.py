@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from mcp_server.agent.contracts import ContextAsset
 from mcp_server.agent.schemas import AgentStage2Case, ToolCall, ToolResponse
 from mcp_server.agent.tool_schema import (
     IMAGE_TOOL_NAME,
@@ -105,12 +106,17 @@ class ToolExecutor:
         return None
 
     async def _execute_map_tool(self, call: ToolCall) -> ToolResponse:
+        args = dict(call.arguments)
+        op = str(args.get("op"))
+        if op == "get_route_context":
+            # get_route_context v1 只返回 text/structured ContextAsset，不依赖
+            # live provider；真实 BEV/waypoint image 渲染后续通过 artifact 接口补。
+            return self._execute_route_context_tool(call)
+
         missing_context = self._require_app_context(call)
         if missing_context:
             return missing_context
 
-        args = dict(call.arguments)
-        op = str(args.get("op"))
         # map_tool 是单一 student-visible 工具，op 再映射到 RouteServer core map/session API。
         if op == "geocode":
             result = await map_ops.geocode(
@@ -231,6 +237,50 @@ class ToolExecutor:
             )
         return ToolResponse(tool=call.tool, success=True, result=result, call_id=call.call_id)
 
+    def _execute_route_context_tool(self, call: ToolCall) -> ToolResponse:
+        """Return deterministic route-context assets for Stage2/Stage3 context injection.
+
+        Args:
+            call: ``map_tool.get_route_context`` call.
+
+        Returns:
+            ``ToolResponse`` containing text/structured ``context_assets``.
+            Image assets are represented only when an executor provides a real
+            artifact path; this fallback never fabricates images.
+        """
+
+        args = dict(call.arguments)
+        asset_types = args.get("asset_types") or [
+            "route_summary",
+            "route_instruction_text",
+            "next_maneuver",
+            "next_waypoint",
+        ]
+        if not isinstance(asset_types, list):
+            asset_types = [str(asset_types)]
+        route_id = args.get("route_id") or args.get("session_id")
+        response_id = call.call_id or f"route_context:{route_id or 'unknown'}"
+        assets: list[dict[str, Any]] = []
+        for index, asset_type in enumerate(asset_types):
+            asset = _route_context_asset(
+                str(asset_type),
+                index=index,
+                call=call,
+                response_id=response_id,
+            )
+            if asset is not None:
+                assets.append(asset.to_dict())
+        result = {
+            "op": "get_route_context",
+            "tool_response_id": response_id,
+            "route_id": route_id,
+            "session_id": args.get("session_id"),
+            "horizon_m": args.get("horizon_m"),
+            "frame": args.get("frame") or "ego",
+            "context_assets": assets,
+        }
+        return ToolResponse(tool=call.tool, success=True, result=result, call_id=call.call_id)
+
     def _execute_image_tool(self, call: ToolCall, *, case: AgentStage2Case | None) -> ToolResponse:
         args = dict(call.arguments)
         image_path = args.get("image_path")
@@ -296,12 +346,174 @@ class ToolExecutor:
 
     def _execute_user_interaction_tool(self, call: ToolCall) -> ToolResponse:
         args = dict(call.arguments)
+        op = str(args.get("op") or "")
+        requires_user = bool(args.get("requires_user_response", op not in {"answer_query", "notify_issue"}))
+        interaction_mode = str(args.get("interaction_mode") or ("blocking" if requires_user else "non_blocking"))
+        motion_policy = str(
+            args.get("motion_policy_while_waiting")
+            or ("stop" if requires_user else "continue_previous_safe_policy")
+        )
+        message = args.get("message") or args.get("question") or ""
+        options = _normalize_user_options(args.get("options") or args.get("choices") or [])
+        choices = args.get("choices") or [option.get("label") for option in options if option.get("label")]
+        interaction_id = args.get("interaction_id") or call.call_id or f"ui:{op or 'interaction'}"
+        pending = None
+        if requires_user:
+            pending = {
+                "interaction_id": interaction_id,
+                "op": op,
+                "message": message,
+                "options": options,
+                "recommended_option_id": args.get("recommended_option_id"),
+                "motion_policy_while_waiting": motion_policy,
+            }
         # 离线 evaluator 不真正等待用户，只记录“需要用户确认/澄清”的结构化动作。
         result = {
-            "await_user": True,
-            "op": args.get("op"),
-            "question": args.get("question"),
-            "choices": args.get("choices") or [],
+            "await_user": requires_user,
+            "interaction_id": interaction_id,
+            "op": op,
+            "message": message,
+            "question": args.get("question") or message,
+            "choices": choices,
+            "options": options,
+            "recommended_option_id": args.get("recommended_option_id"),
+            "requires_user_response": requires_user,
+            "interaction_mode": interaction_mode,
+            "motion_policy_while_waiting": motion_policy,
+            "runtime_state": "WAITING_FOR_USER" if requires_user else "RUNNING",
+            "dialogue_state": {"pending_user_interaction": pending} if pending is not None else {},
+            "evidence_refs": args.get("evidence_refs") or [],
             "proposal": args.get("proposal") or {},
         }
         return ToolResponse(tool=call.tool, success=True, result=json.loads(json.dumps(result)), call_id=call.call_id)
+
+
+def _normalize_user_options(options: Any) -> list[dict[str, Any]]:
+    """Normalize user-facing choices into auditable option objects.
+
+    Args:
+        options: Either ``[{"option_id": ..., "label": ...}]`` or a legacy
+            string list from ``choices``.
+
+    Returns:
+        List of option dictionaries with stable ``option_id`` values.
+    """
+
+    if not isinstance(options, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(options):
+        if isinstance(item, dict):
+            option = dict(item)
+            option.setdefault("option_id", option.get("id") or option.get("candidate_id") or f"option_{index}")
+            if option.get("label") is None and option.get("text") is not None:
+                option["label"] = option.get("text")
+            normalized.append(option)
+        else:
+            # 兼容早期 choices=["A","B"]，executor 输出统一 option object。
+            normalized.append({"option_id": f"option_{index}", "label": str(item)})
+    return normalized
+
+
+def _route_context_asset(
+    asset_type: str,
+    *,
+    index: int,
+    call: ToolCall,
+    response_id: str,
+) -> ContextAsset | None:
+    """Build one deterministic route-context asset.
+
+    Args:
+        asset_type: Requested asset type.
+        index: Position in the requested asset list.
+        call: Source tool call.
+        response_id: Tool response id used for traceability.
+
+    Returns:
+        ``ContextAsset`` for supported text/structured assets.  Unsupported
+        image assets return an explicit not-implemented structured asset
+        instead of a fabricated image path.
+    """
+
+    args = dict(call.arguments)
+    asset_id = f"{response_id}:asset:{index}:{asset_type}"
+    route_id = args.get("route_id") or args.get("session_id")
+    frame = str(args.get("frame") or "ego")
+    source_tool = call.tool
+    if asset_type == "route_summary":
+        return ContextAsset(
+            asset_id=asset_id,
+            asset_type=asset_type,
+            source_tool=source_tool,
+            source_tool_response_id=response_id,
+            modality="structured",
+            payload={
+                "route_id": route_id,
+                "distance_m": args.get("distance_m"),
+                "eta_sec": args.get("eta_sec"),
+                "status": "available",
+            },
+        )
+    if asset_type == "route_instruction_text":
+        maneuver = args.get("maneuver") or args.get("next_maneuver") or "continue"
+        distance = args.get("distance_m") or args.get("next_maneuver_distance_m") or args.get("horizon_m")
+        text = args.get("instruction_text") or _route_instruction_text(maneuver=str(maneuver), distance=distance)
+        return ContextAsset(
+            asset_id=asset_id,
+            asset_type=asset_type,
+            source_tool=source_tool,
+            source_tool_response_id=response_id,
+            modality="text",
+            payload={"text": text},
+        )
+    if asset_type == "next_maneuver":
+        return ContextAsset(
+            asset_id=asset_id,
+            asset_type=asset_type,
+            source_tool=source_tool,
+            source_tool_response_id=response_id,
+            modality="structured",
+            frame=frame,
+            payload={
+                "type": args.get("maneuver") or args.get("next_maneuver") or "continue",
+                "distance_m": args.get("next_maneuver_distance_m") or args.get("distance_m"),
+            },
+        )
+    if asset_type == "next_waypoint":
+        waypoint = args.get("waypoint_ego") or args.get("next_waypoint") or [0.0, float(args.get("horizon_m") or 10.0), 0.0]
+        return ContextAsset(
+            asset_id=asset_id,
+            asset_type=asset_type,
+            source_tool=source_tool,
+            source_tool_response_id=response_id,
+            modality="structured",
+            frame=frame,
+            payload={
+                "coordinate_convention": "x_right_y_front_theta_yaw",
+                "waypoint_ego": waypoint,
+                "maneuver": args.get("maneuver") or args.get("next_maneuver") or "continue",
+            },
+        )
+    if asset_type in {"route_bev_view", "waypoint_image", "entrance_image"}:
+        return ContextAsset(
+            asset_id=asset_id,
+            asset_type=asset_type,
+            source_tool=source_tool,
+            source_tool_response_id=response_id,
+            modality="image",
+            frame=frame,
+            payload={
+                "image_ref": args.get("image_ref"),
+                "render_status": "not_implemented" if not args.get("image_ref") else "provided_by_executor_args",
+            },
+        )
+    return None
+
+
+def _route_instruction_text(*, maneuver: str, distance: Any) -> str:
+    """Return a compact route instruction string for context assets."""
+
+    if distance is not None:
+        return f"Continue for about {distance} meters, then {maneuver}."
+    return f"Continue and prepare to {maneuver}."

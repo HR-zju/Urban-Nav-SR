@@ -21,7 +21,7 @@ from mcp_server.agent.schemas import (
 )
 from mcp_server.agent.stage2 import NAVIGATION_READOUT_TOKENS
 from mcp_server.agent.tool_parser import parse_finish_text
-from mcp_server.agent.tool_schema import validate_tool_call
+from mcp_server.agent.tool_schema import USER_INTERACTION_TOOL_NAME, validate_tool_call
 from mcp_server.eval.metrics import compute_trace_metrics
 
 
@@ -34,6 +34,26 @@ STAGE2_ROW_ROLE_SEQUENCE = STAGE2_TOOL_ROW_ROLE_SEQUENCE
 FINAL_COT_REQUIRED_BASE_TAGS = ("<Scene>", "<FPVScene>", "<BEVContext>", "<CrossView>", "<Plan>", "<finish>")
 FINAL_COT_REQUIRED_TOOL_TAGS = FINAL_COT_REQUIRED_BASE_TAGS + ("<ToolResultUse>",)
 FINAL_COT_REQUIRED_TAGS = FINAL_COT_REQUIRED_TOOL_TAGS
+USER_WAIT_MOTION_POLICIES = {
+    "stop",
+    "slow_down",
+    "continue_previous_safe_policy",
+    "handover_to_safety_controller",
+}
+FORBIDDEN_CONTEXT_ASSET_KEYS = {
+    "action_ego_t",
+    "action_mask",
+    "action_stats",
+    "future_gps",
+    "future_pose",
+    "future_trajectory",
+    "ground_truth",
+    "pixel_trajectory",
+    "semantic_segmentation_path",
+    "teacher_answer",
+    "trajectory_ego_t",
+    "trajectory_fpv_t",
+}
 
 
 @dataclass(frozen=True)
@@ -128,6 +148,7 @@ def validate_stage2_trace(trace: AgentTrace, case: AgentStage2Case | None = None
                 errors.append("tool_response_tool_mismatch")
             if "success" not in response_payload:
                 errors.append("tool_response_missing_success")
+            _validate_tool_response_contract(response_payload, errors=errors, warnings=warnings)
 
     readout_index = 4 if has_tool_roles else 2
     final_index = 5 if has_tool_roles else 3
@@ -237,6 +258,8 @@ def validate_ms_swift_stage2_row(row: dict[str, Any]) -> Stage2ValidationResult:
                 is_valid, validation_errors = validate_tool_call(call)
                 if not is_valid:
                     errors.extend(f"tool_call_schema:{item}" for item in validation_errors)
+            if role == "tool_response" and payload is not None:
+                _validate_tool_response_contract(payload, errors=errors, warnings=warnings)
         if role == "tool" or (isinstance(content, str) and "<tool_response>" in content):
             errors.append("legacy_tool_response_format")
         if role == "assistant" and index != (6 if has_tool_roles else 4) and isinstance(content, str) and "<ToolResultUse>" in content:
@@ -284,3 +307,158 @@ def _json_dict(content: Any) -> tuple[dict[str, Any] | None, list[str]]:
 
 def _contains_all_readout_tokens(text: str) -> bool:
     return all(token in text for token in NAVIGATION_READOUT_TOKENS)
+
+
+def _validate_tool_response_contract(
+    payload: dict[str, Any],
+    *,
+    errors: list[str],
+    warnings: list[str],
+) -> None:
+    """Validate optional contract fields in one tool response.
+
+    Args:
+        payload: Parsed ``tool_response`` content.
+        errors: Mutable hard-error list.
+        warnings: Mutable warning list.
+
+    Returns:
+        None.  This function keeps Stage2 role compatibility and only checks
+        optional user-interaction/context-asset contracts when present.
+    """
+
+    result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+    if payload.get("tool") == USER_INTERACTION_TOOL_NAME:
+        # user_interaction_tool 是“向用户发起动作”的工具，不是普通文本回答；
+        # 需要显式记录是否等待用户以及等待期间的运动策略。
+        if "await_user" not in result:
+            warnings.append("user_interaction_missing_await_user")
+        requires_user = bool(result.get("requires_user_response", result.get("await_user") is True))
+        if requires_user and result.get("await_user") is not True:
+            errors.append("user_interaction_requires_user_but_not_awaiting")
+        if requires_user and result.get("interaction_mode") != "blocking":
+            errors.append("user_interaction_requires_user_must_be_blocking")
+        if requires_user and result.get("motion_policy_while_waiting") not in USER_WAIT_MOTION_POLICIES:
+            errors.append("user_interaction_bad_motion_policy")
+        if result.get("await_user") is True:
+            if not result.get("dialogue_state"):
+                warnings.append("user_interaction_missing_dialogue_state")
+            pending = result.get("dialogue_state", {}).get("pending_user_interaction")
+            if not isinstance(pending, dict):
+                warnings.append("user_interaction_missing_pending_state")
+        op = str(result.get("op") or "")
+        if op == "present_options":
+            _validate_user_options(result, errors=errors, warnings=warnings)
+        if op == "answer_query" and not result.get("evidence_refs"):
+            warnings.append("user_interaction_answer_query_missing_evidence_refs")
+    context_assets = result.get("context_assets")
+    if context_assets is not None:
+        _validate_context_assets(context_assets, errors=errors, warnings=warnings)
+
+
+def _validate_user_options(
+    result: dict[str, Any],
+    *,
+    errors: list[str],
+    warnings: list[str],
+) -> None:
+    """Validate ``present_options`` response payload.
+
+    Args:
+        result: Parsed user-interaction result.
+        errors: Mutable hard-error list.
+        warnings: Mutable warning list.
+
+    Returns:
+        None.
+    """
+
+    options = result.get("options")
+    if not isinstance(options, list) or not options:
+        errors.append("user_interaction_present_options_missing_options")
+        return
+    option_ids: set[str] = set()
+    evidence_refs = {str(item) for item in result.get("evidence_refs") or []}
+    for index, option in enumerate(options):
+        if not isinstance(option, dict):
+            errors.append(f"user_interaction_option_not_object:{index}")
+            continue
+        option_id = option.get("option_id") or option.get("id")
+        if option_id is None:
+            errors.append(f"user_interaction_option_missing_id:{index}")
+        else:
+            option_ids.add(str(option_id))
+        candidate_id = option.get("candidate_id")
+        if candidate_id is not None and not (str(candidate_id) in evidence_refs or option.get("evidence_ref")):
+            warnings.append(f"user_interaction_option_candidate_without_evidence_ref:{candidate_id}")
+    recommended = result.get("recommended_option_id")
+    if recommended is None:
+        warnings.append("user_interaction_present_options_missing_recommended_option")
+    elif str(recommended) not in option_ids:
+        errors.append("user_interaction_recommended_option_not_in_options")
+
+
+def _validate_context_assets(
+    context_assets: Any,
+    *,
+    errors: list[str],
+    warnings: list[str],
+) -> None:
+    """Validate route/image context assets returned by tools.
+
+    Args:
+        context_assets: Candidate context asset list.
+        errors: Mutable hard-error list.
+        warnings: Mutable warning list.
+
+    Returns:
+        None.
+    """
+
+    if not isinstance(context_assets, list):
+        errors.append("context_assets_not_list")
+        return
+    seen: set[str] = set()
+    for index, asset in enumerate(context_assets):
+        if not isinstance(asset, dict):
+            errors.append(f"context_asset_not_object:{index}")
+            continue
+        asset_id = str(asset.get("asset_id") or "")
+        if not asset_id:
+            errors.append(f"context_asset_missing_id:{index}")
+        elif asset_id in seen:
+            errors.append(f"context_asset_duplicate_id:{asset_id}")
+        seen.add(asset_id)
+        modality = asset.get("modality")
+        if modality not in {"text", "structured", "image"}:
+            errors.append(f"context_asset_bad_modality:{asset_id or index}")
+        if _contains_forbidden_context_asset_key(asset):
+            # context_assets 是环境观测，不允许混入 GT / future supervision。
+            errors.append(f"context_asset_contains_supervision:{asset_id or index}")
+        if asset.get("asset_type") == "next_waypoint" and not asset.get("frame"):
+            warnings.append(f"context_asset_next_waypoint_missing_frame:{asset_id or index}")
+        if asset.get("modality") == "image":
+            payload = asset.get("payload") if isinstance(asset.get("payload"), dict) else {}
+            if not payload.get("image_ref") and payload.get("render_status") != "not_implemented":
+                errors.append(f"context_asset_image_without_ref:{asset_id or index}")
+
+
+def _contains_forbidden_context_asset_key(payload: Any) -> bool:
+    """Return True when a context asset exposes training-only supervision.
+
+    Args:
+        payload: Arbitrary nested context asset payload.
+
+    Returns:
+        ``True`` if a key looks like ground-truth / future supervision.
+    """
+
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if str(key).lower() in FORBIDDEN_CONTEXT_ASSET_KEYS:
+                return True
+            if _contains_forbidden_context_asset_key(value):
+                return True
+    elif isinstance(payload, list):
+        return any(_contains_forbidden_context_asset_key(item) for item in payload)
+    return False
