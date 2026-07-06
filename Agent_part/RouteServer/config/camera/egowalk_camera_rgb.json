@@ -1,0 +1,24 @@
+{
+  "dataset": "EgoWalk",
+  "camera": "rgb",
+  "image_width": 960,
+  "image_height": 600,
+  "intrinsics": {
+    "fx": 367.544,
+    "fy": 367.5575,
+    "cx": 483.335,
+    "cy": 298.59
+  },
+  "distortion_model": "opencv_rational_polynomial",
+  "distortion": {
+    "k1": 4.19757,
+    "k2": 2.88146,
+    "p1": -0.000224475,
+    "p2": 0.000175638,
+    "k3": 0.808998,
+    "k4": 4.20432,
+    "k5": 2.9008,
+    "k6": 1.1033
+  },
+  "source": "/media/ubuntu/data2/EgoWalk/meta/camera_rgb.json"
+}

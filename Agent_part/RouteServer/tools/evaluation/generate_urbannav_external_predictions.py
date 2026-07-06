@@ -28,7 +28,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from mcp_server.core.live_map_backend import LiveMapBackend  # noqa: E402
-from mcp_server.core.replay_map_backend import ReplayMapBackend  # noqa: E402
+from mcp_server.core.replay_map_backend import ReplayMapBackend, ReplayMapBackendClient  # noqa: E402
 from mcp_server.eval.urbannav_io import load_urbannav_cases, write_urbannav_predictions  # noqa: E402
 from mcp_server.eval.urbannav_runners import (  # noqa: E402
     ReplayUrbanNavBackendAdapter,
@@ -58,6 +58,20 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--poi-cache", type=Path, default=None, help="POI replay cache for --backend replay.")
     parser.add_argument("--route-cache", type=Path, default=None, help="Route replay cache for --backend replay.")
+    parser.add_argument(
+        "--replay-cache-url",
+        default=None,
+        help=(
+            "Optional shared replay cache service URL. When set, replay workers "
+            "query this service instead of loading poi_cache/route_cache locally."
+        ),
+    )
+    parser.add_argument(
+        "--replay-cache-timeout-s",
+        type=float,
+        default=30.0,
+        help="Timeout for shared replay cache service lookups.",
+    )
     parser.add_argument("--map-provider", default=None, help="Map provider override for --backend live.")
     parser.add_argument("--max-cases", type=int, default=None, help="Optional smoke-test case cap.")
     parser.add_argument("--concurrency", type=int, default=4, help="Maximum concurrent prediction workers.")
@@ -503,6 +517,13 @@ def _build_backend(args: argparse.Namespace) -> Any:
     """
 
     if args.backend == "replay":
+        if args.replay_cache_url:
+            return ReplayUrbanNavBackendAdapter(
+                ReplayMapBackendClient(
+                    base_url=str(args.replay_cache_url),
+                    timeout_s=float(args.replay_cache_timeout_s or 30.0),
+                )
+            )
         if not args.poi_cache or not args.route_cache:
             raise ValueError("--poi-cache and --route-cache are required for --backend replay")
         return ReplayUrbanNavBackendAdapter(

@@ -25,6 +25,8 @@ TRAJECTORY_TOLERANCE="${TRAJECTORY_TOLERANCE:-0.025}"
 THETA_TOLERANCE_DEG="${THETA_TOLERANCE_DEG:-2.0}"
 IMAGE_DETAIL="${IMAGE_DETAIL:-auto}"
 FALLBACK_POLICY="${FALLBACK_POLICY:-drop}"
+CONCURRENCY="${CONCURRENCY:-1}"
+API_KEY_FILE="${API_KEY_FILE:-${KEY_FILE:-}}"
 ARCHIVE_AFTER_COT="${ARCHIVE_AFTER_COT:-1}"
 ARCHIVE_ROOT="${ARCHIVE_ROOT:-${OUTPUT_ROOT}_archive}"
 ARCHIVE_SPLIT_NAME="${ARCHIVE_SPLIT_NAME:-${SPLIT_NAME}}"
@@ -45,7 +47,12 @@ cmd=(
   --theta-tolerance-deg "${THETA_TOLERANCE_DEG}"
   --image-detail "${IMAGE_DETAIL}"
   --fallback-policy "${FALLBACK_POLICY}"
+  --concurrency "${CONCURRENCY}"
 )
+
+if [[ -n "${API_KEY_FILE}" ]]; then
+  cmd+=(--api-key-file "${API_KEY_FILE}")
+fi
 
 if [[ -n "${LIMIT}" ]]; then
   cmd+=(--limit "${LIMIT}")

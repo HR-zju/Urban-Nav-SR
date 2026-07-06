@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 from pathlib import Path
 from typing import Any
+from urllib import error as urlerror
+from urllib import parse as urlparse
+from urllib import request as urlrequest
 
 from mcp_server.eval.urbannav_io import iter_json_records
 from mcp_server.eval.urbannav_schema import UrbanNavDestination, UrbanNavPoint, parse_route
@@ -201,6 +205,92 @@ class ReplayMapBackend:
         """
 
         return self.route_by_key[cache_key]
+
+
+class ReplayMapBackendClient:
+    r"""HTTP client for a shared replay cache service.
+
+    Args:
+        base_url: Base URL of ``serve_urbannav_replay_cache.py``.
+        timeout_s: HTTP request timeout.
+
+    This client exposes the same lookup methods as :class:`ReplayMapBackend`
+    while avoiding per-worker loading of large replay cache JSONL files.
+    """
+
+    def __init__(self, *, base_url: str, timeout_s: float = 30.0) -> None:
+        """Initialize a replay cache service client.
+
+        Args:
+            base_url: Cache service base URL.
+            timeout_s: HTTP request timeout.
+
+        Returns:
+            None.
+        """
+
+        self.base_url = str(base_url or "").rstrip("/")
+        if not self.base_url:
+            raise ValueError("ReplayMapBackendClient requires a non-empty base_url")
+        self.timeout_s = max(1.0, float(timeout_s or 30.0))
+        self._opener = urlrequest.build_opener(urlrequest.ProxyHandler({}))
+
+    def search_destinations(self, *, cache_key: str) -> ReplayPoiResult:
+        """Return frozen POI search results by key.
+
+        Args:
+            cache_key: Key from ``case.cache_keys["poi_search"]``.
+
+        Returns:
+            Frozen ``ReplayPoiResult``.
+        """
+
+        return ReplayPoiResult.from_dict(self._get_json("/poi", cache_key=cache_key))
+
+    def plan_route(self, *, cache_key: str) -> ReplayRouteResult:
+        """Return frozen route result by key.
+
+        Args:
+            cache_key: Key from ``case.cache_keys["routes"]``.
+
+        Returns:
+            Frozen ``ReplayRouteResult``.
+        """
+
+        return ReplayRouteResult.from_dict(self._get_json("/route", cache_key=cache_key))
+
+    def _get_json(self, path: str, *, cache_key: str) -> dict[str, Any]:
+        """Fetch one cache record from the replay cache service.
+
+        Args:
+            path: Service path, for example ``/poi`` or ``/route``.
+            cache_key: Replay cache key.
+
+        Returns:
+            JSON dictionary payload.
+
+        Raises:
+            KeyError: If the service reports a missing key.
+            RuntimeError: If the service call fails.
+        """
+
+        query = urlparse.urlencode({"cache_key": str(cache_key or "")})
+        url = f"{self.base_url}{path}?{query}"
+        request = urlrequest.Request(url, method="GET")
+        try:
+            with self._opener.open(request, timeout=self.timeout_s) as response:
+                raw = response.read().decode("utf-8", errors="replace")
+        except urlerror.HTTPError as exc:
+            detail = exc.read(512).decode("utf-8", errors="replace")
+            if exc.code == 404:
+                raise KeyError(cache_key) from exc
+            raise RuntimeError(f"replay_cache_service_http_{exc.code}:{detail}") from exc
+        except Exception as exc:
+            raise RuntimeError(f"replay_cache_service_error:{type(exc).__name__}:{exc}") from exc
+        payload = json.loads(raw)
+        if not isinstance(payload, dict):
+            raise RuntimeError("replay_cache_service_error:non_object_payload")
+        return payload
 
 
 def load_poi_cache(path: str | Path | None) -> dict[str, ReplayPoiResult]:

@@ -106,7 +106,7 @@ def render_html(samples: list[dict[str, Any]], source_jsonl: Path) -> str:
 <html>
 <head>
   <meta charset="utf-8">
-  <title>FrodoBots Phase1 Review</title>
+  <title>SideWalk Phase1 Source Review</title>
   <style>
     * {{ box-sizing: border-box; }}
     body {{ margin: 0; font-family: system-ui, -apple-system, Segoe UI, sans-serif; background: #f6f7f9; color: #17202a; }}
@@ -143,7 +143,7 @@ def render_html(samples: list[dict[str, Any]], source_jsonl: Path) -> str:
 <body>
   <header>
     <div class="bar">
-      <strong>FrodoBots Phase1 Review</strong>
+      <strong>SideWalk Phase1 Source Review</strong>
       <button id="prevBtn">Prev</button>
       <button id="nextBtn">Next</button>
       <label>Intent <select id="intentFilter"><option value="">all</option></select></label>

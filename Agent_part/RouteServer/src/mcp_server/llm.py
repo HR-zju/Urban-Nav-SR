@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, replace
 from typing import Any
 import ast
@@ -877,18 +878,23 @@ class IntentParser(BaseLLMService):
 
     async def _call_llm_with_fallback(self, client: Any, user_instruction: str) -> tuple[str, str]:
         errors: list[str] = []
-        for style in self._api_style_sequence():
-            try:
-                if style == "responses":
-                    content = await self._call_responses_api(client, user_instruction)
-                else:
-                    content = await self._call_chat_completions(client, user_instruction)
+        retry_count = max(1, int(os.getenv("LLM_INTENT_CALL_ATTEMPTS", "2") or 2))
+        retry_sleep_s = max(0.0, float(os.getenv("LLM_INTENT_RETRY_SLEEP_S", "1.0") or 1.0))
+        for attempt in range(retry_count):
+            for style in self._api_style_sequence():
+                try:
+                    if style == "responses":
+                        content = await self._call_responses_api(client, user_instruction)
+                    else:
+                        content = await self._call_chat_completions(client, user_instruction)
 
-                if str(content or "").strip():
-                    return content, style
-                errors.append(f"{style}: empty_content")
-            except Exception as exc:
-                errors.append(f"{style}: {exc}")
+                    if str(content or "").strip():
+                        return content, style
+                    errors.append(f"{style}: empty_content")
+                except Exception as exc:
+                    errors.append(f"{style}: {exc}")
+            if attempt + 1 < retry_count and retry_sleep_s:
+                await asyncio.sleep(retry_sleep_s * (attempt + 1))
 
         raise RuntimeError(" | ".join(errors) if errors else "unknown_llm_call_error")
 
@@ -1600,18 +1606,23 @@ class GoalDecomposer(BaseLLMService):
 
     async def _call_llm_with_fallback(self, client: Any, user_instruction: str) -> tuple[str, str]:
         errors: list[str] = []
-        for style in self._api_style_sequence():
-            try:
-                content = (
-                    await self._call_responses_api(client, user_instruction)
-                    if style == "responses"
-                    else await self._call_chat_completions(client, user_instruction)
-                )
-                if str(content or "").strip():
-                    return content, style
-                errors.append(f"{style}: empty_content")
-            except Exception as exc:
-                errors.append(f"{style}: {exc}")
+        retry_count = max(1, int(os.getenv("LLM_ITINERARY_CALL_ATTEMPTS", "2") or 2))
+        retry_sleep_s = max(0.0, float(os.getenv("LLM_ITINERARY_RETRY_SLEEP_S", "1.0") or 1.0))
+        for attempt in range(retry_count):
+            for style in self._api_style_sequence():
+                try:
+                    content = (
+                        await self._call_responses_api(client, user_instruction)
+                        if style == "responses"
+                        else await self._call_chat_completions(client, user_instruction)
+                    )
+                    if str(content or "").strip():
+                        return content, style
+                    errors.append(f"{style}: empty_content")
+                except Exception as exc:
+                    errors.append(f"{style}: {exc}")
+            if attempt + 1 < retry_count and retry_sleep_s:
+                await asyncio.sleep(retry_sleep_s * (attempt + 1))
         raise RuntimeError(" | ".join(errors) if errors else "unknown_llm_call_error")
 
     def _normalize_output(self, user_instruction: str, parsed: dict[str, Any]) -> dict[str, Any]:
@@ -2086,27 +2097,32 @@ class CandidateReranker(BaseLLMService):
         candidates: list[dict[str, Any]],
     ) -> tuple[str, str]:
         errors: list[str] = []
-        for style in self._api_style_sequence():
-            try:
-                if style == "responses":
-                    content = await self._call_responses_api(
-                        client,
-                        user_instruction=user_instruction,
-                        parsed_intent=parsed_intent,
-                        candidates=candidates,
-                    )
-                else:
-                    content = await self._call_chat_completions(
-                        client,
-                        user_instruction=user_instruction,
-                        parsed_intent=parsed_intent,
-                        candidates=candidates,
-                    )
-                if str(content or "").strip():
-                    return content, style
-                errors.append(f"{style}: empty_content")
-            except Exception as exc:
-                errors.append(f"{style}: {exc}")
+        retry_count = max(1, int(os.getenv("LLM_RERANK_CALL_ATTEMPTS", "2") or 2))
+        retry_sleep_s = max(0.0, float(os.getenv("LLM_RERANK_RETRY_SLEEP_S", "1.0") or 1.0))
+        for attempt in range(retry_count):
+            for style in self._api_style_sequence():
+                try:
+                    if style == "responses":
+                        content = await self._call_responses_api(
+                            client,
+                            user_instruction=user_instruction,
+                            parsed_intent=parsed_intent,
+                            candidates=candidates,
+                        )
+                    else:
+                        content = await self._call_chat_completions(
+                            client,
+                            user_instruction=user_instruction,
+                            parsed_intent=parsed_intent,
+                            candidates=candidates,
+                        )
+                    if str(content or "").strip():
+                        return content, style
+                    errors.append(f"{style}: empty_content")
+                except Exception as exc:
+                    errors.append(f"{style}: {exc}")
+            if attempt + 1 < retry_count and retry_sleep_s:
+                await asyncio.sleep(retry_sleep_s * (attempt + 1))
 
         raise RuntimeError(" | ".join(errors) if errors else "unknown_llm_call_error")
 

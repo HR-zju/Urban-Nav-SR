@@ -184,7 +184,7 @@ class SidewalkPhase1CotTeacherTest(unittest.TestCase):
             report = root / "phase1_cot_report_train.json"
             source.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
 
-            async def fake_call(row_arg, evidence_arg, config_arg, *, previous_answer=None, errors=None):
+            async def fake_call(row_arg, evidence_arg, config_arg, *, previous_answer=None, errors=None, api_key=None):
                 if previous_answer is None:
                     return "invalid teacher answer", {"model": "fake-vlm"}
                 return render_template_answer(row_arg, evidence_arg), {"model": "fake-vlm"}
@@ -210,6 +210,52 @@ class SidewalkPhase1CotTeacherTest(unittest.TestCase):
             self.assertEqual(rows[0]["cot_teacher"]["teacher_model"], "fake-vlm")
             saved_report = json.loads(report.read_text(encoding="utf-8"))
             self.assertEqual(saved_report["written_rows"], 1)
+
+    def test_generate_cot_dataset_parallel_workers_write_valid_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            row_a = _make_source_row(root)
+            row_b = json.loads(json.dumps(row_a))
+            row_b["id"] = "clip_a_000002"
+            row_b["frame_idx"] = 2
+            source = root / "phase1_source_train.jsonl"
+            output = root / "phase1_cot_train.jsonl"
+            report = root / "phase1_cot_report_train.json"
+            source.write_text(
+                "\n".join(json.dumps(row, ensure_ascii=False) for row in (row_a, row_b)) + "\n",
+                encoding="utf-8",
+            )
+            seen_keys: list[str | None] = []
+
+            async def fake_call(row_arg, evidence_arg, config_arg, *, previous_answer=None, errors=None, api_key=None):
+                seen_keys.append(api_key)
+                await asyncio.sleep(0.01)
+                return render_template_answer(row_arg, evidence_arg), {"model": "fake-vlm"}
+
+            original = _MODULE.call_llm_teacher
+            _MODULE.call_llm_teacher = fake_call
+            try:
+                summary = asyncio.run(
+                    generate_cot_dataset(
+                        str(source),
+                        str(output),
+                        report_json=str(report),
+                        config=TeacherConfig(expected_points=4, max_retries=0, fallback_policy="error"),
+                        concurrency=2,
+                        api_keys=("key-a", "key-b"),
+                    )
+                )
+            finally:
+                _MODULE.call_llm_teacher = original
+
+            self.assertEqual(summary["written_rows"], 2)
+            self.assertEqual(summary["concurrency"], 2)
+            self.assertEqual(summary["api_key_count"], 2)
+            self.assertTrue((Path(str(output) + ".state.jsonl")).is_file())
+            rows = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual({row["id"] for row in rows}, {"clip_a_000001", "clip_a_000002"})
+            self.assertIn("key-a", seen_keys)
+            self.assertIn("key-b", seen_keys)
 
 
 if __name__ == "__main__":

@@ -28,6 +28,8 @@ KEY_FILE="${KEY_FILE:-${ROUTE_ROOT}/data/benchmark/urbannav_module1_runs/local_p
 DATASET="${DATASET:-${ROUTE_ROOT}/data/benchmark/urbannav_v2_osm_local_osrm_foot_final_15k/task_gt.jsonl}"
 POI_CACHE="${POI_CACHE:-${ROUTE_ROOT}/data/benchmark/urbannav_v2_osm_local_osrm_foot_final_15k/poi_cache.jsonl}"
 ROUTE_CACHE="${ROUTE_CACHE:-${ROUTE_ROOT}/data/benchmark/urbannav_v2_osm_local_osrm_foot_final_15k/route_cache.jsonl}"
+REPLAY_CACHE_URL="${REPLAY_CACHE_URL:-}"
+REPLAY_CACHE_TIMEOUT_S="${REPLAY_CACHE_TIMEOUT_S:-30}"
 
 MAX_CASES="${MAX_CASES:-200}"
 SHARDS="${SHARDS:-4}"
@@ -63,6 +65,7 @@ _print_config() {
   print "shards=${SHARDS}"
   print "concurrency_per_shard=${CONCURRENCY}"
   print "llm_base_url=${LLM_BASE_URL}"
+  print "replay_cache_url=${REPLAY_CACHE_URL:-local-files}"
   print "api_style=/chat/completions"
   print "LLM_API_STYLE_FALLBACK=0"
   print "skip_llm_preflight=${SKIP_LLM_PREFLIGHT}"
@@ -209,11 +212,16 @@ fi
 if [[ -n "${STOP_AFTER_PENDING}" ]]; then
   extra_prediction_args+=(--stop-after-pending "${STOP_AFTER_PENDING}")
 fi
+if [[ -n "${REPLAY_CACHE_URL}" ]]; then
+  extra_prediction_args+=(--replay-cache-url "${REPLAY_CACHE_URL}")
+  extra_prediction_args+=(--replay-cache-timeout-s "${REPLAY_CACHE_TIMEOUT_S}")
+fi
 
 {
   print "[proxy-shard] model=${MODEL} shard=${shard_id} started at \$(date '+%Y-%m-%d %H:%M:%S')"
   print "[proxy-shard] shard_case=${shard_case}"
   print "[proxy-shard] concurrency=${CONCURRENCY}"
+  print "[proxy-shard] replay_cache_url=${REPLAY_CACHE_URL:-local-files}"
 } 2>&1 | tee -a "${pred_log}" | tee -a "${GROUP_LOG}"
 
 LLM_RESPONSE_FORMAT_JSON="${LLM_RESPONSE_FORMAT_JSON}" LLM_API_STYLE_FALLBACK=0 PYTHONUNBUFFERED=1 PYTHONPATH=src "${PYTHON_BIN}" \\

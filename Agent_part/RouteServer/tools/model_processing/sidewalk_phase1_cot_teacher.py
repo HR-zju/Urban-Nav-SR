@@ -29,7 +29,7 @@ import math
 import re
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -113,6 +113,81 @@ def count_jsonl_rows(path: Path) -> int:
         return 0
     with path.open("r", encoding="utf-8") as f:
         return sum(1 for line in f if line.strip())
+
+
+def read_api_keys(path: str | Path | None) -> tuple[str, ...]:
+    if not path:
+        return ()
+    keys: list[str] = []
+    with Path(path).expanduser().open("r", encoding="utf-8") as f:
+        for line in f:
+            value = line.strip()
+            if not value or value.startswith("#"):
+                continue
+            keys.append(value)
+    return tuple(keys)
+
+
+def row_resume_key(index: int, row: dict[str, Any]) -> str:
+    row_id = str(row.get("id") or "").strip()
+    return row_id or f"__index_{index}"
+
+
+def read_existing_output_keys(path: Path) -> set[str]:
+    if not path.is_file():
+        return set()
+    keys: set[str] = set()
+    with path.open("r", encoding="utf-8") as f:
+        for index, line in enumerate(f):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(row, dict):
+                keys.add(row_resume_key(index, row))
+    return keys
+
+
+def state_jsonl_path(output_path: Path) -> Path:
+    return Path(str(output_path) + ".state.jsonl")
+
+
+def read_state_keys(path: Path) -> set[str]:
+    if not path.is_file():
+        return set()
+    keys: set[str] = set()
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(record, dict):
+                continue
+            key = str(record.get("row_key") or record.get("id") or "").strip()
+            if key:
+                keys.add(key)
+    return keys
+
+
+def write_state_record(f: Any, result: dict[str, Any]) -> None:
+    record = {
+        "index": result.get("index"),
+        "id": result.get("id"),
+        "row_key": result.get("row_key"),
+        "status": result.get("status"),
+        "errors": result.get("errors") or [],
+        "worker_id": result.get("worker_id"),
+        "api_key_index": result.get("api_key_index"),
+        "updated_at": time.time(),
+    }
+    f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
 def optional_int(value: Any) -> int | None:
@@ -680,9 +755,20 @@ def build_cot_manifest_row(
     return out
 
 
-async def call_llm_teacher(row: dict[str, Any], evidence: dict[str, Any], config: TeacherConfig, *, previous_answer: str | None = None, errors: list[str] | None = None) -> tuple[str, dict[str, Any]]:
-    VisionAnalyzer, local_image_path_to_data_url = load_agent_llm_helpers()
-    analyzer = VisionAnalyzer()
+async def call_llm_teacher(
+    row: dict[str, Any],
+    evidence: dict[str, Any],
+    config: TeacherConfig,
+    *,
+    previous_answer: str | None = None,
+    errors: list[str] | None = None,
+    api_key: str | None = None,
+) -> tuple[str, dict[str, Any]]:
+    VisionAnalyzer, local_image_path_to_data_url, LLMSettings = load_agent_llm_helpers()
+    settings = None
+    if api_key:
+        settings = replace(LLMSettings.from_env(), api_key=str(api_key).strip())
+    analyzer = VisionAnalyzer(settings=settings) if settings is not None else VisionAnalyzer()
     if not analyzer.is_available():
         raise RuntimeError("LLM/VLM teacher is not configured. Set ARK_API_KEY or LLM_API_KEY.")
 
@@ -704,9 +790,103 @@ def load_agent_llm_helpers():
     src = REPO_ROOT / "src"
     if str(src) not in sys.path:
         sys.path.insert(0, str(src))
-    from mcp_server.llm import VisionAnalyzer, local_image_path_to_data_url
+    from mcp_server.llm import LLMSettings, VisionAnalyzer, local_image_path_to_data_url
 
-    return VisionAnalyzer, local_image_path_to_data_url
+    return VisionAnalyzer, local_image_path_to_data_url, LLMSettings
+
+
+async def process_cot_row(
+    index: int,
+    row: dict[str, Any],
+    cfg: TeacherConfig,
+    *,
+    api_key: str | None = None,
+    api_key_index: int | None = None,
+    worker_id: int | None = None,
+) -> dict[str, Any]:
+    row_key = row_resume_key(index, row)
+    result: dict[str, Any] = {
+        "index": index,
+        "id": row.get("id"),
+        "row_key": row_key,
+        "status": "not_started",
+        "out_row": None,
+        "errors": [],
+        "telemetries": [],
+        "worker_id": worker_id,
+        "api_key_index": api_key_index,
+    }
+    evidence = load_evidence(row)
+    answer = ""
+    validation = ValidationResult(False, ["not_started"], {})
+    telemetry: dict[str, Any] | None = None
+
+    for attempt in range(int(cfg.max_retries) + 1):
+        try:
+            answer, telemetry = await call_llm_teacher(
+                row,
+                evidence,
+                cfg,
+                previous_answer=answer if attempt else None,
+                errors=validation.errors if attempt else None,
+                api_key=api_key,
+            )
+            if telemetry:
+                result["telemetries"].append(telemetry)
+        except RuntimeError as exc:
+            if "not configured" in str(exc).lower():
+                if cfg.fallback_policy != "template":
+                    raise
+                validation = ValidationResult(False, [f"teacher_not_configured:{str(exc)[:200]}"], {})
+                break
+            validation = ValidationResult(False, [f"teacher_call_failed:{type(exc).__name__}:{str(exc)[:200]}"], {})
+            continue
+        except Exception as exc:
+            validation = ValidationResult(False, [f"teacher_call_failed:{type(exc).__name__}:{str(exc)[:200]}"], {})
+            continue
+        validation = validate_teacher_answer(answer, row, evidence, cfg)
+        if validation.valid:
+            break
+
+    teacher_model = None
+    teacher_usage = telemetry_usage(telemetry)
+    if isinstance(telemetry, dict):
+        llm_telemetry = telemetry_llm_metadata(telemetry)
+        teacher_model = str(llm_telemetry.get("model") or telemetry.get("model") or "") or None
+
+    if validation.valid:
+        result["status"] = "written"
+        result["out_row"] = build_cot_manifest_row(
+            row,
+            answer=answer,
+            validation=validation,
+            teacher_source="llm_teacher",
+            teacher_model=teacher_model,
+            teacher_usage=teacher_usage,
+        )
+        return result
+
+    result["errors"] = validation.errors
+    if cfg.fallback_policy == "template":
+        template_answer = render_template_answer(row, evidence)
+        template_validation = validate_teacher_answer(template_answer, row, evidence, cfg)
+        if not template_validation.valid:
+            raise RuntimeError(f"Template fallback failed for {row.get('id')}: {template_validation.errors}")
+        result["status"] = "fallback"
+        result["out_row"] = build_cot_manifest_row(
+            row,
+            answer=template_answer,
+            validation=template_validation,
+            teacher_source="template_after_llm_failure",
+            teacher_model=teacher_model,
+            teacher_usage=teacher_usage,
+        )
+        return result
+    if cfg.fallback_policy == "error":
+        raise RuntimeError(f"Teacher validation failed for row {index} ({row.get('id')}): {validation.errors}")
+
+    result["status"] = "dropped"
+    return result
 
 
 async def generate_cot_dataset(
@@ -717,6 +897,8 @@ async def generate_cot_dataset(
     limit: int | None = None,
     config: TeacherConfig | None = None,
     progress_interval: int = 25,
+    concurrency: int = 1,
+    api_keys: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     cfg = config or TeacherConfig()
     rows = list(read_jsonl(Path(source_jsonl)))
@@ -724,20 +906,39 @@ async def generate_cot_dataset(
         rows = rows[: int(limit)]
 
     output_path = Path(output_jsonl)
-    existing_rows = count_jsonl_rows(output_path)
-    if existing_rows > len(rows):
+    existing_output_keys = read_existing_output_keys(output_path)
+    state_path = state_jsonl_path(output_path)
+    existing_state_keys = read_state_keys(state_path)
+    processed_keys = set(existing_output_keys) | set(existing_state_keys)
+    existing_rows = len(processed_keys)
+    if len(existing_output_keys) > len(rows):
         raise RuntimeError(f"Existing output has more rows than source: {output_jsonl}")
+
+    loaded_api_keys = tuple(str(key).strip() for key in list(api_keys or []) if str(key).strip())
+    worker_count = max(1, int(concurrency))
+    if loaded_api_keys:
+        worker_count = min(worker_count, len(loaded_api_keys))
+
+    pending: list[tuple[int, dict[str, Any]]] = [
+        (index, row)
+        for index, row in enumerate(rows)
+        if row_resume_key(index, row) not in processed_keys
+    ]
 
     report: dict[str, Any] = {
         "schema_version": f"{COT_SCHEMA_VERSION}_report",
         "source_jsonl": str(source_jsonl),
         "output_jsonl": str(output_jsonl),
+        "state_jsonl": str(state_path),
         "input_rows": len(rows),
-        "written_rows": existing_rows,
+        "written_rows": count_jsonl_rows(output_path),
         "dropped_rows": 0,
         "fallback_rows": 0,
         "processed_rows": existing_rows,
         "resumed_rows": existing_rows,
+        "pending_rows": len(pending),
+        "concurrency": worker_count,
+        "api_key_count": len(loaded_api_keys),
         "status": "running",
         "error_counts": {},
     }
@@ -747,117 +948,99 @@ async def generate_cot_dataset(
     progress_every = max(1, int(progress_interval))
     print(
         f"[cot-teacher] starting source={source_jsonl} rows={len(rows)} "
-        f"resume={existing_rows} output={output_jsonl}",
+        f"resume={existing_rows} pending={len(pending)} concurrency={worker_count} "
+        f"api_keys={len(loaded_api_keys)} output={output_jsonl}",
         flush=True,
     )
 
-    if existing_rows == len(rows):
+    if not pending:
         report["status"] = "done"
         report["eta_seconds"] = 0.0
         write_report(report_json, report)
         return report
 
-    with output_path.open("a" if existing_rows else "w", encoding="utf-8", buffering=1) as out_f:
-        for index, row in enumerate(rows[existing_rows:], start=existing_rows):
-            evidence = load_evidence(row)
-            answer = ""
-            validation = ValidationResult(False, ["not_started"], {})
-            telemetry: dict[str, Any] | None = None
-            for attempt in range(int(cfg.max_retries) + 1):
-                try:
-                    answer, telemetry = await call_llm_teacher(
-                        row,
-                        evidence,
-                        cfg,
-                        previous_answer=answer if attempt else None,
-                        errors=validation.errors if attempt else None,
-                    )
-                    add_usage_to_report(report, telemetry)
-                except RuntimeError as exc:
-                    if "not configured" in str(exc).lower():
-                        if cfg.fallback_policy != "template":
-                            raise
-                        validation = ValidationResult(False, [f"teacher_not_configured:{str(exc)[:200]}"], {})
-                        break
-                    validation = ValidationResult(False, [f"teacher_call_failed:{type(exc).__name__}:{str(exc)[:200]}"], {})
-                    continue
-                except Exception as exc:
-                    validation = ValidationResult(False, [f"teacher_call_failed:{type(exc).__name__}:{str(exc)[:200]}"], {})
-                    continue
-                validation = validate_teacher_answer(answer, row, evidence, cfg)
-                if validation.valid:
-                    break
+    work_q: asyncio.Queue[tuple[int, dict[str, Any]] | None] = asyncio.Queue()
+    result_q: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    for item in pending:
+        work_q.put_nowait(item)
 
-            teacher_model = None
-            teacher_usage = telemetry_usage(telemetry)
-            if isinstance(telemetry, dict):
-                llm_telemetry = telemetry_llm_metadata(telemetry)
-                teacher_model = str(llm_telemetry.get("model") or telemetry.get("model") or "") or None
+    worker_count = min(worker_count, len(pending))
+    for _ in range(worker_count):
+        work_q.put_nowait(None)
 
-            if validation.valid:
-                out_row = build_cot_manifest_row(
+    async def worker(worker_id: int) -> None:
+        api_key = loaded_api_keys[(worker_id - 1) % len(loaded_api_keys)] if loaded_api_keys else None
+        api_key_index = ((worker_id - 1) % len(loaded_api_keys)) + 1 if loaded_api_keys else None
+        while True:
+            item = await work_q.get()
+            try:
+                if item is None:
+                    return
+                index, row = item
+                result = await process_cot_row(
+                    index,
                     row,
-                    answer=answer,
-                    validation=validation,
-                    teacher_source="llm_teacher",
-                    teacher_model=teacher_model,
-                    teacher_usage=teacher_usage,
+                    cfg,
+                    api_key=api_key,
+                    api_key_index=api_key_index,
+                    worker_id=worker_id,
                 )
-                out_f.write(json.dumps(out_row, ensure_ascii=False) + "\n")
-                report["written_rows"] += 1
-                report["processed_rows"] = index + 1
-                if (index + 1) % progress_every == 0 or index + 1 == len(rows):
-                    elapsed = max(time.monotonic() - started_at, 1e-6)
-                    current_run_rows = max(int(report["processed_rows"]) - int(report["resumed_rows"]), 0)
-                    rate = float(current_run_rows) / elapsed
-                    remaining = max(len(rows) - int(report["processed_rows"]), 0)
-                    eta_seconds = remaining / rate if rate > 0 else None
-                    report["rate_rows_per_hour"] = rate * 3600.0
-                    report["eta_seconds"] = eta_seconds
-                    write_report(report_json, report)
-                    eta_text = f"{eta_seconds / 3600.0:.2f}h" if eta_seconds is not None else "unknown"
-                    print(
-                        "[cot-teacher] progress "
-                        f"{report['processed_rows']}/{len(rows)} "
-                        f"written={report['written_rows']} "
-                        f"dropped={report['dropped_rows']} "
-                        f"fallback={report['fallback_rows']} "
-                        f"rate={report['rate_rows_per_hour']:.1f}/h "
-                        f"eta={eta_text}",
-                        flush=True,
-                    )
-                continue
-
-            for error in validation.errors:
-                _inc(report["error_counts"], error.split(":", 1)[0])
-
-            if cfg.fallback_policy == "template":
-                template_answer = render_template_answer(row, evidence)
-                template_validation = validate_teacher_answer(template_answer, row, evidence, cfg)
-                if not template_validation.valid:
-                    raise RuntimeError(f"Template fallback failed for {row.get('id')}: {template_validation.errors}")
-                out_row = build_cot_manifest_row(
-                    row,
-                    answer=template_answer,
-                    validation=template_validation,
-                    teacher_source="template_after_llm_failure",
-                    teacher_model=teacher_model,
-                    teacher_usage=teacher_usage,
+                await result_q.put(result)
+            except Exception as exc:
+                failed_index = item[0] if item is not None else None
+                failed_row = item[1] if item is not None else {}
+                await result_q.put(
+                    {
+                        "index": failed_index,
+                        "id": failed_row.get("id") if isinstance(failed_row, dict) else None,
+                        "row_key": row_resume_key(int(failed_index or 0), failed_row) if isinstance(failed_row, dict) else "",
+                        "status": "error",
+                        "out_row": None,
+                        "errors": [f"worker_exception:{type(exc).__name__}:{str(exc)[:200]}"],
+                        "telemetries": [],
+                        "worker_id": worker_id,
+                        "api_key_index": api_key_index,
+                    }
                 )
-                out_f.write(json.dumps(out_row, ensure_ascii=False) + "\n")
+            finally:
+                work_q.task_done()
+
+    workers = [asyncio.create_task(worker(worker_id)) for worker_id in range(1, worker_count + 1)]
+
+    completed = 0
+    with output_path.open("a", encoding="utf-8", buffering=1) as out_f, state_path.open("a", encoding="utf-8", buffering=1) as state_f:
+        while completed < len(pending):
+            result = await result_q.get()
+            completed += 1
+
+            for telemetry in list(result.get("telemetries") or []):
+                add_usage_to_report(report, telemetry if isinstance(telemetry, dict) else None)
+
+            status = str(result.get("status") or "")
+            if status in {"written", "fallback"} and isinstance(result.get("out_row"), dict):
+                out_f.write(json.dumps(result["out_row"], ensure_ascii=False) + "\n")
                 report["written_rows"] += 1
-                report["fallback_rows"] += 1
-            elif cfg.fallback_policy == "error":
-                raise RuntimeError(f"Teacher validation failed for row {index} ({row.get('id')}): {validation.errors}")
+                if status == "fallback":
+                    report["fallback_rows"] += 1
+            elif status == "dropped":
+                report["dropped_rows"] += 1
             else:
+                if cfg.fallback_policy == "error":
+                    for task in workers:
+                        task.cancel()
+                    raise RuntimeError(f"Teacher worker failed for row {result.get('index')} ({result.get('id')}): {result.get('errors')}")
                 report["dropped_rows"] += 1
 
-            report["processed_rows"] = index + 1
-            if (index + 1) % progress_every == 0 or index + 1 == len(rows):
+            for error in list(result.get("errors") or []):
+                _inc(report["error_counts"], str(error).split(":", 1)[0])
+            write_state_record(state_f, result)
+
+            report["processed_rows"] = int(report["resumed_rows"]) + completed
+            report["pending_rows"] = max(len(rows) - int(report["processed_rows"]), 0)
+            if completed % progress_every == 0 or completed == len(pending):
                 elapsed = max(time.monotonic() - started_at, 1e-6)
-                current_run_rows = max(int(report["processed_rows"]) - int(report["resumed_rows"]), 0)
-                rate = float(current_run_rows) / elapsed
-                remaining = max(len(rows) - int(report["processed_rows"]), 0)
+                rate = float(completed) / elapsed
+                remaining = max(len(pending) - completed, 0)
                 eta_seconds = remaining / rate if rate > 0 else None
                 report["rate_rows_per_hour"] = rate * 3600.0
                 report["eta_seconds"] = eta_seconds
@@ -869,10 +1052,14 @@ async def generate_cot_dataset(
                     f"written={report['written_rows']} "
                     f"dropped={report['dropped_rows']} "
                     f"fallback={report['fallback_rows']} "
+                    f"concurrency={worker_count} "
                     f"rate={report['rate_rows_per_hour']:.1f}/h "
                     f"eta={eta_text}",
                     flush=True,
                 )
+
+    await work_q.join()
+    await asyncio.gather(*workers)
 
     report["status"] = "done"
     report["eta_seconds"] = 0.0
@@ -986,6 +1173,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--image-detail", default="auto", choices=["auto", "low", "high"])
     parser.add_argument("--fallback-policy", default="drop", choices=["drop", "error", "template"])
     parser.add_argument("--progress-interval", type=int, default=25)
+    parser.add_argument("--concurrency", type=int, default=1, help="Number of concurrent teacher workers")
+    parser.add_argument("--api-key-file", default=None, help="Optional file with one API key per non-comment line")
     return parser.parse_args()
 
 
@@ -1007,6 +1196,8 @@ def main() -> None:
             limit=args.limit,
             config=config,
             progress_interval=int(args.progress_interval),
+            concurrency=int(args.concurrency),
+            api_keys=read_api_keys(args.api_key_file),
         )
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
