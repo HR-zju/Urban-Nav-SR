@@ -2,8 +2,11 @@
 
 本模块只处理“协议拼装”，不调用 LLM、地图服务或图像模型。核心数学/因果约束是
 自回归 Transformer 的 attention mask 第 t 个 token 只能看到它之前的 token。
-因此用于 trajectory head 的 ``[TRAJ_i]`` readout token 必须放在 ``tool_response``
-之后，否则读出的 hidden state 无法包含工具结果，轨迹监督会错位。
+因此用于 trajectory / System1 head 的 readout token 必须放在可见上下文之后，
+否则读出的 hidden state 无法包含工具结果，轨迹监督会错位。v1 使用
+``user [TRAJ_i] -> assistant final``；v2 使用
+``assistant <finish> -> <readout>[SYS1_i]</readout>``，让 System1 latent 还能
+看到最终导航语义决策。
 """
 
 from __future__ import annotations
@@ -22,6 +25,13 @@ from mcp_server.agent.schemas import AgentStage2Case, ToolCall, ToolResponse
 
 TRAJECTORY_TOKEN_COUNT = 16
 NAVIGATION_READOUT_TOKENS = tuple(f"[TRAJ_{index}]" for index in range(TRAJECTORY_TOKEN_COUNT))
+SYSTEM1_READOUT_TOKENS = tuple(f"[SYS1_{index}]" for index in range(TRAJECTORY_TOKEN_COUNT))
+READOUT_PLACEMENT_USER_PROMPT_V1 = "user_prompt_v1"
+READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2 = "assistant_suffix_v2"
+READOUT_PLACEMENTS = {
+    READOUT_PLACEMENT_USER_PROMPT_V1,
+    READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2,
+}
 FINAL_NAVIGATION_DECISION_PROMPT = (
     "Produce the final sidewalk navigation decision using FPV, BEV, and route state.\n\n"
     + " ".join(NAVIGATION_READOUT_TOKENS)
@@ -29,6 +39,12 @@ FINAL_NAVIGATION_DECISION_PROMPT = (
 FINAL_NAVIGATION_DECISION_WITH_TOOL_PROMPT = (
     "Produce the final sidewalk navigation decision using the tool result, FPV, BEV, and route state.\n\n"
     + " ".join(NAVIGATION_READOUT_TOKENS)
+)
+FINAL_NAVIGATION_DECISION_TEXT_PROMPT = (
+    "Produce the final sidewalk navigation decision using FPV, BEV, and route state."
+)
+FINAL_NAVIGATION_DECISION_WITH_TOOL_TEXT_PROMPT = (
+    "Produce the final sidewalk navigation decision using the tool result, FPV, BEV, and route state."
 )
 
 _FINISH_RE = re.compile(r"<finish>(.*?)</finish>", re.DOTALL)
@@ -60,19 +76,83 @@ def initial_user_content(case: AgentStage2Case) -> str:
     return "".join("<image>" for _ in case.images) + case.user_request
 
 
-def final_navigation_user_content(*, tool_used: bool = True) -> str:
+def final_navigation_user_content(
+    *,
+    tool_used: bool = True,
+    readout_placement: str = READOUT_PLACEMENT_USER_PROMPT_V1,
+) -> str:
     """Return the final readout prompt containing all trajectory query tokens.
 
     Args:
         tool_used: True 时提示模型把已经出现的 ``tool_response`` 纳入最终导航；
             False 时生成 no-tool replay 的最终导航 prompt。
+        readout_placement: ``user_prompt_v1`` 时返回带 ``[TRAJ_i]`` 的旧
+            readout user prompt；``assistant_suffix_v2`` 时只返回文本触发
+            prompt，readout token 由最终 assistant 的 ``<readout>`` 承载。
 
     Returns:
-        带 ``[TRAJ_i]`` 的 user turn 文本。该 turn 必须位于最终 assistant 前，
-        且在 tool 路径中必须位于 ``tool_response`` 后。
+        最终导航 user turn 文本。v1 包含 ``[TRAJ_i]``；v2 不包含 readout
+        token，避免 System1 readout 早于 ``<finish>``。
+
+    Raises:
+        ValueError: ``readout_placement`` 不是已知取值时抛出。
     """
 
+    if readout_placement not in READOUT_PLACEMENTS:
+        raise ValueError(f"Unknown readout placement: {readout_placement}")
+    if readout_placement == READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2:
+        return FINAL_NAVIGATION_DECISION_WITH_TOOL_TEXT_PROMPT if tool_used else FINAL_NAVIGATION_DECISION_TEXT_PROMPT
     return FINAL_NAVIGATION_DECISION_WITH_TOOL_PROMPT if tool_used else FINAL_NAVIGATION_DECISION_PROMPT
+
+
+def system1_readout_block(*, readout_placement: str = READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2) -> str:
+    """Build the System1 assistant-suffix readout block.
+
+    Args:
+        readout_placement: Placement mode. Only ``assistant_suffix_v2`` emits
+            a non-empty block.
+
+    Returns:
+        ``<readout>[SYS1_0] ... [SYS1_N]</readout>`` for v2, otherwise an
+        empty string. These tokens are latent anchors and must be masked out of
+        assistant LM loss by the ms-swift template/trainer.
+
+    Raises:
+        ValueError: ``readout_placement`` is unknown.
+    """
+
+    if readout_placement not in READOUT_PLACEMENTS:
+        raise ValueError(f"Unknown readout placement: {readout_placement}")
+    if readout_placement != READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2:
+        return ""
+    return "<readout>" + " ".join(SYSTEM1_READOUT_TOKENS) + "</readout>"
+
+
+def append_system1_readout(
+    text: str,
+    *,
+    readout_placement: str = READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2,
+) -> str:
+    """Append a v2 System1 readout block to final assistant text.
+
+    Args:
+        text: Final assistant text containing ``<finish>``.
+        readout_placement: Placement mode. ``user_prompt_v1`` leaves ``text``
+            unchanged.
+
+    Returns:
+        Assistant text with one trailing ``<readout>`` block in v2 mode.
+
+    Raises:
+        ValueError: ``readout_placement`` is unknown.
+    """
+
+    block = system1_readout_block(readout_placement=readout_placement)
+    if not block:
+        return text
+    if "<readout>" in text:
+        return text
+    return f"{text.rstrip()}\n{block}"
 
 
 def build_agent_think_text(*, state: dict[str, Any], decision: dict[str, Any]) -> str:
@@ -212,11 +292,14 @@ def build_final_assistant_text(
     response: ToolResponse | None,
     source: str,
     phase1_response: str | None = None,
+    readout_placement: str = READOUT_PLACEMENT_USER_PROMPT_V1,
 ) -> str:
     """Build the final assistant CoT and ``<finish>`` target.
 
     输入:
         Stage2 case、可选工具调用/返回，以及可选 Phase1 CoT response。
+        ``readout_placement`` 控制是否把 v2 System1 readout 追加到最终
+        assistant 后缀。
 
     输出:
         最终 assistant content。若 case 中已有 Phase1 CoT 会插入
@@ -229,7 +312,10 @@ def build_final_assistant_text(
     base_response = (phase1_response or _find_phase1_response(case)).strip()
     if base_response:
         text = _insert_tool_result_use(base_response, tool_use) if tool_use is not None else base_response
-        return _augment_finish(text, finish_extra)
+        return append_system1_readout(
+            _augment_finish(text, finish_extra),
+            readout_placement=readout_placement,
+        )
 
     scene = {
         "summary": "offline Stage2 teacher sample",
@@ -266,7 +352,7 @@ def build_final_assistant_text(
         plan["tool_result_use"] = tool_use.get("used_for")
     finish = dict(finish_extra)
     tool_result_block = f"<ToolResultUse>{json_dumps(tool_use)}</ToolResultUse>\n" if tool_use is not None else ""
-    return (
+    return append_system1_readout(
         "<think>\n"
         f"<Scene>{json_dumps(scene)}</Scene>\n"
         f"<FPVScene>{json_dumps(fpv_scene)}</FPVScene>\n"
@@ -275,7 +361,8 @@ def build_final_assistant_text(
         f"<Plan>{json_dumps(plan)}</Plan>\n"
         f"{tool_result_block}"
         "</think>\n"
-        f"<finish>{json_dumps(finish)}</finish>"
+        f"<finish>{json_dumps(finish)}</finish>",
+        readout_placement=readout_placement,
     )
 
 

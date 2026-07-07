@@ -12,7 +12,7 @@ from typing import Any
 
 from mcp_server.agent.finish_schema import finish_trajectory_matches
 from mcp_server.agent.schemas import AgentMetricResult, AgentStage2Case, AgentTrace, ToolCall, ToolResponse
-from mcp_server.agent.stage2 import NAVIGATION_READOUT_TOKENS
+from mcp_server.agent.stage2 import NAVIGATION_READOUT_TOKENS, SYSTEM1_READOUT_TOKENS
 from mcp_server.agent.tool_parser import parse_finish_text, parse_tool_call_text
 from mcp_server.agent.tool_schema import validate_tool_call
 
@@ -138,14 +138,26 @@ def _role_order_valid(trace: AgentTrace) -> bool:
     if tool_call is not None:
         tool_response = _first_index(trace, "tool_response", start=tool_call + 1)
         readout_user = _first_readout_user_index(trace, start=(tool_response + 1 if tool_response is not None else 0))
-        final_assistant = _first_final_assistant_index(trace, start=(readout_user + 1 if readout_user is not None else 0))
-        return all(index is not None for index in (initial_user, think, tool_call, tool_response, readout_user, final_assistant))
+        if readout_user is not None:
+            final_assistant = _first_final_assistant_index(trace, start=readout_user + 1)
+            return all(index is not None for index in (initial_user, think, tool_call, tool_response, final_assistant))
+        final_assistant = _first_final_assistant_index(trace, start=(tool_response + 1 if tool_response is not None else 0))
+        return (
+            all(index is not None for index in (initial_user, think, tool_call, tool_response, final_assistant))
+            and _final_assistant_has_suffix_readout(trace, final_assistant)
+        )
     tool_response = _first_index(trace, "tool_response", start=(think + 1 if think is not None else 0))
     if tool_response is not None:
         return False
     readout_user = _first_readout_user_index(trace, start=(think + 1 if think is not None else 0))
-    final_assistant = _first_final_assistant_index(trace, start=(readout_user + 1 if readout_user is not None else 0))
-    return all(index is not None for index in (initial_user, think, readout_user, final_assistant))
+    if readout_user is not None:
+        final_assistant = _first_final_assistant_index(trace, start=readout_user + 1)
+        return all(index is not None for index in (initial_user, think, final_assistant))
+    final_assistant = _first_final_assistant_index(trace, start=(think + 1 if think is not None else 0))
+    return (
+        all(index is not None for index in (initial_user, think, final_assistant))
+        and _final_assistant_has_suffix_readout(trace, final_assistant)
+    )
 
 
 def _trajectory_readout_order_valid(trace: AgentTrace) -> bool:
@@ -156,10 +168,16 @@ def _trajectory_readout_order_valid(trace: AgentTrace) -> bool:
     if last_tool_response is not None:
         # tool 路径中 readout 必须在最后一个 tool_response 之后。
         readout_user = _first_readout_user_index(trace, start=last_tool_response + 1)
-        return readout_user is not None
+        if readout_user is not None:
+            return True
+        final_assistant = _first_final_assistant_index(trace, start=last_tool_response + 1)
+        return _final_assistant_has_suffix_readout(trace, final_assistant)
     first_think = _first_index(trace, "assistant", start=0)
     readout_user = _first_readout_user_index(trace, start=(first_think + 1 if first_think is not None else 0))
-    return readout_user is not None
+    if readout_user is not None:
+        return True
+    final_assistant = _first_final_assistant_index(trace, start=(first_think + 1 if first_think is not None else 0))
+    return _final_assistant_has_suffix_readout(trace, final_assistant)
 
 
 def _first_index(trace: AgentTrace, role: str, *, start: int) -> int | None:
@@ -185,6 +203,21 @@ def _first_final_assistant_index(trace: AgentTrace, *, start: int) -> int | None
 
 def _contains_readout_tokens(text: str) -> bool:
     return all(token in text for token in NAVIGATION_READOUT_TOKENS)
+
+
+def _contains_system1_readout_tokens(text: str) -> bool:
+    return all(token in text for token in SYSTEM1_READOUT_TOKENS)
+
+
+def _final_assistant_has_suffix_readout(trace: AgentTrace, index: int | None) -> bool:
+    if index is None:
+        return False
+    turn = trace.turns[index]
+    if turn.role != "assistant" or not isinstance(turn.content, str):
+        return False
+    finish_index = turn.content.rfind("</finish>")
+    readout_index = turn.content.find("<readout>", finish_index + len("</finish>")) if finish_index >= 0 else -1
+    return finish_index >= 0 and readout_index > finish_index and _contains_system1_readout_tokens(turn.content[readout_index:])
 
 
 def _final_cot_valid(trace: AgentTrace) -> bool:

@@ -6,7 +6,7 @@ import unittest
 
 from mcp_server.agent.finish_schema import finish_trajectory_matches, parse_finish_trajectory_norm
 from mcp_server.agent.schemas import AGENT_STAGE2_CASE_SCHEMA_VERSION, AgentStage2Case
-from mcp_server.agent.stage2 import build_final_assistant_text
+from mcp_server.agent.stage2 import READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2, build_final_assistant_text
 from mcp_server.agent.tool_parser import parse_finish_text
 from mcp_server.eval.exporters import trace_to_ms_swift_stage2_row
 from mcp_server.eval.metrics import compute_trace_metrics
@@ -77,6 +77,32 @@ class AgentFinishSchemaTest(unittest.TestCase):
         self.assertIn("finish_trajectory_mismatch", trace_validation.errors)
         self.assertFalse(row_validation.valid)
         self.assertIn("row_finish_trajectory_mismatch", row_validation.errors)
+
+    def test_exporter_supports_assistant_suffix_system1_readout_v2(self) -> None:
+        case = _sample_case()
+        trace = AgenticStage2TraceBuilder().build_trace(
+            case,
+            call=None,
+            tool_decision_reason="local FPV and BEV are enough",
+        )
+
+        row = trace_to_ms_swift_stage2_row(
+            trace,
+            case,
+            readout_placement=READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2,
+        )
+
+        self.assertTrue(validate_ms_swift_stage2_row(row).valid)
+        self.assertEqual(row["contract_meta"]["system1_readout_placement"], READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2)
+        self.assertEqual(row["contract_meta"]["system1_readout_lm_label"], -100)
+        self.assertIn("[SYS1_0]", row["messages"][-1]["content"])
+        self.assertGreater(row["messages"][-1]["content"].find("<readout>"), row["messages"][-1]["content"].find("</finish>"))
+        self.assertNotIn("[TRAJ_0]", row["messages"][-2]["content"])
+        finish, errors = parse_finish_text(row["messages"][-1]["content"])
+        self.assertEqual(errors, [])
+        assert finish is not None
+        self.assertNotIn("trajectory_grid1000", finish)
+        self.assertNotIn("trajectory", finish)
 
 
 def _sample_case() -> AgentStage2Case:

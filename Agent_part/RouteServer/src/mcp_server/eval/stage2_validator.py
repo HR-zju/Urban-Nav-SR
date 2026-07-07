@@ -19,7 +19,13 @@ from mcp_server.agent.schemas import (
     AgentTrace,
     ToolCall,
 )
-from mcp_server.agent.stage2 import NAVIGATION_READOUT_TOKENS
+from mcp_server.agent.stage2 import (
+    NAVIGATION_READOUT_TOKENS,
+    READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2,
+    READOUT_PLACEMENT_USER_PROMPT_V1,
+    READOUT_PLACEMENTS,
+    SYSTEM1_READOUT_TOKENS,
+)
 from mcp_server.agent.tool_parser import parse_finish_text
 from mcp_server.agent.tool_schema import USER_INTERACTION_TOOL_NAME, validate_tool_call
 from mcp_server.eval.metrics import compute_trace_metrics
@@ -152,11 +158,15 @@ def validate_stage2_trace(trace: AgentTrace, case: AgentStage2Case | None = None
 
     readout_index = 4 if has_tool_roles else 2
     final_index = 5 if has_tool_roles else 3
+    final_text_for_readout = trace.turns[final_index].content if len(trace.turns) > final_index else ""
     if len(trace.turns) > readout_index:
         # 这里直接检查所有 [TRAJ_i]，保证 trajectory head 的 readout token 完整出现。
         readout = trace.turns[readout_index].content
-        if not isinstance(readout, str) or not _contains_all_readout_tokens(readout):
-            errors.append("missing_readout_tokens")
+        if not isinstance(readout, str) or not _contains_all_v1_readout_tokens(readout):
+            if not _assistant_suffix_readout_valid(str(final_text_for_readout or "")):
+                errors.append("missing_readout_tokens")
+    elif not _assistant_suffix_readout_valid(str(final_text_for_readout or "")):
+        errors.append("missing_readout_tokens")
     if len(trace.turns) > final_index:
         final_text = trace.turns[final_index].content
         if not isinstance(final_text, str):
@@ -228,6 +238,7 @@ def validate_ms_swift_stage2_row(row: dict[str, Any]) -> Stage2ValidationResult:
         return Stage2ValidationResult(valid=False, errors=["messages_not_list"])
     roles = tuple(str(message.get("role")) for message in messages if isinstance(message, dict))
     has_tool_roles = "tool_call" in roles or "tool_response" in roles
+    readout_placement = _row_readout_placement(row)
     # exported row 比 trace 多 system，因此单独校验 row role sequence。
     expected_roles = STAGE2_TOOL_ROW_ROLE_SEQUENCE if has_tool_roles else STAGE2_NO_TOOL_ROW_ROLE_SEQUENCE
     if roles != expected_roles:
@@ -266,18 +277,30 @@ def validate_ms_swift_stage2_row(row: dict[str, Any]) -> Stage2ValidationResult:
             errors.append(f"tool_result_use_outside_final:{index}")
     readout_index = 5 if has_tool_roles else 3
     final_index = 6 if has_tool_roles else 4
-    if len(messages) > readout_index and not _contains_all_readout_tokens(str(messages[readout_index].get("content"))):
-        errors.append("row_missing_readout_tokens")
     if len(messages) > final_index:
         final_text = messages[final_index].get("content")
         required_tags = FINAL_COT_REQUIRED_TOOL_TAGS if has_tool_roles else FINAL_COT_REQUIRED_BASE_TAGS
         if not isinstance(final_text, str) or not all(tag in final_text for tag in required_tags):
             errors.append("row_final_cot_invalid")
-        elif row.get("pixel_trajectory") is not None:
+        else:
             finish, finish_errors = parse_finish_text(final_text)
             errors.extend(f"row_finish:{item}" for item in finish_errors)
-            if finish is not None and not finish_trajectory_matches(finish, row.get("pixel_trajectory")):
+            if (
+                finish is not None
+                and row.get("pixel_trajectory") is not None
+                and readout_placement != READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2
+                and not finish_trajectory_matches(finish, row.get("pixel_trajectory"))
+            ):
                 errors.append("row_finish_trajectory_mismatch")
+        if readout_placement == READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2:
+            if len(messages) > readout_index and _contains_all_v1_readout_tokens(str(messages[readout_index].get("content"))):
+                errors.append("row_v2_legacy_user_readout_tokens")
+            if not isinstance(final_text, str) or not _assistant_suffix_readout_valid(final_text):
+                errors.append("row_missing_assistant_suffix_readout")
+        elif len(messages) > readout_index and not _contains_all_v1_readout_tokens(str(messages[readout_index].get("content"))):
+            errors.append("row_missing_readout_tokens")
+        elif len(messages) <= readout_index:
+            errors.append("row_missing_readout_tokens")
     else:
         errors.append("row_missing_final_assistant")
     if not row.get("images"):
@@ -305,8 +328,26 @@ def _json_dict(content: Any) -> tuple[dict[str, Any] | None, list[str]]:
     return payload, []
 
 
-def _contains_all_readout_tokens(text: str) -> bool:
+def _contains_all_v1_readout_tokens(text: str) -> bool:
     return all(token in text for token in NAVIGATION_READOUT_TOKENS)
+
+
+def _contains_all_v2_readout_tokens(text: str) -> bool:
+    return all(token in text for token in SYSTEM1_READOUT_TOKENS)
+
+
+def _assistant_suffix_readout_valid(text: str) -> bool:
+    finish_index = text.rfind("</finish>")
+    readout_index = text.find("<readout>", finish_index + len("</finish>")) if finish_index >= 0 else -1
+    return finish_index >= 0 and readout_index > finish_index and _contains_all_v2_readout_tokens(text[readout_index:])
+
+
+def _row_readout_placement(row: dict[str, Any]) -> str:
+    contract_meta = row.get("contract_meta") if isinstance(row.get("contract_meta"), dict) else {}
+    placement = str(contract_meta.get("system1_readout_placement") or READOUT_PLACEMENT_USER_PROMPT_V1)
+    if placement not in READOUT_PLACEMENTS:
+        return READOUT_PLACEMENT_USER_PROMPT_V1
+    return placement
 
 
 def _validate_tool_response_contract(

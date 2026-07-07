@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Iterable
 
@@ -18,6 +19,15 @@ from mcp_server.agent.contracts import (
     NAV_OBSERVATION_CONTRACT_VERSION,
     AgentStepResult,
 )
+from mcp_server.agent.stage2 import (
+    NAVIGATION_READOUT_TOKENS,
+    READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2,
+    READOUT_PLACEMENT_USER_PROMPT_V1,
+    READOUT_PLACEMENTS,
+    SYSTEM1_READOUT_TOKENS,
+    append_system1_readout,
+    final_navigation_user_content,
+)
 from mcp_server.agent.tool_schema import get_tool_definitions
 
 
@@ -26,6 +36,24 @@ DEFAULT_AGENT_SYSTEM_PROMPT = (
     "or user-interaction context is needed. When needed, emit a tool call through the "
     "tool_call role. After tool responses, produce the final navigation CoT and finish block."
 )
+
+_FINISH_RE = re.compile(r"<finish>(.*?)</finish>", re.DOTALL)
+_V2_FINISH_SUPERVISION_KEYS = {
+    "trajectory",
+    "trajectory_norm",
+    "trajectory_grid1000",
+    "trajectory_coord_frame",
+    "trajectory_coordinate",
+    "coordinate_frame",
+    "pixel_trajectory",
+    "trajectory_fpv_t",
+    "trajectory_fpv_tv",
+    "trajectory_ego_t",
+    "action_ego_t",
+    "action_mask",
+    "semantic_segmentation_path",
+    "semantic_mask_path",
+}
 
 
 def _text_content(content) -> str:
@@ -62,8 +90,27 @@ def _case_from_trace(trace: AgentTrace) -> AgentStage2Case | None:
     return None
 
 
-def trace_to_ms_swift_stage2_row(trace: AgentTrace, case: AgentStage2Case | None = None) -> dict:
+def trace_to_ms_swift_stage2_row(
+    trace: AgentTrace,
+    case: AgentStage2Case | None = None,
+    *,
+    readout_placement: str = READOUT_PLACEMENT_USER_PROMPT_V1,
+) -> dict:
     """Convert one ``AgentTrace`` to a trainable ms-swift agent-template JSONL row.
+
+    Args:
+        trace: Source trace.
+        case: Optional source case used to recover images and supervision.
+        readout_placement: ``user_prompt_v1`` keeps the existing
+            ``user [TRAJ_i] -> assistant final`` contract.
+            ``assistant_suffix_v2`` exports ``[SYS1_i]`` after final
+            ``<finish>`` for System1 CFM training.
+
+    Returns:
+        JSON-compatible ms-swift row.
+
+    Raises:
+        ValueError: Unknown readout placement or malformed v2 conversion.
 
     输出字段:
         ``messages``: system/user/assistant/tool_call/tool_response 对话。
@@ -73,6 +120,8 @@ def trace_to_ms_swift_stage2_row(trace: AgentTrace, case: AgentStage2Case | None
         ``sidewalk_meta``: trace schema、case_id、metrics 等审计信息。
     """
 
+    if readout_placement not in READOUT_PLACEMENTS:
+        raise ValueError(f"Unknown readout placement: {readout_placement}")
     case = case or _case_from_trace(trace)
     messages: list[dict] = []
     has_system = any(turn.role == "system" for turn in trace.turns)
@@ -97,6 +146,9 @@ def trace_to_ms_swift_stage2_row(trace: AgentTrace, case: AgentStage2Case | None
         else:
             # 未知 role 降级为 assistant 文本，validator 会负责暴露 role sequence 错误。
             messages.append({"role": "assistant", "content": _text_content(turn.content)})
+
+    if readout_placement == READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2:
+        messages = _messages_with_assistant_suffix_readout(messages)
 
     supervision = dict(trace.supervision)
     if case is not None:
@@ -125,6 +177,13 @@ def trace_to_ms_swift_stage2_row(trace: AgentTrace, case: AgentStage2Case | None
             "observation_contract_version": NAV_OBSERVATION_CONTRACT_VERSION,
             "action_contract_version": ACTION_CONTRACT_VERSION,
             "agent_step_result_schema": step_result.schema_version,
+            "system1_readout_placement": readout_placement,
+            "system1_readout_tokens": (
+                list(SYSTEM1_READOUT_TOKENS)
+                if readout_placement == READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2
+                else list(NAVIGATION_READOUT_TOKENS)
+            ),
+            "system1_readout_lm_label": -100,
         },
         "sidewalk_meta": {
             "schema_version": MS_SWIFT_AGENTIC_STAGE2_SCHEMA_VERSION,
@@ -209,6 +268,90 @@ def _system1_supervision_from_supervision(supervision: dict) -> dict:
     return {key: value for key, value in payload.items() if value is not None}
 
 
+def _messages_with_assistant_suffix_readout(messages: list[dict]) -> list[dict]:
+    """Convert v1 readout placement to v2 assistant-suffix placement.
+
+    Args:
+        messages: Exported v1-style message list.
+
+    Returns:
+        Copied messages where the final user turn is a text-only final
+        navigation prompt and the final assistant has
+        ``<readout>[SYS1_i]</readout>`` after ``<finish>``.
+
+    Raises:
+        ValueError: The final assistant or v1 readout user turn cannot be
+        located.
+    """
+
+    converted = [dict(message) for message in messages]
+    final_index = _find_final_assistant_message_index(converted)
+    if final_index is None:
+        raise ValueError("Stage2 row is missing final assistant <finish> turn.")
+    readout_index = _find_readout_user_message_index(converted, before=final_index)
+    if readout_index is None:
+        raise ValueError("Stage2 row is missing v1 final readout user turn.")
+    has_tool_roles = any(message.get("role") == "tool_call" for message in converted if isinstance(message, dict))
+    converted[readout_index]["content"] = final_navigation_user_content(
+        tool_used=has_tool_roles,
+        readout_placement=READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2,
+    )
+    final_text = _strip_v2_finish_supervision_fields(str(converted[final_index].get("content") or ""))
+    converted[final_index]["content"] = append_system1_readout(
+        final_text,
+        readout_placement=READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2,
+    )
+    return converted
+
+
+def _strip_v2_finish_supervision_fields(text: str) -> str:
+    """Remove System1 numeric supervision fields from a v2 ``<finish>`` block.
+
+    Args:
+        text: Final assistant text containing a JSON ``<finish>`` payload.
+
+    Returns:
+        Assistant text with high-rate trajectory/action/segmentation labels
+        removed from ``<finish>``.  Route/tool decision fields stay in text;
+        System1 labels remain in top-level row fields and are read out through
+        ``assistant_suffix_v2`` tokens.
+    """
+
+    match = _FINISH_RE.search(text)
+    if match is None:
+        return text
+    try:
+        payload = json.loads(match.group(1).strip())
+    except json.JSONDecodeError:
+        return text
+    if not isinstance(payload, dict):
+        return text
+    stripped = dict(payload)
+    for key in _V2_FINISH_SUPERVISION_KEYS:
+        stripped.pop(key, None)
+    replacement = json.dumps(stripped, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return f"{text[:match.start(1)]}{replacement}{text[match.end(1):]}"
+
+
+def _find_final_assistant_message_index(messages: list[dict]) -> int | None:
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if message.get("role") == "assistant" and "<finish>" in str(message.get("content") or ""):
+            return index
+    return None
+
+
+def _find_readout_user_message_index(messages: list[dict], *, before: int) -> int | None:
+    for index in range(before - 1, -1, -1):
+        message = messages[index]
+        if message.get("role") != "user":
+            continue
+        content = str(message.get("content") or "")
+        if all(token in content for token in NAVIGATION_READOUT_TOKENS):
+            return index
+    return None
+
+
 def trace_to_ms_swift_row(trace: AgentTrace, case: AgentEvalCase | None = None) -> dict:
     """Compatibility wrapper for the Stage2 exporter.
 
@@ -225,10 +368,16 @@ def write_ms_swift_jsonl(
     path: str | Path,
     *,
     cases_by_id: dict[str, AgentEvalCase] | None = None,
+    readout_placement: str = READOUT_PLACEMENT_USER_PROMPT_V1,
 ) -> None:
     """Compatibility wrapper for ``write_ms_swift_stage2_jsonl``."""
 
-    write_ms_swift_stage2_jsonl(traces, path, cases_by_id=cases_by_id)
+    write_ms_swift_stage2_jsonl(
+        traces,
+        path,
+        cases_by_id=cases_by_id,
+        readout_placement=readout_placement,
+    )
 
 
 def write_ms_swift_stage2_jsonl(
@@ -236,15 +385,30 @@ def write_ms_swift_stage2_jsonl(
     path: str | Path,
     *,
     cases_by_id: dict[str, AgentStage2Case] | None = None,
+    readout_placement: str = READOUT_PLACEMENT_USER_PROMPT_V1,
 ) -> None:
-    """Write ms-swift agent-template JSONL for Stage2 cold-start training."""
+    """Write ms-swift agent-template JSONL for Stage2 cold-start training.
+
+    Args:
+        traces: Source traces.
+        path: Output JSONL path.
+        cases_by_id: Optional case lookup for supervision/image recovery.
+        readout_placement: v1/v2 readout placement exported to each row.
+
+    Returns:
+        None.
+    """
 
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("w", encoding="utf-8") as handle:
         for trace in traces:
             # cases_by_id 用于把 trace 与原始 supervision/images 重新对齐。
-            row = trace_to_ms_swift_stage2_row(trace, case=(cases_by_id or {}).get(trace.case_id))
+            row = trace_to_ms_swift_stage2_row(
+                trace,
+                case=(cases_by_id or {}).get(trace.case_id),
+                readout_placement=readout_placement,
+            )
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
