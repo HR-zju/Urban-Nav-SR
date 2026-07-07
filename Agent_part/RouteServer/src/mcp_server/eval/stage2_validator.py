@@ -297,6 +297,7 @@ def validate_ms_swift_stage2_row(row: dict[str, Any]) -> Stage2ValidationResult:
                 errors.append("row_v2_legacy_user_readout_tokens")
             if not isinstance(final_text, str) or not _assistant_suffix_readout_valid(final_text):
                 errors.append("row_missing_assistant_suffix_readout")
+            _validate_system1_v2_targets(row, errors=errors)
         elif len(messages) > readout_index and not _contains_all_v1_readout_tokens(str(messages[readout_index].get("content"))):
             errors.append("row_missing_readout_tokens")
         elif len(messages) <= readout_index:
@@ -348,6 +349,48 @@ def _row_readout_placement(row: dict[str, Any]) -> str:
     if placement not in READOUT_PLACEMENTS:
         return READOUT_PLACEMENT_USER_PROMPT_V1
     return placement
+
+
+def _validate_system1_v2_targets(row: dict[str, Any], *, errors: list[str]) -> None:
+    """Validate assistant-suffix System1 supervision shape.
+
+    Args:
+        row: Exported ms-swift row.
+        errors: Mutable hard-error list.
+
+    Returns:
+        None.
+
+    Notes:
+        v2 CFM rows use ``trajectory_ego_t`` as
+        ``[x_right_m, y_front_m, heading_delta_rad]``.  The old Phase1
+        ``[x_right_m, y_front_m, dt_s, speed_mps]`` convention is still valid
+        for archived local-navigation rows, but must be converted before a row
+        declares ``assistant_suffix_v2`` System1 readout tokens.
+    """
+
+    trajectory = row.get("trajectory_ego_t")
+    if trajectory is None:
+        return
+    width = _last_dim_width(trajectory)
+    if width != 3:
+        errors.append(f"row_system1_trajectory_ego_t_width:{width}")
+    contract_meta = row.get("contract_meta") if isinstance(row.get("contract_meta"), dict) else {}
+    target_format = contract_meta.get("system1_target_format")
+    if target_format not in {None, "ego_xy_heading_delta"}:
+        errors.append(f"row_system1_target_format:{target_format}")
+    system1 = row.get("system1_supervision") if isinstance(row.get("system1_supervision"), dict) else {}
+    if system1.get("trajectory_ego_t") is not None and _last_dim_width(system1.get("trajectory_ego_t")) != 3:
+        errors.append("row_system1_supervision_trajectory_ego_t_not_canonical")
+
+
+def _last_dim_width(value: Any) -> int | None:
+    if not isinstance(value, list) or not value:
+        return None
+    first = value[0]
+    if isinstance(first, list):
+        return len(first)
+    return None
 
 
 def _validate_tool_response_contract(

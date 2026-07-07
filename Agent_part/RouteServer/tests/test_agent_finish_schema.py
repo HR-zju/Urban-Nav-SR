@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import unittest
 
@@ -103,6 +104,54 @@ class AgentFinishSchemaTest(unittest.TestCase):
         assert finish is not None
         self.assertNotIn("trajectory_grid1000", finish)
         self.assertNotIn("trajectory", finish)
+
+    def test_v2_exporter_canonicalizes_system1_trajectory_ego_t(self) -> None:
+        case = _sample_case()
+        case.ground_truth["trajectory_ego_t"] = [
+            [0.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.1, 0.5],
+            [1.0, 1.0, 0.2, 0.5],
+        ]
+        trace = AgenticStage2TraceBuilder().build_trace(
+            case,
+            call=None,
+            tool_decision_reason="local FPV and BEV are enough",
+        )
+
+        row = trace_to_ms_swift_stage2_row(
+            trace,
+            case,
+            readout_placement=READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2,
+        )
+
+        self.assertTrue(validate_ms_swift_stage2_row(row).valid)
+        self.assertEqual(row["contract_meta"]["system1_target_field"], "trajectory_ego_t")
+        self.assertEqual(row["contract_meta"]["system1_target_format"], "ego_xy_heading_delta")
+        self.assertEqual(row["trajectory_ego_t"][0], [0.0, 0.0, 0.0])
+        self.assertEqual(row["trajectory_ego_t"][1], [0.0, 1.0, 0.0])
+        self.assertAlmostEqual(row["trajectory_ego_t"][2][2], math.pi / 2.0)
+        self.assertEqual(row["system1_supervision"]["trajectory_ego_t"], row["trajectory_ego_t"])
+
+    def test_v2_validator_rejects_legacy_four_channel_system1_trajectory(self) -> None:
+        case = _sample_case()
+        trace = AgenticStage2TraceBuilder().build_trace(
+            case,
+            call=None,
+            tool_decision_reason="local FPV and BEV are enough",
+        )
+        row = trace_to_ms_swift_stage2_row(
+            trace,
+            case,
+            readout_placement=READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2,
+        )
+        row["trajectory_ego_t"] = [[0.0, 0.0, 0.0, 0.0]]
+        row["system1_supervision"]["trajectory_ego_t"] = row["trajectory_ego_t"]
+
+        validation = validate_ms_swift_stage2_row(row)
+
+        self.assertFalse(validation.valid)
+        self.assertIn("row_system1_trajectory_ego_t_width:4", validation.errors)
+        self.assertIn("row_system1_supervision_trajectory_ego_t_not_canonical", validation.errors)
 
 
 def _sample_case() -> AgentStage2Case:

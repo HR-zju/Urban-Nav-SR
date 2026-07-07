@@ -109,16 +109,23 @@ view：
   "contract_meta": {
     "system1_readout_placement": "assistant_suffix_v2",
     "system1_readout_tokens": ["[SYS1_0]", "[SYS1_1]"],
-    "system1_readout_lm_label": -100
+    "system1_readout_lm_label": -100,
+    "system1_target_field": "trajectory_ego_t",
+    "system1_target_format": "ego_xy_heading_delta"
   }
 }
 ```
 
 训练优先级：
 
-1. `trajectory_ego_t` 作为当前推荐 CFM primary target。
+1. `trajectory_ego_t` 作为当前推荐 CFM primary target，v2 固定列为
+   `[x_right_m, y_front_m, heading_delta_rad]`。
 2. `action_ego_t` 作为 fallback，兼容已有 CFM action head。
 3. `pixel_trajectory` / `trajectory_grid1000` 只用于 v1 text/head 兼容和评测。
+
+历史 Phase1 archive 中的 `trajectory_ego_t=[x_right_m,y_front_m,dt_s,speed_mps]`
+不能直接作为 v2 CFM target。RouteServer 在 `assistant_suffix_v2` 导出时会确定性转换为
+`ego_xy_heading_delta`；validator 会拒绝四维 v2 `trajectory_ego_t`。
 
 ## 5. Loss Mask
 
@@ -159,11 +166,20 @@ v* = x_1 - x_0
 L_CFM = || f_phi(x_lambda, lambda, Fuse(H_sys1, V_fpv)) - v* ||_2^2
 ```
 
-当前阶段 CFM 显式条件只允许：
+当前阶段 CFM 条件支持三种可配置模式，训练和推理必须使用同名配置：
 
 ```text
-H_sys1 = hidden states at [SYS1_i]
-V_fpv = current FPV fast visual features
+traj_query_only:
+  z = H([SYS1_i])
+  memory = None
+
+vlm_memory:
+  z = MeanPool(prompt-only H)
+  memory = prompt-only H
+
+hybrid:
+  z = H([SYS1_i])
+  memory = prompt-only H
 ```
 
 不显式输入：
@@ -178,6 +194,11 @@ dialogue text
 ```
 
 这些信息必须先由 System2 读入并通过 `H_sys1` 间接传递。
+
+`traj_query_only` 对齐 InternNav latent-query System1 的解耦方式：System2 低频输出
+readout latent，System1 CFM 高频采样 action chunk，不再 attend 到完整文本上下文。
+`vlm_memory` 和 `hybrid` 用于消融，验证 prompt-visible VLM memory 是否提升 ADE/FDE、
+collision/social risk 和 closed-loop recovery。
 
 ## 6. Export Modes
 

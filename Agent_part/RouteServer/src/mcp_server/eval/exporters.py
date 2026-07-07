@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from pathlib import Path
 from typing import Iterable
@@ -157,7 +158,11 @@ def trace_to_ms_swift_stage2_row(
     tools = trace.tools or (case.tools if case is not None and case.tools else get_tool_definitions())
     observation_meta = case.to_nav_observation().to_dict() if case is not None else {}
     system2_supervision = _system2_supervision_from_trace(trace, supervision)
-    system1_supervision = _system1_supervision_from_supervision(supervision)
+    system1_export = _system1_export_supervision(
+        supervision,
+        readout_placement=readout_placement,
+    )
+    system1_supervision = _system1_supervision_from_supervision(system1_export)
     step_result = AgentStepResult.from_trace(
         trace,
         case=case,
@@ -184,6 +189,13 @@ def trace_to_ms_swift_stage2_row(
                 else list(NAVIGATION_READOUT_TOKENS)
             ),
             "system1_readout_lm_label": -100,
+            "system1_target_field": "trajectory_ego_t" if system1_export.get("trajectory_ego_t") is not None else None,
+            "system1_target_format": (
+                "ego_xy_heading_delta"
+                if system1_export.get("trajectory_ego_t") is not None
+                and readout_placement == READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2
+                else None
+            ),
         },
         "sidewalk_meta": {
             "schema_version": MS_SWIFT_AGENTIC_STAGE2_SCHEMA_VERSION,
@@ -210,9 +222,9 @@ def trace_to_ms_swift_stage2_row(
         "semantic_segmentation_path",
         "semantic_mask_path",
     ):
-        if supervision.get(key) is not None:
+        if system1_export.get(key) is not None:
             # FPV/ego trajectory 与 segmentation 监督继续顶层透传，保持 Phase1 loss 接口不变。
-            row[key] = supervision[key]
+            row[key] = system1_export[key]
     return row
 
 
@@ -266,6 +278,92 @@ def _system1_supervision_from_supervision(supervision: dict) -> dict:
         "semantic_mask_path": supervision.get("semantic_mask_path"),
     }
     return {key: value for key, value in payload.items() if value is not None}
+
+
+def _system1_export_supervision(supervision: dict, *, readout_placement: str) -> dict:
+    """Normalize System1 labels for the exported ms-swift contract.
+
+    Args:
+        supervision: Merged case/trace supervision dictionary.
+        readout_placement: v1/v2 readout placement requested by the exporter.
+
+    Returns:
+        A copied supervision dictionary.  For v2 System1 rows,
+        ``trajectory_ego_t`` is canonicalized to ``[x_right_m, y_front_m,
+        heading_delta_rad]`` so CFM training does not silently consume the old
+        ``[x_right_m, y_front_m, dt_s, speed_mps]`` Phase1 convention.
+    """
+
+    exported = dict(supervision)
+    if readout_placement != READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2:
+        return exported
+    trajectory_ego_t = exported.get("trajectory_ego_t")
+    if trajectory_ego_t is not None:
+        exported["trajectory_ego_t"] = _canonical_system1_trajectory_ego_t(trajectory_ego_t)
+        policy = dict(exported.get("trajectory_policy") or {})
+        policy.setdefault("system1_target_format", "ego_xy_heading_delta")
+        policy.setdefault("system1_target_columns", ["x_right_m", "y_front_m", "heading_delta_rad"])
+        exported["trajectory_policy"] = policy
+    return exported
+
+
+def _canonical_system1_trajectory_ego_t(value) -> list[list[float]]:
+    """Convert ego trajectory labels to CFM's three-channel System1 target.
+
+    Args:
+        value: Sequence shaped ``[T, 3]`` or legacy ``[T, 4]``.
+
+    Returns:
+        ``[T, 3]`` rows ``[x_right_m, y_front_m, heading_delta_rad]``.
+
+    Raises:
+        ValueError: If the input is empty or has an unsupported row width.
+
+    Notes:
+        Legacy Phase1 ``trajectory_ego_t`` stores
+        ``[x_right_m, y_front_m, dt_s, speed_mps]``.  Without a per-waypoint
+        yaw label, the least ambiguous deployment target is the local path
+        tangent angle:
+
+        ``heading_delta_i = atan2(dx_right_i, dy_front_i)``
+
+        where the first delta is measured from the current body origin and
+        later deltas are measured from the previous waypoint.  Degenerate
+        zero-motion steps reuse the previous heading.
+    """
+
+    rows = list(value or [])
+    if not rows:
+        raise ValueError("trajectory_ego_t must be a non-empty sequence for System1 export.")
+    canonical: list[list[float]] = []
+    prev_x = 0.0
+    prev_y = 0.0
+    prev_heading = 0.0
+    for index, row in enumerate(rows):
+        if not isinstance(row, (list, tuple)):
+            raise ValueError(f"trajectory_ego_t row {index} is not a sequence.")
+        if len(row) == 3:
+            x, y, heading = row
+            canonical.append([float(x), float(y), float(heading)])
+            prev_x = float(x)
+            prev_y = float(y)
+            prev_heading = float(heading)
+            continue
+        if len(row) != 4:
+            raise ValueError(f"trajectory_ego_t row {index} has width {len(row)}; expected 3 or 4.")
+        x = float(row[0])
+        y = float(row[1])
+        dx = x - prev_x
+        dy = y - prev_y
+        if abs(dx) + abs(dy) > 1e-8:
+            heading = math.atan2(dx, dy)
+        else:
+            heading = prev_heading
+        canonical.append([x, y, heading])
+        prev_x = x
+        prev_y = y
+        prev_heading = heading
+    return canonical
 
 
 def _messages_with_assistant_suffix_readout(messages: list[dict]) -> list[dict]:
