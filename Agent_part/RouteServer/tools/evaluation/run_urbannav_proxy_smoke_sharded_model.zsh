@@ -209,6 +209,9 @@ extra_prediction_args=()
 if [[ "${RESUME}" == "1" ]]; then
   extra_prediction_args+=(--resume)
 fi
+if [[ "${SKIP_LLM_PREFLIGHT}" == "1" ]]; then
+  extra_prediction_args+=(--skip-llm-preflight)
+fi
 if [[ -n "${STOP_AFTER_PENDING}" ]]; then
   extra_prediction_args+=(--stop-after-pending "${STOP_AFTER_PENDING}")
 fi

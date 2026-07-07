@@ -31,7 +31,7 @@ data/benchmark/urbannav_v2_osm_local_osrm_foot_final_15k/task_gt.jsonl
 | 2026-07-01 | `qwen3.7-max` | `external` | `replay-strict` | 15000 | 0.7588 | 0.9635 | 0.7588 | 1.0000 | 0.6519 | 0.7593 | 90.6687 | 0.5127 | 0.7026 | 0.0418 |
 | 2026-07-01 | `glm-5.2` | `external` | `replay-strict` | 15000 | 0.7426 | 0.9558 | 0.7426 | 1.0000 | 0.6385 | 0.7456 | 89.0327 | 0.4631 | 0.6932 | 0.0589 |
 | 2026-07-01 | `deepseek-v4-pro` | `external` | `replay-strict` | 15000 | 0.7084 | 0.9341 | 0.7084 | 1.0000 | 0.6042 | 0.7143 | 85.2985 | 0.4874 | 0.6511 | 0.0977 |
-| TBD | `qwen3.5-4b` | `external` | `replay-strict` | 15000 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+| 2026-07-07 | `qwen3.5-4b` | `external` | `replay-strict` | 15000 | 0.7702 | 0.9841 | 0.7702 | 1.0000 | 0.7209 | 0.7883 | 94.1318 | 0.5210 | 0.7351 | 0.0272 |
 | TBD | `qwen3.5-4b-sft` | `external` | `replay-strict` | 15000 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
 | 2026-07-03 | `qwen3.5-9b` | `external` | `replay-strict` | 15000 | 0.7838 | 0.9931 | 0.7838 | 1.0000 | 0.7525 | 0.8062 | 96.2689 | 0.5277 | 0.7479 | 0.0063 |
 | TBD | `qwen3.5-27b` | `external` | `replay-strict` | 15000 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
@@ -70,6 +70,16 @@ multi-stop 的主指标应看逐站召回、序列成功和任务 SPL。这里�
 | `poi_navigation` | 4744 | 0.8047 | 0.9825 | 0.8047 | 0.8047 |
 | `multi_stop_route` | 2096 | 0.7621 | 0.9237 | 0.7621 | 0.5127 |
 | `route_update_add_via` | 587 | 0.7026 | 0.9702 | 0.7026 | 0.7026 |
+
+按任务类型，`qwen3.5-4b` 的结果为：
+
+| Category | Cases | Destination Success | Task Hit@5 | Route Success | Task SPL |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `implicit_need_navigation` | 7573 | 0.7421 | 0.9869 | 0.7421 | 0.7421 |
+| `poi_navigation` | 4744 | 0.8251 | 0.9940 | 0.8251 | 0.8251 |
+| `multi_stop_route` | 2096 | 0.7563 | 0.9421 | 0.7563 | 0.5210 |
+| `route_update_add_via` | 587 | 0.7351 | 0.9897 | 0.7351 | 0.7351 |
+
 
 按任务类型，`qwen3.5-9b` 的结果为：
 
