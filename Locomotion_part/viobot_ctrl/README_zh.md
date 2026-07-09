@@ -6,7 +6,7 @@
 
 Urban-Nav-SR 项目中的 ROS 2 工作区，用于 Viobot 算法控制、GNSS 单点定位（SPP）、Stereo3/GNSS 融合、相机发布和同步录包。
 
-[English README](README.md) | [中文说明](README_zh.md) | [录制数据手册](DATA_RECORDING_MANUAL_zh.md)
+[English README](README.md) | [中文说明](README_zh.md) | [录制数据手册](DATA_RECORDING_MANUAL_zh.md) | [技术实现](TECHNICAL_IMPLEMENTATION_README_zh.md)
 
 </div>
 

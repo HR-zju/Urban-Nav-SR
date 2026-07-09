@@ -6,7 +6,7 @@
 
 A ROS 2 workspace for Viobot algorithm control, GNSS Single Point Positioning (SPP), Stereo3/GNSS fusion, camera publishing, and synchronized bag recording.
 
-[English README](README.md) | [中文说明](README_zh.md) | [录制数据手册](DATA_RECORDING_MANUAL_zh.md)
+[English README](README.md) | [中文说明](README_zh.md) | [录制数据手册](DATA_RECORDING_MANUAL_zh.md) | [技术实现](TECHNICAL_IMPLEMENTATION_README_zh.md)
 
 </div>
 
