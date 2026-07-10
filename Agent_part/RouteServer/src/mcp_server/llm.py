@@ -82,6 +82,7 @@ class LLMSettings:
     allow_api_style_fallback: bool = False
     response_format: bool = True
     reasoning_effort: str | None = None
+    chat_template_kwargs: dict[str, Any] | None = None
 
     @classmethod
     def from_env(cls) -> "LLMSettings":
@@ -123,6 +124,12 @@ class LLMSettings:
             reasoning_effort = "minimal"
         if reasoning_effort not in {"minimal", "low", "medium", "high"}:
             reasoning_effort = None
+        chat_template_kwargs: dict[str, Any] | None = None
+        enable_thinking_env = os.getenv("LLM_CHAT_TEMPLATE_ENABLE_THINKING", "").strip().lower()
+        if enable_thinking_env:
+            chat_template_kwargs = {
+                "enable_thinking": enable_thinking_env in {"1", "true", "yes", "on"},
+            }
         fallback_env = os.getenv("LLM_API_STYLE_FALLBACK", "").strip().lower()
         if fallback_env:
             allow_api_style_fallback = fallback_env in {"1", "true", "yes"}
@@ -140,6 +147,7 @@ class LLMSettings:
             allow_api_style_fallback=allow_api_style_fallback,
             response_format=os.getenv("LLM_RESPONSE_FORMAT_JSON", "true").strip().lower() not in {"0", "false", "no"},
             reasoning_effort=reasoning_effort,
+            chat_template_kwargs=chat_template_kwargs,
         )
 
 
@@ -304,6 +312,15 @@ def _apply_reasoning_effort(payload: dict[str, Any], settings: LLMSettings) -> d
     effort = str(settings.reasoning_effort or "").strip().lower()
     if settings.provider == "ark" and effort in {"minimal", "low", "medium", "high"}:
         payload["reasoning_effort"] = effort
+    return payload
+
+
+def _apply_chat_template_kwargs(payload: dict[str, Any], settings: LLMSettings) -> dict[str, Any]:
+    """Attach provider-specific chat-template kwargs when explicitly configured."""
+    if settings.chat_template_kwargs:
+        extra_body = dict(payload.get("extra_body") or {})
+        extra_body["chat_template_kwargs"] = dict(settings.chat_template_kwargs)
+        payload["extra_body"] = extra_body
     return payload
 
 
@@ -1119,6 +1136,7 @@ class IntentParser(BaseLLMService):
         # Keep the prompt JSON-only and fall back to regex extraction instead.
         if self.settings.response_format and self.settings.provider != "ark":
             payload["response_format"] = {"type": "json_object"}
+        payload = _apply_chat_template_kwargs(payload, self.settings)
 
         response = await client.chat.completions.create(**payload)
         return _extract_text_from_chat_response(response)
@@ -1586,6 +1604,7 @@ class GoalDecomposer(BaseLLMService):
         payload["max_tokens"] = max(128, int(max_tokens_env)) if max_tokens_env else 1536
         if self.settings.response_format and self.settings.provider != "ark":
             payload["response_format"] = {"type": "json_object"}
+        payload = _apply_chat_template_kwargs(payload, self.settings)
         response = await client.chat.completions.create(**payload)
         return _extract_text_from_chat_response(response)
 
@@ -1837,6 +1856,7 @@ class ItineraryCandidateJudge(BaseLLMService):
         }
         if self.settings.response_format and self.settings.provider != "ark":
             payload["response_format"] = {"type": "json_object"}
+        payload = _apply_chat_template_kwargs(payload, self.settings)
         response = await client.chat.completions.create(**payload)
         return _extract_text_from_chat_response(response)
 
@@ -2050,6 +2070,7 @@ class CandidateReranker(BaseLLMService):
         }
         if self.settings.response_format and self.settings.provider != "ark":
             payload["response_format"] = {"type": "json_object"}
+        payload = _apply_chat_template_kwargs(payload, self.settings)
         response = await client.chat.completions.create(**payload)
         return _extract_text_from_chat_response(response)
 
@@ -2368,6 +2389,7 @@ class VisionAnalyzer(BaseLLMService):
             },
             self.settings,
         )
+        payload = _apply_chat_template_kwargs(payload, self.settings)
         try:
             if self._stream_timing_enabled():
                 streamed = await self._stream_chat_completions(client, payload)
@@ -2575,11 +2597,15 @@ class MapLocalizationService(BaseLLMService):
         *,
         messages: list[dict[str, Any]],
     ) -> str:
-        response = await client.chat.completions.create(
-            model=self.settings.model,
-            temperature=self.settings.temperature,
-            messages=messages,
+        payload = _apply_chat_template_kwargs(
+            {
+                "model": self.settings.model,
+                "temperature": self.settings.temperature,
+                "messages": messages,
+            },
+            self.settings,
         )
+        response = await client.chat.completions.create(**payload)
         return _extract_text_from_chat_response(response)
 
     async def _call_responses_api(
