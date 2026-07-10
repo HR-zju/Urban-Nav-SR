@@ -620,6 +620,7 @@ def _stage2_llm_system_prompt(target: str) -> str:
     return (
         "You are the live RouteServer Stage2 inference backend. "
         "Return only the next assistant message content for the requested target. "
+        "The target is either tool_decision or final_navigation; never mix both targets. "
         "Follow the XML-like tag grammar exactly. "
         "Do not use markdown, code fences, prose outside the required tags, or provider function-calling. "
         f"Current target: {target}."
@@ -632,8 +633,8 @@ def _stage2_output_contract(*, target: str, has_tool_response: bool) -> dict[str
     if target == "tool_decision":
         return {
             "allowed_outputs": [
-                "no_tool: <think>\\n<AgentState>{json}</AgentState>\\n<ToolDecision>{\"should_call_tool\":false,...}</ToolDecision>\\n</think>, no <tool_call>",
-                "tool: <think>\\n<AgentState>{json}</AgentState>\\n<ToolDecision>{\"should_call_tool\":true,\"tool\":\"...\",\"op\":\"...\",...}</ToolDecision>\\n</think>, followed by sibling <tool_call>{...}</tool_call>",
+                "no_tool: <think>\\n<AgentState>{json}</AgentState>\\n<ToolDecision>{\"should_call_tool\":false,\"reason_code\":\"local_context_sufficient\",...}</ToolDecision>\\n</think>, no <tool_call>",
+                "tool: <think>\\n<AgentState>{json}</AgentState>\\n<ToolDecision>{\"should_call_tool\":true,\"tool\":\"...\",\"op\":\"...\",\"reason_code\":\"need_map_context\",...}</ToolDecision>\\n</think>, followed by sibling <tool_call>{...}</tool_call>",
             ],
             "rules": [
                 "Always emit <AgentState> and <ToolDecision> as XML-like tags; never write plain labels such as 'AgentState:' or 'ToolDecision:'.",
@@ -645,6 +646,7 @@ def _stage2_output_contract(*, target: str, has_tool_response: bool) -> dict[str
                 "Never use placeholders such as 'current longitude,current latitude' or 'lon,lat'.",
                 "For map_tool.create_route_session, include op, origin, destination, and mode=foot unless the user asks otherwise.",
                 "If the visible route/image context is enough, set should_call_tool=false.",
+                "<ToolDecision>.reason_code is optional; prefer need_map_context, need_visual_crop, need_user_clarification, or local_context_sufficient when present.",
             ],
             "tool_call_shape": {
                 "name": "map_tool",
@@ -672,6 +674,8 @@ def _stage2_output_contract(*, target: str, has_tool_response: bool) -> dict[str
             "Use route_action=request_user_input only when user_interaction_tool asks for clarification.",
             "If a tool_response is available, include <ToolResultUse> summarizing tool_used, used_for, result_summary, route_update, and navigation_effect.",
             "<ToolResultUse>.tool_used must be true when the prefix contains a tool_response.",
+            "Raw tool_response is environment context; summarize only its decision-relevant effect in <ToolResultUse>.",
+            "<Plan> encodes symbolic local navigation policy only; do not output CFM action chunks, ego_delta_xyt, or System1Output in assistant text.",
         ],
         "tool_result_use_shape": {
             "tool_used": has_tool_response,

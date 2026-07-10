@@ -227,6 +227,7 @@ def build_refine_question(source_row: dict[str, Any], base_sections: dict[str, d
         "</think>\n"
         "<finish>{...}</finish>\n\n"
         "Do not add markdown or prose outside the tags.\n\n"
+        "<Plan> is symbolic local navigation policy only; do not output CFM action chunks, ego_delta_xyt, or System1Output in assistant text.\n\n"
         f"{cot.COT_BEV_VISUAL_CONVENTION}\n"
         "Evidence JSON:\n"
         f"{json.dumps(payload, ensure_ascii=False, indent=2)}"

@@ -12,7 +12,7 @@ from typing import Any
 
 from mcp_server.agent.finish_schema import finish_trajectory_matches
 from mcp_server.agent.schemas import AgentMetricResult, AgentStage2Case, AgentTrace, ToolCall, ToolResponse
-from mcp_server.agent.stage2 import NAVIGATION_READOUT_TOKENS, SYSTEM1_READOUT_TOKENS
+from mcp_server.agent.stage2 import NAVIGATION_READOUT_TOKENS, SYSTEM1_READOUT_TOKENS, TOOL_DECISION_REASON_CODES
 from mcp_server.agent.tool_parser import parse_finish_text, parse_tool_call_text
 from mcp_server.agent.tool_schema import validate_tool_call
 
@@ -258,6 +258,42 @@ def _tool_decision_consistent(trace: AgentTrace, decisions: list[dict[str, Any]]
     return should_call == has_tool_call
 
 
+def _tool_decision_reason_code_metrics(decisions: list[dict[str, Any]]) -> dict[str, float | None]:
+    """Return non-blocking audit metrics for optional ``reason_code`` fields.
+
+    Args:
+        decisions: Parsed ``<ToolDecision>`` payloads.
+
+    Returns:
+        ``tool_decision_reason_code_present_rate`` measures how often new
+        traces include the optional field. ``tool_decision_reason_code_validity``
+        is 0 when an emitted code is outside the allowed enum, but this is not
+        added to parse errors so historical data remains valid.
+    """
+
+    if not decisions:
+        return {
+            "tool_decision_reason_code_present_rate": None,
+            "tool_decision_reason_code_validity": None,
+        }
+    reason_codes = [
+        str(decision.get("reason_code") or "").strip()
+        for decision in decisions
+        if decision.get("reason_code") is not None
+    ]
+    if not reason_codes:
+        return {
+            "tool_decision_reason_code_present_rate": 0.0,
+            "tool_decision_reason_code_validity": None,
+        }
+    return {
+        "tool_decision_reason_code_present_rate": len(reason_codes) / len(decisions),
+        "tool_decision_reason_code_validity": 1.0
+        if all(reason_code in TOOL_DECISION_REASON_CODES for reason_code in reason_codes)
+        else 0.0,
+    }
+
+
 def _finish_trajectory_consistent(
     finishes: list[dict[str, Any]],
     case: AgentStage2Case | None,
@@ -326,6 +362,8 @@ def compute_trace_metrics(trace: AgentTrace, case: AgentStage2Case | None = None
             tool 路径还要求 ``<ToolResultUse>``。
         ``tool_result_use_validity``: ``<ToolResultUse>`` 是否只表达工具结果使用结论。
         ``tool_decision_consistency``: ``should_call_tool`` 是否与实际 role 序列一致。
+        ``tool_decision_reason_code_present_rate`` / ``tool_decision_reason_code_validity``:
+            可选原因码的覆盖率和枚举合法性。非法原因码只作为 debug metric，不阻断旧数据。
         ``unnecessary_tool_call_rate``: 显式 no-tool 样本是否错误调用工具。
         ``route_update_success``: route-session 类 tool_response 是否成功更新。
     """
@@ -376,6 +414,7 @@ def compute_trace_metrics(trace: AgentTrace, case: AgentStage2Case | None = None
             break
 
     tool_decision_consistency = 1.0 if _tool_decision_consistent(trace, tool_decisions) else 0.0
+    reason_code_metrics = _tool_decision_reason_code_metrics(tool_decisions)
     # None 表示该样本没有对应 GT 或不适用，聚合时不会被当作 0。
     metrics: dict[str, float | None] = {
         "parse_success": 1.0 if finishes and not parse_errors and tool_decision_consistency == 1.0 else 0.0,
@@ -388,6 +427,7 @@ def compute_trace_metrics(trace: AgentTrace, case: AgentStage2Case | None = None
         "final_cot_validity": 1.0 if _final_cot_valid(trace) else 0.0,
         "tool_result_use_validity": 1.0 if _tool_result_use_valid(trace) else 0.0,
         "tool_decision_consistency": tool_decision_consistency,
+        **reason_code_metrics,
         "unnecessary_tool_call_rate": (1.0 if tool_calls else 0.0) if expected_no_tool else None,
         "finish_trajectory_consistency": _finish_trajectory_consistent(finishes, case, trace),
         "route_update_success": route_update_success,

@@ -104,7 +104,7 @@ System1 / heads:
     "query": "nearby convenience store"
   },
   "decision_meta": {
-    "reason_code": "need_external_map_context"
+    "reason_code": "need_map_context"
   }
 }
 ```

@@ -35,7 +35,13 @@ from mcp_server.agent.tool_schema import get_tool_definitions
 DEFAULT_AGENT_SYSTEM_PROMPT = (
     "You are a sidewalk navigation agent. First reason about whether external map, image, "
     "or user-interaction context is needed. When needed, emit a tool call through the "
-    "tool_call role. After tool responses, produce the final navigation CoT and finish block."
+    "tool_call role. <ToolDecision>.reason_code is optional and should use compact values "
+    "such as need_map_context, need_visual_crop, need_user_clarification, or "
+    "local_context_sufficient while keeping the free-text reason field. After tool responses, "
+    "produce the final navigation CoT and finish block. Raw tool_response content is context; "
+    "summarize only its decision-relevant effect in <ToolResultUse>. <Plan> is symbolic local "
+    "navigation policy only; do not output CFM action chunks, ego_delta_xyt, or System1Output "
+    "in assistant text."
 )
 
 _FINISH_RE = re.compile(r"<finish>(.*?)</finish>", re.DOTALL)

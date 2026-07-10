@@ -21,6 +21,7 @@ from mcp_server.agent.finish_schema import (
     parse_finish_trajectory_norm,
 )
 from mcp_server.agent.schemas import AgentStage2Case, ToolCall, ToolResponse
+from mcp_server.agent.tool_schema import IMAGE_TOOL_NAME, MAP_TOOL_NAME, USER_INTERACTION_TOOL_NAME
 
 
 TRAJECTORY_TOKEN_COUNT = 16
@@ -31,6 +32,16 @@ READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2 = "assistant_suffix_v2"
 READOUT_PLACEMENTS = {
     READOUT_PLACEMENT_USER_PROMPT_V1,
     READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2,
+}
+TOOL_DECISION_REASON_CODE_NEED_MAP_CONTEXT = "need_map_context"
+TOOL_DECISION_REASON_CODE_NEED_VISUAL_CROP = "need_visual_crop"
+TOOL_DECISION_REASON_CODE_NEED_USER_CLARIFICATION = "need_user_clarification"
+TOOL_DECISION_REASON_CODE_LOCAL_CONTEXT_SUFFICIENT = "local_context_sufficient"
+TOOL_DECISION_REASON_CODES = {
+    TOOL_DECISION_REASON_CODE_NEED_MAP_CONTEXT,
+    TOOL_DECISION_REASON_CODE_NEED_VISUAL_CROP,
+    TOOL_DECISION_REASON_CODE_NEED_USER_CLARIFICATION,
+    TOOL_DECISION_REASON_CODE_LOCAL_CONTEXT_SUFFICIENT,
 }
 FINAL_NAVIGATION_DECISION_PROMPT = (
     "Produce the final sidewalk navigation decision using FPV, BEV, and route state.\n\n"
@@ -189,12 +200,42 @@ def build_agent_state(case: AgentStage2Case, *, intent: dict[str, Any] | None = 
     }
 
 
-def build_tool_decision(call: ToolCall | None, *, reason: str) -> dict[str, Any]:
+def infer_tool_decision_reason_code(call: ToolCall | None) -> str:
+    """Infer a compact ``<ToolDecision>.reason_code`` from the selected tool.
+
+    Args:
+        call: Tool call selected by teacher/runtime. ``None`` represents a
+            no-tool replay where local context is already sufficient.
+
+    Returns:
+        One value from ``TOOL_DECISION_REASON_CODES``. This field is an audit
+        label for tool-decision quality; it is not part of executable tool
+        arguments and historical traces may omit it.
+    """
+
+    if call is None:
+        return TOOL_DECISION_REASON_CODE_LOCAL_CONTEXT_SUFFICIENT
+    if call.tool == MAP_TOOL_NAME:
+        return TOOL_DECISION_REASON_CODE_NEED_MAP_CONTEXT
+    if call.tool == IMAGE_TOOL_NAME:
+        return TOOL_DECISION_REASON_CODE_NEED_VISUAL_CROP
+    if call.tool == USER_INTERACTION_TOOL_NAME:
+        return TOOL_DECISION_REASON_CODE_NEED_USER_CLARIFICATION
+    return TOOL_DECISION_REASON_CODE_NEED_MAP_CONTEXT
+
+
+def build_tool_decision(
+    call: ToolCall | None,
+    *,
+    reason: str,
+    reason_code: str | None = None,
+) -> dict[str, Any]:
     """Build the compact ``<ToolDecision>`` payload.
 
     Args:
         call: 下一步要执行的工具调用。None 表示教师标注 no-tool replay。
         reason: 教师给出的决策理由，作为 LM 监督的一部分。
+        reason_code: 可选离散原因码。为空时按工具类型推断；旧标注可完全缺省。
 
     Returns:
         ``<ToolDecision>`` JSON。tool 路径中它与下一条 ``tool_call`` role 对齐；
@@ -203,6 +244,7 @@ def build_tool_decision(call: ToolCall | None, *, reason: str) -> dict[str, Any]
 
     decision = {
         "should_call_tool": call is not None,
+        "reason_code": reason_code or infer_tool_decision_reason_code(call),
         "reason": reason,
     }
     if call is not None:

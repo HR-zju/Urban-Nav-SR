@@ -93,6 +93,7 @@ class AgentEvalFlowTest(unittest.IsolatedAsyncioTestCase):
         trace = AgenticStage2TraceBuilder().build_trace(case, call=call)
         self.assertEqual([turn.role for turn in trace.turns], ["user", "assistant", "tool_call", "tool_response", "user", "assistant"])
         self.assertEqual(trace.turns[2].content["name"], "map_tool")
+        self.assertIn('"reason_code":"need_map_context"', trace.turns[1].content)
         self.assertIn("[TRAJ_0]", trace.turns[4].content)
         self.assertIn('"result_summary"', trace.turns[5].content)
         self.assertIn('"navigation_effect"', trace.turns[5].content)
@@ -117,6 +118,31 @@ class AgentEvalFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(validate_stage2_trace(trace, case).valid)
         self.assertTrue(validate_ms_swift_stage2_row(row).valid)
         self.assertEqual([message["role"] for message in row["messages"]], ["system", "user", "assistant", "user", "assistant"])
+
+    async def test_tool_decision_reason_code_is_optional_and_non_blocking(self) -> None:
+        case = _sample_case()
+        call = ToolCall(tool="map_tool", arguments={"op": "search_poi", "query": "rest stop", "location": "120,30"})
+
+        invalid_trace = AgenticStage2TraceBuilder().build_trace(
+            case,
+            call=call,
+            tool_decision_reason_code="bad_reason_code",
+        )
+        invalid_metrics = compute_trace_metrics(invalid_trace, case)
+        self.assertEqual(invalid_metrics.metrics["parse_success"], 1.0)
+        self.assertEqual(invalid_metrics.metrics["tool_decision_reason_code_validity"], 0.0)
+        self.assertEqual(invalid_metrics.errors, [])
+
+        legacy_trace = AgenticStage2TraceBuilder().build_trace(case, call=None)
+        legacy_trace.turns[1].content = legacy_trace.turns[1].content.replace(
+            '"reason_code":"local_context_sufficient",',
+            "",
+        )
+        legacy_metrics = compute_trace_metrics(legacy_trace, case)
+        self.assertEqual(legacy_metrics.metrics["parse_success"], 1.0)
+        self.assertEqual(legacy_metrics.metrics["tool_decision_reason_code_present_rate"], 0.0)
+        self.assertIsNone(legacy_metrics.metrics["tool_decision_reason_code_validity"])
+        self.assertTrue(validate_stage2_trace(legacy_trace, case).valid)
 
     async def test_agentic_stage2_trace_builder_supports_failed_tool_response(self) -> None:
         case = _sample_case()

@@ -74,6 +74,7 @@ class AgenticStage2TraceBuilder:
         model_run: dict[str, Any] | None = None,
         intent: dict[str, Any] | None = None,
         tool_decision_reason: str = "external context is required before final navigation",
+        tool_decision_reason_code: str | None = None,
         recommendation: dict[str, Any] | None = None,
         visual_prompt: dict[str, Any] | None = None,
         phase1_response: str | None = None,
@@ -89,6 +90,8 @@ class AgenticStage2TraceBuilder:
             tools: 学生可见工具 schema 为空时使用默认三类元工具。
             model_run: 记录 runner/teacher 配置的审计信息。
             intent/recommendation/visual_prompt: teacher internal context 只用于摘要和合成返回。
+            tool_decision_reason_code: 可选离散原因码；为空时由 ``stage2`` helper
+                根据 tool 类型推断，保持旧调用兼容。
             phase1_response: 已有 Phase1 CoT 为空时从 case 自动查找，再 fallback。
 
         返回:
@@ -103,7 +106,11 @@ class AgenticStage2TraceBuilder:
         # 第一轮 assistant 只写 AgentState/ToolDecision；可执行 tool_call 作为独立 role 追加。
         think_text = build_agent_think_text(
             state=build_agent_state(case, intent=intent),
-            decision=build_tool_decision(call, reason=tool_decision_reason),
+            decision=build_tool_decision(
+                call,
+                reason=tool_decision_reason,
+                reason_code=tool_decision_reason_code,
+            ),
         )
         trace.add_turn("assistant", think_text, metadata={"stage2_step": "tool_decision_think"})
 

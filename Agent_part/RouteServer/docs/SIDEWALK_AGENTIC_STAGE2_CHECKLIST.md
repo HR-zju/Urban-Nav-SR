@@ -21,6 +21,8 @@
 - [x] 最终 assistant 只写工具结果使用结论：`<ToolResultUse>{...}</ToolResultUse>`。
 - [x] no-tool replay 不写 `tool_call`、`tool_response`、`<ToolResultUse>`。
 - [x] `AgentState.available_context` 只列运行时可观测上下文；`pixel_trajectory` / `trajectory_fpv_t` / `trajectory_ego_t` / seg label 只作为顶层监督字段，不进入 assistant target。
+- [x] `<ToolDecision>.reason_code` 是可选离散审计字段，允许值为 `need_map_context` / `need_visual_crop` / `need_user_clarification` / `local_context_sufficient`；旧 trace 缺省时仍然有效。
+- [x] `<Plan>` 只表达 symbolic local navigation policy；CFM action chunk、`ego_delta_xyt`、`System1Output` 不写入 assistant text，只作为顶层监督或模型 head 输出。
 
 验收标准：
 
@@ -38,6 +40,7 @@ PYTHONPATH=src PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/test_agent_eval_
 - [x] `AgentStage2Case` 作为 Stage2 case 主类。
 - [x] `AgentTrace` 支持 `tool_call` / `tool_response` 独立 role。
 - [x] `AgenticStage2TraceBuilder` 支持 tool / no-tool / failed-tool 三类 trace。
+- [x] `AgenticStage2TraceBuilder` 支持 `tool_decision_reason_code=None`，默认由工具类型推断并兼容旧调用。
 - [x] `trace_to_ms_swift_stage2_row()` 导出 ms-swift agent-template row。
 - [x] exporter 透传 `pixel_trajectory` / `trajectory_fpv_t` / `semantic_segmentation_path` 等额外监督字段。
 - [x] `stage2_validator` 校验 tool/no-tool 两种 role sequence。
@@ -51,6 +54,7 @@ PYTHONPATH=src PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/test_agent_eval_
 - validator 将 finish 轨迹转回 norm01，并与 top-level `pixel_trajectory` 做等价检查。
 - tool 路径中 `[TRAJ_i]` 在 `tool_response` 后。
 - no-tool 路径中 `[TRAJ_i]` 在 first assistant think 后。
+- 旧 `ToolDecision` 无 `reason_code` 不阻断 validator/metrics；新样本可解析 `need_map_context` 等离散原因码。
 
 ## 2. ToolExecutor 逐工具单测
 
