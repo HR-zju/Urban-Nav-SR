@@ -213,21 +213,46 @@ def build_behavior_system_prompt() -> str:
     """
 
     return (
-        "You are an expert first-person robot navigation sample reviewer.\n"
-        "Your task is to analyze a temporal FPV sample from a delivery robot "
-        "in an urban environment.\n\n"
+        "Your task is to analyze a temporal FPV sample from an assistive navigation "
+        "robot for people with disabilities in an urban environment.\n\n"
         "Determine if this sample is \"interesting\" or \"boring\" for navigation training.\n\n"
+        "Be strict: mark a sample as INTERESTING only when the visual event or "
+        "scene element is close enough and relevant enough to affect the robot's "
+        "current or near-future navigation decision. As a visual rule of thumb, "
+        "the object/terrain should be in the robot's likely path or side-clearance "
+        "zone within the next 3-5 seconds, roughly within 0-8 meters. For road "
+        "crossings, traffic lights, vehicles, or intersections, a farther cue can "
+        "count only if it is clearly on the robot's route and likely to affect the "
+        "next maneuver, roughly within 0-15 meters. Distant background activity, "
+        "parked objects far outside the path, or visually complex scenery that does "
+        "not affect navigation should still be BORING.\n\n"
         "INTERESTING scenes include:\n"
-        "- Interactions with pedestrians\n"
-        "- Interactions with objects\n"
-        "- Complex terrain navigation\n"
-        "- Traffic situations\n"
-        "- Environmental interactions\n"
-        "- Dynamic obstacles or unexpected situations\n\n"
+        "- Pedestrian interaction: a person in or near the path, crossing ahead, "
+        "approaching from the side, forcing yielding, slowing, or detouring.\n"
+        "- Object interaction: cones, barriers, signs, bikes, scooters, parked "
+        "items, carts, doors, or trash bins that narrow, block, or border the "
+        "robot's immediate corridor.\n"
+        "- Complex terrain navigation: curbs, curb cuts, ramps, stairs, tactile "
+        "paving, uneven pavement, puddles, gravel, narrow gaps, or sidewalk-road "
+        "transitions close to the robot.\n"
+        "- Traffic situations: crosswalks, intersections, driveways, traffic "
+        "lights, moving vehicles, bikes, scooters, or vehicle conflict zones that "
+        "the robot is about to enter or pass.\n"
+        "- Environmental interaction: construction zones, temporary sidewalk "
+        "closures, gates, tight passages, occluded corners, or route changes that "
+        "require an action soon.\n"
+        "- Dynamic or unexpected situations: moving people/vehicles/objects, sudden "
+        "occlusions, stopped crowds, animals, emergency vehicles, or anything that "
+        "requires cautious behavior now.\n\n"
         "BORING scenes include:\n"
-        "- Simple straight-line walking on sidewalks\n"
-        "- Repetitive movement without interactions\n"
-        "- Just following a path without any challenges\n\n"
+        "- Simple straight-line motion on a clear sidewalk or road edge with no "
+        "near-field obstacle or decision point.\n"
+        "- Repetitive movement without interactions, such as long open paths, "
+        "corridors, fences, walls, lawns, or buildings beside the path.\n"
+        "- Distant pedestrians, distant cars, distant intersections, or parked "
+        "objects that are outside the likely path and do not change the next action.\n"
+        "- Merely following a visible path, lane, curb, or sidewalk when the route "
+        "is unobstructed and no yielding, stopping, turning, or avoidance is needed.\n\n"
         "Please respond with only \"1\" for interesting or \"2\" for boring."
     )
 
@@ -254,6 +279,9 @@ def build_behavior_question(row: dict[str, Any], frame_paths: list[str]) -> str:
     return (
         "Classify the provided temporal FPV frames as one already-built training sample.\n"
         "The images are ordered from oldest to newest; the final image is the supervised current frame.\n"
+        "Prioritize the final/current frame. Use earlier frames only to understand motion or whether a nearby "
+        "object is approaching, receding, or already passed. Do not mark a sample interesting just because "
+        "there are distant background objects or old-frame events that no longer affect the current action.\n"
         "Return only the single character 1 or 2.\n\n"
         "Metadata JSON:\n"
         f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
@@ -396,25 +424,22 @@ def collect_row_fpv_images(row: dict[str, Any], *, max_frames: int) -> list[str]
     """
 
     candidates: list[str] = []
-    for key in ("fpv_image_paths", "history_fpv_image_paths"):
-        value = row.get(key)
+    value = row.get("fpv_image_paths")
+    if isinstance(value, list) and value:
+        candidates.extend(str(item) for item in value if looks_like_fpv_path(item))
+    else:
+        value = row.get("history_fpv_image_paths")
         if isinstance(value, list):
             candidates.extend(str(item) for item in value if looks_like_fpv_path(item))
-    if row.get("fpv_image_path") and looks_like_fpv_path(row.get("fpv_image_path")):
-        candidates.append(str(row["fpv_image_path"]))
+        if row.get("fpv_image_path") and looks_like_fpv_path(row.get("fpv_image_path")):
+            candidates.append(str(row["fpv_image_path"]))
 
     if not candidates and isinstance(row.get("images"), list):
         candidates.extend(str(item) for item in row["images"] if looks_like_fpv_path(item))
         if not candidates:
             candidates.extend(str(item) for item in row["images"] if is_image_path(item))
 
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for item in candidates:
-        if item not in seen:
-            seen.add(item)
-            deduped.append(item)
-    return uniformly_subsample(deduped, max_frames)
+    return uniformly_subsample(candidates, max_frames)
 
 
 def collect_behavior_frames(
