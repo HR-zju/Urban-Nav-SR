@@ -136,6 +136,15 @@ class RouteSessionRunResult:
             Dictionary suitable for online logging or offline replay indexing.
         """
 
+        from mcp_server.contracts.trace_adapter import merge_agent_traces_to_episode
+
+        episode_trace = merge_agent_traces_to_episode(
+            self.traces,
+            episode_id=self.session_id,
+            session_id=self.session_id,
+            stop_reason=self.stopped_reason,
+            source=str(self.metadata.get("source") or "route_session_runtime"),
+        )
         return {
             "schema_version": self.schema_version,
             "session_id": self.session_id,
@@ -143,6 +152,7 @@ class RouteSessionRunResult:
             "tick_count": len(self.ticks),
             "ticks": [tick.to_dict() for tick in self.ticks],
             "metadata": dict(self.metadata),
+            "episode_trace_v2": episode_trace.model_dump(mode="json"),
         }
 
     @property
@@ -209,6 +219,17 @@ class RouteSessionRuntime:
                 "tick_index": tick_index,
                 "source": self.config.source,
             }
+        )
+        # 单 tick runner 可能已附加 episode view；这里用 session/tick id
+        # 重新生成，保证多个 tick 能合并为同一条因果事件流。
+        from mcp_server.contracts.trace_adapter import attach_episode_trace_v2
+
+        attach_episode_trace_v2(
+            trace,
+            episode_id=self.config.session_id,
+            session_id=self.config.session_id,
+            tick_id=tick_index,
+            source=self.config.source,
         )
         trace_validation = _extract_trace_validation(run_result) or validate_stage2_trace(trace, case)
         row_validation = _extract_row_validation(run_result)

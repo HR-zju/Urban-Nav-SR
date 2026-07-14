@@ -10,6 +10,7 @@ from typing import Any
 from mcp_server.agent.schemas import AgentTrace, ToolResponse
 from mcp_server.agent.tool_parser import parse_agent_action
 from mcp_server.agent.tool_schema import MAP_TOOL_NAME, get_tool_definitions
+from mcp_server.contracts.trace_adapter import attach_episode_trace_v2
 from mcp_server.eval.urbannav_replay_tool_executor import (
     ReplayUrbanNavToolExecutor,
     UrbanNavReplayToolState,
@@ -247,6 +248,13 @@ class UrbanNavToolAgentRunner(AsyncUrbanNavRunner):
         finish: dict[str, Any],
     ) -> dict[str, Any]:
         trace.metrics = self.executor.tool_metrics(state)
+        attach_episode_trace_v2(
+            trace,
+            episode_id=trace.case_id,
+            session_id=state.route_session_id,
+            tick_id=0,
+            source="urbannav_tool_agent",
+        )
         return {
             "runner": "urbannav_tool_agent",
             "agent_trace": trace.to_dict(),
@@ -255,6 +263,12 @@ class UrbanNavToolAgentRunner(AsyncUrbanNavRunner):
         }
 
     def _prediction_exception(self, *, case: UrbanNavCase, trace: AgentTrace, detail: str) -> UrbanNavPrediction:
+        attach_episode_trace_v2(
+            trace,
+            episode_id=case.case_id,
+            tick_id=0,
+            source="urbannav_tool_agent",
+        )
         return UrbanNavPrediction(
             case_id=case.case_id,
             trace={

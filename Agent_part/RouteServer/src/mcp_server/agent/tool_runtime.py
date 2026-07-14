@@ -327,6 +327,10 @@ class AgentToolRuntime:
             if metric_result.errors:
                 trace.metadata["metric_errors"] = metric_result.errors
         self._attach_runtime_log(trace, runtime_errors=runtime_errors)
+        # 同时附加 v2 episode event 视图，不改变 legacy Stage2 trace/row。
+        from mcp_server.contracts.trace_adapter import attach_episode_trace_v2
+
+        attach_episode_trace_v2(trace, episode_id=case.case_id, tick_id=0, source=self.config.source)
         return trace
 
     def _parse_first_tool_call(self, first_assistant_output: str) -> tuple[ToolCall | None, list[str]]:

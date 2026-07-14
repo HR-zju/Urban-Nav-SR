@@ -14,6 +14,7 @@ from typing import Any
 
 from mcp_server.agent.schemas import ToolCall, ToolResponse
 from mcp_server.agent.tool_schema import MAP_TOOL_NAME, normalize_map_tool_arguments
+from mcp_server.tools.registry import DEFAULT_TOOL_REGISTRY
 from mcp_server.core.replay_map_backend import ReplayPoiResult, ReplayRouteResult
 from mcp_server.eval.urbannav_runners import (
     ReplayUrbanNavBackendAdapter,
@@ -127,6 +128,29 @@ class ReplayUrbanNavToolExecutor:
         self.candidate_limit = max(1, int(candidate_limit))
         self.mode = str(mode or "foot")
 
+    @classmethod
+    def supported_capabilities(cls) -> set[tuple[str, str]]:
+        """Return operations implemented by the frozen replay executor.
+
+        Returns:
+            Explicit ``(tool, op)`` pairs used by conformance tests.
+        """
+
+        return {
+            (MAP_TOOL_NAME, op)
+            for op in {
+                "search_destination",
+                "search_poi",
+                "plan_route",
+                "create_route_session",
+                "get_route_session",
+                "add_via",
+                "add_via_and_replan",
+                "replace_destination",
+                "replan_from_current_pose",
+            }
+        }
+
     def new_state(self, case: UrbanNavCase) -> UrbanNavReplayToolState | None:
         """Create a case-local state.
 
@@ -161,6 +185,14 @@ class ReplayUrbanNavToolExecutor:
             never fabricates a prediction.
         """
 
+        valid, errors, canonical_arguments = DEFAULT_TOOL_REGISTRY.validate_call(call)
+        if not valid:
+            return self._error(call, "invalid_tool_call", {"messages": errors})
+        call = ToolCall(
+            tool=call.tool,
+            arguments=dict(canonical_arguments or {}),
+            call_id=call.call_id,
+        )
         if call.tool != MAP_TOOL_NAME:
             return self._error(call, "unsupported_tool", {"tool": call.tool})
         op = str(normalize_map_tool_arguments(call.arguments).get("op") or call.op or "").strip()

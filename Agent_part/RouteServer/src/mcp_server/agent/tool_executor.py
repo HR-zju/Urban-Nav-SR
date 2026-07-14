@@ -12,9 +12,10 @@ from mcp_server.agent.tool_schema import (
     IMAGE_TOOL_NAME,
     MAP_TOOL_NAME,
     USER_INTERACTION_TOOL_NAME,
-    validate_tool_call,
 )
 from mcp_server.core import map_ops
+from mcp_server.tools.registry import DEFAULT_TOOL_REGISTRY
+from mcp_server.tools.specs import normalize_map_tool_arguments
 
 
 def _as_location(value: Any) -> str:
@@ -63,9 +64,32 @@ class ToolExecutor:
         self.app_context = app_context
         self.artifact_dir = Path(artifact_dir) if artifact_dir else None
 
+    @classmethod
+    def supported_capabilities(cls) -> set[tuple[str, str]]:
+        """Return capabilities implemented by the live executor.
+
+        Returns:
+            Explicit ``(tool, op)`` pairs used by conformance tests.
+        """
+
+        return {
+            *{(MAP_TOOL_NAME, op) for op in {
+                "geocode", "reverse_geocode", "search_destination", "search_poi", "search_category",
+                "plan_route", "get_route", "get_route_context", "create_route_session", "get_route_session",
+                "add_via", "add_via_and_replan", "remove_via_and_replan", "replace_destination",
+                "replan_from_current_pose",
+            }},
+            (IMAGE_TOOL_NAME, "crop"),
+            (IMAGE_TOOL_NAME, "zoom_in"),
+            *{(USER_INTERACTION_TOOL_NAME, op) for op in {
+                "ask_user", "request_clarification", "present_options", "confirm_route_change",
+                "notify_issue", "answer_query",
+            }},
+        }
+
     async def execute(self, call: ToolCall, *, case: AgentStage2Case | None = None) -> ToolResponse:
         # executor 只执行 schema 允许的工具；非法调用也转成 tool_response，保证 trace 完整。
-        is_valid, errors = validate_tool_call(call)
+        is_valid, errors, canonical_arguments = DEFAULT_TOOL_REGISTRY.validate_call(call)
         if not is_valid:
             return ToolResponse(
                 tool=call.tool,
@@ -73,6 +97,13 @@ class ToolExecutor:
                 error={"code": "invalid_tool_call", "messages": errors},
                 call_id=call.call_id,
             )
+        # executor 只消费 registry 验证后的 canonical 参数，避免 live/replay
+        # 对同一 alias 产生不同语义。
+        call = ToolCall(
+            tool=call.tool,
+            arguments=dict(canonical_arguments or {}),
+            call_id=call.call_id,
+        )
         try:
             # 三类元工具统一从这里分发，方便 validator/test 对 schema 与 executor 做一致性检查。
             if call.tool == MAP_TOOL_NAME:
@@ -106,7 +137,7 @@ class ToolExecutor:
         return None
 
     async def _execute_map_tool(self, call: ToolCall) -> ToolResponse:
-        args = dict(call.arguments)
+        args = normalize_map_tool_arguments(call.arguments)
         op = str(args.get("op"))
         if op == "get_route_context":
             # get_route_context v1 只返回 text/structured ContextAsset，不依赖
@@ -129,7 +160,7 @@ class ToolExecutor:
                 latitude=float(args["latitude"]),
                 longitude=float(args["longitude"]),
             )
-        elif op == "search_poi":
+        elif op in {"search_destination", "search_poi"}:
             result = await map_ops.search_poi(
                 app_context=self.app_context,
                 location=_as_location(args.get("location") or args.get("origin")),
@@ -194,7 +225,7 @@ class ToolExecutor:
                 session_id=str(args.get("session_id")),
                 force_replan=bool(args.get("force_replan", False)),
             )
-        elif op == "add_via_and_replan":
+        elif op in {"add_via", "add_via_and_replan"}:
             from mcp_server.core import route_session_ops
 
             result = await route_session_ops.add_via_point(
