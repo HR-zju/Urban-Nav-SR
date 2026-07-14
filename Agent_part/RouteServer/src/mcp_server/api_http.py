@@ -23,18 +23,22 @@ from mcp_server.core.route_session_ops import (
 
 
 LOGGER = logging.getLogger("mcp_server.http_api")
+EPISODE_SERVICE_KEY = web.AppKey("episode_service", object)
 
 
 @dataclass
 class HTTPAPIState:
-    app_context: mcp_server.AppContext
+    app_context: mcp_server.AppContext | None
+    episode_service: Any | None = None
 
     @property
     def provider(self) -> str:
-        return self.app_context.provider
+        return self.app_context.provider if self.app_context is not None else "episode_only"
 
     @property
     def map_client(self):
+        if self.app_context is None:
+            raise RuntimeError("map API is unavailable in episode-only mode")
         return self.app_context.osm_client
 
 
@@ -153,9 +157,61 @@ async def _handle_health(request: web.Request) -> web.Response:
             "status": "ok",
             "provider": state.provider,
             "session_store": mcp_server._route_session_store_info(),
+            "episode_service": state.episode_service is not None,
             "timestamp": datetime.now().isoformat(),
         }
     )
+
+
+async def _handle_episode_reset(request: web.Request) -> web.Response:
+    """Reset one externally-driven training or benchmark episode.
+
+    Args:
+        request: Aiohttp request containing an episode payload.
+
+    Returns:
+        Strict JSON response consumed by ``UrbanNavEnvClient``.
+    """
+
+    state: HTTPAPIState = request.app["state"]
+    if state.episode_service is None:
+        return _json_error(
+            "Episode service is not configured.",
+            status=503,
+            code="episode_service_unavailable",
+        )
+    from mcp_server.runtime.service import EpisodeResetResponse
+
+    payload = await _read_json(request)
+    response = await state.episode_service.reset(payload)
+    validated = response if isinstance(response, EpisodeResetResponse) else EpisodeResetResponse.model_validate(response)
+    return web.json_response(validated.model_dump(mode="json", exclude_none=True))
+
+
+async def _handle_episode_step(request: web.Request) -> web.Response:
+    """Apply one external model action to an active episode.
+
+    Args:
+        request: Aiohttp request containing action and message history.
+
+    Returns:
+        Strict reward/observation response consumed by ``UrbanNavEnvClient``.
+    """
+
+    state: HTTPAPIState = request.app["state"]
+    if state.episode_service is None:
+        return _json_error(
+            "Episode service is not configured.",
+            status=503,
+            code="episode_service_unavailable",
+        )
+    from mcp_server.runtime.service import EpisodeStepResponse
+
+    payload = await _read_json(request)
+    episode_id = str(request.match_info["episode_id"])
+    response = await state.episode_service.step(episode_id, payload)
+    validated = response if isinstance(response, EpisodeStepResponse) else EpisodeStepResponse.model_validate(response)
+    return web.json_response(validated.model_dump(mode="json", exclude_none=True))
 
 
 async def _handle_recommendations(request: web.Request) -> web.Response:
@@ -432,7 +488,10 @@ async def json_error_middleware(request: web.Request, handler):
 async def app_cleanup_ctx(app: web.Application):
     map_client, provider = create_map_client()
     await map_client.connect()
-    state = HTTPAPIState(app_context=mcp_server.AppContext(osm_client=map_client, provider=provider))
+    state = HTTPAPIState(
+        app_context=mcp_server.AppContext(osm_client=map_client, provider=provider),
+        episode_service=app.get(EPISODE_SERVICE_KEY),
+    )
     app["state"] = state
     try:
         yield
@@ -440,18 +499,42 @@ async def app_cleanup_ctx(app: web.Application):
         await map_client.disconnect()
 
 
-def create_app() -> web.Application:
+async def episode_app_cleanup_ctx(app: web.Application):
+    """Install an episode-only state without opening any map connection."""
+
+    app["state"] = HTTPAPIState(app_context=None, episode_service=app.get(EPISODE_SERVICE_KEY))
+    yield
+
+
+def create_app(*, episode_service: Any | None = None, episode_only: bool = False) -> web.Application:
+    """Create the RouteServer HTTP application.
+
+    Args:
+        episode_service: Optional externally-driven episode backend. The API
+            returns HTTP 503 instead of fabricating transitions when absent.
+        episode_only: Expose only frozen episode endpoints and avoid creating a
+            map provider client. This is required for deterministic benchmark
+            serving.
+
+    Returns:
+        Configured aiohttp application.
+    """
+
     app = web.Application(middlewares=[json_error_middleware])
-    app.cleanup_ctx.append(app_cleanup_ctx)
+    app[EPISODE_SERVICE_KEY] = episode_service
+    app.cleanup_ctx.append(episode_app_cleanup_ctx if episode_only else app_cleanup_ctx)
     app.router.add_get("/api/health", _handle_health)
-    app.router.add_post("/api/recommendations", _handle_recommendations)
-    app.router.add_post("/api/routes/plan", _handle_plan_route)
-    app.router.add_post("/api/route-sessions", _handle_create_route_session)
-    app.router.add_get("/api/route-sessions/{session_id}", _handle_get_route_session)
-    app.router.add_post("/api/route-sessions/{session_id}/via-points", _handle_add_via_point)
-    app.router.add_post("/api/route-sessions/{session_id}/replan", _handle_replan_route_session)
-    app.router.add_post("/api/waypoints/push", _handle_push_waypoints)
-    app.router.add_get("/ws/route-sessions/{session_id}", _handle_route_session_ws)
+    if not episode_only:
+        app.router.add_post("/api/recommendations", _handle_recommendations)
+        app.router.add_post("/api/routes/plan", _handle_plan_route)
+        app.router.add_post("/api/route-sessions", _handle_create_route_session)
+        app.router.add_get("/api/route-sessions/{session_id}", _handle_get_route_session)
+        app.router.add_post("/api/route-sessions/{session_id}/via-points", _handle_add_via_point)
+        app.router.add_post("/api/route-sessions/{session_id}/replan", _handle_replan_route_session)
+        app.router.add_post("/api/waypoints/push", _handle_push_waypoints)
+        app.router.add_get("/ws/route-sessions/{session_id}", _handle_route_session_ws)
+    app.router.add_post("/v1/episodes/reset", _handle_episode_reset)
+    app.router.add_post("/v1/episodes/{episode_id}/step", _handle_episode_step)
     return app
 
 
@@ -460,13 +543,34 @@ def main() -> None:
     parser.add_argument("--host", default="0.0.0.0", help="HTTP bind host")
     parser.add_argument("--port", type=int, default=8080, help="HTTP bind port")
     parser.add_argument("--log-level", default="INFO", help="Logging level")
+    parser.add_argument(
+        "--episode-cases",
+        default=None,
+        help="Optional frozen EpisodeCase JSONL exposed at /v1/episodes.",
+    )
+    parser.add_argument(
+        "--episode-only",
+        action="store_true",
+        help="Serve frozen episodes without connecting to a map provider.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
         level=getattr(logging, str(args.log_level).upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
-    web.run_app(create_app(), host=args.host, port=args.port)
+    episode_service = None
+    if args.episode_cases:
+        from mcp_server.eval.episode import FrozenExternalEpisodeService, load_frozen_episode_cases
+
+        episode_service = FrozenExternalEpisodeService(load_frozen_episode_cases(args.episode_cases))
+    if args.episode_only and episode_service is None:
+        parser.error("--episode-only requires --episode-cases")
+    web.run_app(
+        create_app(episode_service=episode_service, episode_only=args.episode_only),
+        host=args.host,
+        port=args.port,
+    )
 
 
 if __name__ == "__main__":
