@@ -310,11 +310,13 @@ def _system1_export_supervision(supervision: dict, *, readout_placement: str) ->
     """
 
     exported = dict(supervision)
+    # v1 仅用于历史兼容；只有 v2 System1 row 进入生产坐标转换闸门。
     if readout_placement != READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2:
         return exported
     trajectory_ego_t = exported.get("trajectory_ego_t")
     if trajectory_ego_t is not None:
         policy = dict(exported.get("trajectory_policy") or {})
+        # 坐标语义必须来自 metadata；不能因 shape 恰好为 [T,3] 就视为 FLU。
         source_format = policy.get("system1_target_format")
         canonical = _canonical_system1_trajectory_ego_t(
             trajectory_ego_t,

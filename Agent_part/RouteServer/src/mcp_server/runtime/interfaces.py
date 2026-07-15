@@ -116,6 +116,7 @@ class System1Output(BaseModel):
             ValueError: If caller metadata contradicts the production format.
         """
 
+        # Runtime 对外只暴露 canonical 累计轨迹；调用方 metadata 不能改写其物理语义。
         expected = {
             "system1_target_field": SYSTEM1_TARGET_FIELD_TRAJECTORY_EGO_T,
             "system1_target_format": SYSTEM1_TARGET_FORMAT_EGO_POSE_XYT_FLU_V1,

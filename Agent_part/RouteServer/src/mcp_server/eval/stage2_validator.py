@@ -381,10 +381,12 @@ def _validate_system1_v2_targets(row: dict[str, Any], *, errors: list[str]) -> N
     width = _last_dim_width(trajectory)
     if width != 3:
         errors.append(f"row_system1_trajectory_ego_t_width:{width}")
+    # contract_meta 约束 template/checkpoint，trajectory_policy 约束数值标签；两处必须一致。
     contract_meta = row.get("contract_meta") if isinstance(row.get("contract_meta"), dict) else {}
     target_format = contract_meta.get("system1_target_format")
     if target_format != SYSTEM1_TARGET_FORMAT_EGO_POSE_XYT_FLU_V1:
         errors.append(f"row_system1_target_format:{target_format}")
+    # 仅验证 [T,3] 无法区分累计轨迹和 delta action，因此继续检查完整物理语义。
     policy = row.get("trajectory_policy") if isinstance(row.get("trajectory_policy"), dict) else {}
     if policy.get("system1_target_format") != SYSTEM1_TARGET_FORMAT_EGO_POSE_XYT_FLU_V1:
         errors.append("row_system1_policy_target_format_not_canonical")

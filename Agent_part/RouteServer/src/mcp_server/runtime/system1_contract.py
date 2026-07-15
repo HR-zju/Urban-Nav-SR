@@ -85,6 +85,7 @@ def canonicalize_trajectory_ego_t(
     }:
         raise ValueError(f"Unsupported trajectory_ego_t source format: {normalized_format}")
 
+    # 已声明 canonical 的 row 只做数值和角度校验，禁止再次交换坐标轴。
     if normalized_format == SYSTEM1_TARGET_FORMAT_EGO_POSE_XYT_FLU_V1:
         canonical = [_validated_xyt_row(row, index=index) for index, row in enumerate(rows)]
         return [[x, y, wrap_angle_rad(yaw)] for x, y, yaw in canonical]
@@ -99,6 +100,7 @@ def canonicalize_trajectory_ego_t(
             raise ValueError(f"trajectory_ego_t row {index} is not a sequence.")
         if len(row) not in {3, 4}:
             raise ValueError(f"trajectory_ego_t row {index} has width {len(row)}; expected 3 or 4.")
+        # legacy 的 dt/speed 不属于 System1 三维目标；这里只读取累计平面位置。
         x_right = _finite_float(row[0], name=f"trajectory_ego_t[{index}][0]")
         y_front = _finite_float(row[1], name=f"trajectory_ego_t[{index}][1]")
         x_forward = y_front
@@ -139,6 +141,7 @@ def canonical_trajectory_policy(
     if yaw_source not in SYSTEM1_YAW_SOURCES:
         raise ValueError(f"Unsupported System1 yaw_source: {yaw_source}")
     payload = dict(policy or {})
+    # canonical 关键字段必须覆盖 source metadata，避免旧坐标语义继续透传。
     payload.update(
         {
             "system1_target_field": SYSTEM1_TARGET_FIELD_TRAJECTORY_EGO_T,
@@ -156,6 +159,7 @@ def canonical_trajectory_policy(
             "normalized": False,
         }
     )
+    # 采样间隔属于 policy metadata，不能重新占用 trajectory_ego_t 的列。
     if payload.get("dt_sec") is None and payload.get("frame_dt_sec") is not None:
         payload["dt_sec"] = float(payload["frame_dt_sec"])
     return payload
