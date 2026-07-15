@@ -1,0 +1,37 @@
+{
+  "version": "urbannav_25k_v2_collection_pool_plan_v1",
+  "case_id_prefix": "urbannav-v4",
+  "purpose": "Oversampled collection pool for the exact final-25K v2 package",
+  "final_distribution_plan": "config/urbannav_25k_v2_distribution_plan.json",
+  "target_cases": 40000,
+  "city_distribution": [
+    {"country": "netherlands", "city": "amsterdam", "count": 2353},
+    {"country": "thailand", "city": "bangkok", "count": 2353},
+    {"country": "spain", "city": "barcelona", "count": 2353},
+    {"country": "germany", "city": "berlin", "count": 2353},
+    {"country": "usa", "city": "chicago", "count": 2353},
+    {"country": "uk", "city": "london", "count": 2353},
+    {"country": "mexico", "city": "mexico_city", "count": 2353},
+    {"country": "usa", "city": "new_york", "count": 2353},
+    {"country": "japan", "city": "osaka", "count": 2353},
+    {"country": "france", "city": "paris", "count": 2353},
+    {"country": "usa", "city": "san_francisco", "count": 2353},
+    {"country": "brazil", "city": "sao_paulo", "count": 2353},
+    {"country": "south_korea", "city": "seoul", "count": 2353},
+    {"country": "singapore", "city": "singapore", "count": 2353},
+    {"country": "australia", "city": "sydney", "count": 2353},
+    {"country": "japan", "city": "tokyo", "count": 2353},
+    {"country": "canada", "city": "toronto", "count": 2352}
+  ],
+  "task_distribution": [
+    {"category": "poi_navigation", "count": 16000},
+    {"category": "implicit_need_navigation", "count": 14000},
+    {"category": "multi_stop_route", "count": 6000},
+    {"category": "route_update_add_via", "count": 4000}
+  ],
+  "route_update_action_distribution": [
+    {"action": "replace_destination", "count": 1600},
+    {"action": "add_via", "count": 1600},
+    {"action": "insert_before_final", "count": 800}
+  ]
+}

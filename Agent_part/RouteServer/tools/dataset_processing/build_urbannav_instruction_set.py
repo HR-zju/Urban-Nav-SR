@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 from pathlib import Path
 import random
@@ -32,7 +32,7 @@ DEFAULT_DISTRIBUTION = ROUTE_SERVER_ROOT / "config" / "urbannav_10k_distribution
 DEFAULT_PROVIDER_MAP = ROUTE_SERVER_ROOT / "config" / "urbannav_target_type_provider_map_mined_v2.json"
 DEFAULT_REGIONS = ROUTE_SERVER_ROOT / "config" / "urbannav_global_gt_collection_full_en.json"
 DEFAULT_OUTPUT_ROOT = ROUTE_SERVER_ROOT / "data" / "benchmark" / "urbannav_instruction_set_full_en_v2"
-BUILDER_VERSION = "urbannav_instruction_set_builder_v1"
+BUILDER_VERSION = "urbannav_instruction_set_builder_v2"
 NEAREST_ACCEPTABLE_ROUTE_RATIO = 1.15
 NEARBY_ACCEPTABLE_ROUTE_RATIO = 1.75
 NEARBY_ACCEPTABLE_ROUTE_LIMIT_M = 1500.0
@@ -67,6 +67,8 @@ class CompiledTask:
         templates: Instruction templates in the selected language.
         target_types: Unordered target types for single-destination tasks.
         ordered_target_types: Ordered target groups for multi-stop tasks.
+        ordered_goal_labels: Canonical, distinct user-facing labels for ordered
+            multi-stop goals.
         query_terms: Provider-neutral text queries derived from target types.
         osm_tags: OSM tag constraints derived from target types.
         tomtom_category_set: TomTom category ids derived from target types.
@@ -92,6 +94,7 @@ class CompiledTask:
     templates: list[str]
     target_types: list[str]
     ordered_target_types: list[list[str]]
+    ordered_goal_labels: list[str]
     query_terms: list[str]
     osm_tags: list[str]
     tomtom_category_set: list[str]
@@ -120,6 +123,7 @@ class CompiledTask:
             "templates": list(self.templates),
             "target_types": list(self.target_types),
             "ordered_target_types": [list(group) for group in self.ordered_target_types],
+            "ordered_goal_labels": list(self.ordered_goal_labels),
             "queries_by_locale": {"default": list(self.query_terms), "en": list(self.query_terms)},
             "osm_tags": list(self.osm_tags),
             "provider_category_map": {
@@ -149,6 +153,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--distribution", type=Path, default=DEFAULT_DISTRIBUTION, help="Benchmark distribution plan JSON.")
     parser.add_argument("--provider-map", type=Path, default=DEFAULT_PROVIDER_MAP, help="Target-type provider ontology JSON.")
     parser.add_argument("--regions-config", type=Path, default=DEFAULT_REGIONS, help="Region config used to populate collection config.")
+    parser.add_argument("--quality-policy", type=Path, default=None, help="Optional v2 benchmark quality policy JSON.")
+    parser.add_argument(
+        "--city-plan-mode",
+        choices=["available_equal", "exact"],
+        default="available_equal",
+        help="Use legacy equal allocation over available regions or require the explicit city distribution plan.",
+    )
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT, help="Output directory.")
     parser.add_argument("--language", choices=["en", "zh"], default="en", help="Instruction template language.")
     parser.add_argument(
@@ -177,6 +188,8 @@ def main() -> None:
         distribution_path=args.distribution,
         provider_map_path=args.provider_map,
         regions_config_path=args.regions_config,
+        quality_policy_path=args.quality_policy,
+        city_plan_mode=args.city_plan_mode,
         output_root=args.output_root,
         language=args.language,
         instruction_mode=args.instruction_mode,
@@ -194,6 +207,8 @@ def build_instruction_set(
     distribution_path: Path,
     provider_map_path: Path,
     regions_config_path: Path | None,
+    quality_policy_path: Path | None = None,
+    city_plan_mode: str = "available_equal",
     output_root: Path,
     language: str,
     instruction_mode: str,
@@ -209,6 +224,11 @@ def build_instruction_set(
         distribution_path: Path to the global distribution plan.
         provider_map_path: Path to the target-type provider map.
         regions_config_path: Optional region config copied into collection config.
+        quality_policy_path: Optional v2 quality policy with multi-stop goal
+            labels and target-group overrides.
+        city_plan_mode: ``"exact"`` requires every configured city quota to
+            match an available collection city. ``"available_equal"`` keeps
+            the legacy behavior.
         output_root: Output artifact directory.
         language: Template language.
         instruction_mode: Instruction rendering mode.
@@ -232,19 +252,24 @@ def build_instruction_set(
     distribution = _load_json(distribution_path)
     provider_map = _load_json(provider_map_path)
     regions_config = _load_json(regions_config_path) if regions_config_path and regions_config_path.exists() else {}
+    quality_policy = _load_json(quality_policy_path) if quality_policy_path and quality_policy_path.exists() else {}
 
     task_quotas = _task_quotas(distribution, include_semantic_analysis=include_semantic_analysis)
-    city_slots = _city_slots(distribution, regions_config=regions_config, seed=seed)
+    route_update_action_quotas = _route_update_action_quotas(distribution)
+    city_slots = _city_slots(distribution, regions_config=regions_config, seed=seed, mode=city_plan_mode)
     compiled = compile_tasks(
         taxonomy=taxonomy,
         provider_map=provider_map,
         task_quotas=task_quotas,
+        route_update_action_quotas=route_update_action_quotas,
         language=language,
         allow_missing_target_types=allow_missing_target_types,
     )
+    compiled = _apply_quality_policy(compiled, quality_policy=quality_policy)
     instruction_rows = build_instruction_rows(
         compiled_tasks=compiled,
         city_slots=city_slots,
+        case_id_prefix=str(distribution.get("case_id_prefix") or "urbannav"),
         seed=seed,
         instruction_mode=instruction_mode,
     )
@@ -254,6 +279,8 @@ def build_instruction_set(
         distribution_path=distribution_path,
         provider_map_path=provider_map_path,
         regions_config_path=regions_config_path,
+        quality_policy_path=quality_policy_path,
+        city_plan_mode=city_plan_mode,
         output_root=output_root,
         language=language,
         instruction_mode=instruction_mode,
@@ -275,6 +302,7 @@ def compile_tasks(
     taxonomy: dict[str, Any],
     provider_map: dict[str, Any],
     task_quotas: dict[str, int],
+    route_update_action_quotas: dict[str, int] | None = None,
     language: str,
     allow_missing_target_types: bool,
 ) -> list[CompiledTask]:
@@ -284,6 +312,7 @@ def compile_tasks(
         taxonomy: Raw taxonomy payload.
         provider_map: Target-type provider ontology.
         task_quotas: Category quota map.
+        route_update_action_quotas: Optional exact route-update action quotas.
         language: Template language.
         allow_missing_target_types: Whether missing provider mappings are
             warnings or errors.
@@ -303,8 +332,15 @@ def compile_tasks(
         specs = specs_by_category.get(category, [])
         if not specs:
             raise ValueError(f"No taxonomy specs found for planned category: {category}")
-        counts = _allocate_by_weight(specs, total=quota)
-        for spec, planned_count in zip(specs, counts):
+        if category == "route_update_add_via" and route_update_action_quotas:
+            planned_specs = _allocate_route_update_specs(
+                specs,
+                action_quotas=route_update_action_quotas,
+                category_quota=quota,
+            )
+        else:
+            planned_specs = list(zip(specs, _allocate_by_weight(specs, total=quota)))
+        for spec, planned_count in planned_specs:
             if planned_count <= 0:
                 continue
             compiled.append(
@@ -320,10 +356,124 @@ def compile_tasks(
     return compiled
 
 
+def _allocate_route_update_specs(
+    specs: list[dict[str, Any]],
+    *,
+    action_quotas: dict[str, int],
+    category_quota: int,
+) -> list[tuple[dict[str, Any], int]]:
+    """Allocate route-update taxonomy specs under exact action quotas.
+
+    Args:
+        specs: Route-update taxonomy specs.
+        action_quotas: Desired count by update action.
+        category_quota: Total route-update category quota.
+
+    Returns:
+        ``(spec, count)`` pairs in taxonomy order.
+
+    Raises:
+        ValueError: If action quotas do not match the category total or an
+            action has no taxonomy specs.
+    """
+
+    if sum(action_quotas.values()) != category_quota:
+        raise ValueError(
+            f"Route-update action quotas sum to {sum(action_quotas.values())}, expected {category_quota}"
+        )
+    by_action: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for spec in specs:
+        by_action[str(spec.get("route_update_action") or "add_via")].append(spec)
+    counts_by_id: dict[int, int] = {}
+    for action, action_quota in action_quotas.items():
+        action_specs = by_action.get(action) or []
+        if action_quota > 0 and not action_specs:
+            raise ValueError(f"No route-update taxonomy specs for action={action}")
+        for spec, count in zip(action_specs, _allocate_by_weight(action_specs, total=action_quota)):
+            counts_by_id[id(spec)] = count
+    return [(spec, counts_by_id.get(id(spec), 0)) for spec in specs]
+
+
+def _apply_quality_policy(
+    tasks: list[CompiledTask],
+    *,
+    quality_policy: dict[str, Any],
+) -> list[CompiledTask]:
+    """Apply explicit v2 multi-stop semantics to compiled tasks.
+
+    Args:
+        tasks: Compiled taxonomy tasks.
+        quality_policy: Optional quality policy payload.
+
+    Returns:
+        Tasks with configured target-group overrides and canonical goal labels.
+
+    Raises:
+        ValueError: If a strict multi-stop policy contains repeated labels,
+            overlapping target groups, or mismatched group/label counts.
+    """
+
+    multi_policy = quality_policy.get("multi_stop") if isinstance(quality_policy.get("multi_stop"), dict) else {}
+    subcategory_policy = multi_policy.get("subcategories") if isinstance(multi_policy.get("subcategories"), dict) else {}
+    require_disjoint = bool(multi_policy.get("require_disjoint_target_types", False))
+    output: list[CompiledTask] = []
+    for task in tasks:
+        if task.category != "multi_stop_route":
+            output.append(task)
+            continue
+        override = subcategory_policy.get(task.subcategory) if isinstance(subcategory_policy.get(task.subcategory), dict) else {}
+        groups = [
+            [str(item) for item in group]
+            for group in (override.get("ordered_target_types") or task.ordered_target_types)
+        ]
+        labels = [
+            str(item).strip()
+            for item in (override.get("ordered_goal_labels") or task.ordered_goal_labels)
+            if str(item).strip()
+        ]
+        if not labels:
+            labels = [group[0].replace("_", " ") for group in groups if group]
+        updated = replace(task, ordered_target_types=groups, ordered_goal_labels=labels)
+        _validate_multi_stop_task(updated, require_disjoint=require_disjoint)
+        output.append(updated)
+    return output
+
+
+def _validate_multi_stop_task(task: CompiledTask, *, require_disjoint: bool) -> None:
+    """Validate one structured multi-stop task definition.
+
+    Args:
+        task: Multi-stop task.
+        require_disjoint: Whether target-type groups must be pairwise disjoint.
+
+    Returns:
+        None.
+
+    Raises:
+        ValueError: If the task violates ordered-goal invariants.
+    """
+
+    groups = [{str(item).strip().lower() for item in group if str(item).strip()} for group in task.ordered_target_types]
+    labels = [" ".join(label.lower().split()) for label in task.ordered_goal_labels]
+    if len(groups) < 2 or any(not group for group in groups):
+        raise ValueError(f"Multi-stop task requires at least two non-empty target groups: {task.task_id}")
+    if len(labels) != len(groups):
+        raise ValueError(f"Multi-stop labels/groups mismatch for {task.task_id}: labels={len(labels)} groups={len(groups)}")
+    if len(set(labels)) != len(labels):
+        raise ValueError(f"Repeated multi-stop goal labels for {task.task_id}: {labels}")
+    if require_disjoint:
+        for left in range(len(groups)):
+            for right in range(left + 1, len(groups)):
+                overlap = groups[left].intersection(groups[right])
+                if overlap:
+                    raise ValueError(f"Overlapping target groups for {task.task_id}: {sorted(overlap)}")
+
+
 def build_instruction_rows(
     *,
     compiled_tasks: list[CompiledTask],
     city_slots: list[dict[str, Any]],
+    case_id_prefix: str = "urbannav",
     seed: int,
     instruction_mode: str,
 ) -> list[dict[str, Any]]:
@@ -332,6 +482,7 @@ def build_instruction_rows(
     Args:
         compiled_tasks: Compiled task definitions.
         city_slots: City quota slots.
+        case_id_prefix: Stable namespace for generated case ids.
         seed: Deterministic assignment seed.
         instruction_mode: Instruction rendering mode.
 
@@ -374,7 +525,7 @@ def build_instruction_rows(
             )
             rows.append(
                 {
-                    "instruction_id": f"urbannav-{task.category}-{category_offsets[task.category]:05d}",
+                    "instruction_id": f"{case_id_prefix}-{task.category}-{category_offsets[task.category]:05d}",
                     "builder_version": BUILDER_VERSION,
                     "planned_city": dict(city),
                     "category": task.category,
@@ -387,6 +538,7 @@ def build_instruction_rows(
                     "template_index": template_index,
                     "target_types": list(task.target_types),
                     "ordered_target_types": [list(group) for group in task.ordered_target_types],
+                    "ordered_goal_labels": list(task.ordered_goal_labels),
                     "query_terms": list(task.query_terms),
                     "osm_tags": list(task.osm_tags),
                     "provider_category_map": {
@@ -436,6 +588,10 @@ def _compile_one_task(
     task_id = f"{category}:{subcategory}"
     target_types = [str(item) for item in spec.get("target_types") or []]
     ordered_target_types = [[str(item) for item in group] for group in spec.get("ordered_target_types") or []]
+    ordered_goal_labels = [str(item).strip() for item in spec.get("ordered_goal_labels") or [] if str(item).strip()]
+    route_update_action = _str_or_none(spec.get("route_update_action"))
+    if category == "route_update_add_via" and route_update_action is None:
+        route_update_action = "add_via"
     templates = _templates_for_spec(spec=spec, taxonomy=taxonomy, language=language)
     target_groups = ordered_target_types or ([target_types] if target_types else [])
     ontology = _provider_ontology_for_groups(
@@ -451,11 +607,12 @@ def _compile_one_task(
         templates=templates,
         target_types=target_types,
         ordered_target_types=ordered_target_types,
+        ordered_goal_labels=ordered_goal_labels,
         query_terms=ontology["query_terms"],
         osm_tags=ontology["osm_tags"],
         tomtom_category_set=ontology["tomtom_category_set"],
         semantic_tags=[str(item) for item in spec.get("semantic_tags") or []],
-        route_update_action=_str_or_none(spec.get("route_update_action")),
+        route_update_action=route_update_action,
         quota_weight=float(spec.get("quota_weight") or 1.0),
         planned_count=planned_count,
     )
@@ -560,19 +717,67 @@ def _task_quotas(distribution: dict[str, Any], *, include_semantic_analysis: boo
     return quotas
 
 
-def _city_slots(distribution: dict[str, Any], *, regions_config: dict[str, Any], seed: int) -> list[dict[str, Any]]:
+def _route_update_action_quotas(distribution: dict[str, Any]) -> dict[str, int]:
+    """Read optional route-update action quotas.
+
+    Args:
+        distribution: Raw distribution plan.
+
+    Returns:
+        Count by ``replace_destination``, ``add_via``, or
+        ``insert_before_final``.
+    """
+
+    quotas: dict[str, int] = {}
+    for item in distribution.get("route_update_action_distribution", []):
+        action = str(item.get("action") or "").strip()
+        count = int(item.get("count") or 0)
+        if action and count > 0:
+            quotas[action] = quotas.get(action, 0) + count
+    return quotas
+
+
+def _city_slots(
+    distribution: dict[str, Any],
+    *,
+    regions_config: dict[str, Any],
+    seed: int,
+    mode: str = "available_equal",
+) -> list[dict[str, Any]]:
     """Expand city quotas into one slot per planned case.
 
     Args:
         distribution: Raw distribution plan.
         regions_config: Region config that defines actually collectable cities.
         seed: Deterministic assignment seed.
+        mode: City quota policy. ``"exact"`` honors the distribution plan and
+            rejects unavailable cities.
 
     Returns:
         City slot records.
     """
 
     available = _collectable_city_records(regions_config)
+    if mode == "exact":
+        available_by_key = {_normalize_city_name(item.get("city")): item for item in available}
+        slots: list[dict[str, Any]] = []
+        missing: list[str] = []
+        for item in distribution.get("city_distribution", []):
+            count = int(item.get("count") or 0)
+            key = _normalize_city_name(item.get("city"))
+            city = available_by_key.get(key)
+            if count > 0 and city is None:
+                missing.append(str(item.get("city") or key))
+                continue
+            for _ in range(max(0, count)):
+                slots.append(dict(city or item))
+        if missing:
+            raise ValueError(f"Distribution cities are unavailable in regions config: {sorted(missing)}")
+        target = int(distribution.get("target_cases") or len(slots))
+        if len(slots) != target:
+            raise ValueError(f"Exact city quotas sum to {len(slots)}, expected target_cases={target}")
+        random.Random(seed).shuffle(slots)
+        return slots
     if available:
         target = int(distribution.get("target_cases") or 0)
         if target <= 0:
@@ -594,6 +799,19 @@ def _city_slots(distribution: dict[str, Any], *, regions_config: dict[str, Any],
             slots.append({"country": item.get("country"), "city": item.get("city")})
     random.Random(seed).shuffle(slots)
     return slots
+
+
+def _normalize_city_name(value: Any) -> str:
+    """Normalize a city name for distribution/region matching.
+
+    Args:
+        value: Raw city value.
+
+    Returns:
+        Lowercase underscore-delimited city key.
+    """
+
+    return str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
 
 
 def _collectable_city_records(regions_config: dict[str, Any]) -> list[dict[str, Any]]:
@@ -818,7 +1036,10 @@ def _render_multi_stop_instruction(task: CompiledTask, *, idx: int, city_name: s
         Instruction string.
     """
 
-    stops = [_group_phrase(group, idx=idx + offset) for offset, group in enumerate(task.ordered_target_types)]
+    stops = list(task.ordered_goal_labels) or [
+        _group_phrase(group, idx=idx + offset)
+        for offset, group in enumerate(task.ordered_target_types)
+    ]
     sequence = _sequence_phrase(stops)
     compact = " -> ".join(stops)
     modifier = _pick(_MULTI_STOP_MODIFIERS, idx // 11)
@@ -1116,6 +1337,8 @@ def _manifest(
     distribution_path: Path,
     provider_map_path: Path,
     regions_config_path: Path | None,
+    quality_policy_path: Path | None,
+    city_plan_mode: str,
     output_root: Path,
     language: str,
     compiled_tasks: list[CompiledTask],
@@ -1131,6 +1354,8 @@ def _manifest(
         distribution_path: Distribution path.
         provider_map_path: Provider map path.
         regions_config_path: Region config path.
+        quality_policy_path: Optional v2 quality policy path.
+        city_plan_mode: City quota resolution policy.
         output_root: Output root.
         language: Template language.
         compiled_tasks: Compiled tasks.
@@ -1156,6 +1381,8 @@ def _manifest(
         "distribution": str(distribution_path),
         "provider_map": str(provider_map_path),
         "regions_config": str(regions_config_path) if regions_config_path else None,
+        "quality_policy": str(quality_policy_path) if quality_policy_path else None,
+        "city_plan_mode": city_plan_mode,
         "target_cases": int(distribution.get("target_cases") or len(instruction_rows)),
         "instruction_rows": len(instruction_rows),
         "unique_instruction_count": len({str(row.get("instruction") or "") for row in instruction_rows}),

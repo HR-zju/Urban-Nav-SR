@@ -1,0 +1,25 @@
+{
+  "version": "urbannav_25k_v3_new_cities_pool_plan_v2",
+  "case_id_prefix": "urbannav-v6",
+  "purpose": "Coverage-filtered oversampling pool for the six cities added to the final-25K 23-city split",
+  "target_cases": 36000,
+  "city_distribution": [
+    {"country": "china", "city": "beijing", "count": 6000},
+    {"country": "china", "city": "shanghai", "count": 6000},
+    {"country": "china", "city": "shenzhen", "count": 6000},
+    {"country": "china", "city": "hangzhou", "count": 6000},
+    {"country": "uae", "city": "dubai", "count": 6000},
+    {"country": "russia", "city": "moscow", "count": 6000}
+  ],
+  "task_distribution": [
+    {"category": "poi_navigation", "count": 14400},
+    {"category": "implicit_need_navigation", "count": 12600},
+    {"category": "multi_stop_route", "count": 5400},
+    {"category": "route_update_add_via", "count": 3600}
+  ],
+  "route_update_action_distribution": [
+    {"action": "replace_destination", "count": 1440},
+    {"action": "add_via", "count": 1440},
+    {"action": "insert_before_final", "count": 720}
+  ]
+}

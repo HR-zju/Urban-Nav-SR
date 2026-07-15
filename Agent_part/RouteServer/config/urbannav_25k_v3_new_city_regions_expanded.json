@@ -1,0 +1,79 @@
+{
+  "version": "urbannav_25k_v3_new_city_regions_v2",
+  "description": "Expanded city-center OSM collection regions for the six cities added to the 23-city UrbanNav split.",
+  "provider": "osm_local",
+  "search_radius_m": 2500,
+  "candidate_limit": 5,
+  "acceptable_route_ratio": 1.15,
+  "min_route_distance_m": 50,
+  "max_route_distance_m": 2500,
+  "regions": [
+    {
+      "country": "china",
+      "city": "beijing",
+      "locale": "zh-CN",
+      "region_id": "beijing_wangfujing",
+      "label": "Beijing central urban area",
+      "lat": 39.9149,
+      "lng": 116.411,
+      "radius_m": 7000,
+      "quota": 3000
+    },
+    {
+      "country": "china",
+      "city": "shanghai",
+      "locale": "zh-CN",
+      "region_id": "shanghai_people_square",
+      "label": "Shanghai central urban area",
+      "lat": 31.2304,
+      "lng": 121.4737,
+      "radius_m": 7000,
+      "quota": 3000
+    },
+    {
+      "country": "china",
+      "city": "shenzhen",
+      "locale": "zh-CN",
+      "region_id": "shenzhen_futian",
+      "label": "Shenzhen central urban area",
+      "lat": 22.543,
+      "lng": 114.057,
+      "radius_m": 7000,
+      "quota": 3000
+    },
+    {
+      "country": "china",
+      "city": "hangzhou",
+      "locale": "zh-CN",
+      "region_id": "hangzhou_westlake",
+      "label": "Hangzhou central urban area",
+      "lat": 30.2587,
+      "lng": 120.1634,
+      "radius_m": 7000,
+      "quota": 3000
+    },
+    {
+      "country": "uae",
+      "city": "dubai",
+      "locale": "en-AE",
+      "region_id": "dubai_downtown",
+      "label": "Dubai central urban area",
+      "lat": 25.1972,
+      "lng": 55.2744,
+      "radius_m": 7000,
+      "quota": 3000
+    },
+    {
+      "country": "russia",
+      "city": "moscow",
+      "locale": "ru-RU",
+      "region_id": "moscow_center",
+      "label": "Moscow central urban area",
+      "lat": 55.7558,
+      "lng": 37.6173,
+      "radius_m": 7000,
+      "quota": 3000
+    }
+  ],
+  "tasks": []
+}

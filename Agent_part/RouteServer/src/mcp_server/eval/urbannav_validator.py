@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
+from mcp_server.core.replay_map_backend import ReplayRouteResult
 from mcp_server.eval.urbannav_io import iter_json_records, load_urbannav_cases
 from mcp_server.eval.urbannav_metrics import haversine_m, route_distance_m
 from mcp_server.eval.urbannav_schema import UrbanNavCase, UrbanNavDestination, UrbanNavPoint
@@ -22,12 +23,22 @@ class UrbanNavValidationConfig:
         require_cache_keys: Whether each case must contain ``cache_keys``.
         require_ranked_destinations: Whether each case must contain
             ``ranked_destinations``.
+        multi_stop_continuity_tolerance_m: Maximum GT leg transition gap.
+        min_inter_stop_distance_m: Minimum distance between distinct GT stops.
+        require_disjoint_multistop_target_types: Whether ordered target groups
+            must be pairwise disjoint.
+        require_full_multistop_route_matrix: Whether every later stop must cache
+            every predecessor-candidate to current-candidate route.
     """
 
     origin_tolerance_m: float = 30.0
     destination_tolerance_m: float = 30.0
     require_cache_keys: bool = True
     require_ranked_destinations: bool = True
+    multi_stop_continuity_tolerance_m: float = 5.0
+    min_inter_stop_distance_m: float = 0.0
+    require_disjoint_multistop_target_types: bool = False
+    require_full_multistop_route_matrix: bool = False
 
 
 @dataclass
@@ -90,6 +101,7 @@ def validate_urbannav_cases(
     *,
     poi_cache_keys: set[str] | None = None,
     route_cache_keys: set[str] | None = None,
+    route_cache_records: dict[str, dict[str, Any]] | None = None,
     rejects: Iterable[dict[str, Any]] | None = None,
     config: UrbanNavValidationConfig | None = None,
 ) -> UrbanNavValidationReport:
@@ -113,6 +125,8 @@ def validate_urbannav_cases(
             cache keys must exist in this set.
         route_cache_keys: Available route cache keys. If supplied, referenced
             route cache keys must exist in this set.
+        route_cache_records: Optional route cache payloads keyed by cache key,
+            required for strict route-matrix validation.
         rejects: Optional reject records for reject reason statistics.
         config: Optional validation configuration.
 
@@ -129,6 +143,7 @@ def validate_urbannav_cases(
         report.category_counts[case.category or "unknown"] = report.category_counts.get(case.category or "unknown", 0) + 1
         errors = _validate_case(case, seen_ids, cfg)
         errors.extend(_validate_cache_keys(case, poi_cache_keys=poi_cache_keys, route_cache_keys=route_cache_keys, cfg=cfg))
+        errors.extend(_validate_multistop_case(case, route_cache_records=route_cache_records, cfg=cfg))
         if errors:
             report.errors_by_case[case.case_id] = errors
             report.invalid_cases += 1
@@ -169,12 +184,14 @@ def validate_urbannav_package(
 
     cases = load_urbannav_cases(gt_path)
     poi_keys = load_cache_keys(poi_cache_path) if poi_cache_path else None
-    route_keys = load_cache_keys(route_cache_path) if route_cache_path else None
+    route_records = load_cache_records(route_cache_path) if route_cache_path else None
+    route_keys = set(route_records) if route_records is not None else None
     rejects = list(iter_json_records(rejects_path)) if rejects_path else None
     return validate_urbannav_cases(
         cases,
         poi_cache_keys=poi_keys,
         route_cache_keys=route_keys,
+        route_cache_records=route_records,
         rejects=rejects,
         config=config,
     )
@@ -198,6 +215,19 @@ def load_cache_keys(path: str | None) -> set[str]:
         if key:
             keys.add(str(key))
     return keys
+
+
+def load_cache_records(path: str | None) -> dict[str, dict[str, Any]]:
+    """Load replay cache records keyed by ``cache_key`` or ``key``."""
+
+    if not path:
+        return {}
+    records: dict[str, dict[str, Any]] = {}
+    for record in iter_json_records(path):
+        key = record.get("cache_key") or record.get("key")
+        if key:
+            records[str(key)] = record
+    return records
 
 
 def _validate_case(case: UrbanNavCase, seen_ids: set[str], cfg: UrbanNavValidationConfig) -> list[str]:
@@ -258,14 +288,26 @@ def _validate_route_alignment(case: UrbanNavCase, cfg: UrbanNavValidationConfig)
         origin_error = haversine_m(case.origin, case.gt_route[0])
         if origin_error > cfg.origin_tolerance_m:
             errors.append(f"route_origin_far:{origin_error:.3f}")
-    if case.gt_destination is not None and case.gt_destination.point is not None:
-        endpoint_error = haversine_m(case.gt_route[-1], case.gt_destination.point)
+    endpoint_destination = _route_endpoint_destination(case)
+    if endpoint_destination is not None and endpoint_destination.point is not None:
+        endpoint_error = haversine_m(case.gt_route[-1], endpoint_destination.point)
         if endpoint_error > cfg.destination_tolerance_m:
             errors.append(f"route_endpoint_far:{endpoint_error:.3f}")
     route_distance = route_distance_m(case.gt_route)
     if case.gt_distance_m is None and route_distance is None:
         errors.append("missing_gt_distance")
     return errors
+
+
+def _route_endpoint_destination(case: UrbanNavCase) -> UrbanNavDestination | None:
+    """Return the destination that the complete GT route must end at."""
+
+    update = case.metadata.get("route_update") if isinstance(case.metadata.get("route_update"), dict) else {}
+    update_type = str(update.get("update_type") or "")
+    final = update.get("final_destination")
+    if update_type in {"add_via", "insert_before_final"} and isinstance(final, dict):
+        return UrbanNavDestination.from_dict(final)
+    return case.gt_destination
 
 
 def _validate_ranked_destinations(case: UrbanNavCase) -> list[str]:
@@ -342,6 +384,169 @@ def _validate_cache_keys(
         if route_cache_keys is not None and key not in route_cache_keys:
             errors.append(f"missing_cache_key:route:{key}")
     return errors
+
+
+def _validate_multistop_case(
+    case: UrbanNavCase,
+    *,
+    route_cache_records: dict[str, dict[str, Any]] | None,
+    cfg: UrbanNavValidationConfig,
+) -> list[str]:
+    """Validate ordered-stop semantics, leg continuity, and route matrices."""
+
+    if case.category != "multi_stop_route":
+        return []
+    errors: list[str] = []
+    legs = [item for item in case.raw.get("gt_route_legs") or [] if isinstance(item, dict)]
+    if len(legs) < 2:
+        return ["multi_stop_missing_gt_route_legs"]
+
+    groups = case.metadata.get("ordered_target_types")
+    if cfg.require_disjoint_multistop_target_types and isinstance(groups, list):
+        normalized = [
+            {str(item).strip().lower() for item in group if str(item).strip()}
+            for group in groups
+            if isinstance(group, list)
+        ]
+        for left in range(len(normalized)):
+            for right in range(left + 1, len(normalized)):
+                overlap = normalized[left].intersection(normalized[right])
+                if overlap:
+                    errors.append(f"multi_stop_target_type_overlap:{left + 1}:{right + 1}:{','.join(sorted(overlap))}")
+
+    destinations = [_destination_from_leg(leg) for leg in legs]
+    seen_ids: set[str] = set()
+    for index, destination in enumerate(destinations):
+        if destination is None:
+            errors.append(f"multi_stop_missing_destination:{index + 1}")
+            continue
+        repeated = seen_ids.intersection(destination.stable_ids)
+        if repeated:
+            errors.append(f"multi_stop_repeated_destination:{index + 1}")
+        seen_ids.update(destination.stable_ids)
+    for left in range(len(destinations)):
+        for right in range(left + 1, len(destinations)):
+            first = destinations[left]
+            second = destinations[right]
+            if first is None or second is None or first.point is None or second.point is None:
+                continue
+            distance = haversine_m(first.point, second.point)
+            if distance < cfg.min_inter_stop_distance_m:
+                errors.append(f"multi_stop_distance_too_short:{left + 1}:{right + 1}:{distance:.3f}")
+
+    routes = [_route_from_leg(leg) for leg in legs]
+    for index, (leg, route, destination) in enumerate(zip(legs, routes, destinations), start=1):
+        if len(route) < 2:
+            errors.append(f"multi_stop_leg_route_too_short:{index}")
+            continue
+        origin = _point_from_dict(leg.get("origin"))
+        if origin is not None:
+            gap = haversine_m(origin, route[0])
+            if gap > cfg.multi_stop_continuity_tolerance_m:
+                errors.append(f"multi_stop_leg_origin_far:{index}:{gap:.3f}")
+        if destination is not None and destination.point is not None:
+            gap = haversine_m(route[-1], destination.point)
+            if gap > cfg.destination_tolerance_m:
+                errors.append(f"multi_stop_leg_endpoint_far:{index}:{gap:.3f}")
+    for index in range(len(routes) - 1):
+        if not routes[index] or not routes[index + 1]:
+            continue
+        gap = haversine_m(routes[index][-1], routes[index + 1][0])
+        if gap > cfg.multi_stop_continuity_tolerance_m:
+            errors.append(f"multi_stop_leg_discontinuity:{index + 1}:{index + 2}:{gap:.3f}")
+
+    if cfg.require_full_multistop_route_matrix:
+        if route_cache_records is None:
+            errors.append("multi_stop_route_matrix_records_unavailable")
+        else:
+            errors.extend(_validate_route_matrices(legs, route_cache_records, cfg))
+    return errors
+
+
+def _validate_route_matrices(
+    legs: list[dict[str, Any]],
+    route_cache_records: dict[str, dict[str, Any]],
+    cfg: UrbanNavValidationConfig,
+) -> list[str]:
+    """Validate every predecessor/current candidate pair for later legs."""
+
+    errors: list[str] = []
+    for index in range(1, len(legs)):
+        previous = _destinations_from_leg(legs[index - 1], "ranked_destinations")
+        current = _destinations_from_leg(legs[index], "ranked_destinations")
+        matrix = legs[index].get("route_matrix") if isinstance(legs[index].get("route_matrix"), dict) else {}
+        route_keys = [str(item) for item in matrix.get("route_keys") or []]
+        if matrix.get("policy") != "full_route_matrix":
+            errors.append(f"multi_stop_route_matrix_missing:{index + 1}")
+            continue
+        records = [route_cache_records[key] for key in route_keys if key in route_cache_records]
+        expected = len(previous) * len(current)
+        if len(records) != expected:
+            errors.append(f"multi_stop_route_matrix_size:{index + 1}:{len(records)}:{expected}")
+        for predecessor in previous:
+            for destination in current:
+                if not any(_route_record_matches(record, predecessor, destination, cfg) for record in records):
+                    errors.append(
+                        f"multi_stop_route_matrix_pair_missing:{index + 1}:"
+                        f"{_destination_label(predecessor)}:{_destination_label(destination)}"
+                    )
+    return errors
+
+
+def _route_record_matches(
+    record: dict[str, Any],
+    predecessor: UrbanNavDestination,
+    destination: UrbanNavDestination,
+    cfg: UrbanNavValidationConfig,
+) -> bool:
+    """Return whether one route record covers an expected matrix pair."""
+
+    request = record.get("request") if isinstance(record.get("request"), dict) else {}
+    request_origin = _point_from_dict(request.get("origin"))
+    request_destination = UrbanNavDestination.from_dict(request.get("destination")) if isinstance(request.get("destination"), dict) else None
+    if predecessor.point is None or request_origin is None or request_destination is None:
+        return False
+    if haversine_m(predecessor.point, request_origin) > cfg.multi_stop_continuity_tolerance_m:
+        return False
+    if not _same_destination(destination, request_destination):
+        return False
+    parsed = ReplayRouteResult.from_dict(record)
+    return parsed.distance_m is not None and parsed.distance_m > 0 and bool(parsed.polyline)
+
+
+def _destinations_from_leg(leg: dict[str, Any], key: str) -> list[UrbanNavDestination]:
+    """Parse destination dictionaries from one GT leg field."""
+
+    return [
+        UrbanNavDestination.from_dict(item)
+        for item in leg.get(key) or []
+        if isinstance(item, dict)
+    ]
+
+
+def _destination_from_leg(leg: dict[str, Any]) -> UrbanNavDestination | None:
+    """Parse the selected destination from one GT leg."""
+
+    value = leg.get("gt_destination")
+    return UrbanNavDestination.from_dict(value) if isinstance(value, dict) else None
+
+
+def _route_from_leg(leg: dict[str, Any]) -> list[UrbanNavPoint]:
+    """Parse route points from one GT leg."""
+
+    return [UrbanNavPoint.from_dict(item) for item in leg.get("route") or [] if isinstance(item, dict)]
+
+
+def _point_from_dict(value: Any) -> UrbanNavPoint | None:
+    """Parse an optional point dictionary."""
+
+    return UrbanNavPoint.from_dict(value) if isinstance(value, dict) else None
+
+
+def _destination_label(destination: UrbanNavDestination) -> str:
+    """Return a compact stable destination label for validation errors."""
+
+    return sorted(destination.stable_ids)[0] if destination.stable_ids else destination.name or "unknown"
 
 
 def _same_destination(a: UrbanNavDestination, b: UrbanNavDestination) -> bool:

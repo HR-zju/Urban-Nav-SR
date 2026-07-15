@@ -1,0 +1,64 @@
+{
+  "version": "urbannav_25k_v2_quality_policy_v1",
+  "multi_stop": {
+    "require_disjoint_target_types": true,
+    "min_inter_stop_distance_m": 20.0,
+    "min_leg_route_distance_m": 20.0,
+    "max_leg_route_distance_m": 2500.0,
+    "route_continuity_tolerance_m": 5.0,
+    "cache_policy": "full_route_matrix",
+    "subcategories": {
+      "coffee_then_work": {
+        "ordered_goal_labels": ["coffee shop", "workplace"],
+        "ordered_target_types": [["cafe", "coffee_shop"], ["library", "coworking_space"]]
+      },
+      "eat_then_drink": {
+        "ordered_goal_labels": ["restaurant", "beverage shop"]
+      },
+      "parking_then_restaurant": {
+        "ordered_goal_labels": ["parking lot", "restaurant"]
+      },
+      "dessert_then_coffee": {
+        "ordered_goal_labels": ["dessert shop", "coffee shop"]
+      },
+      "bank_then_pharmacy": {
+        "ordered_goal_labels": ["bank", "pharmacy"]
+      },
+      "parking_then_hospital": {
+        "ordered_goal_labels": ["parking lot", "hospital"]
+      },
+      "library_then_cafe": {
+        "ordered_goal_labels": ["library", "coffee shop"]
+      },
+      "daily_goods_then_drink_2stop": {
+        "ordered_goal_labels": ["daily-goods store", "beverage shop"],
+        "ordered_target_types": [["convenience_store", "supermarket", "store"], ["cafe", "beverage_shop"]]
+      },
+      "atm_then_food_then_rest_3stop": {
+        "ordered_goal_labels": ["ATM", "restaurant", "park"]
+      },
+      "coffee_then_print_then_work_3stop": {
+        "ordered_goal_labels": ["coffee shop", "print shop", "workplace"],
+        "ordered_target_types": [["cafe", "coffee_shop"], ["print_shop"], ["library", "coworking_space"]]
+      },
+      "gym_then_smoothie": {
+        "ordered_goal_labels": ["gym", "smoothie shop"]
+      },
+      "bookstore_then_cafe": {
+        "ordered_goal_labels": ["bookstore", "coffee shop"]
+      },
+      "takeout_then_park": {
+        "ordered_goal_labels": ["takeout restaurant", "park"]
+      },
+      "restaurant_then_bar": {
+        "ordered_goal_labels": ["restaurant", "bar"]
+      },
+      "laundry_then_coffee": {
+        "ordered_goal_labels": ["laundry", "coffee shop"]
+      },
+      "post_office_then_grocery": {
+        "ordered_goal_labels": ["post office", "grocery store"]
+      }
+    }
+  }
+}

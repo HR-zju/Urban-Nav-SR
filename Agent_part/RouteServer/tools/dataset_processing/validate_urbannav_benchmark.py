@@ -24,6 +24,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rejects", type=Path, default=None, help="Path to task_rejects.jsonl")
     parser.add_argument("--origin-tolerance-m", type=float, default=30.0)
     parser.add_argument("--destination-tolerance-m", type=float, default=30.0)
+    parser.add_argument("--multi-stop-continuity-tolerance-m", type=float, default=5.0)
+    parser.add_argument("--min-inter-stop-distance-m", type=float, default=0.0)
+    parser.add_argument("--require-disjoint-multistop-target-types", action="store_true")
+    parser.add_argument("--require-full-multistop-route-matrix", action="store_true")
     parser.add_argument("--allow-missing-cache-keys", action="store_true")
     parser.add_argument("--allow-missing-ranked-destinations", action="store_true")
     parser.add_argument("--output-json", type=Path, default=None, help="Output validation_report.json path")
@@ -43,6 +47,10 @@ def main() -> None:
         destination_tolerance_m=args.destination_tolerance_m,
         require_cache_keys=not args.allow_missing_cache_keys,
         require_ranked_destinations=not args.allow_missing_ranked_destinations,
+        multi_stop_continuity_tolerance_m=args.multi_stop_continuity_tolerance_m,
+        min_inter_stop_distance_m=args.min_inter_stop_distance_m,
+        require_disjoint_multistop_target_types=args.require_disjoint_multistop_target_types,
+        require_full_multistop_route_matrix=args.require_full_multistop_route_matrix,
     )
     report = validate_urbannav_package(
         gt_path=str(args.ground_truth),

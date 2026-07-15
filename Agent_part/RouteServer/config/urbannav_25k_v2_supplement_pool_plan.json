@@ -1,0 +1,23 @@
+{
+  "version": "urbannav_25k_v2_supplement_pool_plan_v1",
+  "case_id_prefix": "urbannav-v4-supp1",
+  "purpose": "Targeted oversampling for exact city/category cells missing after the primary final-25K v2 collection",
+  "target_cases": 4000,
+  "city_distribution": [
+    {"country": "spain", "city": "barcelona", "count": 500},
+    {"country": "japan", "city": "osaka", "count": 500},
+    {"country": "france", "city": "paris", "count": 500},
+    {"country": "south_korea", "city": "seoul", "count": 500},
+    {"country": "singapore", "city": "singapore", "count": 500},
+    {"country": "australia", "city": "sydney", "count": 500},
+    {"country": "japan", "city": "tokyo", "count": 500},
+    {"country": "canada", "city": "toronto", "count": 500}
+  ],
+  "task_distribution": [
+    {"category": "multi_stop_route", "count": 2500},
+    {"category": "route_update_add_via", "count": 1500}
+  ],
+  "route_update_action_distribution": [
+    {"action": "add_via", "count": 1500}
+  ]
+}

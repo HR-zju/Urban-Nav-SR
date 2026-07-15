@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import json
 from pathlib import Path
 from typing import Any, Iterable
@@ -49,7 +50,7 @@ def main() -> None:
     for path in args.input_jsonl:
         records.extend(_iter_jsonl_records(path, country=args.country, city=args.city, region_id=args.region_id, bbox=bbox, allowed_tags=allowed_tags))
     for path in args.input_pbf:
-        records.extend(_iter_pbf_node_records(path, country=args.country, city=args.city, region_id=args.region_id, bbox=bbox, allowed_tags=allowed_tags))
+        records.extend(_iter_pbf_records(path, country=args.country, city=args.city, region_id=args.region_id, bbox=bbox, allowed_tags=allowed_tags))
 
     deduped = _dedupe_records(records)
     with args.output_jsonl.open("w", encoding="utf-8") as handle:
@@ -84,7 +85,17 @@ def _iter_jsonl_records(
             yield record
 
 
-def _iter_pbf_node_records(
+@dataclass(frozen=True)
+class _RelationPoiSpec:
+    """Tagged relation and the members used to estimate its center."""
+
+    osm_id: int
+    tags: dict[str, str]
+    node_refs: tuple[int, ...]
+    way_refs: tuple[int, ...]
+
+
+def _iter_pbf_records(
     path: Path,
     *,
     country: str | None,
@@ -93,15 +104,25 @@ def _iter_pbf_node_records(
     bbox: tuple[float, float, float, float] | None,
     allowed_tags: set[str],
 ) -> Iterable[LocalOsmPoiRecord]:
+    """Extract POIs represented by OSM nodes, ways, and relations.
+
+    Way coordinates use the arithmetic center of their available nodes.
+    Relation coordinates use the arithmetic center of member node positions
+    and member-way centers. This representative point is deterministic and is
+    used only for local candidate retrieval; pedestrian route endpoints remain
+    grounded by the frozen router.
+    """
+
     try:
         import osmium  # type: ignore
     except ImportError as exc:
         raise RuntimeError("Reading --input-pbf requires pyosmium. Install osmium/pyosmium or pass --input-jsonl.") from exc
 
     records: list[LocalOsmPoiRecord] = []
+    relations: list[_RelationPoiSpec] = []
 
     class Handler(osmium.SimpleHandler):  # type: ignore[misc]
-        """pyosmium node handler for benchmark POI extraction."""
+        """Collect tagged nodes/ways and relation member specifications."""
 
         def node(self, node: Any) -> None:
             tags = {str(key): str(value) for key, value in dict(node.tags).items()}
@@ -109,23 +130,142 @@ def _iter_pbf_node_records(
                 return
             if not node.location.valid():
                 return
-            payload = {
-                "osm_id": f"node/{node.id}",
-                "name": tags.get("name") or tags.get("brand") or tags.get("operator") or "Unnamed OSM POI",
-                "lat": float(node.location.lat),
-                "lng": float(node.location.lon),
-                "tags": tags,
-                "country": country,
-                "city": city,
-                "region_id": region_id,
-            }
-            record = LocalOsmPoiRecord.from_dict(payload)
-            if record is not None and _record_in_bbox(record, bbox):
-                records.append(record)
+            _append_osm_record(
+                records,
+                osm_id=f"node/{node.id}",
+                tags=tags,
+                point=(float(node.location.lat), float(node.location.lon)),
+                country=country,
+                city=city,
+                region_id=region_id,
+                bbox=bbox,
+            )
+
+        def way(self, way: Any) -> None:
+            tags = {str(key): str(value) for key, value in dict(way.tags).items()}
+            if not record_has_supported_poi_tag(tags, allowed_tags=allowed_tags):
+                return
+            point = _way_center(way)
+            if point is None:
+                return
+            _append_osm_record(
+                records,
+                osm_id=f"way/{way.id}",
+                tags=tags,
+                point=point,
+                country=country,
+                city=city,
+                region_id=region_id,
+                bbox=bbox,
+            )
+
+        def relation(self, relation: Any) -> None:
+            tags = {str(key): str(value) for key, value in dict(relation.tags).items()}
+            if not record_has_supported_poi_tag(tags, allowed_tags=allowed_tags):
+                return
+            relations.append(
+                _RelationPoiSpec(
+                    osm_id=int(relation.id),
+                    tags=tags,
+                    node_refs=tuple(int(member.ref) for member in relation.members if str(member.type) == "n"),
+                    way_refs=tuple(int(member.ref) for member in relation.members if str(member.type) == "w"),
+                )
+            )
 
     handler = Handler()
-    handler.apply_file(str(path), locations=False)
+    handler.apply_file(str(path), locations=True, idx="flex_mem")
+
+    if relations:
+        wanted_nodes = {ref for relation in relations for ref in relation.node_refs}
+        wanted_ways = {ref for relation in relations for ref in relation.way_refs}
+        member_nodes: dict[int, tuple[float, float]] = {}
+        member_ways: dict[int, tuple[float, float]] = {}
+
+        class RelationGeometryHandler(osmium.SimpleHandler):  # type: ignore[misc]
+            """Resolve representative points for members of tagged relations."""
+
+            def node(self, node: Any) -> None:
+                if int(node.id) in wanted_nodes and node.location.valid():
+                    member_nodes[int(node.id)] = (float(node.location.lat), float(node.location.lon))
+
+            def way(self, way: Any) -> None:
+                if int(way.id) not in wanted_ways:
+                    return
+                point = _way_center(way)
+                if point is not None:
+                    member_ways[int(way.id)] = point
+
+        geometry_handler = RelationGeometryHandler()
+        geometry_handler.apply_file(str(path), locations=True, idx="flex_mem")
+        for relation in relations:
+            points = [member_nodes[ref] for ref in relation.node_refs if ref in member_nodes]
+            points.extend(member_ways[ref] for ref in relation.way_refs if ref in member_ways)
+            point = _center(points)
+            if point is None:
+                continue
+            _append_osm_record(
+                records,
+                osm_id=f"relation/{relation.osm_id}",
+                tags=relation.tags,
+                point=point,
+                country=country,
+                city=city,
+                region_id=region_id,
+                bbox=bbox,
+            )
     return records
+
+
+def _way_center(way: Any) -> tuple[float, float] | None:
+    """Return the center of valid node locations attached to an OSM way."""
+
+    points = [
+        (float(node.lat), float(node.lon))
+        for node in way.nodes
+        if node.location.valid()
+    ]
+    return _center(points)
+
+
+def _center(points: Iterable[tuple[float, float]]) -> tuple[float, float] | None:
+    """Return the deterministic arithmetic center of latitude/longitude points."""
+
+    values = list(points)
+    if not values:
+        return None
+    return (
+        sum(point[0] for point in values) / len(values),
+        sum(point[1] for point in values) / len(values),
+    )
+
+
+def _append_osm_record(
+    records: list[LocalOsmPoiRecord],
+    *,
+    osm_id: str,
+    tags: dict[str, str],
+    point: tuple[float, float],
+    country: str | None,
+    city: str | None,
+    region_id: str | None,
+    bbox: tuple[float, float, float, float] | None,
+) -> None:
+    """Normalize and append one tagged OSM element when it is in bounds."""
+
+    record = LocalOsmPoiRecord.from_dict(
+        {
+            "osm_id": osm_id,
+            "name": tags.get("name") or tags.get("brand") or tags.get("operator") or "Unnamed OSM POI",
+            "lat": point[0],
+            "lng": point[1],
+            "tags": tags,
+            "country": country,
+            "city": city,
+            "region_id": region_id,
+        }
+    )
+    if record is not None and _record_in_bbox(record, bbox):
+        records.append(record)
 
 
 def _dedupe_records(records: Iterable[LocalOsmPoiRecord]) -> list[LocalOsmPoiRecord]:

@@ -21,6 +21,7 @@
 | --- | --- |
 | [commands.md](commands.md) | 常用运行命令。 |
 | [debugging.md](debugging.md) | 调试、排错和运行状态检查。 |
+| [URBANNAV_25K_BUILD.md](URBANNAV_25K_BUILD.md) | UrbanNav final-25K 数据构建、质量约束、版本演进与验证记录。 |
 
 ## 历史参考
 

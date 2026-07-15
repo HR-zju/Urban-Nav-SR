@@ -1,0 +1,235 @@
+{
+  "description": "Local OSM router config with POI-hotspot aliases over shared city assets.",
+  "poi_index_root": "data/osm/index",
+  "default_router_type": "osrm",
+  "default_osrm_url": "http://127.0.0.1:5000",
+  "default_osrm_profile": "foot",
+  "default_valhalla_url": "http://127.0.0.1:8002",
+  "default_valhalla_costing": "pedestrian",
+  "indexes": {
+    "default": "all.jsonl",
+    "beijing_wangfujing": "beijing_wangfujing.jsonl",
+    "shanghai_people_square": "shanghai_people_square.jsonl",
+    "shenzhen_futian": "shenzhen_futian.jsonl",
+    "hangzhou_westlake": "hangzhou_westlake.jsonl",
+    "dubai_downtown": "dubai_downtown.jsonl",
+    "moscow_center": "moscow_center.jsonl",
+    "beijing_wangfujing_hotspot_01": "beijing_wangfujing.jsonl",
+    "beijing_wangfujing_hotspot_02": "beijing_wangfujing.jsonl",
+    "beijing_wangfujing_hotspot_03": "beijing_wangfujing.jsonl",
+    "beijing_wangfujing_hotspot_04": "beijing_wangfujing.jsonl",
+    "beijing_wangfujing_hotspot_05": "beijing_wangfujing.jsonl",
+    "shanghai_people_square_hotspot_01": "shanghai_people_square.jsonl",
+    "shanghai_people_square_hotspot_02": "shanghai_people_square.jsonl",
+    "shanghai_people_square_hotspot_03": "shanghai_people_square.jsonl",
+    "shanghai_people_square_hotspot_04": "shanghai_people_square.jsonl",
+    "shanghai_people_square_hotspot_05": "shanghai_people_square.jsonl",
+    "shenzhen_futian_hotspot_01": "shenzhen_futian.jsonl",
+    "shenzhen_futian_hotspot_02": "shenzhen_futian.jsonl",
+    "shenzhen_futian_hotspot_03": "shenzhen_futian.jsonl",
+    "shenzhen_futian_hotspot_04": "shenzhen_futian.jsonl",
+    "shenzhen_futian_hotspot_05": "shenzhen_futian.jsonl",
+    "hangzhou_westlake_hotspot_01": "hangzhou_westlake.jsonl",
+    "hangzhou_westlake_hotspot_02": "hangzhou_westlake.jsonl",
+    "hangzhou_westlake_hotspot_03": "hangzhou_westlake.jsonl",
+    "hangzhou_westlake_hotspot_04": "hangzhou_westlake.jsonl",
+    "hangzhou_westlake_hotspot_05": "hangzhou_westlake.jsonl",
+    "dubai_downtown_hotspot_01": "dubai_downtown.jsonl",
+    "dubai_downtown_hotspot_02": "dubai_downtown.jsonl",
+    "dubai_downtown_hotspot_03": "dubai_downtown.jsonl",
+    "dubai_downtown_hotspot_04": "dubai_downtown.jsonl",
+    "dubai_downtown_hotspot_05": "dubai_downtown.jsonl",
+    "moscow_center_hotspot_01": "moscow_center.jsonl",
+    "moscow_center_hotspot_02": "moscow_center.jsonl",
+    "moscow_center_hotspot_03": "moscow_center.jsonl",
+    "moscow_center_hotspot_04": "moscow_center.jsonl",
+    "moscow_center_hotspot_05": "moscow_center.jsonl"
+  },
+  "routers": {
+    "default": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5000",
+      "profile": "foot"
+    },
+    "beijing_wangfujing": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5031",
+      "profile": "foot"
+    },
+    "shanghai_people_square": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5032",
+      "profile": "foot"
+    },
+    "shenzhen_futian": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5033",
+      "profile": "foot"
+    },
+    "hangzhou_westlake": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5034",
+      "profile": "foot"
+    },
+    "dubai_downtown": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5035",
+      "profile": "foot"
+    },
+    "moscow_center": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5036",
+      "profile": "foot"
+    },
+    "beijing_wangfujing_hotspot_01": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5031",
+      "profile": "foot"
+    },
+    "beijing_wangfujing_hotspot_02": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5031",
+      "profile": "foot"
+    },
+    "beijing_wangfujing_hotspot_03": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5031",
+      "profile": "foot"
+    },
+    "beijing_wangfujing_hotspot_04": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5031",
+      "profile": "foot"
+    },
+    "beijing_wangfujing_hotspot_05": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5031",
+      "profile": "foot"
+    },
+    "shanghai_people_square_hotspot_01": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5032",
+      "profile": "foot"
+    },
+    "shanghai_people_square_hotspot_02": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5032",
+      "profile": "foot"
+    },
+    "shanghai_people_square_hotspot_03": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5032",
+      "profile": "foot"
+    },
+    "shanghai_people_square_hotspot_04": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5032",
+      "profile": "foot"
+    },
+    "shanghai_people_square_hotspot_05": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5032",
+      "profile": "foot"
+    },
+    "shenzhen_futian_hotspot_01": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5033",
+      "profile": "foot"
+    },
+    "shenzhen_futian_hotspot_02": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5033",
+      "profile": "foot"
+    },
+    "shenzhen_futian_hotspot_03": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5033",
+      "profile": "foot"
+    },
+    "shenzhen_futian_hotspot_04": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5033",
+      "profile": "foot"
+    },
+    "shenzhen_futian_hotspot_05": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5033",
+      "profile": "foot"
+    },
+    "hangzhou_westlake_hotspot_01": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5034",
+      "profile": "foot"
+    },
+    "hangzhou_westlake_hotspot_02": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5034",
+      "profile": "foot"
+    },
+    "hangzhou_westlake_hotspot_03": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5034",
+      "profile": "foot"
+    },
+    "hangzhou_westlake_hotspot_04": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5034",
+      "profile": "foot"
+    },
+    "hangzhou_westlake_hotspot_05": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5034",
+      "profile": "foot"
+    },
+    "dubai_downtown_hotspot_01": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5035",
+      "profile": "foot"
+    },
+    "dubai_downtown_hotspot_02": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5035",
+      "profile": "foot"
+    },
+    "dubai_downtown_hotspot_03": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5035",
+      "profile": "foot"
+    },
+    "dubai_downtown_hotspot_04": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5035",
+      "profile": "foot"
+    },
+    "dubai_downtown_hotspot_05": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5035",
+      "profile": "foot"
+    },
+    "moscow_center_hotspot_01": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5036",
+      "profile": "foot"
+    },
+    "moscow_center_hotspot_02": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5036",
+      "profile": "foot"
+    },
+    "moscow_center_hotspot_03": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5036",
+      "profile": "foot"
+    },
+    "moscow_center_hotspot_04": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5036",
+      "profile": "foot"
+    },
+    "moscow_center_hotspot_05": {
+      "router_type": "osrm",
+      "osrm_url": "http://127.0.0.1:5036",
+      "profile": "foot"
+    }
+  }
+}

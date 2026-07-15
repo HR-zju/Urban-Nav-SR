@@ -22,6 +22,7 @@ from typing import Any, Iterable
 from mcp_server.core.replay_map_backend import ReplayPoiResult, ReplayRouteResult
 from mcp_server.core.urbannav_provider import UrbanNavLiveProvider, UrbanNavPoiSearchRequest, UrbanNavRouteRequest
 from mcp_server.eval.urbannav_io import iter_json_records, load_urbannav_cases
+from mcp_server.eval.urbannav_collection_policy import previous_target_types_for_update
 from mcp_server.eval.urbannav_schema import UrbanNavDestination, UrbanNavPoint
 from mcp_server.eval.urbannav_validator import validate_urbannav_cases
 
@@ -43,8 +44,9 @@ from collect_urbannav_global_gt import (
 )
 
 
-BUILDER_VERSION = "urbannav_complex_provider_v1"
+BUILDER_VERSION = "urbannav_complex_provider_v2"
 DEFAULT_TARGET_MAP = Path(__file__).resolve().parents[2] / "config" / "urbannav_target_type_provider_map_mined_v2.json"
+DEFAULT_QUALITY_POLICY = Path(__file__).resolve().parents[2] / "config" / "urbannav_25k_v2_quality_policy.json"
 
 
 def parse_args() -> argparse.Namespace:
@@ -59,6 +61,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Global city/region config JSON.")
     parser.add_argument("--instruction-set", required=True, type=Path, help="Compiled UrbanNav instruction_set.jsonl.")
     parser.add_argument("--target-type-map", type=Path, default=DEFAULT_TARGET_MAP, help="Target type to provider tag map.")
+    parser.add_argument("--quality-policy", type=Path, default=None, help="Optional v2 multi-stop quality policy JSON.")
+    parser.add_argument(
+        "--multi-stop-cache-policy",
+        choices=["gt_path", "full_route_matrix"],
+        default="gt_path",
+        help="Cache only the GT-origin routes or every predecessor/candidate transition.",
+    )
+    parser.add_argument("--min-inter-stop-distance-m", type=float, default=None, help="Minimum distance between distinct stops.")
+    parser.add_argument("--min-leg-route-distance-m", type=float, default=None, help="Minimum route length for every GT leg.")
+    parser.add_argument("--max-leg-route-distance-m", type=float, default=None, help="Maximum route length for every GT leg.")
     parser.add_argument("--target-multistop", type=int, default=1500, help="Target valid multi-stop cases.")
     parser.add_argument("--target-route-update", type=int, default=1000, help="Target valid route-update cases.")
     parser.add_argument("--seed", type=int, default=20260629, help="Sampling seed.")
@@ -127,6 +139,8 @@ async def collect_complex_gt(args: argparse.Namespace) -> dict[str, Any]:
         raise RuntimeError(f"{args.output_root} already contains outputs; use --resume or --overwrite")
 
     config = _load_json(args.config)
+    quality_policy = _load_json(args.quality_policy) if args.quality_policy else {}
+    _apply_quality_policy_args(args, quality_policy=quality_policy)
     target_map = _load_target_map(args.target_type_map)
     plan = build_global_collection_plan(config, seed=args.seed, origins_per_region=args.origins_per_region)
     rows = _planned_complex_rows(args.instruction_set, plan=plan, seed=args.seed)
@@ -297,6 +311,11 @@ async def _build_multistop_case(
     groups = row.get("ordered_target_types")
     if not isinstance(groups, list) or len(groups) < 2:
         return _reject_result(case_id, origin_record, row, "missing_ordered_target_types")
+    if _target_groups_overlap(groups):
+        return _reject_result(case_id, origin_record, row, "overlapping_ordered_target_types")
+    goal_labels = [str(item).strip() for item in row.get("ordered_goal_labels") or [] if str(item).strip()]
+    if goal_labels and (len(goal_labels) != len(groups) or len(set(label.lower() for label in goal_labels)) != len(goal_labels)):
+        return _reject_result(case_id, origin_record, row, "invalid_ordered_goal_labels")
 
     current = origin
     full_route: list[UrbanNavPoint] = [origin]
@@ -306,6 +325,7 @@ async def _build_multistop_case(
     poi_records: list[ReplayPoiResult] = []
     route_records: list[ReplayRouteResult] = []
     total_distance = 0.0
+    previous_ranked: list[UrbanNavDestination] = []
 
     for stop_index, raw_group in enumerate(groups, start=1):
         goal = _goal_from_target_types(raw_group, target_map=target_map)
@@ -319,17 +339,61 @@ async def _build_multistop_case(
             case_id=case_id,
             goal_key=f"stop{stop_index:02d}",
             excluded_destinations=selected,
+            min_separation_m=float(args.min_inter_stop_distance_m or 0.0),
             config=config,
             args=args,
         )
         poi_records.append(poi_record)
-        route_records.extend(stop_routes)
+        if previous_ranked:
+            ranked = _filter_candidates_against_predecessors(
+                ranked,
+                previous_ranked,
+                min_separation_m=float(args.min_inter_stop_distance_m or 0.0),
+            )
         if not ranked:
-            return _reject_result(case_id, origin_record, row, f"no_routeable_candidates_at_stop_{stop_index}", poi_records=poi_records, route_records=route_records)
+            return _reject_result(
+                case_id,
+                origin_record,
+                row,
+                _goal_failure_reason(poi_record, stop_routes, goal_label=f"stop_{stop_index}"),
+                poi_records=poi_records,
+                route_records=route_records,
+            )
+        leg_route_records = list(stop_routes)
+        route_matrix: dict[str, Any] | None = None
+        if previous_ranked and args.multi_stop_cache_policy == "full_route_matrix":
+            matrix_records = await _plan_route_matrix(
+                provider=provider,
+                predecessor_candidates=previous_ranked,
+                destination_candidates=ranked,
+                case_id=case_id,
+                stop_index=stop_index,
+                retry=int(args.retry),
+                route_concurrency=int(args.route_concurrency),
+            )
+            if any(not _route_record_is_valid(record) for record in matrix_records):
+                return _reject_result(
+                    case_id,
+                    origin_record,
+                    row,
+                    f"incomplete_route_matrix_at_stop_{stop_index}",
+                    poi_records=poi_records,
+                    route_records=[*route_records, *matrix_records],
+                )
+            leg_route_records = matrix_records
+            route_matrix = {
+                "policy": "full_route_matrix",
+                "predecessor_candidate_ids": [_destination_key(item) for item in previous_ranked],
+                "destination_candidate_ids": [_destination_key(item) for item in ranked],
+                "route_keys": [record.cache_key for record in matrix_records],
+            }
+        route_records.extend(leg_route_records)
         destination = ranked[0]
         if destination.point is None:
             return _reject_result(case_id, origin_record, row, f"selected_destination_missing_point_at_stop_{stop_index}", poi_records=poi_records, route_records=route_records)
         best_distance = float(destination.reference_route_distance_m or destination.route_distance_m or 0.0)
+        if best_distance < float(args.min_leg_route_distance_m or 0.0):
+            return _reject_result(case_id, origin_record, row, f"leg_route_too_short_at_stop_{stop_index}", poi_records=poi_records, route_records=route_records)
         acceptable = _acceptable(ranked, ratio=float(_setting(args.acceptable_route_ratio, config, "acceptable_route_ratio", 1.15)))
         full_route = _append_route(full_route, destination.reference_route)
         total_distance += best_distance
@@ -349,11 +413,13 @@ async def _build_multistop_case(
                 "distance_m": best_distance,
                 "cache_keys": {
                     "poi_search": [poi_record.cache_key],
-                    "routes": [record.cache_key for record in stop_routes],
+                    "routes": [record.cache_key for record in leg_route_records],
                 },
+                "route_matrix": route_matrix,
             }
         )
         current = destination.point
+        previous_ranked = ranked
 
     case = {
         "schema_version": "urbannav_case_v1",
@@ -384,6 +450,11 @@ async def _build_multistop_case(
             "task_id": row.get("task_id"),
             "goal_count": len(sequence),
             "ordered_target_types": groups,
+            "ordered_goal_labels": goal_labels,
+            "multi_stop_cache_policy": args.multi_stop_cache_policy,
+            "min_inter_stop_distance_m": float(args.min_inter_stop_distance_m or 0.0),
+            "min_leg_route_distance_m": float(args.min_leg_route_distance_m or 0.0),
+            "max_leg_route_distance_m": float(args.max_leg_route_distance_m or 0.0),
             "acceptance_policy": row.get("acceptance_policy"),
             "route_features": _route_features(full_route, total_distance),
         },
@@ -417,7 +488,7 @@ async def _build_route_update_case(
     case_id = str(row.get("instruction_id") or "")
     original_origin = UrbanNavPoint(lat=float(origin_record["lat"]), lng=float(origin_record["lng"]))
     update_action = _route_update_action(row)
-    previous_goal = _goal_from_target_types(_previous_target_types(row), target_map=target_map)
+    previous_goal = _goal_from_target_types(previous_target_types_for_update(row), target_map=target_map)
     update_goal = _goal_from_target_types(row.get("target_types") or [], target_map=target_map)
     if not previous_goal["osm_tags"] or not update_goal["osm_tags"]:
         return _reject_result(case_id, origin_record, row, "missing_previous_or_update_goal_tags")
@@ -438,7 +509,14 @@ async def _build_route_update_case(
     poi_records.append(previous_poi)
     route_records.extend(previous_routes)
     if not previous_ranked:
-        return _reject_result(case_id, origin_record, row, "missing_routeable_previous_destination", poi_records=poi_records, route_records=route_records)
+        return _reject_result(
+            case_id,
+            origin_record,
+            row,
+            _goal_failure_reason(previous_poi, previous_routes, goal_label="previous_destination"),
+            poi_records=poi_records,
+            route_records=route_records,
+        )
 
     previous_destination = previous_ranked[0]
     old_route = list(previous_destination.reference_route)
@@ -460,7 +538,14 @@ async def _build_route_update_case(
     poi_records.append(update_poi)
     route_records.extend(update_routes)
     if not update_ranked:
-        return _reject_result(case_id, origin_record, row, "missing_routeable_update_destination", poi_records=poi_records, route_records=route_records)
+        return _reject_result(
+            case_id,
+            origin_record,
+            row,
+            _goal_failure_reason(update_poi, update_routes, goal_label="update_destination"),
+            poi_records=poi_records,
+            route_records=route_records,
+        )
 
     updated_destination = update_ranked[0]
     acceptable = _acceptable(update_ranked, ratio=float(_setting(args.acceptable_route_ratio, config, "acceptable_route_ratio", 1.15)))
@@ -484,6 +569,8 @@ async def _build_route_update_case(
         route_records.append(via_to_final_record)
         if via_to_final_record.distance_m is None or via_to_final_record.distance_m <= 0 or not via_to_final_record.polyline:
             return _reject_result(case_id, origin_record, row, "missing_route_from_via_to_final", poi_records=poi_records, route_records=route_records)
+        if float(args.max_leg_route_distance_m or 0.0) > 0 and via_to_final_record.distance_m > float(args.max_leg_route_distance_m):
+            return _reject_result(case_id, origin_record, row, "via_to_final_route_too_long", poi_records=poi_records, route_records=route_records)
         updated_route = _append_route(updated_route, via_to_final_record.polyline)
         updated_distance += float(via_to_final_record.distance_m)
 
@@ -550,6 +637,7 @@ async def _search_rank_goal(
     case_id: str,
     goal_key: str,
     excluded_destinations: list[UrbanNavDestination],
+    min_separation_m: float = 0.0,
     config: dict[str, Any],
     args: argparse.Namespace,
 ) -> tuple[list[UrbanNavDestination], ReplayPoiResult, list[ReplayRouteResult]]:
@@ -563,6 +651,7 @@ async def _search_rank_goal(
         case_id: Case id.
         goal_key: Stable goal key for cache ids.
         excluded_destinations: Previously selected destinations.
+        min_separation_m: Minimum distance to every previously selected stop.
         config: Raw config.
         args: Parsed arguments.
 
@@ -605,10 +694,13 @@ async def _search_rank_goal(
         route_concurrency=int(args.route_concurrency),
     )
     ranked: list[UrbanNavDestination] = []
+    max_distance_m = float(args.max_leg_route_distance_m or 0.0)
     for candidate_index, candidate, route_record in route_records:
-        if _is_repeated_destination(candidate, excluded_destinations):
+        if _is_repeated_destination(candidate, excluded_destinations, min_separation_m=min_separation_m):
             continue
         if route_record.distance_m is None or route_record.distance_m <= 0 or not route_record.polyline:
+            continue
+        if max_distance_m > 0 and route_record.distance_m > max_distance_m:
             continue
         ranked.append(_destination_with_route(candidate, route_record, provider_rank=candidate_index))
     ranked.sort(key=lambda item: (item.reference_route_distance_m or float("inf"), item.name or ""))
@@ -650,6 +742,116 @@ async def _plan_candidate_routes(
 
     tasks = [asyncio.create_task(run_one(index, candidate)) for index, candidate in enumerate(candidates, start=1)]
     return sorted(await asyncio.gather(*tasks), key=lambda item: item[0])
+
+
+async def _plan_route_matrix(
+    *,
+    provider: UrbanNavLiveProvider,
+    predecessor_candidates: list[UrbanNavDestination],
+    destination_candidates: list[UrbanNavDestination],
+    case_id: str,
+    stop_index: int,
+    retry: int,
+    route_concurrency: int,
+) -> list[ReplayRouteResult]:
+    """Plan every predecessor-to-candidate transition for one later stop.
+
+    Args:
+        provider: Connected route provider.
+        predecessor_candidates: Frozen candidate set for the previous stop.
+        destination_candidates: Frozen candidate set for the current stop.
+        case_id: Case identifier.
+        stop_index: One-based current stop index.
+        retry: Provider retry count.
+        route_concurrency: Maximum concurrent route calls.
+
+    Returns:
+        Matrix route records in predecessor-major order.
+    """
+
+    semaphore = asyncio.Semaphore(max(1, route_concurrency))
+
+    async def run_one(
+        predecessor: UrbanNavDestination,
+        destination: UrbanNavDestination,
+    ) -> ReplayRouteResult:
+        if predecessor.point is None:
+            return ReplayRouteResult(
+                cache_key=_matrix_route_key(case_id, stop_index, predecessor, destination),
+                provider=provider.capabilities.provider_name,
+                request={"origin": None, "destination": destination.to_dict(), "mode": "foot"},
+                response={"error": "predecessor_missing_point"},
+            )
+        async with semaphore:
+            return await _plan_route(
+                provider=provider,
+                origin=predecessor.point,
+                destination=destination,
+                case_id=case_id,
+                route_key=_matrix_route_suffix(stop_index, predecessor, destination),
+                retry=retry,
+            )
+
+    tasks = [
+        asyncio.create_task(run_one(predecessor, destination))
+        for predecessor in predecessor_candidates
+        for destination in destination_candidates
+    ]
+    return await asyncio.gather(*tasks)
+
+
+def _matrix_route_suffix(
+    stop_index: int,
+    predecessor: UrbanNavDestination,
+    destination: UrbanNavDestination,
+) -> str:
+    """Build the canonical route-matrix cache suffix."""
+
+    return (
+        f"stop{stop_index:02d}:from={_destination_key(predecessor)}"
+        f":to={_destination_key(destination)}"
+    )
+
+
+def _matrix_route_key(
+    case_id: str,
+    stop_index: int,
+    predecessor: UrbanNavDestination,
+    destination: UrbanNavDestination,
+) -> str:
+    """Build a complete route-matrix cache key."""
+
+    return f"route:{case_id}:{_matrix_route_suffix(stop_index, predecessor, destination)}"
+
+
+def _route_record_is_valid(record: ReplayRouteResult) -> bool:
+    """Return whether one replay route contains usable geometry."""
+
+    return record.distance_m is not None and record.distance_m > 0 and bool(record.polyline)
+
+
+def _goal_failure_reason(
+    poi_record: ReplayPoiResult,
+    route_records: list[ReplayRouteResult],
+    *,
+    goal_label: str,
+) -> str:
+    """Classify why a searched goal produced no ranked destination.
+
+    Args:
+        poi_record: Frozen POI search response.
+        route_records: Candidate route responses.
+        goal_label: Stable goal label included in the reason.
+
+    Returns:
+        Precise rejection reason separating retrieval, routing, and filtering.
+    """
+
+    if not poi_record.candidates:
+        return f"no_poi_candidates_at_{goal_label}"
+    if not any(_route_record_is_valid(record) for record in route_records):
+        return f"no_valid_routes_at_{goal_label}"
+    return f"all_candidates_filtered_at_{goal_label}"
 
 
 async def _plan_route(
@@ -767,31 +969,6 @@ def _goal_from_target_types(target_types: Iterable[Any], *, target_map: dict[str
     }
 
 
-def _previous_target_types(row: dict[str, Any]) -> list[str]:
-    """Infer the original destination type for a route-update session.
-
-    Args:
-        row: Route-update instruction row.
-
-    Returns:
-        Target type list used to build the pre-update route.
-    """
-
-    subcategory = str(row.get("subcategory") or "")
-    targets = {str(item) for item in row.get("target_types") or []}
-    if subcategory.startswith("replace_destination_restaurant"):
-        return ["pharmacy", "library"]
-    if subcategory.startswith("replace_destination_pharmacy"):
-        return ["restaurant", "cafe"]
-    if subcategory.startswith("insert_before_final"):
-        return ["library", "cafe"]
-    if "parking" in targets or "parking_lot" in targets:
-        return ["restaurant", "shopping_mall"]
-    if "restaurant" in targets:
-        return ["cafe", "library"]
-    return ["restaurant", "cafe"]
-
-
 def _route_update_action(row: dict[str, Any]) -> str:
     """Infer the route-update action.
 
@@ -830,12 +1007,18 @@ def _acceptable(ranked: list[UrbanNavDestination], *, ratio: float) -> list[Urba
     return [item for item in ranked if (item.reference_route_distance_m or float("inf")) <= best * max(1.0, ratio)] or [ranked[0]]
 
 
-def _is_repeated_destination(candidate: UrbanNavDestination, selected: list[UrbanNavDestination]) -> bool:
+def _is_repeated_destination(
+    candidate: UrbanNavDestination,
+    selected: list[UrbanNavDestination],
+    *,
+    min_separation_m: float = 0.0,
+) -> bool:
     """Check whether a candidate repeats a previous stop.
 
     Args:
         candidate: Candidate destination.
         selected: Previously selected destinations.
+        min_separation_m: Minimum allowed candidate-to-selected distance.
 
     Returns:
         ``True`` when ids match or coordinates are nearly identical.
@@ -848,9 +1031,71 @@ def _is_repeated_destination(candidate: UrbanNavDestination, selected: list[Urba
         existing_point = existing.point
         if point is None or existing_point is None:
             continue
-        if abs(point.lat - existing_point.lat) < 2e-5 and abs(point.lng - existing_point.lng) < 2e-5:
+        if _haversine_m(point, existing_point) < max(2.0, min_separation_m):
             return True
     return False
+
+
+def _filter_candidates_against_predecessors(
+    candidates: list[UrbanNavDestination],
+    predecessors: list[UrbanNavDestination],
+    *,
+    min_separation_m: float,
+) -> list[UrbanNavDestination]:
+    """Remove current-stop candidates that overlap any predecessor branch."""
+
+    filtered = [
+        candidate
+        for candidate in candidates
+        if not _is_repeated_destination(
+            candidate,
+            predecessors,
+            min_separation_m=min_separation_m,
+        )
+    ]
+    return [_with_rank(item, rank=index) for index, item in enumerate(filtered, start=1)]
+
+
+def _destination_key(destination: UrbanNavDestination) -> str:
+    """Return a cache-key-safe stable destination identifier."""
+
+    identifiers = sorted(destination.stable_ids)
+    if identifiers:
+        raw = identifiers[0]
+    elif destination.point is not None:
+        raw = f"coord_{destination.point.lat:.6f}_{destination.point.lng:.6f}"
+    else:
+        raw = destination.name or "unknown"
+    return "".join(character if character.isalnum() or character in {"_", "-", "."} else "_" for character in raw)
+
+
+def _target_groups_overlap(groups: list[Any]) -> bool:
+    """Return whether ordered target-type groups overlap semantically."""
+
+    normalized = [
+        {str(item).strip().lower() for item in group if str(item).strip()}
+        for group in groups
+        if isinstance(group, list)
+    ]
+    for left in range(len(normalized)):
+        for right in range(left + 1, len(normalized)):
+            if normalized[left].intersection(normalized[right]):
+                return True
+    return False
+
+
+def _apply_quality_policy_args(args: argparse.Namespace, *, quality_policy: dict[str, Any]) -> None:
+    """Resolve optional CLI quality settings from the v2 policy."""
+
+    multi = quality_policy.get("multi_stop") if isinstance(quality_policy.get("multi_stop"), dict) else {}
+    if args.min_inter_stop_distance_m is None:
+        args.min_inter_stop_distance_m = float(multi.get("min_inter_stop_distance_m") or 0.0)
+    if args.min_leg_route_distance_m is None:
+        args.min_leg_route_distance_m = float(multi.get("min_leg_route_distance_m") or 0.0)
+    if args.max_leg_route_distance_m is None:
+        args.max_leg_route_distance_m = float(multi.get("max_leg_route_distance_m") or 0.0)
+    if args.multi_stop_cache_policy == "gt_path" and multi.get("cache_policy") == "full_route_matrix":
+        args.multi_stop_cache_policy = "full_route_matrix"
 
 
 def _append_route(base: list[UrbanNavPoint], leg: list[UrbanNavPoint]) -> list[UrbanNavPoint]:

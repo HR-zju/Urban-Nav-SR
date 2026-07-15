@@ -1,0 +1,19 @@
+{
+  "version": "urbannav_25k_v3_shenzhen_update_supplement_plan_v1",
+  "case_id_prefix": "urbannav-v6u",
+  "purpose": "Action-targeted Shenzhen route-update supplement after semantic de-duplication",
+  "target_cases": 2500,
+  "city_distribution": [
+    {"country": "china", "city": "shenzhen", "count": 2500}
+  ],
+  "task_distribution": [
+    {"category": "poi_navigation", "count": 100},
+    {"category": "implicit_need_navigation", "count": 100},
+    {"category": "multi_stop_route", "count": 300},
+    {"category": "route_update_add_via", "count": 2000}
+  ],
+  "route_update_action_distribution": [
+    {"action": "replace_destination", "count": 1300},
+    {"action": "insert_before_final", "count": 700}
+  ]
+}

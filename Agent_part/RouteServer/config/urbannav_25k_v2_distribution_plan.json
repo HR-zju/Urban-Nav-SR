@@ -1,0 +1,35 @@
+{
+  "version": "urbannav_25k_v2_distribution_plan_v1",
+  "case_id_prefix": "urbannav-v4",
+  "target_cases": 25000,
+  "city_distribution": [
+    {"country": "netherlands", "city": "amsterdam", "count": 1471},
+    {"country": "thailand", "city": "bangkok", "count": 1471},
+    {"country": "spain", "city": "barcelona", "count": 1471},
+    {"country": "germany", "city": "berlin", "count": 1471},
+    {"country": "usa", "city": "chicago", "count": 1471},
+    {"country": "uk", "city": "london", "count": 1471},
+    {"country": "mexico", "city": "mexico_city", "count": 1471},
+    {"country": "usa", "city": "new_york", "count": 1471},
+    {"country": "japan", "city": "osaka", "count": 1471},
+    {"country": "france", "city": "paris", "count": 1471},
+    {"country": "usa", "city": "san_francisco", "count": 1470},
+    {"country": "brazil", "city": "sao_paulo", "count": 1470},
+    {"country": "south_korea", "city": "seoul", "count": 1470},
+    {"country": "singapore", "city": "singapore", "count": 1470},
+    {"country": "australia", "city": "sydney", "count": 1470},
+    {"country": "japan", "city": "tokyo", "count": 1470},
+    {"country": "canada", "city": "toronto", "count": 1470}
+  ],
+  "task_distribution": [
+    {"category": "poi_navigation", "label": "Explicit POI navigation", "count": 10000},
+    {"category": "implicit_need_navigation", "label": "Implicit need navigation", "count": 8750},
+    {"category": "multi_stop_route", "label": "Ordered multi-stop route", "count": 3750},
+    {"category": "route_update_add_via", "label": "Route update / reroute", "count": 2500}
+  ],
+  "route_update_action_distribution": [
+    {"action": "replace_destination", "count": 1000},
+    {"action": "add_via", "count": 1000},
+    {"action": "insert_before_final", "count": 500}
+  ]
+}

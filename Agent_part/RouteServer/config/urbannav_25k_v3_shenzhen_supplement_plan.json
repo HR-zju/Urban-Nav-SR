@@ -1,0 +1,20 @@
+{
+  "version": "urbannav_25k_v3_shenzhen_supplement_plan_v1",
+  "case_id_prefix": "urbannav-v6s",
+  "purpose": "Targeted supplement for Shenzhen multi-stop and route-update final-quota deficits",
+  "target_cases": 5000,
+  "city_distribution": [
+    {"country": "china", "city": "shenzhen", "count": 5000}
+  ],
+  "task_distribution": [
+    {"category": "poi_navigation", "count": 500},
+    {"category": "implicit_need_navigation", "count": 500},
+    {"category": "multi_stop_route", "count": 1000},
+    {"category": "route_update_add_via", "count": 3000}
+  ],
+  "route_update_action_distribution": [
+    {"action": "replace_destination", "count": 1200},
+    {"action": "add_via", "count": 1200},
+    {"action": "insert_before_final", "count": 600}
+  ]
+}

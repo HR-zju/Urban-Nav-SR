@@ -1,0 +1,41 @@
+{
+  "description": "OSM PBF sources and isolated OSRM ports for the six cities added to UrbanNav final-25K v3.",
+  "sources": {
+    "beijing_wangfujing": {
+      "url": "https://download.openstreetmap.fr/extracts/asia/china/beijing-latest.osm.pbf",
+      "raw_filename": "beijing-latest.osm.pbf",
+      "osrm_port": 5031,
+      "valhalla_port": 6031
+    },
+    "shanghai_people_square": {
+      "url": "https://download.openstreetmap.fr/extracts/asia/china/shanghai-latest.osm.pbf",
+      "raw_filename": "shanghai-latest.osm.pbf",
+      "osrm_port": 5032,
+      "valhalla_port": 6032
+    },
+    "shenzhen_futian": {
+      "url": "https://download.openstreetmap.fr/extracts/asia/china/guangdong-latest.osm.pbf",
+      "raw_filename": "guangdong-latest.osm.pbf",
+      "osrm_port": 5033,
+      "valhalla_port": 6033
+    },
+    "hangzhou_westlake": {
+      "url": "https://download.openstreetmap.fr/extracts/asia/china/zhejiang-latest.osm.pbf",
+      "raw_filename": "zhejiang-latest.osm.pbf",
+      "osrm_port": 5034,
+      "valhalla_port": 6034
+    },
+    "dubai_downtown": {
+      "url": "https://download.geofabrik.de/asia/gcc-states-latest.osm.pbf",
+      "raw_filename": "gcc-states-latest.osm.pbf",
+      "osrm_port": 5035,
+      "valhalla_port": 6035
+    },
+    "moscow_center": {
+      "url": "https://download.geofabrik.de/russia/central-fed-district-latest.osm.pbf",
+      "raw_filename": "central-fed-district-latest.osm.pbf",
+      "osrm_port": 5036,
+      "valhalla_port": 6036
+    }
+  }
+}

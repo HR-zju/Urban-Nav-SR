@@ -317,7 +317,7 @@ async def build_global_case(
         return {"case": None, "reject": _reject(case_id, origin_record, task, "poi_api_error", str(exc))}
     candidates = _dedupe_destinations(poi_record.candidates)
     if not candidates:
-        return {"case": None, "reject": _reject(case_id, origin_record, task, "no_satisfying_poi_candidates")}
+        return {"case": None, "reject": _reject(case_id, origin_record, task, "no_poi_candidates")}
 
     route_records: list[ReplayRouteResult] = []
     ranked: list[UrbanNavDestination] = []
@@ -338,7 +338,12 @@ async def build_global_case(
         ranked.append(_destination_with_route(candidate, route_record, provider_rank=candidate_index))
 
     if not ranked:
-        return {"case": None, "reject": _reject(case_id, origin_record, task, "no_routeable_candidates")}
+        has_valid_geometry = any(
+            record.distance_m is not None and record.distance_m > 0 and bool(record.polyline)
+            for record in route_records
+        )
+        reason = "all_routes_outside_distance_bounds" if has_valid_geometry else "no_valid_routes"
+        return {"case": None, "reject": _reject(case_id, origin_record, task, reason)}
 
     ranked.sort(key=lambda item: (item.reference_route_distance_m or float("inf"), item.name or ""))
     ranked = [_with_rank(destination, rank=rank) for rank, destination in enumerate(ranked, start=1)]
@@ -759,9 +764,20 @@ def _with_rank(destination: UrbanNavDestination, *, rank: int) -> UrbanNavDestin
         Ranked destination.
     """
 
-    payload = destination.to_dict()
-    payload["rank"] = rank
-    return UrbanNavDestination.from_dict(payload)
+    return UrbanNavDestination(
+        lat=destination.lat,
+        lng=destination.lng,
+        name=destination.name,
+        type=destination.type,
+        provider_poi_id=destination.provider_poi_id,
+        place_id=destination.place_id,
+        rank=rank,
+        reference_route_distance_m=destination.reference_route_distance_m,
+        reference_route=list(destination.reference_route),
+        route_distance_m=destination.route_distance_m,
+        score_breakdown=dict(destination.score_breakdown),
+        raw=dict(destination.raw),
+    )
 
 
 def _acceptable_destinations(

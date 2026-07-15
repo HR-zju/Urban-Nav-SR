@@ -28,10 +28,13 @@ class UrbanNavEvalConfig:
             identity matching when stable POI ids are unavailable.
         endpoint_tolerance_m: Tolerance for checking whether the predicted
             route endpoint reaches the matched destination.
+        multi_stop_continuity_tolerance_m: Maximum gap between adjacent
+            predicted route legs and their declared transition origin.
     """
 
     destination_tolerance_m: float = 30.0
     endpoint_tolerance_m: float = 30.0
+    multi_stop_continuity_tolerance_m: float = 5.0
 
 
 @dataclass(frozen=True)
@@ -515,7 +518,19 @@ def evaluate_multi_stop_case(
     stop_count = len(gt_legs)
     sequence_success = stop_count > 0 and matched_count == stop_count and len(pred_sequence) == stop_count
     sequence_hit_at_5 = stop_count > 0 and stop_candidate_count == stop_count and stop_hit_at_5_count == stop_count
-    leg_route_success = stop_count > 0 and leg_route_success_count == stop_count
+    continuity = _evaluate_leg_continuity(
+        pred_legs,
+        tolerance_m=cfg.multi_stop_continuity_tolerance_m,
+    )
+    for index, result in enumerate(stop_results[:-1]):
+        result["continuity_to_next"] = continuity["transitions"][index] if index < len(continuity["transitions"]) else None
+    if stop_results:
+        stop_results[-1]["continuity_to_next"] = None
+    leg_route_success = (
+        stop_count > 0
+        and leg_route_success_count == stop_count
+        and continuity["success"]
+    )
     pred_total = prediction.route_distance_m if prediction is not None else None
     if pred_total is None and prediction is not None:
         pred_total = route_distance_m(prediction.route_polyline)
@@ -532,11 +547,70 @@ def evaluate_multi_stop_case(
         "candidate_coverage": stop_candidate_count / stop_count if stop_count else 0.0,
         "leg_route_success": leg_route_success,
         "leg_route_success_rate": leg_route_success_count / stop_count if stop_count else 0.0,
+        "leg_continuity_success": continuity["success"],
+        "max_leg_gap_m": continuity["max_gap_m"],
+        "leg_transitions": continuity["transitions"],
         "multi_stop_spl": multi_stop_spl,
         "reference_total_distance_m": reference_total if reference_total > 0 else None,
         "pred_total_distance_m": pred_total,
         "legs": stop_results,
     }
+
+
+def _evaluate_leg_continuity(
+    pred_legs: list[Any],
+    *,
+    tolerance_m: float,
+) -> dict[str, Any]:
+    """Evaluate geometric continuity between adjacent predicted route legs."""
+
+    if len(pred_legs) <= 1:
+        return {"success": True, "max_gap_m": 0.0, "transitions": []}
+    transitions: list[dict[str, Any]] = []
+    observed_gaps: list[float] = []
+    for index in range(len(pred_legs) - 1):
+        previous_route = _parse_leg_route(pred_legs[index])
+        next_route = _parse_leg_route(pred_legs[index + 1])
+        route_gap = None
+        if previous_route and next_route:
+            route_gap = haversine_m(previous_route[-1], next_route[0])
+            observed_gaps.append(route_gap)
+        next_origin = _leg_origin(pred_legs[index + 1])
+        previous_to_origin_gap = None
+        origin_to_next_gap = None
+        if next_origin is not None and previous_route:
+            previous_to_origin_gap = haversine_m(previous_route[-1], next_origin)
+            observed_gaps.append(previous_to_origin_gap)
+        if next_origin is not None and next_route:
+            origin_to_next_gap = haversine_m(next_origin, next_route[0])
+            observed_gaps.append(origin_to_next_gap)
+        checks = [route_gap]
+        if next_origin is not None:
+            checks.extend([previous_to_origin_gap, origin_to_next_gap])
+        success = all(gap is not None and gap <= tolerance_m for gap in checks)
+        transitions.append(
+            {
+                "from_leg_index": index + 1,
+                "to_leg_index": index + 2,
+                "success": success,
+                "route_gap_m": route_gap,
+                "previous_end_to_next_origin_m": previous_to_origin_gap,
+                "next_origin_to_next_start_m": origin_to_next_gap,
+            }
+        )
+    return {
+        "success": all(item["success"] for item in transitions),
+        "max_gap_m": max(observed_gaps) if observed_gaps else None,
+        "transitions": transitions,
+    }
+
+
+def _leg_origin(value: Any) -> UrbanNavPoint | None:
+    """Parse an optional route-leg origin."""
+
+    if not isinstance(value, dict):
+        return None
+    return _point_from_dict(value.get("origin"))
 
 
 def evaluate_route_update_case(

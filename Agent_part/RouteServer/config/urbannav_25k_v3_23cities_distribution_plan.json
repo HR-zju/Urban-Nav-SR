@@ -1,0 +1,41 @@
+{
+  "version": "urbannav_25k_v3_23cities_distribution_plan_v1",
+  "case_id_prefix": "urbannav-v5",
+  "target_cases": 25000,
+  "city_distribution": [
+    {"country": "netherlands", "city": "amsterdam", "count": 1087},
+    {"country": "thailand", "city": "bangkok", "count": 1087},
+    {"country": "spain", "city": "barcelona", "count": 1087},
+    {"country": "china", "city": "beijing", "count": 1087},
+    {"country": "germany", "city": "berlin", "count": 1087},
+    {"country": "usa", "city": "chicago", "count": 1087},
+    {"country": "uae", "city": "dubai", "count": 1087},
+    {"country": "china", "city": "hangzhou", "count": 1087},
+    {"country": "uk", "city": "london", "count": 1087},
+    {"country": "mexico", "city": "mexico_city", "count": 1087},
+    {"country": "russia", "city": "moscow", "count": 1087},
+    {"country": "usa", "city": "new_york", "count": 1087},
+    {"country": "japan", "city": "osaka", "count": 1087},
+    {"country": "france", "city": "paris", "count": 1087},
+    {"country": "usa", "city": "san_francisco", "count": 1087},
+    {"country": "brazil", "city": "sao_paulo", "count": 1087},
+    {"country": "south_korea", "city": "seoul", "count": 1087},
+    {"country": "china", "city": "shanghai", "count": 1087},
+    {"country": "china", "city": "shenzhen", "count": 1087},
+    {"country": "singapore", "city": "singapore", "count": 1087},
+    {"country": "australia", "city": "sydney", "count": 1087},
+    {"country": "japan", "city": "tokyo", "count": 1087},
+    {"country": "canada", "city": "toronto", "count": 1086}
+  ],
+  "task_distribution": [
+    {"category": "poi_navigation", "count": 10000},
+    {"category": "implicit_need_navigation", "count": 8750},
+    {"category": "multi_stop_route", "count": 3750},
+    {"category": "route_update_add_via", "count": 2500}
+  ],
+  "route_update_action_distribution": [
+    {"action": "replace_destination", "count": 1000},
+    {"action": "add_via", "count": 1000},
+    {"action": "insert_before_final", "count": 500}
+  ]
+}

@@ -644,17 +644,20 @@ class ReplayUrbanNavBackendAdapter:
     without changing the benchmark state.
     """
 
-    def __init__(self, replay_backend: ReplayMapBackend) -> None:
+    def __init__(self, replay_backend: ReplayMapBackend, *, origin_tolerance_m: float = 5.0) -> None:
         """Initialize the adapter.
 
         Args:
             replay_backend: Replay cache backend.
+            origin_tolerance_m: Maximum stored-request origin error accepted
+                for replay route lookup.
 
         Returns:
             None.
         """
 
         self.replay_backend = replay_backend
+        self.origin_tolerance_m = max(0.0, float(origin_tolerance_m))
 
     def search_destinations(self, *, case: UrbanNavCase, stop_index: int | None = None) -> ReplayPoiResult:
         """Return frozen POI candidates for a case.
@@ -708,26 +711,38 @@ class ReplayUrbanNavBackendAdapter:
             stop_index=stop_index,
             route_phase=route_phase,
         )
-        fallback: ReplayRouteResult | None = None
         destination_matches: list[ReplayRouteResult] = []
         for key in route_keys:
             try:
                 record = self.replay_backend.plan_route(cache_key=key)
             except KeyError:
                 continue
-            if fallback is None:
-                fallback = record
             request_destination = UrbanNavDestination.from_dict(dict(record.request.get("destination") or {}))
             if destination_ids and request_destination.stable_ids & destination_ids:
                 destination_matches.append(record)
         if destination_matches:
-            return _best_origin_matched_route(destination_matches, origin=origin)
+            matched = _best_origin_matched_route(
+                destination_matches,
+                origin=origin,
+                origin_tolerance_m=self.origin_tolerance_m,
+            )
+            if matched is not None:
+                return matched
+            return ReplayRouteResult(
+                cache_key=f"missing-origin-route:{case.case_id}:{destination.provider_poi_id or destination.name or 'unknown'}",
+                provider=case.optimality_scope.route_provider,
+                request={
+                    "origin": origin.to_dict() if origin is not None else None,
+                    "destination": destination.to_dict(),
+                },
+                response={"error": "route_cache_origin_not_found"},
+            )
         return ReplayRouteResult(
             cache_key=f"missing-route:{case.case_id}:{destination.provider_poi_id or destination.name or 'unknown'}",
             provider=case.optimality_scope.route_provider,
             request={"destination": destination.to_dict()},
             response={"error": "route_cache_key_not_found"},
-        ) if fallback is None else fallback
+        )
 
 
 def run_urbannav_cases_async(runner: AsyncUrbanNavRunner, cases: Iterable[UrbanNavCase]) -> list[UrbanNavPrediction]:
@@ -923,19 +938,24 @@ def _best_origin_matched_route(
     records: list[ReplayRouteResult],
     *,
     origin: UrbanNavPoint | None,
-) -> ReplayRouteResult:
+    origin_tolerance_m: float = 5.0,
+) -> ReplayRouteResult | None:
     """Choose the route whose stored request origin best matches ``origin``.
 
     Args:
         records: Route cache records already matched by destination.
         origin: Effective route origin.
+        origin_tolerance_m: Maximum accepted request-origin error.
 
     Returns:
-        Best route record. If no origin is provided, the first destination
-        match is returned.
+        Best route record, or ``None`` when no stored request origin is within
+        tolerance. If no origin is provided, the first destination match is
+        returned.
     """
 
-    if not records or origin is None:
+    if not records:
+        return None
+    if origin is None:
         return records[0]
 
     scored: list[tuple[float, ReplayRouteResult]] = []
@@ -945,8 +965,10 @@ def _best_origin_matched_route(
             continue
         scored.append((_distance_m(origin, request_origin), record))
     if not scored:
-        return records[0]
+        return None
     scored.sort(key=lambda item: item[0])
+    if scored[0][0] > max(0.0, origin_tolerance_m):
+        return None
     return scored[0][1]
 
 
