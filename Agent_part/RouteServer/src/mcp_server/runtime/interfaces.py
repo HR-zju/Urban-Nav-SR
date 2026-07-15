@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import math
 from enum import Enum
 from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from mcp_server.contracts.tool import ToolCallV2, ToolResponseV2
+from mcp_server.runtime.system1_contract import (
+    SYSTEM1_AXIS_NAMES_EGO_POSE_XYT_FLU,
+    SYSTEM1_COORDINATE_FRAME_CURRENT_EGO_FLU,
+    SYSTEM1_REPRESENTATION_CUMULATIVE_RELATIVE_POSE,
+    SYSTEM1_TARGET_FIELD_TRAJECTORY_EGO_T,
+    SYSTEM1_TARGET_FORMAT_EGO_POSE_XYT_FLU_V1,
+)
 
 
 class System2ActionType(str, Enum):
@@ -58,10 +66,12 @@ class System2Action(BaseModel):
 
 
 class System1Output(BaseModel):
-    """Continuous ego-frame action chunk produced by System1.
+    """Metric cumulative FLU trajectory produced by System1.
 
     Args:
-        trajectory_ego_t: ``[T,3]`` points ``[x_right_m, y_front_m, heading_delta_rad]``.
+        trajectory_ego_t: ``[T,3]`` points
+            ``[x_forward_m, y_left_m, yaw_rel_ccw_rad]`` in the current fixed
+            ego reference frame.
         action_mask: Optional valid-step mask.
         runtime_commands: Optional controller-ready commands.
         metadata: Head and sampling metadata.
@@ -77,7 +87,7 @@ class System1Output(BaseModel):
     @field_validator("trajectory_ego_t")
     @classmethod
     def _validate_xyt(cls, value: list[list[float]]) -> list[list[float]]:
-        """Require a non-empty ego ``[T,3]`` trajectory.
+        """Require a finite non-empty canonical ``[T,3]`` trajectory.
 
         Args:
             value: Candidate trajectory.
@@ -91,7 +101,36 @@ class System1Output(BaseModel):
 
         if not value or any(len(point) != 3 for point in value):
             raise ValueError("trajectory_ego_t must have shape [T,3] with T > 0")
+        if any(not math.isfinite(float(component)) for point in value for component in point):
+            raise ValueError("trajectory_ego_t values must be finite")
         return value
+
+    @model_validator(mode="after")
+    def _bind_canonical_contract(self) -> "System1Output":
+        """Attach immutable coordinate semantics to runtime output metadata.
+
+        Returns:
+            Output with canonical contract fields present in ``metadata``.
+
+        Raises:
+            ValueError: If caller metadata contradicts the production format.
+        """
+
+        expected = {
+            "system1_target_field": SYSTEM1_TARGET_FIELD_TRAJECTORY_EGO_T,
+            "system1_target_format": SYSTEM1_TARGET_FORMAT_EGO_POSE_XYT_FLU_V1,
+            "representation": SYSTEM1_REPRESENTATION_CUMULATIVE_RELATIVE_POSE,
+            "coordinate_frame": SYSTEM1_COORDINATE_FRAME_CURRENT_EGO_FLU,
+            "axis_names": list(SYSTEM1_AXIS_NAMES_EGO_POSE_XYT_FLU),
+            "normalized": False,
+        }
+        metadata = dict(self.metadata)
+        for key, expected_value in expected.items():
+            if key in metadata and metadata[key] != expected_value:
+                raise ValueError(f"System1Output metadata {key}={metadata[key]!r} contradicts {expected_value!r}")
+            metadata[key] = expected_value
+        self.metadata = metadata
+        return self
 
 
 class SafetyResult(BaseModel):

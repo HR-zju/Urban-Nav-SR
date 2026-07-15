@@ -340,40 +340,127 @@ h_i=F_{\theta}(I,U,e_i).
 
 ```text
 trajectory_ego_t [T,3]
-columns = [x_right_m, y_front_m, heading_delta_rad]
-frame = current_ego
+system1_target_format = ego_pose_xyt_flu_v1
+columns = [x_forward_m, y_left_m, yaw_rel_ccw_rad]
+representation = cumulative_relative_pose
+frame = current_ego_flu
+normalized = false
 ```
 
-其中每个 \((x_i,y_i)\) 是相对当前 ego 原点的轨迹点，heading 是该点局部方向。
+其中
+
+\[
+q_i=[x_i,y_i,\psi_i]
+\]
+
+表示未来第 \(i\) 个时刻相对当前观测时刻 \(t_0\) 的累计相对位姿。所有点都在
+\(t_0\) 的固定 FLU 参考帧中：\(x\) 向前，\(y\) 向左，yaw 逆时针为正。
+它不是世界坐标绝对位姿，也不是相邻 waypoint 增量。
+
+历史 RouteServer 的 `x_right/y_front` 数据只在 exporter 边界转换一次：
+
+\[
+x_{forward}=y_{front},\qquad y_{left}=-x_{right}.
+\]
+
+第三维优先使用 odometry：
+
+\[
+\psi_i=wrap(\psi_i^{world}-\psi_0^{world}).
+\]
+
+缺少可靠 yaw 时，exporter 才从路径切线估计并记录 `yaw_source=path_tangent`：
+
+\[
+\psi_i=atan2(y_i-y_{i-1},x_i-x_{i-1}).
+\]
+
+#### 4.3.1 原始数据进入 CFM 前的固定转换闸门
+
+原始 FPV、BEV、instruction 和 tool context 属于模型观测，可以按各自的多模态
+adapter 进入 LVLM。原始 GPS、odometry、历史轨迹和 delta action 属于运动监督，
+**不能直接作为生产 CFM target**。生产数据必须在离线 source adapter/exporter 边界
+完成下面的确定性转换：
+
+```text
+raw GPS / world odometry / legacy trajectory
+  -> 解析数据源坐标轴、单位、采样时刻和 yaw 定义
+  -> GPS/global pose 投影到局部米制平面
+  -> 以当前观测时刻 t0 建立固定 ego FLU 参考帧
+  -> 对所有未来 pose 计算 (T_e0^w)^-1 T_i^w
+  -> 构造 metric cumulative trajectory_ego_t [T,3]
+  -> 补齐并校验 trajectory_policy
+  -> 写入 canonical JSONL/replay row
+  -> ms-swift dataset/collator
+  -> Direct/CFM System1 training
+```
+
+不同来源必须按显式规则处理：
+
+| 原始监督 | 固定处理 | 是否可直接训练 |
+| --- | --- | --- |
+| world/GPS pose + odometry yaw | 投影到米制平面，再做 current-ego SE(2) 相对变换 | 否，转换后才可用 |
+| `[x_right,y_front,dt,speed]` | `x_forward=y_front`、`y_left=-x_right`；yaw 使用 odometry 或路径切线；`dt/speed` 不进入三维 target | 否，转换后才可用 |
+| rolling body delta | 仅在语义明确时通过 SE(2) 累积重建轨迹；否则保留为独立 `action_ego_t` 消融 | 否，不允许隐式混用 |
+| normalized trajectory/action | 使用该数据集绑定的统计量反归一化为物理量 | 否，转换后才可用 |
+| canonical FLU `[T,3]` | 检查 finite、字段、format、frame、单位、yaw source 和 `normalized=false` | 校验通过后可直接训练 |
+
+canonical row 至少必须声明：
+
+```yaml
+trajectory_policy:
+  system1_target_field: trajectory_ego_t
+  system1_target_format: ego_pose_xyt_flu_v1
+  representation: cumulative_relative_pose
+  coordinate_frame: current_ego_flu
+  axis_names: [x_forward_m, y_left_m, yaw_rel_ccw_rad]
+  yaw_source: odometry  # or path_tangent
+  normalized: false
+  dt_sec: 0.2
+```
+
+该转换不得放进 trainer、CFM head 或 runtime 中按 shape 动态推断。这样可以保证同一条
+row 在训练、离线评测和 replay 中具有完全相同的数值语义。当前 CityWalker/EgoWalk
+旧 exporter 仍可生成四维历史标签；这些 row 必须先经过 v2 canonical exporter 或专用
+migration，再进入生产训练。
 
 兼容控制合同是：
 
 ```text
 action_ego_t [T,3]
-columns = [dx_right_m, dy_front_m, dtheta_rad]
-space = ego_delta_xyt
+columns = [dx_forward_body_m, dy_left_body_m, dtheta_ccw_rad]
+space = ego_delta_xyt_flu_v1
 ```
 
-二者不能仅凭维度混用。绝对 ego 轨迹转控制增量必须显式计算：
+二者不能仅凭维度混用。累计 ego 轨迹转 rolling body delta 必须显式计算：
 
 \[
-\Delta x_i=x_i-x_{i-1},\quad
-\Delta y_i=y_i-y_{i-1},
+\Delta p_i^{ref}=p_i-p_{i-1},
 \]
 
 \[
-\Delta\theta_i=wrap(\theta_i-\theta_{i-1}),
-\qquad (x_{-1},y_{-1},\theta_{-1})=(0,0,0).
+\Delta p_i^{body}=R(-\psi_{i-1})\Delta p_i^{ref},
 \]
 
-当前 trainer 优先使用 `trajectory_ego_t`，缺失时使用 `action_ego_t`。当前 `ActionRuntimeAdapter` 的执行空间仍是 `ego_delta_xyt`；因此当 checkpoint 输出绝对 `trajectory_ego_t` 时，部署前必须增加上述显式转换。该转换目前不是 runtime adapter 中已完成的统一主路径。
+\[
+\Delta\psi_i=wrap(\psi_i-\psi_{i-1}),
+\qquad (p_{-1},\psi_{-1})=(0,0).
+\]
 
-System1 head 本身只检查张量宽度，不会推断坐标语义，也不会自动把绝对轨迹转换成 delta action。当前两类 target 的尺度约定也不同：
+当前 `ActionRuntimeAdapter` 已实现该旋转转换，并把结果交给离散动作映射或
+`v/omega` 控制层。真实差速底盘仍推荐用 Pure Pursuit/MPC 跟踪累计轨迹，adapter
+的逐步 `v/omega` 主要用于统一 smoke/replay 接口。
+
+生产 trainer 和 checkpoint 固定：
 
 ```text
-trajectory_ego_t: RouteServer v2 exporter 输出 metric ego trajectory
-action_ego_t:     dataset action pipeline 通常按 action_stats 归一化
+sidewalk_system1_target_field = trajectory_ego_t
+sidewalk_system1_target_format = ego_pose_xyt_flu_v1
 ```
+
+当 row 缺少 `trajectory_ego_t` 时，该 row 的 System1 loss 关闭，不允许自动回退到
+`action_ego_t`。`action_ego_t` 只用于独立 delta-action 消融和旧数据兼容，必须使用
+单独配置与 checkpoint。
 
 对 `action_ego_t`：
 
@@ -382,7 +469,10 @@ a_{norm}=\frac{a_{raw}-\mu}{\sigma},\qquad
 a_{raw}=a_{norm}\sigma+\mu.
 \]
 
-因此 checkpoint 和 inference row 必须保存 `system1_target_format`、`action_stats` 和 `normalized`。禁止只根据 `[T,3]` shape 决定是否反归一化或累计积分。
+生产 row 始终保存真实物理量 `normalized=false`。CFM 内部如需标准化，统计量绑定在
+checkpoint System1 config 中，推理后必须反归一化。checkpoint 和 inference row
+必须保存 `system1_target_field`、`system1_target_format` 和 `normalized`，禁止只根据
+`[T,3]` shape 决定是否反归一化或累计积分。
 
 ### 4.4 FPV 文本轨迹
 
@@ -979,12 +1069,21 @@ tool\_response \prec finish \prec [SYS1_i].
   ],
   "tools": "[...]",
   "images": ["fpv.jpg", "bev.jpg"],
-  "trajectory_ego_t": [[0.0, 0.4, 0.0], [0.1, 0.9, 0.08]],
+  "trajectory_ego_t": [[0.4, 0.0, 0.0], [0.9, 0.1, 0.08]],
+  "trajectory_policy": {
+    "representation": "cumulative_relative_pose",
+    "coordinate_frame": "current_ego_flu",
+    "axis_names": ["x_forward_m", "y_left_m", "yaw_rel_ccw_rad"],
+    "normalized": false,
+    "yaw_source": "odometry",
+    "dt_sec": 0.2
+  },
   "action_mask": [true, true],
   "contract_meta": {
     "system1_readout_placement": "assistant_suffix_v2",
     "system1_readout_lm_label": -100,
-    "system1_target_format": "ego_xy_heading_delta"
+    "system1_target_field": "trajectory_ego_t",
+    "system1_target_format": "ego_pose_xyt_flu_v1"
   }
 }
 ```
@@ -1261,7 +1360,7 @@ swift/sidewalk_nav/cli/infer.py
   text/head inference and system1_chunk_ego output
 
 swift/sidewalk_nav/adapters/action_runtime_adapter.py
-  ego_delta_xyt command adapter
+  cumulative FLU trajectory -> rolling body-delta command adapter
 
 swift/sidewalk_nav/data/agentic_episode_manifest.py
   EpisodeTraceV2 -> session SFT/DAgger rows
@@ -1294,8 +1393,8 @@ swift/sidewalk_nav/rollout/urbannav_env.py
 | 自动多模态 input-mode resolver | 未完成 | 当前依赖显式 prompt/image roles |
 | 生产级 Safety Validator | 未完成 | 只有 Protocol、graph node 和测试 fake |
 | safety intervention execution | 未完成 | intervention 当前未替换轨迹 |
-| System1 target 坐标/归一化统一 | 部分实现 | exporter 可固定 trajectory `[T,3]`，head 尚不区分 absolute/delta 语义 |
-| absolute trajectory -> delta controller 统一桥接 | 未完成 | 当前 adapter 仍以 ego_delta_xyt 为输入 |
+| System1 target 坐标/归一化统一 | 已实现 | v2 exporter 输出 metric cumulative FLU，checkpoint 固定 field/format |
+| cumulative trajectory -> body-delta runtime 桥接 | 已实现 | adapter 使用 `R(-yaw_prev)` 显式转换 |
 | live simulator/robot multi-tick rollout validation | 需要部署验证 | frozen service 不等于真实控制闭环 |
 | GRPO 生产训练 | 未完成 | 必须先满足 replay/reward readiness |
 | 独立 async RGB memory branch | 未实现 | 当前使用 LVLM multimodal hidden memory |
@@ -1307,7 +1406,7 @@ swift/sidewalk_nav/rollout/urbannav_env.py
 1. `tool_response` 必须是上下文，不能计算 LM CE。
 2. `[TRAJ_i]/[SYS1_i]` 必须 `labels=-100`，且 v2 readout 位于工具结果和 finish 之后。
 3. `trajectory_ego_t/action_ego_t` 只能作为顶层 head supervision，不能写入 assistant target。
-4. `trajectory_ego_t` 与 `action_ego_t` 必须通过 format metadata 区分，禁止按 `[T,3]` 静默混用。
+4. 生产 checkpoint 固定 `trajectory_ego_t/ego_pose_xyt_flu_v1`；禁止自动回退到 `action_ego_t`，也禁止按 `[T,3]` 静默混用。
 5. RouteSession、provider cache 和 safety diagnostics 属于外部 runtime state，不是 LVLM 必须预测的 belief。
 6. live、replay、training exporter 必须共享同一 tool name/op/response contract。
 7. DAgger 必须使用显式 teacher correction，不能把失败动作回写成监督。

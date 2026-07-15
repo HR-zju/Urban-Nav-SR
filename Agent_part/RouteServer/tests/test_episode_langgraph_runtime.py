@@ -133,7 +133,7 @@ class _HitlSystem2Policy:
 
 class _System1Policy:
     async def predict(self, state):
-        return System1Output(trajectory_ego_t=[[0.0, 0.5, 0.0], [0.0, 1.0, 0.0]])
+        return System1Output(trajectory_ego_t=[[0.5, 0.0, 0.0], [1.0, 0.0, 0.0]])
 
 
 class _SafetyValidator:

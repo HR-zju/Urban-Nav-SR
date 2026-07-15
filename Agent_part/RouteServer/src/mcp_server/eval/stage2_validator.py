@@ -29,6 +29,13 @@ from mcp_server.agent.stage2 import (
 from mcp_server.agent.tool_parser import parse_finish_text
 from mcp_server.agent.tool_schema import USER_INTERACTION_TOOL_NAME, validate_tool_call
 from mcp_server.eval.metrics import compute_trace_metrics
+from mcp_server.runtime.system1_contract import (
+    SYSTEM1_AXIS_NAMES_EGO_POSE_XYT_FLU,
+    SYSTEM1_COORDINATE_FRAME_CURRENT_EGO_FLU,
+    SYSTEM1_REPRESENTATION_CUMULATIVE_RELATIVE_POSE,
+    SYSTEM1_TARGET_FORMAT_EGO_POSE_XYT_FLU_V1,
+    SYSTEM1_YAW_SOURCES,
+)
 
 
 STAGE2_TOOL_TRACE_ROLE_SEQUENCE = ("user", "assistant", "tool_call", "tool_response", "user", "assistant")
@@ -362,11 +369,10 @@ def _validate_system1_v2_targets(row: dict[str, Any], *, errors: list[str]) -> N
         None.
 
     Notes:
-        v2 CFM rows use ``trajectory_ego_t`` as
-        ``[x_right_m, y_front_m, heading_delta_rad]``.  The old Phase1
-        ``[x_right_m, y_front_m, dt_s, speed_mps]`` convention is still valid
-        for archived local-navigation rows, but must be converted before a row
-        declares ``assistant_suffix_v2`` System1 readout tokens.
+        v2 CFM rows use metric cumulative FLU ``trajectory_ego_t`` as
+        ``[x_forward_m, y_left_m, yaw_rel_ccw_rad]``.  Historical
+        ``x_right/y_front`` rows must be converted before a row declares
+        ``assistant_suffix_v2`` System1 readout tokens.
     """
 
     trajectory = row.get("trajectory_ego_t")
@@ -377,8 +383,21 @@ def _validate_system1_v2_targets(row: dict[str, Any], *, errors: list[str]) -> N
         errors.append(f"row_system1_trajectory_ego_t_width:{width}")
     contract_meta = row.get("contract_meta") if isinstance(row.get("contract_meta"), dict) else {}
     target_format = contract_meta.get("system1_target_format")
-    if target_format not in {None, "ego_xy_heading_delta"}:
+    if target_format != SYSTEM1_TARGET_FORMAT_EGO_POSE_XYT_FLU_V1:
         errors.append(f"row_system1_target_format:{target_format}")
+    policy = row.get("trajectory_policy") if isinstance(row.get("trajectory_policy"), dict) else {}
+    if policy.get("system1_target_format") != SYSTEM1_TARGET_FORMAT_EGO_POSE_XYT_FLU_V1:
+        errors.append("row_system1_policy_target_format_not_canonical")
+    if policy.get("representation") != SYSTEM1_REPRESENTATION_CUMULATIVE_RELATIVE_POSE:
+        errors.append("row_system1_policy_representation_not_cumulative")
+    if policy.get("coordinate_frame") != SYSTEM1_COORDINATE_FRAME_CURRENT_EGO_FLU:
+        errors.append("row_system1_policy_coordinate_frame_not_flu")
+    if policy.get("axis_names") != list(SYSTEM1_AXIS_NAMES_EGO_POSE_XYT_FLU):
+        errors.append("row_system1_policy_axis_names_not_canonical")
+    if policy.get("normalized") is not False:
+        errors.append("row_system1_policy_must_be_metric")
+    if policy.get("yaw_source") not in SYSTEM1_YAW_SOURCES:
+        errors.append("row_system1_policy_yaw_source_missing")
     system1 = row.get("system1_supervision") if isinstance(row.get("system1_supervision"), dict) else {}
     if system1.get("trajectory_ego_t") is not None and _last_dim_width(system1.get("trajectory_ego_t")) != 3:
         errors.append("row_system1_supervision_trajectory_ego_t_not_canonical")

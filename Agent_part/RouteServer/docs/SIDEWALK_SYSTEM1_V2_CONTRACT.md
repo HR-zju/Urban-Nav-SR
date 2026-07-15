@@ -101,31 +101,57 @@ view：
 {
   "system1_supervision": {
     "target_type": "system1_head_supervision",
-    "trajectory_ego_t": [[0.0, 0.0, 0.0], [0.3, 0.0, 0.01]],
-    "action_ego_t": [[0.25, 0.0, 0.0], [0.25, 0.0, 0.01]],
+    "trajectory_ego_t": [[0.3, 0.0, 0.0], [0.6, 0.05, 0.01]],
     "action_mask": [true, true],
-    "action_stats": {"space": "ego_delta_xyt"}
+    "trajectory_policy": {
+      "representation": "cumulative_relative_pose",
+      "coordinate_frame": "current_ego_flu",
+      "axis_names": ["x_forward_m", "y_left_m", "yaw_rel_ccw_rad"],
+      "normalized": false,
+      "yaw_source": "odometry"
+    }
   },
   "contract_meta": {
     "system1_readout_placement": "assistant_suffix_v2",
     "system1_readout_tokens": ["[SYS1_0]", "[SYS1_1]"],
     "system1_readout_lm_label": -100,
     "system1_target_field": "trajectory_ego_t",
-    "system1_target_format": "ego_xy_heading_delta"
+    "system1_target_format": "ego_pose_xyt_flu_v1"
   }
 }
 ```
 
-训练优先级：
+生产训练合同：
 
 1. `trajectory_ego_t` 作为当前推荐 CFM primary target，v2 固定列为
-   `[x_right_m, y_front_m, heading_delta_rad]`。
-2. `action_ego_t` 作为 fallback，兼容已有 CFM action head。
-3. `pixel_trajectory` / `trajectory_grid1000` 只用于 v1 text/head 兼容和评测。
+   `[x_forward_m, y_left_m, yaw_rel_ccw_rad]`，语义是当前 ego 固定 FLU
+   参考帧下的米制累计相对位姿。
+2. 缺少 `trajectory_ego_t` 时关闭本 row System1 loss，不允许自动回退到
+   `action_ego_t`。
+3. `action_ego_t` 只用于独立 delta-action 消融或旧数据兼容，必须使用单独
+   checkpoint 和显式 `system1_target_format`。
+4. `pixel_trajectory` / `trajectory_grid1000` 只用于 v1 text/head 兼容和评测。
 
 历史 Phase1 archive 中的 `trajectory_ego_t=[x_right_m,y_front_m,dt_s,speed_mps]`
-不能直接作为 v2 CFM target。RouteServer 在 `assistant_suffix_v2` 导出时会确定性转换为
-`ego_xy_heading_delta`；validator 会拒绝四维 v2 `trajectory_ego_t`。
+不能直接作为 v2 CFM target。RouteServer 在 `assistant_suffix_v2` 导出时会按
+`x_forward=y_front, y_left=-x_right` 转为 `ego_pose_xyt_flu_v1`，并用路径切线
+补齐 CCW yaw；validator 会拒绝四维或缺少 FLU metadata 的 v2 `trajectory_ego_t`。
+
+固定预处理边界为：
+
+```text
+raw source trajectory
+  -> source-specific coordinate/unit/time parsing
+  -> current-ego FLU metric cumulative pose [T,3]
+  -> canonical trajectory_policy
+  -> v2 validator
+  -> ms-swift trainer
+```
+
+图像、文本和 tool context 不受该轨迹转换约束；GPS、world pose、legacy
+`[x_right,y_front,dt,speed]`、normalized target 和 rolling delta 都必须在离线
+adapter/exporter 中显式转换。trainer 只消费和验证 canonical row，不负责根据 shape
+猜测坐标系、反归一化、丢弃列或在累计轨迹与 delta action 之间自动切换。
 
 ## 5. Loss Mask
 

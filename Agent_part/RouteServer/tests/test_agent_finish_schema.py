@@ -126,11 +126,51 @@ class AgentFinishSchemaTest(unittest.TestCase):
 
         self.assertTrue(validate_ms_swift_stage2_row(row).valid)
         self.assertEqual(row["contract_meta"]["system1_target_field"], "trajectory_ego_t")
-        self.assertEqual(row["contract_meta"]["system1_target_format"], "ego_xy_heading_delta")
+        self.assertEqual(row["contract_meta"]["system1_target_format"], "ego_pose_xyt_flu_v1")
         self.assertEqual(row["trajectory_ego_t"][0], [0.0, 0.0, 0.0])
-        self.assertEqual(row["trajectory_ego_t"][1], [0.0, 1.0, 0.0])
-        self.assertAlmostEqual(row["trajectory_ego_t"][2][2], math.pi / 2.0)
+        self.assertEqual(row["trajectory_ego_t"][1], [1.0, 0.0, 0.0])
+        self.assertEqual(row["trajectory_ego_t"][2][:2], [1.0, -1.0])
+        self.assertAlmostEqual(row["trajectory_ego_t"][2][2], -math.pi / 2.0)
+        self.assertEqual(row["trajectory_policy"]["coordinate_frame"], "current_ego_flu")
+        self.assertEqual(row["trajectory_policy"]["representation"], "cumulative_relative_pose")
+        self.assertEqual(
+            row["trajectory_policy"]["axis_names"],
+            ["x_forward_m", "y_left_m", "yaw_rel_ccw_rad"],
+        )
+        self.assertEqual(row["trajectory_policy"]["yaw_source"], "path_tangent")
+        self.assertIs(row["trajectory_policy"]["normalized"], False)
         self.assertEqual(row["system1_supervision"]["trajectory_ego_t"], row["trajectory_ego_t"])
+
+    def test_v2_exporter_preserves_declared_canonical_flu_trajectory(self) -> None:
+        case = _sample_case()
+        case.ground_truth.update(
+            {
+                "trajectory_ego_t": [[0.5, 0.1, 0.05], [1.0, 0.3, 0.2]],
+                "trajectory_policy": {
+                    "system1_target_format": "ego_pose_xyt_flu_v1",
+                    "yaw_source": "odometry",
+                    "dt_sec": 0.2,
+                },
+            }
+        )
+        trace = AgenticStage2TraceBuilder().build_trace(
+            case,
+            call=None,
+            tool_decision_reason="local FPV and BEV are enough",
+        )
+
+        row = trace_to_ms_swift_stage2_row(
+            trace,
+            case,
+            readout_placement=READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2,
+        )
+
+        self.assertTrue(validate_ms_swift_stage2_row(row).valid)
+        for actual, expected in zip(row["trajectory_ego_t"], [[0.5, 0.1, 0.05], [1.0, 0.3, 0.2]]):
+            for actual_value, expected_value in zip(actual, expected):
+                self.assertAlmostEqual(actual_value, expected_value)
+        self.assertEqual(row["trajectory_policy"]["yaw_source"], "odometry")
+        self.assertEqual(row["trajectory_policy"]["dt_sec"], 0.2)
 
     def test_v2_validator_rejects_legacy_four_channel_system1_trajectory(self) -> None:
         case = _sample_case()

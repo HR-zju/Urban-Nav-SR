@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 import re
 from pathlib import Path
 from typing import Iterable
@@ -30,6 +29,12 @@ from mcp_server.agent.stage2 import (
     final_navigation_user_content,
 )
 from mcp_server.agent.tool_schema import get_tool_definitions
+from mcp_server.runtime.system1_contract import (
+    SYSTEM1_TARGET_FIELD_TRAJECTORY_EGO_T,
+    SYSTEM1_TARGET_FORMAT_EGO_POSE_XYT_FLU_V1,
+    canonical_trajectory_policy,
+    canonicalize_trajectory_ego_t,
+)
 
 
 DEFAULT_AGENT_SYSTEM_PROMPT = (
@@ -195,9 +200,13 @@ def trace_to_ms_swift_stage2_row(
                 else list(NAVIGATION_READOUT_TOKENS)
             ),
             "system1_readout_lm_label": -100,
-            "system1_target_field": "trajectory_ego_t" if system1_export.get("trajectory_ego_t") is not None else None,
+            "system1_target_field": (
+                SYSTEM1_TARGET_FIELD_TRAJECTORY_EGO_T
+                if system1_export.get("trajectory_ego_t") is not None
+                else None
+            ),
             "system1_target_format": (
-                "ego_xy_heading_delta"
+                SYSTEM1_TARGET_FORMAT_EGO_POSE_XYT_FLU_V1
                 if system1_export.get("trajectory_ego_t") is not None
                 and readout_placement == READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2
                 else None
@@ -295,9 +304,9 @@ def _system1_export_supervision(supervision: dict, *, readout_placement: str) ->
 
     Returns:
         A copied supervision dictionary.  For v2 System1 rows,
-        ``trajectory_ego_t`` is canonicalized to ``[x_right_m, y_front_m,
-        heading_delta_rad]`` so CFM training does not silently consume the old
-        ``[x_right_m, y_front_m, dt_s, speed_mps]`` Phase1 convention.
+        ``trajectory_ego_t`` is canonicalized to metric cumulative FLU
+        ``[x_forward_m, y_left_m, yaw_rel_ccw_rad]`` so CFM training does not
+        silently consume the historical ``x_right/y_front`` convention.
     """
 
     exported = dict(supervision)
@@ -305,71 +314,52 @@ def _system1_export_supervision(supervision: dict, *, readout_placement: str) ->
         return exported
     trajectory_ego_t = exported.get("trajectory_ego_t")
     if trajectory_ego_t is not None:
-        exported["trajectory_ego_t"] = _canonical_system1_trajectory_ego_t(trajectory_ego_t)
         policy = dict(exported.get("trajectory_policy") or {})
-        policy.setdefault("system1_target_format", "ego_xy_heading_delta")
-        policy.setdefault("system1_target_columns", ["x_right_m", "y_front_m", "heading_delta_rad"])
-        exported["trajectory_policy"] = policy
+        source_format = policy.get("system1_target_format")
+        canonical = _canonical_system1_trajectory_ego_t(
+            trajectory_ego_t,
+            source_format=source_format,
+        )
+        if source_format == SYSTEM1_TARGET_FORMAT_EGO_POSE_XYT_FLU_V1:
+            yaw_source = str(policy.get("yaw_source") or "")
+            if not yaw_source:
+                raise ValueError("Canonical trajectory_ego_t requires trajectory_policy.yaw_source.")
+        else:
+            # 历史 right/front 数据没有可靠逐点 yaw，转换时统一用路径切线。
+            yaw_source = "path_tangent"
+        exported["trajectory_ego_t"] = canonical
+        exported["trajectory_policy"] = canonical_trajectory_policy(
+            policy,
+            horizon_steps=len(canonical),
+            yaw_source=yaw_source,
+        )
     return exported
 
 
-def _canonical_system1_trajectory_ego_t(value) -> list[list[float]]:
-    """Convert ego trajectory labels to CFM's three-channel System1 target.
+def _canonical_system1_trajectory_ego_t(
+    value,
+    *,
+    source_format: str | None = None,
+) -> list[list[float]]:
+    """Convert ego trajectory labels to canonical metric cumulative FLU.
 
     Args:
         value: Sequence shaped ``[T, 3]`` or legacy ``[T, 4]``.
+        source_format: Optional declared input format.
 
     Returns:
-        ``[T, 3]`` rows ``[x_right_m, y_front_m, heading_delta_rad]``.
+        ``[T, 3]`` rows ``[x_forward_m, y_left_m, yaw_rel_ccw_rad]``.
 
     Raises:
         ValueError: If the input is empty or has an unsupported row width.
 
     Notes:
-        Legacy Phase1 ``trajectory_ego_t`` stores
-        ``[x_right_m, y_front_m, dt_s, speed_mps]``.  Without a per-waypoint
-        yaw label, the least ambiguous deployment target is the local path
-        tangent angle:
-
-        ``heading_delta_i = atan2(dx_right_i, dy_front_i)``
-
-        where the first delta is measured from the current body origin and
-        later deltas are measured from the previous waypoint.  Degenerate
-        zero-motion steps reuse the previous heading.
+        Historical points use ``x_right/y_front``.  The canonical conversion is
+        ``x_forward=y_front``, ``y_left=-x_right`` and path-tangent yaw
+        ``atan2(delta_y_left, delta_x_forward)``.
     """
 
-    rows = list(value or [])
-    if not rows:
-        raise ValueError("trajectory_ego_t must be a non-empty sequence for System1 export.")
-    canonical: list[list[float]] = []
-    prev_x = 0.0
-    prev_y = 0.0
-    prev_heading = 0.0
-    for index, row in enumerate(rows):
-        if not isinstance(row, (list, tuple)):
-            raise ValueError(f"trajectory_ego_t row {index} is not a sequence.")
-        if len(row) == 3:
-            x, y, heading = row
-            canonical.append([float(x), float(y), float(heading)])
-            prev_x = float(x)
-            prev_y = float(y)
-            prev_heading = float(heading)
-            continue
-        if len(row) != 4:
-            raise ValueError(f"trajectory_ego_t row {index} has width {len(row)}; expected 3 or 4.")
-        x = float(row[0])
-        y = float(row[1])
-        dx = x - prev_x
-        dy = y - prev_y
-        if abs(dx) + abs(dy) > 1e-8:
-            heading = math.atan2(dx, dy)
-        else:
-            heading = prev_heading
-        canonical.append([x, y, heading])
-        prev_x = x
-        prev_y = y
-        prev_heading = heading
-    return canonical
+    return canonicalize_trajectory_ego_t(value, source_format=source_format)
 
 
 def _messages_with_assistant_suffix_readout(messages: list[dict]) -> list[dict]:
