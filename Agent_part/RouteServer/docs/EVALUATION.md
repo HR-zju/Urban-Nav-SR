@@ -31,6 +31,7 @@ data/benchmark/urbannav_v2_osm_local_osrm_foot_final_15k/task_gt.jsonl
 | 2026-07-01 | `qwen3.7-max` | `external` | `replay-strict` | 15000 | 0.7588 | 0.9635 | 0.7588 | 1.0000 | 0.6519 | 0.7593 | 90.6687 | 0.5127 | 0.7026 | 0.0418 |
 | 2026-07-01 | `glm-5.2` | `external` | `replay-strict` | 15000 | 0.7426 | 0.9558 | 0.7426 | 1.0000 | 0.6385 | 0.7456 | 89.0327 | 0.4631 | 0.6932 | 0.0589 |
 | 2026-07-01 | `deepseek-v4-pro` | `external` | `replay-strict` | 15000 | 0.7084 | 0.9341 | 0.7084 | 1.0000 | 0.6042 | 0.7143 | 85.2985 | 0.4874 | 0.6511 | 0.0977 |
+| 2026-07-12 | `qwen3.5-2b` | `external` | `replay-strict` | 15000 | 0.7730 | 0.9705 | 0.7730 | 1.0000 | 0.7555 | 0.7989 | 95.3979 | 0.4948 | 0.7700 | 0.0234 |
 | 2026-07-10 | `qwen3.5-4b` | `external` | `replay-strict` | 15000 | 0.8007 | 0.9989 | 0.8007 | 1.0000 | 0.7736 | 0.8223 | 98.2008 | 0.6255 | 0.7734 | 0.0000 |
 | TBD | `qwen3.5-4b-sft` | `external` | `replay-strict` | 15000 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
 | 2026-07-03 | `qwen3.5-9b` | `external` | `replay-strict` | 15000 | 0.7838 | 0.9931 | 0.7838 | 1.0000 | 0.7525 | 0.8062 | 96.2689 | 0.5277 | 0.7479 | 0.0063 |
@@ -46,15 +47,95 @@ data/benchmark/urbannav_v2_osm_local_osrm_foot_final_15k/task_gt.jsonl
 | 2026-07-10 | `qwen3-vl-4b-instruct` | `external` | `replay-strict` | 15000 | 0.8014 | 0.9989 | 0.8014 | 1.0000 | 0.7744 | 0.8230 | 98.2776 | 0.6298 | 0.7785 | 0.0000 |
 | 2026-07-10 | `qwen3-vl-8b-instruct` | `external` | `replay-strict` | 15000 | 0.7999 | 0.9989 | 0.7999 | 1.0000 | 0.7726 | 0.8216 | 98.1176 | 0.6264 | 0.7751 | 0.0000 |
 | 2026-07-10 | `qwen3-vl-32b-instruct` | `external` | `replay-strict` | 15000 | 0.8009 | 0.9988 | 0.8009 | 1.0000 | 0.7725 | 0.8222 | 98.1789 | 0.6183 | 0.7598 | 0.0000 |
+| 2026-07-11 | `internvl2.5-8b` | `external` | `replay-strict` | 15000 | 0.7906 | 0.9982 | 0.7906 | 1.0000 | 0.7608 | 0.8129 | 97.0728 | 0.5534 | 0.7394 | 0.0000 |
+| 2026-07-11 | `internvl3-8b` | `external` | `replay-strict` | 15000 | 0.7948 | 0.9987 | 0.7948 | 1.0000 | 0.7662 | 0.8169 | 97.5488 | 0.5811 | 0.7496 | 0.0000 |
+| 2026-07-11 | `internvl3-14b` | `external` | `replay-strict` | 15000 | 0.7780 | 0.9988 | 0.7780 | 1.0000 | 0.7501 | 0.8028 | 95.8686 | 0.5468 | 0.7530 | 0.0000 |
+| 2026-07-11 | `internvl2.5-38b` | `external` | `replay-strict` | 15000 | 0.7995 | 0.9989 | 0.7995 | 1.0000 | 0.7689 | 0.8203 | 97.9568 | 0.5992 | 0.7513 | 0.0000 |
+| 2026-07-11 | `internvl3-38b` | `external` | `replay-strict` | 15000 | 0.7941 | 0.9987 | 0.7941 | 1.0000 | 0.7619 | 0.8152 | 97.3521 | 0.5782 | 0.7411 | 0.0000 |
+| 2026-07-13 | `internvl3-78b` | `external` | `replay-strict` | 15000 | 0.8016 | 0.9989 | 0.8016 | 1.0000 | 0.7741 | 0.8230 | 98.2856 | 0.6240 | 0.7700 | 0.0000 |
+| 2026-07-14 | `internvl2.5-78b` | `external` | `replay-strict` | 15000 | 0.8021 | 0.9988 | 0.8021 | 1.0000 | 0.7727 | 0.8228 | 98.2585 | 0.6102 | 0.7581 | 0.0000 |
 | 2026-07-05 | `internvl3.5-8b` | `external` | `replay-strict` | 15000 | 0.7565 | 0.9751 | 0.7565 | 1.0000 | 0.6893 | 0.7704 | 91.9946 | 0.5142 | 0.7223 | 0.0480 |
 | 2026-07-09 | `internvl3.5-14b` | `external` | `replay-strict` | 15000 | 0.8031 | 0.9989 | 0.8031 | 1.0000 | 0.7769 | 0.8247 | 98.4802 | 0.6410 | 0.7853 | 0.0000 |
+| 2026-07-12 | `molmo2-4b` | `external` | `replay-strict` | 15000 | 0.7999 | 0.9989 | 0.7999 | 1.0000 | 0.7766 | 0.8228 | 98.2609 | 0.6627 | 0.7649 | 0.0000 |
+| 2026-07-12 | `internvl3.5-38b` | `external` | `replay-strict` | 15000 | 0.8007 | 0.9988 | 0.8007 | 1.0000 | 0.7699 | 0.8212 | 98.0702 | 0.5978 | 0.7598 | 0.0000 |
 
 
 `Task Hit@5` 和 `Task SPL` 是主表使用的任务感知口径。普通单目标和 route-update 使用常规单目标定义；multi-stop 使用逐站 `stop_hit@5` 和 `multi_stop_spl`。原始单目标口径的 `hit@5` / `spl` 仍保存在 `summary.json`，只用于兼容诊断。
 
 `Internal Score` 和 `Relative Index` 是组内相对比较指标，不作为论文主指标。当前以 `routeserver-replay-route-distance` 为 100，权重为 `DS=0.30`、`Task Hit@5=0.10`、`RS=0.25`、`Task SPL=0.30`、`route_efficiency=0.05`。
 
-`TBD` 表示该模型或消融配置的完整 15K 结果尚未记录到本文档。主表中的 Qwen3.5、Qwen3.6、Qwen3-VL、Qwen3.7-Max、Qwen3.5-9B、Gemma-4-31B、GLM 和 DeepSeek 行使用已完成的 overall 指标更新；RouteServer LLM ablation、Qwen3.5-35B-A3B 及更大 MoE、Llama 和 Mixtral 行仍是待测占位。InternVL 和 Qwen3-VL 这类 VLM 在当前 Module 1 中仍按文本候选选择协议评估；若输入图像或 FPV/BEV，上表应迁移到多模态导航表。
+`TBD` 表示该模型或消融配置的完整 15K 结果尚未记录到本文档。主表中的 Qwen3.5、Qwen3.6、Qwen3-VL、Qwen3.7-Max、Gemma-4-12B、GLM、DeepSeek 和 InternVL 行使用已完成的 overall 指标更新；RouteServer LLM ablation、Qwen3.5-35B-A3B 及更大 MoE、Llama 和 Mixtral 行仍是待测占位。InternVL 和 Qwen3-VL 这类 VLM 在当前 Module 1 中仍按文本候选选择协议评估；若输入图像或 FPV/BEV，上表应迁移到多模态导航表。
+
+### 0.1 Paper-ready three-part main table
+
+The paper table below includes only completed final-15K runs. It separates
+closed/API models, one representative for each open model family, and the
+remaining open-source scale variants. This prevents the Qwen and InternVL
+families from dominating the cross-family comparison while retaining the full
+parameter-scaling evidence. `Qwen3-VL`, `InternVL`, and `Molmo` receive text
+only inputs in this Module 1 protocol; their visual encoders are not evaluated
+here.
+
+```latex
+\begin{table*}[t]
+  \centering
+  \scriptsize
+  \setlength{\tabcolsep}{3.5pt}
+  \caption{\textbf{UrbanNav final-15K results under controlled-replay Plan-and-Execute evaluation.}
+  DS and Hit@5 measure destination grounding and candidate recall; RS and SPL measure route executability and efficiency; Multi-stop and Update measure ordered stop composition and route-state modification. All values are percentages. Bold indicates the best result within each subtable.}
+  \label{tab:urbannav_main}
+
+  \textbf{(a) Closed-source / API models}\\[-2pt]
+  \begin{tabular}{lrrrrrr}
+    \hline
+    Method & DS $\uparrow$ & Hit@5 $\uparrow$ & RS $\uparrow$ & SPL $\uparrow$ & Multi-stop $\uparrow$ & Update $\uparrow$ \\
+    \hline
+    Doubao-Seed-2.0-Lite & \textbf{77.03} & \textbf{99.44} & \textbf{77.03} & \textbf{74.02} & \textbf{56.54} & \textbf{75.13} \\
+    Qwen3.7-Max          & 75.88 & 96.35 & 75.88 & 65.19 & 51.27 & 70.26 \\
+    GLM-5.2              & 74.26 & 95.58 & 74.26 & 63.85 & 46.31 & 69.32 \\
+    DeepSeek-V4-Pro      & 70.84 & 93.41 & 70.84 & 60.42 & 48.74 & 65.11 \\
+    \hline
+  \end{tabular}
+
+  \vspace{4pt}
+  \textbf{(b) Open-source model-family representatives}\\[-2pt]
+  \begin{tabular}{lrrrrrr}
+    \hline
+    Method & DS $\uparrow$ & Hit@5 $\uparrow$ & RS $\uparrow$ & SPL $\uparrow$ & Multi-stop $\uparrow$ & Update $\uparrow$ \\
+    \hline
+    Gemma-4-12B             & 78.79 & 99.88 & 78.79 & 75.49 & 56.39 & 74.28 \\
+    Molmo2-4B               & 79.99 & \textbf{99.89} & 79.99 & 77.66 & \textbf{66.27} & 76.49 \\
+    Qwen3.5-27B             & 79.90 & 99.88 & 79.90 & 76.91 & 60.50 & 75.98 \\
+    Qwen3-VL-32B-Instruct   & 80.09 & 99.88 & 80.09 & 77.25 & 61.83 & 75.98 \\
+    InternVL3.5-14B         & \textbf{80.31} & \textbf{99.89} & \textbf{80.31} & \textbf{77.69} & 64.10 & \textbf{78.53} \\
+    \hline
+  \end{tabular}
+
+  \vspace{4pt}
+  \textbf{(c) Open-source parameter and generation variants}\\[-2pt]
+  \begin{tabular}{lrrrrrr}
+    \hline
+    Method & DS $\uparrow$ & Hit@5 $\uparrow$ & RS $\uparrow$ & SPL $\uparrow$ & Multi-stop $\uparrow$ & Update $\uparrow$ \\
+    \hline
+    Qwen3.5-2B             & 77.30 & 97.05 & 77.30 & 75.55 & 49.48 & 77.00 \\
+    Qwen3.5-4B             & 80.07 & \textbf{99.89} & 80.07 & 77.36 & 62.55 & 77.34 \\
+    Qwen3.5-9B             & 78.38 & 99.31 & 78.38 & 75.25 & 52.77 & 74.79 \\
+    Qwen3.6-27B            & 79.83 & 99.87 & 79.83 & 76.74 & 59.40 & 74.79 \\
+    Qwen3-VL-4B-Instruct   & 80.14 & \textbf{99.89} & 80.14 & \textbf{77.44} & \textbf{62.98} & \textbf{77.85} \\
+    Qwen3-VL-8B-Instruct   & 79.99 & \textbf{99.89} & 79.99 & 77.26 & 62.64 & 77.51 \\
+    InternVL2.5-8B         & 79.06 & 99.82 & 79.06 & 76.08 & 55.34 & 73.94 \\
+    InternVL3-8B           & 79.48 & 99.87 & 79.48 & 76.62 & 58.11 & 74.96 \\
+    InternVL3-14B          & 77.80 & 99.88 & 77.80 & 75.01 & 54.68 & 75.30 \\
+    InternVL2.5-38B        & 79.95 & \textbf{99.89} & 79.95 & 76.89 & 59.92 & 75.13 \\
+    InternVL3-38B          & 79.41 & 99.87 & 79.41 & 76.19 & 57.82 & 74.11 \\
+    InternVL3-78B          & 80.16 & \textbf{99.89} & 80.16 & 77.41 & 62.40 & 77.00 \\
+    InternVL2.5-78B        & \textbf{80.21} & 99.88 & \textbf{80.21} & 77.27 & 61.02 & 75.81 \\
+    InternVL3.5-8B         & 75.65 & 97.51 & 75.65 & 68.93 & 51.42 & 72.23 \\
+    InternVL3.5-38B        & 80.07 & 99.88 & 80.07 & 76.99 & 59.78 & 75.98 \\
+    \hline
+  \end{tabular}
+\end{table*}
+```
 
 按任务类型，`final15k_corrected_v1` 的 Doubao 结果为：
 
@@ -150,6 +231,15 @@ multi-stop 的主指标应看逐站召回、序列成功和任务 SPL。这里�
 
 Qwen3-VL 当前在 Module 1 中按文本候选选择协议评估，未输入图像或 FPV/BEV。
 
+按任务类型，`internvl2.5-78b` 的结果为：
+
+| Category | Cases | Destination Success | Task Hit@5 | Route Success | Task SPL |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `implicit_need_navigation` | 7573 | 0.7683 | 1.0000 | 0.7683 | 0.7683 |
+| `poi_navigation` | 4744 | 0.8533 | 1.0000 | 0.8533 | 0.8533 |
+| `multi_stop_route` | 2096 | 0.8206 | 0.9914 | 0.8206 | 0.6102 |
+| `route_update_add_via` | 587 | 0.7581 | 1.0000 | 0.7581 | 0.7581 |
+
 按任务类型，`internvl3.5-8b` 的结果为：
 
 | Category | Cases | Destination Success | Task Hit@5 | Route Success | Task SPL | 
@@ -173,6 +263,15 @@ InternVL 的 valid-only 子集指标更高：overall DS=0.8148、Task SPL=0.7792
 该行由 `internvl3.5-14b` 主测、第一轮 exception repair 和第二轮 `remaining_after_s1c8_v2`
 合并得到。合并后 14996 / 15000 条有有效 prediction，剩余 4 条为 missing prediction；
 主表 `Prediction Exception Rate` 仍为 0.0000。
+
+按任务类型，`internvl3.5-38b` 的结果为：
+
+| Category | Cases | Destination Success | Task Hit@5 | Route Success | Task SPL |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `implicit_need_navigation` | 7573 | 0.7681 | 1.0000 | 0.7681 | 0.7681 |
+| `poi_navigation` | 4744 | 0.8499 | 1.0000 | 0.8499 | 0.8499 |
+| `multi_stop_route` | 2096 | 0.8187 | 0.9912 | 0.8187 | 0.5978 |
+| `route_update_add_via` | 587 | 0.7598 | 1.0000 | 0.7598 | 0.7598 |
 
 按任务类型，`glm-5.2` 的结果为：
 
