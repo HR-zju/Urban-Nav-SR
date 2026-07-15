@@ -317,11 +317,80 @@ def _apply_reasoning_effort(payload: dict[str, Any], settings: LLMSettings) -> d
 
 def _apply_chat_template_kwargs(payload: dict[str, Any], settings: LLMSettings) -> dict[str, Any]:
     """Attach provider-specific chat-template kwargs when explicitly configured."""
+    if _truthy_env("LLM_SINGLE_USER_MESSAGE"):
+        payload = _compact_chat_payload_to_single_user(payload)
     if settings.chat_template_kwargs:
         extra_body = dict(payload.get("extra_body") or {})
         extra_body["chat_template_kwargs"] = dict(settings.chat_template_kwargs)
         payload["extra_body"] = extra_body
     return payload
+
+
+def _compact_chat_payload_to_single_user(payload: dict[str, Any]) -> dict[str, Any]:
+    """Collapse a chat-completions payload to one user message.
+
+    Some OpenAI-compatible local VLM servers, including Molmo2 in the current
+    deployment, reject system messages and few-shot assistant turns with
+    ``Conversation roles must alternate user/assistant/...``.  The UrbanNav
+    prompts are still valid as plain text, so this adapter preserves all
+    sections while presenting them as a single user turn.
+    """
+
+    messages = payload.get("messages")
+    if not isinstance(messages, list) or len(messages) <= 1:
+        return payload
+
+    sections: list[str] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role", "user") or "user").strip().upper()
+        content = _message_content_to_text(message.get("content", ""))
+        if not content.strip():
+            continue
+        if role == "SYSTEM":
+            label = "SYSTEM INSTRUCTIONS"
+        elif role == "ASSISTANT":
+            label = "EXAMPLE ASSISTANT OUTPUT"
+        elif role == "USER":
+            label = "USER INPUT"
+        else:
+            label = role or "MESSAGE"
+        sections.append(f"[{label}]\n{content.strip()}")
+
+    collapsed = dict(payload)
+    collapsed["messages"] = [
+        {
+            "role": "user",
+            "content": "\n\n".join(sections),
+        }
+    ]
+    return collapsed
+
+
+def _message_content_to_text(content: Any) -> str:
+    """Return text content from a chat message payload."""
+
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+                continue
+            if isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+                elif isinstance(item.get("content"), str):
+                    parts.append(str(item["content"]))
+                continue
+            text = getattr(item, "text", None)
+            if isinstance(text, str):
+                parts.append(text)
+        return "\n".join(parts)
+    return str(content or "")
 
 
 def _truthy_env(name: str, default: bool = False) -> bool:
