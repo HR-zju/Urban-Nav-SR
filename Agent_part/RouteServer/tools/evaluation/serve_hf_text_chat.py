@@ -75,7 +75,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-new-tokens", type=int, default=512)
     parser.add_argument("--max-batch-size", type=int, default=1)
     parser.add_argument("--batch-timeout-ms", type=int, default=0)
+    parser.add_argument("--repetition-penalty", type=float, default=1.08)
+    parser.add_argument("--no-repeat-ngram-size", type=int, default=32)
     return parser.parse_args()
+
+
+def _configure_decoder_padding(processor: Any, model: Any) -> None:
+    """Configure left padding for decoder-only batched generation.
+
+    Right padding makes decoder-only models continue from padding tokens for
+    shorter prompts in a microbatch, which can yield prompt echoes or truncated
+    JSON suffixes. Reuse EOS as padding only when the checkpoint has no
+    dedicated padding token.
+    """
+
+    tokenizer = getattr(processor, "tokenizer", processor)
+    if hasattr(tokenizer, "padding_side"):
+        tokenizer.padding_side = "left"
+    if getattr(tokenizer, "pad_token_id", None) is None and getattr(tokenizer, "eos_token", None) is not None:
+        tokenizer.pad_token = tokenizer.eos_token
+    pad_token_id = getattr(tokenizer, "pad_token_id", None)
+    generation_config = getattr(model, "generation_config", None)
+    if generation_config is not None and getattr(generation_config, "pad_token_id", None) is None:
+        generation_config.pad_token_id = pad_token_id
 
 
 @dataclass
@@ -98,11 +120,15 @@ class _MicroBatcher:
         model: Any,
         max_batch_size: int,
         batch_timeout_ms: int,
+        repetition_penalty: float,
+        no_repeat_ngram_size: int,
     ) -> None:
         self.processor = processor
         self.model = model
         self.max_batch_size = max_batch_size
         self.batch_timeout_s = batch_timeout_ms / 1000.0
+        self.repetition_penalty = max(1.0, float(repetition_penalty))
+        self.no_repeat_ngram_size = max(0, int(no_repeat_ngram_size))
         self.queue: asyncio.Queue[_GenerationJob] = asyncio.Queue()
         self.worker: asyncio.Task[None] | None = None
 
@@ -147,7 +173,10 @@ class _MicroBatcher:
         kwargs: dict[str, Any] = {
             "max_new_tokens": batch[0].max_new_tokens,
             "do_sample": temperature > 0,
+            "repetition_penalty": self.repetition_penalty,
         }
+        if self.no_repeat_ngram_size:
+            kwargs["no_repeat_ngram_size"] = self.no_repeat_ngram_size
         if kwargs["do_sample"]:
             kwargs["temperature"] = temperature
         with torch.inference_mode():
@@ -207,11 +236,14 @@ def main() -> None:
         device_map="cuda",
         trust_remote_code=True,
     ).eval()
+    _configure_decoder_padding(processor, model)
     batcher = _MicroBatcher(
         processor=processor,
         model=model,
         max_batch_size=max(1, args.max_batch_size),
         batch_timeout_ms=max(0, args.batch_timeout_ms),
+        repetition_penalty=args.repetition_penalty,
+        no_repeat_ngram_size=args.no_repeat_ngram_size,
     )
 
     @asynccontextmanager

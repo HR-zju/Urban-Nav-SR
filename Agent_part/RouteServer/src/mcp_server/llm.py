@@ -508,6 +508,59 @@ def _remove_trailing_commas(text: str) -> str:
     return re.sub(r",(\s*[}\]])", r"\1", text)
 
 
+def _normalize_json_escapes(text: str) -> str:
+    """Normalize a narrow set of invalid LLM JSON escapes.
+
+    LaTeX-oriented models sometimes emit ``\\_`` inside JSON keys or values.
+    JSON does not define that escape, while removing the backslash preserves
+    the literal underscore intended by the model. Some legacy checkpoints also
+    prefix a field key with ``$`` and omit its opening quote; only that narrow
+    object-key typo is repaired here.
+    """
+
+    normalized = str(text or "").replace(r"\_", "_")
+    normalized = re.sub(r'"\$([A-Za-z_][A-Za-z0-9_]*)"\s*:', r'"\1":', normalized)
+    return re.sub(r'([,{]\s*)\$([A-Za-z_][A-Za-z0-9_]*)"\s*:', r'\1"\2":', normalized)
+
+
+def _close_unterminated_json_containers(text: str, *, max_closers: int = 8) -> str | None:
+    """Append only missing object/array delimiters to partial JSON.
+
+    The repair is intentionally conservative: input must begin with an object,
+    strings must already be terminated, and existing delimiters must be
+    correctly nested. Missing content, keys, values, or quotes are never
+    synthesized.
+    """
+
+    candidate = str(text or "").strip()
+    if not candidate.startswith("{"):
+        return None
+    stack: list[str] = []
+    in_string = False
+    escaped = False
+    for char in candidate:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            stack.append("}")
+        elif char == "[":
+            stack.append("]")
+        elif char in {"}", "]"}:
+            if not stack or stack.pop() != char:
+                return None
+    if in_string or escaped or not stack or len(stack) > max_closers:
+        return None
+    return candidate + "".join(reversed(stack))
+
+
 def _iter_balanced_json_objects(text: str, max_objects: int = 20) -> list[str]:
     objects: list[str] = []
     if not text:
@@ -561,8 +614,21 @@ def _parse_candidate_json_object(candidate: str) -> dict[str, Any] | None:
     if not text:
         return None
 
-    parse_attempts = [text, _remove_trailing_commas(text)]
+    normalized = _normalize_json_escapes(text)
+    repaired = _close_unterminated_json_containers(normalized)
+    parse_attempts = [
+        text,
+        _remove_trailing_commas(text),
+        normalized,
+        _remove_trailing_commas(normalized),
+    ]
+    if repaired is not None:
+        parse_attempts.extend([repaired, _remove_trailing_commas(repaired)])
+    seen: set[str] = set()
     for attempt in parse_attempts:
+        if attempt in seen:
+            continue
+        seen.add(attempt)
         try:
             parsed = json.loads(attempt)
             if isinstance(parsed, dict):
@@ -572,7 +638,7 @@ def _parse_candidate_json_object(candidate: str) -> dict[str, Any] | None:
 
     # Last-resort parser for Python-dict-like outputs from LLMs.
     try:
-        parsed = ast.literal_eval(text)
+        parsed = ast.literal_eval(normalized)
     except Exception:
         return None
     if isinstance(parsed, dict):
@@ -649,6 +715,8 @@ def _json_only_contract(schema: dict[str, Any]) -> str:
         "Output requirements: return exactly one minified JSON object. "
         "Do not output markdown, code fences, comments, analysis, natural-language explanations, "
         "or any text before or after the JSON. "
+        "Write underscores literally; never escape them as \\_. "
+        "Stop immediately after the final closing brace and never repeat tokens or fields. "
         "Use double quotes for all JSON strings. Use null for unknown numeric constraints. "
         "The JSON object must follow this shape: "
         f"{json.dumps(schema, ensure_ascii=True, separators=(',', ':'))}"
@@ -1461,6 +1529,127 @@ def _normalize_goal_label(raw_label: Any, fallback: str = "generic_stop") -> str
 class GoalDecomposer(BaseLLMService):
     """Decompose a multi-activity user instruction into an ordered goal list."""
 
+    def _prompt_profile(self) -> str:
+        """Return the configured itinerary prompt profile."""
+
+        profile = str(os.getenv("LLM_ITINERARY_PROFILE", "full") or "full").strip().lower()
+        return profile if profile in {"minimal", "compact", "full"} else "full"
+
+    def _build_minimal_messages(self, user_instruction: str) -> list[dict[str, str]]:
+        """Build the smallest ordered-goal contract accepted by the runtime."""
+
+        schema = {
+            "goals": [
+                {
+                    "goal_index": 0,
+                    "request_text": "buy coffee",
+                    "destination_type": "cafe",
+                    "destination_kind": "generic_poi",
+                    "search_keywords": "coffee|cafe",
+                }
+            ],
+            "global_mode": "foot",
+        }
+        example = {
+            "goals": [
+                {
+                    "goal_index": 0,
+                    "request_text": "eat at a restaurant",
+                    "destination_type": "restaurant",
+                    "destination_kind": "generic_poi",
+                    "search_keywords": "restaurant|food",
+                },
+                {
+                    "goal_index": 1,
+                    "request_text": "buy a drink",
+                    "destination_type": "beverage_shop",
+                    "destination_kind": "generic_poi",
+                    "search_keywords": "beverage shop|cafe|drink store",
+                },
+            ],
+            "global_mode": "foot",
+        }
+        system_prompt = (
+            "Decompose the request into ordered map-search goals. Return JSON only. "
+            "Top-level keys must be exactly goals and global_mode. Each goal must contain exactly "
+            "goal_index, request_text, destination_type, destination_kind, and search_keywords. Preserve every requested "
+            "stop and its order. Use global_mode=foot unless another mode is explicitly requested. "
+            "Do not return explanations, POI ids, coordinates, routes, constraints, rationale, or extra fields."
+            + " "
+            + _json_only_contract(schema)
+        )
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": "request: First eat at a restaurant, then buy a drink."},
+            {"role": "assistant", "content": json.dumps(example, ensure_ascii=True)},
+            {"role": "user", "content": f"request: {user_instruction}\nReturn the JSON object now."},
+        ]
+
+    def _build_compact_messages(self, user_instruction: str) -> list[dict[str, str]]:
+        """Build a short ordered-goal contract for format-sensitive models."""
+
+        schema = {
+            "goals": [
+                {
+                    "goal_index": 0,
+                    "goal_type": "coffee_stop",
+                    "request_text": "buy coffee",
+                    "destination_type": "cafe",
+                    "destination_kind": "generic_poi",
+                    "search_keywords": "coffee|cafe",
+                    "mode": "foot",
+                    "radius_m": 2000,
+                    "optimize_for": "distance",
+                }
+            ],
+            "global_mode": "foot",
+            "notes": "ordered_goal_list",
+        }
+        example = {
+            "goals": [
+                {
+                    "goal_index": 0,
+                    "goal_type": "meal_stop",
+                    "request_text": "eat at a restaurant",
+                    "destination_type": "restaurant",
+                    "destination_kind": "generic_poi",
+                    "search_keywords": "restaurant|food",
+                    "mode": "foot",
+                    "radius_m": 2000,
+                    "optimize_for": "distance",
+                },
+                {
+                    "goal_index": 1,
+                    "goal_type": "drink_stop",
+                    "request_text": "buy a drink",
+                    "destination_type": "beverage_shop",
+                    "destination_kind": "generic_poi",
+                    "search_keywords": "beverage shop|cafe|drink store",
+                    "mode": "foot",
+                    "radius_m": 2000,
+                    "optimize_for": "distance",
+                },
+            ],
+            "global_mode": "foot",
+            "notes": "ordered_multi_goal",
+        }
+        system_prompt = (
+            "Decompose the request into ordered map-search goals. Return JSON only. "
+            "Top-level keys must be exactly goals, global_mode, notes. Each goal must contain exactly "
+            "goal_index, goal_type, request_text, destination_type, destination_kind, search_keywords, "
+            "mode, radius_m, optimize_for. Preserve every requested stop and its order. Use mode=foot "
+            "unless the user explicitly requests another mode. Do not return POI ids, coordinates, routes, "
+            "hard_constraints, or rationale."
+            + " "
+            + _json_only_contract(schema)
+        )
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": "request: First eat at a restaurant, then buy a drink."},
+            {"role": "assistant", "content": json.dumps(example, ensure_ascii=True)},
+            {"role": "user", "content": f"request: {user_instruction}\nReturn the JSON object now."},
+        ]
+
     def _itinerary_timeout_s(self) -> float:
         raw = os.getenv("LLM_ITINERARY_TIMEOUT_S", "").strip()
         if raw:
@@ -1506,6 +1695,12 @@ class GoalDecomposer(BaseLLMService):
         }
 
     def build_messages(self, user_instruction: str) -> list[dict[str, str]]:
+        prompt_profile = self._prompt_profile()
+        if prompt_profile == "minimal":
+            return self._build_minimal_messages(user_instruction)
+        if prompt_profile == "compact":
+            return self._build_compact_messages(user_instruction)
+
         schema = {
             "goals": [
                 {
@@ -1741,9 +1936,14 @@ class GoalDecomposer(BaseLLMService):
             ).strip()
             if not request_text:
                 continue
+            normalization_goal = dict(raw_goal)
+            normalization_goal.setdefault(
+                "mode",
+                parsed.get("global_mode") or heuristic.get("global_mode", "car"),
+            )
             normalized_intent = parser._normalize_llm_output(  # type: ignore[attr-defined]
                 request_text,
-                raw_goal,
+                normalization_goal,
             )
             raw_goal_type = str(raw_goal.get("goal_type") or raw_goal.get("destination_type") or "").strip()
             goal_type = _normalize_goal_label(
