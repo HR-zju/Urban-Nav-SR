@@ -10,7 +10,13 @@ import json
 from mcp_server.agent.schemas import AGENT_STAGE2_CASE_SCHEMA_VERSION, AgentStage2Case, ToolCall, ToolResponse
 from mcp_server.agent.stage2 import build_agent_state, build_agent_think_text, build_tool_decision
 from mcp_server.agent.tool_executor import ToolExecutor
-from mcp_server.agent.tool_parser import parse_agent_action, parse_finish_text, parse_tool_call_text
+from mcp_server.agent.tool_parser import (
+    parse_agent_action,
+    parse_finish_text,
+    parse_system2_action_text,
+    parse_tool_call_text,
+)
+from mcp_server.runtime.interfaces import System2ActionType
 from mcp_server.agent.tool_runtime import AgentToolRuntime, AgentToolRuntimeConfig, ToolBudget
 from mcp_server.agent.tool_schema import validate_tool_call
 from mcp_server.eval.cases import load_stage2_cases, write_stage2_cases
@@ -49,6 +55,33 @@ class AgentProtocolTest(unittest.TestCase):
         finish, errors = parse_finish_text('<finish>{"route_action":"continue"}</finish>')
         self.assertEqual(errors, [])
         self.assertEqual(finish["route_action"], "continue")
+
+    def test_finish_semantics_distinguish_navigation_terminal_and_stop_hold(self) -> None:
+        navigate, navigate_errors = parse_system2_action_text(
+            '<finish>{"decision_type":"navigate","route_action":"continue_navigation"}</finish>'
+            '<readout>[SYS1_0]</readout>',
+            require_system1_readout=True,
+        )
+        complete, complete_errors = parse_system2_action_text(
+            '<finish>{"decision_type":"complete_task","reason_code":"arrival_confirmed"}</finish>'
+        )
+        stop_hold, stop_hold_errors = parse_system2_action_text(
+            '<finish>{"route_action":"stop","trajectory_type":"stop_hold"}</finish>'
+            '<readout>[SYS1_0]</readout>'
+        )
+        invalid_terminal, invalid_errors = parse_system2_action_text(
+            '<finish>{"decision_type":"abort_task","reason_code":"unsafe_to_continue"}</finish>'
+            '<readout>[SYS1_0]</readout>'
+        )
+
+        self.assertEqual(navigate_errors, [])
+        self.assertEqual(navigate.action_type, System2ActionType.NAVIGATE)
+        self.assertEqual(complete_errors, [])
+        self.assertEqual(complete.action_type, System2ActionType.COMPLETE_TASK)
+        self.assertEqual(stop_hold_errors, [])
+        self.assertEqual(stop_hold.action_type, System2ActionType.NAVIGATE)
+        self.assertIsNone(invalid_terminal)
+        self.assertIn("non_navigation_action_has_system1_readout", invalid_errors)
 
     def test_tool_schema_validation(self) -> None:
         ok = ToolCall(tool="map_tool", arguments={"op": "search_poi", "query": "restroom", "location": "120,30"})

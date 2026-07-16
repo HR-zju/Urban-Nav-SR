@@ -24,8 +24,57 @@ class System2ActionType(str, Enum):
     TOOL_CALL = "tool_call"
     ASK_USER = "ask_user"
     NAVIGATE = "navigate"
-    FINISH = "finish"
-    STOP = "stop"
+    COMPLETE_TASK = "complete_task"
+    ABORT_TASK = "abort_task"
+
+
+class TerminalOutcome(str, Enum):
+    """Outcome category requested by a terminal System2 action."""
+
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+class TerminalDecision(BaseModel):
+    """Structured task-terminal request emitted by System2.
+
+    Args:
+        outcome: Requested episode outcome. Runtime validation remains
+            authoritative, especially for successful completion.
+        reason_code: Stable machine-readable completion or abort reason.
+        reason: Optional human-readable explanation.
+        evidence_refs: Model-declared evidence references for auditing. These
+            references never replace deterministic runtime verification.
+        retryable: Whether a new task revision may retry the failed task.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    outcome: TerminalOutcome
+    reason_code: str = Field(min_length=1)
+    reason: str | None = None
+    evidence_refs: list[str] = Field(default_factory=list)
+    retryable: bool = False
+
+
+class TerminalValidationResult(BaseModel):
+    """Deterministic validation result for a terminal System2 request.
+
+    Args:
+        action_type: Canonical terminal action under validation.
+        accepted: Whether runtime may commit the requested terminal outcome.
+        reason_code: Stable validation reason.
+        evidence_refs: Authoritative environment or route evidence references.
+        metadata: Deterministic validator diagnostics.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    action_type: System2ActionType
+    accepted: bool
+    reason_code: str = Field(min_length=1)
+    evidence_refs: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class System2Action(BaseModel):
@@ -35,7 +84,10 @@ class System2Action(BaseModel):
         action_type: Selected action family.
         tool_call: Tool request for ``tool_call`` actions.
         user_request: HITL request for ``ask_user`` actions.
-        finish: Final System2 payload for ``finish`` or ``stop`` actions.
+        finish: Symbolic assistant ``<finish>`` payload. The tag is a turn
+            envelope and does not by itself mean task completion.
+        terminal: Strongly typed request for ``complete_task`` or
+            ``abort_task``.
         metadata: Diagnostic policy metadata.
     """
 
@@ -45,7 +97,63 @@ class System2Action(BaseModel):
     tool_call: ToolCallV2 | None = None
     user_request: dict[str, Any] | None = None
     finish: dict[str, Any] | None = None
+    terminal: TerminalDecision | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_terminal_actions(cls, value: Any) -> Any:
+        """Normalize legacy ``finish``/``stop`` values at the input boundary.
+
+        Args:
+            value: Raw action mapping or an already validated action.
+
+        Returns:
+            Mapping using canonical terminal action values.
+        """
+
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        raw_action = payload.get("action_type")
+        raw_text = raw_action.value if isinstance(raw_action, Enum) else str(raw_action or "")
+        legacy_aliases = {
+            "finish": System2ActionType.COMPLETE_TASK.value,
+            "stop": System2ActionType.ABORT_TASK.value,
+        }
+        canonical = legacy_aliases.get(raw_text, raw_text)
+        payload["action_type"] = canonical
+        is_legacy = raw_text in legacy_aliases
+        if is_legacy:
+            metadata = dict(payload.get("metadata") or {})
+            metadata.setdefault("legacy_action_type", raw_text)
+            metadata.setdefault("legacy_normalized", True)
+            payload["metadata"] = metadata
+
+        if canonical not in {
+            System2ActionType.COMPLETE_TASK.value,
+            System2ActionType.ABORT_TASK.value,
+        } or payload.get("terminal") is not None:
+            return payload
+
+        # 兼容旧 runtime 的 untyped finish 字段；canonical 新输出仍必须给出 reason_code。
+        finish = payload.get("finish") if isinstance(payload.get("finish"), dict) else {}
+        reason_code = finish.get("reason_code") or finish.get("stop_reason")
+        if reason_code is None and is_legacy:
+            reason_code = "legacy_system2_finish" if raw_text == "finish" else "legacy_system2_stop"
+        if reason_code is not None:
+            payload["terminal"] = {
+                "outcome": (
+                    TerminalOutcome.SUCCEEDED.value
+                    if canonical == System2ActionType.COMPLETE_TASK.value
+                    else TerminalOutcome.FAILED.value
+                ),
+                "reason_code": str(reason_code),
+                "reason": finish.get("reason"),
+                "evidence_refs": finish.get("evidence_refs") or [],
+                "retryable": bool(finish.get("retryable", False)),
+            }
+        return payload
 
     @model_validator(mode="after")
     def _validate_payload(self) -> "System2Action":
@@ -62,6 +170,20 @@ class System2Action(BaseModel):
             raise ValueError("tool_call action requires tool_call payload")
         if self.action_type == System2ActionType.ASK_USER and self.user_request is None:
             raise ValueError("ask_user action requires user_request payload")
+        if self.action_type in {System2ActionType.COMPLETE_TASK, System2ActionType.ABORT_TASK}:
+            if self.terminal is None:
+                raise ValueError(f"{self.action_type.value} action requires terminal payload with reason_code")
+            expected_outcome = (
+                TerminalOutcome.SUCCEEDED
+                if self.action_type == System2ActionType.COMPLETE_TASK
+                else TerminalOutcome.FAILED
+            )
+            if self.terminal.outcome != expected_outcome:
+                raise ValueError(
+                    f"{self.action_type.value} requires terminal.outcome={expected_outcome.value}"
+                )
+        elif self.terminal is not None:
+            raise ValueError("terminal payload is only valid for complete_task or abort_task")
         return self
 
 
@@ -74,6 +196,11 @@ class System1Output(BaseModel):
             ego reference frame.
         action_mask: Optional valid-step mask.
         runtime_commands: Optional controller-ready commands.
+        task_revision: Task revision used to generate this chunk.
+        route_revision: Route revision used to generate this chunk.
+        control_epoch: Controller generation used to generate this chunk.
+        observation_id: Observation used to generate this chunk.
+        action_id: Stable execution lease id.
         metadata: Head and sampling metadata.
     """
 
@@ -82,6 +209,11 @@ class System1Output(BaseModel):
     trajectory_ego_t: list[list[float]]
     action_mask: list[bool] | None = None
     runtime_commands: list[dict[str, Any]] = Field(default_factory=list)
+    task_revision: int | None = Field(default=None, ge=0)
+    route_revision: int | None = Field(default=None, ge=0)
+    control_epoch: int | None = Field(default=None, ge=0)
+    observation_id: str | None = None
+    action_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("trajectory_ego_t")
@@ -159,6 +291,7 @@ class ObservationResult(BaseModel):
         observation: Model/runtime-visible multimodal observation references.
         info: Deterministic environment metadata.
         replay_key: Frozen record key when running offline.
+        external_events: Frozen/simulator events available with this observation.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -166,6 +299,7 @@ class ObservationResult(BaseModel):
     observation: dict[str, Any]
     info: dict[str, Any] = Field(default_factory=dict)
     replay_key: str | None = None
+    external_events: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class EnvironmentStepResult(BaseModel):
@@ -177,6 +311,7 @@ class EnvironmentStepResult(BaseModel):
         done: Whether the episode has terminated.
         info: Arrival, safety and simulator diagnostics.
         replay_key: Frozen transition record key.
+        external_events: Events deterministically emitted after this transition.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -186,6 +321,7 @@ class EnvironmentStepResult(BaseModel):
     done: bool
     info: dict[str, Any] = Field(default_factory=dict)
     replay_key: str | None = None
+    external_events: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class System2Policy(Protocol):
@@ -193,6 +329,21 @@ class System2Policy(Protocol):
 
     async def decide(self, state: dict[str, Any]) -> System2Action:
         """Return one typed System2 action for the current state."""
+
+
+class TerminalValidator(Protocol):
+    """Protocol for deterministic completion and abort validation."""
+
+    async def validate(self, action: System2Action, state: dict[str, Any]) -> TerminalValidationResult:
+        """Validate a terminal request against authoritative runtime state.
+
+        Args:
+            action: Canonical terminal System2 action.
+            state: Current graph state containing trusted environment evidence.
+
+        Returns:
+            Deterministic terminal validation result.
+        """
 
 
 class System1Policy(Protocol):
@@ -217,6 +368,26 @@ class EpisodeEnvironment(Protocol):
 
     async def step(self, output: System1Output, state: dict[str, Any]) -> EnvironmentStepResult:
         """Execute one accepted System1 chunk."""
+
+    async def preempt(self, *, reason: str) -> None:
+        """Cancel the currently executing short-horizon chunk, if any.
+
+        Args:
+            reason: Stable preemption reason.
+
+        Returns:
+            None after controller acknowledgement.
+        """
+
+    async def halt(self, *, reason: str) -> None:
+        """Issue an idempotent deterministic physical stop command.
+
+        Args:
+            reason: Stable terminal stop reason.
+
+        Returns:
+            None after physical-stop acknowledgement.
+        """
 
 
 class EpisodeToolExecutor(Protocol):

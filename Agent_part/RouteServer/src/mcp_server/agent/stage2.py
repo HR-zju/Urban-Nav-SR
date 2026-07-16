@@ -747,6 +747,7 @@ def _augment_finish(text: str, extra: dict[str, Any]) -> str:
         payload = canonicalize_finish_trajectory(payload, trajectory_norm=parse_finish_trajectory_norm(extra) or [])
     for key, value in extra.items():
         if key in {
+            "decision_type",
             "trajectory_grid1000",
             "trajectory_coord_frame",
             "route_action",

@@ -19,6 +19,8 @@ class FrozenEpisodeEnvironment:
     def __init__(self, case: FrozenEpisodeCase) -> None:
         self.case = case
         self.transition_index = 0
+        self.preempt_reasons: list[str] = []
+        self.halt_reason: str | None = None
 
     async def reset(self, initial_context: dict) -> ObservationResult:
         """Reset to the case's frozen initial observation.
@@ -31,10 +33,13 @@ class FrozenEpisodeEnvironment:
         """
 
         self.transition_index = 0
+        self.preempt_reasons.clear()
+        self.halt_reason = None
         return ObservationResult(
             observation=dict(self.case.initial_observation),
             info={"instruction": self.case.instruction, "case_metadata": self.case.metadata},
             replay_key=self.case.initial_replay_key,
+            external_events=[event.model_dump(mode="json") for event in self.case.initial_external_events],
         )
 
     async def step(self, output: System1Output, state: dict) -> EnvironmentStepResult:
@@ -68,4 +73,30 @@ class FrozenEpisodeEnvironment:
             done=transition.done,
             info=dict(transition.info),
             replay_key=transition.replay_key,
+            external_events=[event.model_dump(mode="json") for event in transition.external_events],
         )
+
+    async def preempt(self, *, reason: str) -> None:
+        """Record deterministic cancellation of an in-flight replay action.
+
+        Args:
+            reason: Stable preemption reason.
+
+        Returns:
+            None.
+        """
+
+        self.preempt_reasons.append(reason)
+
+    async def halt(self, *, reason: str) -> None:
+        """Record the idempotent terminal stop without consuming a transition.
+
+        Args:
+            reason: Stable terminal reason.
+
+        Returns:
+            None.
+        """
+
+        if self.halt_reason is None:
+            self.halt_reason = reason

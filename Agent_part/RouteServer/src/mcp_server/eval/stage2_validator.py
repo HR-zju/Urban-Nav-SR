@@ -286,6 +286,7 @@ def validate_ms_swift_stage2_row(row: dict[str, Any]) -> Stage2ValidationResult:
     final_index = 6 if has_tool_roles else 4
     if len(messages) > final_index:
         final_text = messages[final_index].get("content")
+        finish: dict[str, Any] | None = None
         required_tags = FINAL_COT_REQUIRED_TOOL_TAGS if has_tool_roles else FINAL_COT_REQUIRED_BASE_TAGS
         if not isinstance(final_text, str) or not all(tag in final_text for tag in required_tags):
             errors.append("row_final_cot_invalid")
@@ -300,6 +301,8 @@ def validate_ms_swift_stage2_row(row: dict[str, Any]) -> Stage2ValidationResult:
             ):
                 errors.append("row_finish_trajectory_mismatch")
         if readout_placement == READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2:
+            if finish is None or finish.get("decision_type") != "navigate":
+                errors.append("row_v2_finish_decision_type_not_navigate")
             if len(messages) > readout_index and _contains_all_v1_readout_tokens(str(messages[readout_index].get("content"))):
                 errors.append("row_v2_legacy_user_readout_tokens")
             if not isinstance(final_text, str) or not _assistant_suffix_readout_valid(final_text):

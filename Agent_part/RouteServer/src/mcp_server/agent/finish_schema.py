@@ -4,7 +4,9 @@ RouteServer keeps trajectory supervision in top-level row fields such as
 ``pixel_trajectory``.  The assistant text should use the ms-swift prompt
 contract: ``trajectory_grid1000`` plus ``trajectory_coord_frame=norm1000``.
 This module is the shared compatibility layer for building canonical finish
-payloads and validating legacy ``trajectory`` payloads.
+payloads and validating legacy ``trajectory`` payloads. Trajectory-bearing
+finishes explicitly carry ``decision_type=navigate`` so the XML-like tag is
+never interpreted as task completion.
 """
 
 from __future__ import annotations
@@ -86,6 +88,8 @@ def build_finish_payload(base: dict[str, Any], *, trajectory_norm: Any) -> dict[
         for key, value in base.items()
         if value is not None and key not in {"trajectory", "trajectory_norm", "trajectory_grid1000"}
     }
+    # 轨迹型 canonical finish 始终是继续导航，不允许由 <finish> 标签暗示任务完成。
+    finish.setdefault("decision_type", "navigate")
     finish["trajectory_grid1000"] = norm01_to_grid1000(trajectory_norm)
     finish["trajectory_coord_frame"] = NORM1000_COORD_FRAME
     return finish
@@ -152,6 +156,7 @@ def canonicalize_finish_trajectory(payload: dict[str, Any], *, trajectory_norm: 
         canonical.pop(key, None)
     canonical["trajectory_grid1000"] = norm01_to_grid1000(trajectory_norm)
     canonical["trajectory_coord_frame"] = NORM1000_COORD_FRAME
+    canonical.setdefault("decision_type", "navigate")
     return canonical
 
 

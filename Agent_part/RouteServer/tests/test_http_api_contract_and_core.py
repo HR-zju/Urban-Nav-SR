@@ -156,6 +156,7 @@ class HTTPAPIContractTest(unittest.TestCase):
             ("POST", "/api/route-sessions/{session_id}/replan"),
             ("POST", "/api/waypoints/push"),
             ("GET", "/ws/route-sessions/{session_id}"),
+            ("POST", "/v1/episodes/{episode_id}/events"),
         }
         self.assertTrue(expected.issubset(routes), sorted(expected - routes))
 
@@ -165,10 +166,12 @@ class RouteSessionCoreTest(unittest.IsolatedAsyncioTestCase):
         self.env_patch = patch.dict(os.environ, {"ROUTE_SESSION_STORE": "memory"})
         self.env_patch.start()
         route_session_service.ROUTE_SESSIONS.clear()
+        route_session_service.ROUTE_SESSION_MUTATION_RESULTS.clear()
         route_session_service.ROUTE_SESSIONS_LOADED = False
 
     def tearDown(self) -> None:
         route_session_service.ROUTE_SESSIONS.clear()
+        route_session_service.ROUTE_SESSION_MUTATION_RESULTS.clear()
         route_session_service.ROUTE_SESSIONS_LOADED = False
         self.env_patch.stop()
 
@@ -212,6 +215,43 @@ class RouteSessionCoreTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertFalse(replanned["route_plan_cache_hit"])
         self.assertEqual(replanned["session"]["origin"], "120.0010,30.0010")
+
+    async def test_route_mutation_is_idempotent_and_revision_checked(self) -> None:
+        app_context = SimpleNamespace(osm_client=FakeRouteMapClient(), provider="fake")
+        created = await route_session_ops.create_route_session(
+            app_context=app_context,
+            origin="120.0000,30.0000",
+            destination="120.0100,30.0100",
+            idempotency_key="create-1",
+        )
+        session_id = created["session"]["session_id"]
+
+        first = await route_session_ops.add_via_point(
+            app_context=app_context,
+            session_id=session_id,
+            new_via_point={"location": "120.0050,30.0050"},
+            expected_state_revision=0,
+            idempotency_key="via-1",
+        )
+        replay = await route_session_ops.add_via_point(
+            app_context=app_context,
+            session_id=session_id,
+            new_via_point={"location": "120.0050,30.0050"},
+            expected_state_revision=0,
+            idempotency_key="via-1",
+        )
+
+        self.assertEqual(first["state_revision"], 1)
+        self.assertTrue(replay["idempotent_replay"])
+        self.assertEqual(replay["session"]["via_points"], first["session"]["via_points"])
+        with self.assertRaises(route_session_ops.RouteRevisionConflict):
+            await route_session_ops.replace_destination(
+                app_context=app_context,
+                session_id=session_id,
+                destination="120.0200,30.0200",
+                expected_state_revision=0,
+                idempotency_key="destination-stale",
+            )
 
 
 class MapOpsCoreTest(unittest.IsolatedAsyncioTestCase):

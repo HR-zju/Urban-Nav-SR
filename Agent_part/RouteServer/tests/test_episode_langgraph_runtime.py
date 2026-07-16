@@ -149,6 +149,8 @@ class _Environment:
     def __init__(self, *, arrival_after_steps: int) -> None:
         self.arrival_after_steps = arrival_after_steps
         self.steps = 0
+        self.preempt_reasons = []
+        self.halt_reasons = []
 
     async def reset(self, initial_context):
         return ObservationResult(observation={"fpv": "frame-0.jpg"}, replay_key="obs-0")
@@ -163,6 +165,12 @@ class _Environment:
             info={"arrival_success": done, "stop_reason": "arrival" if done else None},
             replay_key=f"transition-{self.steps}",
         )
+
+    async def preempt(self, *, reason):
+        self.preempt_reasons.append(reason)
+
+    async def halt(self, *, reason):
+        self.halt_reasons.append(reason)
 
 
 class _ToolExecutor:

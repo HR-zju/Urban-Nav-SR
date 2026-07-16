@@ -17,6 +17,19 @@ from mcp_server.contracts.trace_adapter import (
     attach_episode_trace_v2,
     merge_agent_traces_to_episode,
 )
+from mcp_server.contracts.task import (
+    TASK_CONTRACT_SCHEMA_VERSION,
+    ControlState,
+    ControlStatus,
+    DialogueState,
+    DialogueTurn,
+    ExternalUserEvent,
+    ExternalUserEventType,
+    PendingInteraction,
+    TaskState,
+    TaskStatus,
+    initial_task_state,
+)
 
 __all__ = [
     "EPISODE_TRACE_SCHEMA_VERSION",
@@ -25,9 +38,20 @@ __all__ = [
     "EpisodeStatus",
     "EpisodeTraceV2",
     "TOOL_CONTRACT_SCHEMA_VERSION",
+    "TASK_CONTRACT_SCHEMA_VERSION",
+    "ControlState",
+    "ControlStatus",
+    "DialogueState",
+    "DialogueTurn",
+    "ExternalUserEvent",
+    "ExternalUserEventType",
+    "PendingInteraction",
+    "TaskState",
+    "TaskStatus",
     "ToolCallV2",
     "ToolResponseV2",
     "agent_trace_to_episode_trace",
     "attach_episode_trace_v2",
     "merge_agent_traces_to_episode",
+    "initial_task_state",
 ]

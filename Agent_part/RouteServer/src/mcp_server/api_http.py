@@ -15,6 +15,7 @@ from mcp_server.map_providers import create_map_client
 from mcp_server.recommendation import DestinationRecommendationEngine
 from mcp_server import server as mcp_server
 from mcp_server.core.route_session_ops import (
+    RouteRevisionConflict,
     add_via_point as core_add_via_point,
     create_route_session as core_create_route_session,
     get_route_session_snapshot,
@@ -24,12 +25,14 @@ from mcp_server.core.route_session_ops import (
 
 LOGGER = logging.getLogger("mcp_server.http_api")
 EPISODE_SERVICE_KEY = web.AppKey("episode_service", object)
+EPISODE_EVENT_SERVICE_KEY = web.AppKey("episode_event_service", object)
 
 
 @dataclass
 class HTTPAPIState:
     app_context: mcp_server.AppContext | None
     episode_service: Any | None = None
+    episode_event_service: Any | None = None
 
     @property
     def provider(self) -> str:
@@ -158,6 +161,7 @@ async def _handle_health(request: web.Request) -> web.Response:
             "provider": state.provider,
             "session_store": mcp_server._route_session_store_info(),
             "episode_service": state.episode_service is not None,
+            "episode_event_service": (state.episode_event_service or state.episode_service) is not None,
             "timestamp": datetime.now().isoformat(),
         }
     )
@@ -211,6 +215,37 @@ async def _handle_episode_step(request: web.Request) -> web.Response:
     episode_id = str(request.match_info["episode_id"])
     response = await state.episode_service.step(episode_id, payload)
     validated = response if isinstance(response, EpisodeStepResponse) else EpisodeStepResponse.model_validate(response)
+    return web.json_response(validated.model_dump(mode="json", exclude_none=True))
+
+
+async def _handle_episode_event(request: web.Request) -> web.Response:
+    """Submit one out-of-band task/control/dialogue event.
+
+    Args:
+        request: Aiohttp request containing an ``ExternalUserEvent`` payload.
+
+    Returns:
+        Strict idempotent event-ingress response.
+    """
+
+    state: HTTPAPIState = request.app["state"]
+    event_service = state.episode_event_service or state.episode_service
+    if event_service is None or not hasattr(event_service, "submit_event"):
+        return _json_error(
+            "Episode event service is not configured.",
+            status=503,
+            code="episode_event_service_unavailable",
+        )
+    from mcp_server.runtime.service import EpisodeEventSubmitResponse
+
+    payload = await _read_json(request)
+    episode_id = str(request.match_info["episode_id"])
+    response = await event_service.submit_event(episode_id, payload)
+    validated = (
+        response
+        if isinstance(response, EpisodeEventSubmitResponse)
+        else EpisodeEventSubmitResponse.model_validate(response)
+    )
     return web.json_response(validated.model_dump(mode="json", exclude_none=True))
 
 
@@ -284,6 +319,8 @@ async def _handle_create_route_session(request: web.Request) -> web.Response:
         via_points=payload.get("via_points"),
         mode=mode,
         session_name=str(payload.get("session_name") or "").strip() or None,
+        idempotency_key=str(payload.get("idempotency_key") or "").strip() or None,
+        source_event_id=str(payload.get("source_event_id") or "").strip() or None,
     )
     return web.json_response(result)
 
@@ -312,7 +349,12 @@ async def _handle_add_via_point(request: web.Request) -> web.Response:
             session_id=session_id,
             new_via_point=payload.get("new_via_point") or payload,
             insert_before_index=payload.get("insert_before_index"),
+            expected_state_revision=payload.get("expected_state_revision"),
+            idempotency_key=str(payload.get("idempotency_key") or "").strip() or None,
+            source_event_id=str(payload.get("source_event_id") or "").strip() or None,
         )
+    except RouteRevisionConflict as exc:
+        return _json_error(str(exc), status=409, code="route_revision_conflict")
     except KeyError as exc:
         return _json_error(str(exc.args[0] if exc.args else exc), status=404, code="not_found")
     except ValueError as exc:
@@ -330,7 +372,12 @@ async def _handle_replan_route_session(request: web.Request) -> web.Response:
             app_context=state.app_context,
             session_id=session_id,
             origin=origin,
+            expected_state_revision=payload.get("expected_state_revision"),
+            idempotency_key=str(payload.get("idempotency_key") or "").strip() or None,
+            source_event_id=str(payload.get("source_event_id") or "").strip() or None,
         )
+    except RouteRevisionConflict as exc:
+        return _json_error(str(exc), status=409, code="route_revision_conflict")
     except KeyError as exc:
         return _json_error(str(exc.args[0] if exc.args else exc), status=404, code="not_found")
     except ValueError as exc:
@@ -491,6 +538,7 @@ async def app_cleanup_ctx(app: web.Application):
     state = HTTPAPIState(
         app_context=mcp_server.AppContext(osm_client=map_client, provider=provider),
         episode_service=app.get(EPISODE_SERVICE_KEY),
+        episode_event_service=app.get(EPISODE_EVENT_SERVICE_KEY),
     )
     app["state"] = state
     try:
@@ -502,16 +550,26 @@ async def app_cleanup_ctx(app: web.Application):
 async def episode_app_cleanup_ctx(app: web.Application):
     """Install an episode-only state without opening any map connection."""
 
-    app["state"] = HTTPAPIState(app_context=None, episode_service=app.get(EPISODE_SERVICE_KEY))
+    app["state"] = HTTPAPIState(
+        app_context=None,
+        episode_service=app.get(EPISODE_SERVICE_KEY),
+        episode_event_service=app.get(EPISODE_EVENT_SERVICE_KEY),
+    )
     yield
 
 
-def create_app(*, episode_service: Any | None = None, episode_only: bool = False) -> web.Application:
+def create_app(
+    *,
+    episode_service: Any | None = None,
+    episode_event_service: Any | None = None,
+    episode_only: bool = False,
+) -> web.Application:
     """Create the RouteServer HTTP application.
 
     Args:
         episode_service: Optional externally-driven episode backend. The API
             returns HTTP 503 instead of fabricating transitions when absent.
+        episode_event_service: Optional registered live-runtime event backend.
         episode_only: Expose only frozen episode endpoints and avoid creating a
             map provider client. This is required for deterministic benchmark
             serving.
@@ -522,6 +580,7 @@ def create_app(*, episode_service: Any | None = None, episode_only: bool = False
 
     app = web.Application(middlewares=[json_error_middleware])
     app[EPISODE_SERVICE_KEY] = episode_service
+    app[EPISODE_EVENT_SERVICE_KEY] = episode_event_service
     app.cleanup_ctx.append(episode_app_cleanup_ctx if episode_only else app_cleanup_ctx)
     app.router.add_get("/api/health", _handle_health)
     if not episode_only:
@@ -535,6 +594,7 @@ def create_app(*, episode_service: Any | None = None, episode_only: bool = False
         app.router.add_get("/ws/route-sessions/{session_id}", _handle_route_session_ws)
     app.router.add_post("/v1/episodes/reset", _handle_episode_reset)
     app.router.add_post("/v1/episodes/{episode_id}/step", _handle_episode_step)
+    app.router.add_post("/v1/episodes/{episode_id}/events", _handle_episode_event)
     return app
 
 

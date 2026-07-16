@@ -29,6 +29,18 @@ class EpisodeEventType(str, Enum):
     ENVIRONMENT_STEP = "environment_step"
     USER_INTERRUPT = "user_interrupt"
     USER_RESUME = "user_resume"
+    EXTERNAL_EVENT_RECEIVED = "external_event_received"
+    EXTERNAL_EVENT_REJECTED = "external_event_rejected"
+    TASK_STATE_UPDATED = "task_state_updated"
+    INTERACTION_REQUESTED = "interaction_requested"
+    INTERACTION_RESOLVED = "interaction_resolved"
+    ACTION_DISPATCHED = "action_dispatched"
+    ACTION_PREEMPTED = "action_preempted"
+    CONTROLLER_FEEDBACK = "controller_feedback"
+    CONTROL_HALTED = "control_halted"
+    SAFETY_INTERVENTION = "safety_intervention"
+    TERMINAL_VALIDATION = "terminal_validation"
+    REVISION_CONFLICT = "revision_conflict"
     EPISODE_FINISHED = "episode_finished"
 
 
@@ -40,6 +52,7 @@ class EpisodeStatus(str, Enum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     TRUNCATED = "truncated"
+    CANCELLED = "cancelled"
 
 
 class EpisodeEvent(BaseModel):
@@ -168,7 +181,12 @@ class EpisodeTraceV2(BaseModel):
             ValueError: If ``status`` is not terminal.
         """
 
-        if status not in {EpisodeStatus.SUCCEEDED, EpisodeStatus.FAILED, EpisodeStatus.TRUNCATED}:
+        if status not in {
+            EpisodeStatus.SUCCEEDED,
+            EpisodeStatus.FAILED,
+            EpisodeStatus.TRUNCATED,
+            EpisodeStatus.CANCELLED,
+        }:
             raise ValueError("finish status must be terminal")
         self.status = status
         self.stop_reason = stop_reason

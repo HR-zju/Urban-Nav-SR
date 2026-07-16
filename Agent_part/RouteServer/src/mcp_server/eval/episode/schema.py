@@ -6,6 +6,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from mcp_server.contracts.task import ExternalUserEvent
+
 
 FROZEN_EPISODE_CASE_SCHEMA_VERSION = "urbannav_frozen_episode_case_v1"
 
@@ -20,8 +22,10 @@ class FrozenEpisodeTransition(BaseModel):
         done: Whether this transition terminates the episode.
         info: Arrival, collision and recovery labels.
         expected_action_shape: Optional expected System1 ``[T,D]`` shape.
-        expected_action_type: Optional external System2 action type.
+        expected_action_type: Optional canonical System2 action type. Legacy
+            ``tool_call``/``finish`` syntax-level expectations remain readable.
         expected_tool_op: Optional tool operation required by this transition.
+        external_events: User events deterministically emitted after execution.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -34,6 +38,7 @@ class FrozenEpisodeTransition(BaseModel):
     expected_action_shape: tuple[int, int] | None = None
     expected_action_type: str | None = None
     expected_tool_op: str | None = None
+    external_events: list[ExternalUserEvent] = Field(default_factory=list)
 
 
 class FrozenEpisodeCase(BaseModel):
@@ -47,6 +52,7 @@ class FrozenEpisodeCase(BaseModel):
         transitions: Ordered immutable environment transitions.
         optimal_steps: Reference number of environment steps.
         requires_recovery: Whether recovery success is a main case outcome.
+        initial_external_events: Events available with the reset observation.
         metadata: Dataset and scenario metadata.
         schema_version: Case contract version.
     """
@@ -60,6 +66,7 @@ class FrozenEpisodeCase(BaseModel):
     transitions: list[FrozenEpisodeTransition]
     optimal_steps: int = Field(ge=1)
     requires_recovery: bool = False
+    initial_external_events: list[ExternalUserEvent] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
     schema_version: str = FROZEN_EPISODE_CASE_SCHEMA_VERSION
 
@@ -80,4 +87,9 @@ class FrozenEpisodeCase(BaseModel):
             raise ValueError("last frozen episode transition must be terminal")
         if any(transition.done for transition in self.transitions[:-1]):
             raise ValueError("only the final frozen transition may be terminal")
+        events = list(self.initial_external_events)
+        for transition in self.transitions:
+            events.extend(transition.external_events)
+        if any(event.episode_id != self.episode_id for event in events):
+            raise ValueError("frozen external event belongs to a different episode")
         return self

@@ -4,6 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from mcp_server.agent.tool_parser import parse_agent_action, parse_system2_action_text
+from mcp_server.agent.tool_schema import get_tool_definitions
 from mcp_server.api_http import create_app
 from mcp_server.contracts.episode import EpisodeEventType, EpisodeStatus, EpisodeTraceV2
 from mcp_server.contracts.tool import ToolResponseV2
@@ -12,6 +14,7 @@ from mcp_server.eval.episode import (
     FrozenEpisodeCase,
     FrozenEpisodeTransition,
     FrozenExternalEpisodeService,
+    build_event_driven_zeroshot_rows,
     compute_episode_metrics,
     load_frozen_episode_cases,
     write_frozen_episode_cases,
@@ -83,6 +86,46 @@ class FrozenEpisodeBenchmarkTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(cases), 1)
         self.assertEqual(cases[0].transitions[0].expected_tool_op, "search_destination")
 
+    async def test_repository_event_smoke_replays_task_update(self) -> None:
+        path = Path(__file__).parents[1] / "examples" / "frozen_episode_event_v2_smoke.jsonl"
+        case = load_frozen_episode_cases(path)[0]
+
+        result = await _runner([True, True]).run_case(case)
+
+        self.assertEqual(result.metrics.arrival_success, 1.0)
+        self.assertEqual(result.metrics.diagnostics["external_events"], 1)
+        self.assertEqual(result.metrics.diagnostics["stale_action_execution_rate"], 0.0)
+        self.assertEqual(
+            result.trace.events[-1].payload["stop_reason"],
+            "arrival",
+        )
+
+    def test_zeroshot_samples_use_live_registry_and_valid_targets(self) -> None:
+        rows = build_event_driven_zeroshot_rows()
+        expected_tools = [
+            definition
+            for definition in get_tool_definitions()
+            if definition.get("function", {}).get("name") in {"map_tool", "user_interaction_tool"}
+        ]
+
+        self.assertEqual(len(rows), 3)
+        for row in rows:
+            self.assertEqual(row["tools"], expected_tools)
+            target = row["messages"][-1]["content"]
+            parsed = parse_agent_action(target)
+            self.assertFalse(parsed.errors, (row["case_id"], parsed.errors))
+            semantic_action, semantic_errors = parse_system2_action_text(
+                target,
+                require_system1_readout=True,
+            )
+            self.assertFalse(semantic_errors, (row["case_id"], semantic_errors))
+            self.assertIsNotNone(semantic_action)
+            for message in row["messages"]:
+                if message["role"] != "assistant" or "<finish>" not in message["content"]:
+                    continue
+                self.assertIn('"decision_type":"navigate"', message["content"])
+                self.assertIn("<readout>[SYS1_0]", message["content"])
+
     def test_collision_free_success_requires_arrival(self) -> None:
         """A pre-execution failure is not a collision-free navigation success."""
 
@@ -141,6 +184,25 @@ class FrozenEpisodeBenchmarkTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(finish.done)
         self.assertEqual(finish.reward_components["arrival"], 1.0)
 
+    async def test_external_service_accepts_idempotent_user_events(self) -> None:
+        service = FrozenExternalEpisodeService([_case()])
+        await service.reset({"episode": {"case_id": "episode-1"}})
+        payload = {
+            "event": {
+                "episode_id": "episode-1",
+                "event_id": "event:pause:1",
+                "event_type": "pause",
+                "content": None,
+            }
+        }
+
+        first = await service.submit_event("episode-1", payload)
+        duplicate = await service.submit_event("episode-1", payload)
+
+        self.assertTrue(first.accepted)
+        self.assertFalse(duplicate.accepted)
+        self.assertTrue(duplicate.duplicate)
+
     def test_episode_only_http_app_does_not_expose_map_routes(self) -> None:
         """Frozen benchmark serving must not initialize or expose live map APIs."""
 
@@ -149,6 +211,7 @@ class FrozenEpisodeBenchmarkTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("/v1/episodes/reset", routes)
         self.assertIn("/v1/episodes/{episode_id}/step", routes)
+        self.assertIn("/v1/episodes/{episode_id}/events", routes)
         self.assertNotIn("/api/routes/plan", routes)
 
 

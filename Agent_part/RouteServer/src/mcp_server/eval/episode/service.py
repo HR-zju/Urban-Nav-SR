@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
-from mcp_server.agent.tool_parser import parse_agent_action
+from mcp_server.agent.tool_parser import parse_agent_action, parse_system2_action_text
+from mcp_server.contracts.task import ExternalUserEvent
 from mcp_server.eval.episode.schema import FrozenEpisodeCase
-from mcp_server.runtime.service import EpisodeResetResponse, EpisodeStepResponse
+from mcp_server.runtime.service import EpisodeEventSubmitResponse, EpisodeResetResponse, EpisodeStepResponse
 
 
 @dataclass
@@ -21,6 +22,7 @@ class _ActiveFrozenEpisode:
 
     case: FrozenEpisodeCase
     transition_index: int = 0
+    external_events: list[ExternalUserEvent] = field(default_factory=list)
 
 
 class FrozenExternalEpisodeService:
@@ -90,10 +92,20 @@ class FrozenExternalEpisodeService:
         action = parse_agent_action(str(action_payload.get("content") or ""))
         if action.action_type == "invalid":
             raise ValueError("invalid external agent action: " + ",".join(action.errors))
-        if transition.expected_action_type and action.action_type != transition.expected_action_type:
-            raise ValueError(
-                f"unexpected action type: expected={transition.expected_action_type}, actual={action.action_type}"
-            )
+        if transition.expected_action_type:
+            if transition.expected_action_type in {"tool_call", "finish"}:
+                actual_action_type = action.action_type
+            else:
+                semantic_action, semantic_errors = parse_system2_action_text(
+                    str(action_payload.get("content") or "")
+                )
+                if semantic_action is None:
+                    raise ValueError("invalid System2 semantics: " + ",".join(semantic_errors))
+                actual_action_type = semantic_action.action_type.value
+            if actual_action_type != transition.expected_action_type:
+                raise ValueError(
+                    f"unexpected action type: expected={transition.expected_action_type}, actual={actual_action_type}"
+                )
         actual_op = action.tool_call.op if action.tool_call is not None else None
         if transition.expected_tool_op and actual_op != transition.expected_tool_op:
             raise ValueError(f"unexpected tool op: expected={transition.expected_tool_op}, actual={actual_op}")
@@ -109,4 +121,39 @@ class FrozenExternalEpisodeService:
             reward_components=dict(reward_components),
             info=info,
             stop_reason=str(info.get("stop_reason")) if info.get("stop_reason") is not None else None,
+        )
+
+    async def submit_event(self, episode_id: str, payload: dict[str, Any]) -> EpisodeEventSubmitResponse:
+        """Record one deterministic external event for frozen multi-turn replay.
+
+        Args:
+            episode_id: Active frozen episode id.
+            payload: Event mapping with or without an explicit episode id.
+
+        Returns:
+            Idempotent event-ingress response.
+
+        Raises:
+            KeyError: If the frozen episode is inactive.
+        """
+
+        active = self.active.get(episode_id)
+        if active is None:
+            raise KeyError(f"inactive frozen episode: {episode_id}")
+        value = dict(payload.get("event") or payload)
+        value.setdefault("episode_id", episode_id)
+        event = ExternalUserEvent.model_validate(value)
+        if event.episode_id != episode_id:
+            raise ValueError(
+                f"event episode_id mismatch: path={episode_id}, payload={event.episode_id}"
+            )
+        duplicate = any(item.event_id == event.event_id for item in active.external_events)
+        if not duplicate:
+            active.external_events.append(event)
+        return EpisodeEventSubmitResponse(
+            episode_id=episode_id,
+            event=event,
+            accepted=not duplicate,
+            duplicate=duplicate,
+            info={"queued_event_count": len(active.external_events)},
         )

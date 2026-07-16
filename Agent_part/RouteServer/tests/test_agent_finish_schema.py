@@ -30,6 +30,7 @@ class AgentFinishSchemaTest(unittest.TestCase):
         assert finish is not None
         self.assertEqual(finish["trajectory_grid1000"], [[500, 900], [501, 820], [520, 740]])
         self.assertEqual(finish["trajectory_coord_frame"], "norm1000")
+        self.assertEqual(finish["decision_type"], "navigate")
         self.assertNotIn("trajectory", finish)
         self.assertTrue(finish_trajectory_matches(finish, case.ground_truth["pixel_trajectory"]))
         self.assertEqual(parse_finish_trajectory_norm(finish), case.ground_truth["pixel_trajectory"])
@@ -102,6 +103,7 @@ class AgentFinishSchemaTest(unittest.TestCase):
         finish, errors = parse_finish_text(row["messages"][-1]["content"])
         self.assertEqual(errors, [])
         assert finish is not None
+        self.assertEqual(finish["decision_type"], "navigate")
         self.assertNotIn("trajectory_grid1000", finish)
         self.assertNotIn("trajectory", finish)
 
