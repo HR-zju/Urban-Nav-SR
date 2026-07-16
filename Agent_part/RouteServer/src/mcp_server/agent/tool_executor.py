@@ -216,6 +216,8 @@ class ToolExecutor:
                 via_points=args.get("via_points"),
                 mode=str(args.get("mode") or "foot"),
                 session_name=args.get("session_name"),
+                idempotency_key=args.get("idempotency_key"),
+                source_event_id=args.get("source_event_id"),
             )
         elif op in {"get_route_session", "get_route"}:
             from mcp_server.core import route_session_ops
@@ -233,6 +235,9 @@ class ToolExecutor:
                 session_id=str(args.get("session_id")),
                 new_via_point=dict(args.get("via_point") or {}),
                 insert_before_index=args.get("insert_before_index"),
+                expected_state_revision=args.get("expected_state_revision"),
+                idempotency_key=args.get("idempotency_key"),
+                source_event_id=args.get("source_event_id"),
             )
         elif op == "remove_via_and_replan":
             from mcp_server.core import route_session_ops
@@ -242,6 +247,9 @@ class ToolExecutor:
                 session_id=str(args.get("session_id")),
                 via_point_index=args.get("via_point_index"),
                 via_point_name=args.get("via_point_name"),
+                expected_state_revision=args.get("expected_state_revision"),
+                idempotency_key=args.get("idempotency_key"),
+                source_event_id=args.get("source_event_id"),
             )
         elif op == "replace_destination":
             from mcp_server.core import route_session_ops
@@ -250,6 +258,9 @@ class ToolExecutor:
                 app_context=self.app_context,
                 session_id=str(args.get("session_id")),
                 destination=_as_location(args.get("destination")),
+                expected_state_revision=args.get("expected_state_revision"),
+                idempotency_key=args.get("idempotency_key"),
+                source_event_id=args.get("source_event_id"),
             )
         elif op == "replan_from_current_pose":
             from mcp_server.core import route_session_ops
@@ -258,6 +269,9 @@ class ToolExecutor:
                 app_context=self.app_context,
                 session_id=str(args.get("session_id")),
                 origin=_as_location(args.get("origin") or args.get("current_pose")),
+                expected_state_revision=args.get("expected_state_revision"),
+                idempotency_key=args.get("idempotency_key"),
+                source_event_id=args.get("source_event_id"),
             )
         else:
             return ToolResponse(

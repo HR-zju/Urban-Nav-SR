@@ -6,6 +6,7 @@ import unittest
 from mcp_server.agent.schemas import ToolCall, ToolResponse
 from mcp_server.agent.tool_executor import ToolExecutor
 from mcp_server.agent.tool_schema import get_tool_definitions, validate_tool_call
+from mcp_server.contracts.task import TaskState
 from mcp_server.contracts.tool import ToolCallV2
 from mcp_server.eval.urbannav_replay_tool_executor import ReplayUrbanNavToolExecutor
 from mcp_server.runtime import LiveToolExecutorAdapter
@@ -57,6 +58,32 @@ class ToolCapabilityRegistryTest(unittest.TestCase):
         self.assertEqual(canonical["current_pose"], {"lat": 30.0, "lng": 120.0})
         self.assertEqual(canonical["session_id"], "session-1")
 
+    def test_add_via_rejects_ungrounded_free_text(self) -> None:
+        invalid, errors, _ = DEFAULT_TOOL_REGISTRY.validate_call(
+            ToolCall(
+                tool="map_tool",
+                arguments={
+                    "op": "add_via_and_replan",
+                    "session_id": "session-1",
+                    "via_point": {"name": "pharmacy", "location": "near library"},
+                },
+            )
+        )
+        valid, valid_errors, _ = DEFAULT_TOOL_REGISTRY.validate_call(
+            ToolCall(
+                tool="map_tool",
+                arguments={
+                    "op": "add_via_and_replan",
+                    "session_id": "session-1",
+                    "via_point": {"name": "pharmacy", "location": "120.1,30.2"},
+                },
+            )
+        )
+
+        self.assertFalse(invalid)
+        self.assertIn("missing_grounded_via_point", errors)
+        self.assertTrue(valid, valid_errors)
+
     def test_live_adapter_returns_canonical_v2_response(self) -> None:
         """Episode runtime adapters should bridge legacy responses without reflection."""
 
@@ -75,6 +102,54 @@ class ToolCapabilityRegistryTest(unittest.TestCase):
         self.assertEqual(response.op, "get_route_context")
         self.assertEqual(response.executor, "live")
         self.assertEqual(legacy.calls[0].arguments["session_id"], "session-1")
+
+    def test_live_adapter_binds_authoritative_active_session(self) -> None:
+        legacy = _LegacyExecutor()
+        adapter = LiveToolExecutorAdapter(legacy)
+        state = {
+            "task_state": TaskState(
+                task_id="task-1",
+                route_session_id="session-active",
+                route_revision=3,
+            ).model_dump(mode="json")
+        }
+
+        response = asyncio.run(adapter.execute(
+            ToolCallV2(
+                tool="map_tool",
+                arguments={"op": "get_route_context", "session_id": "session-hallucinated"},
+            ),
+            state,
+        ))
+
+        self.assertTrue(response.success)
+        self.assertEqual(legacy.calls[0].arguments["session_id"], "session-active")
+
+    def test_live_adapter_rejects_route_plan_bypassing_active_session(self) -> None:
+        legacy = _LegacyExecutor()
+        adapter = LiveToolExecutorAdapter(legacy)
+        state = {
+            "task_state": TaskState(
+                task_id="task-1",
+                route_session_id="session-active",
+            ).model_dump(mode="json")
+        }
+
+        response = asyncio.run(adapter.execute(
+            ToolCallV2(
+                tool="map_tool",
+                arguments={
+                    "op": "plan_route",
+                    "origin": {"latitude": 40.7128, "longitude": -74.0060},
+                    "destination": {"latitude": 40.7589, "longitude": -73.9851},
+                },
+            ),
+            state,
+        ))
+
+        self.assertFalse(response.success)
+        self.assertIn("active_route_session_requires_session_operation", response.error["messages"])
+        self.assertEqual(legacy.calls, [])
 
 
 class _LegacyExecutor:

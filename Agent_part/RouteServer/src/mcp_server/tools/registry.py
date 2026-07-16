@@ -203,6 +203,32 @@ def _validate_route_plan(arguments: dict[str, Any]) -> list[str]:
     return [] if has_pair or has_reference else ["missing_route_endpoint"]
 
 
+def _validate_add_via(arguments: dict[str, Any]) -> list[str]:
+    """Require a resolved candidate id or an explicit longitude/latitude pair."""
+
+    if arguments.get("destination_id") is not None or arguments.get("candidate_id") is not None:
+        return []
+    via_point = arguments.get("via_point")
+    if not isinstance(via_point, dict):
+        return ["missing_grounded_via_point"]
+    location = via_point.get("location")
+    if isinstance(location, str) and "," in location:
+        parts = [part.strip() for part in location.split(",", 1)]
+        try:
+            longitude, latitude = float(parts[0]), float(parts[1])
+        except (TypeError, ValueError):
+            return ["invalid_via_point_coordinate"]
+        return [] if -180 <= longitude <= 180 and -90 <= latitude <= 90 else ["invalid_via_point_coordinate"]
+    coordinate = via_point.get("coordinate") or {}
+    longitude = coordinate.get("longitude", via_point.get("longitude"))
+    latitude = coordinate.get("latitude", via_point.get("latitude"))
+    try:
+        valid = longitude is not None and latitude is not None and -180 <= float(longitude) <= 180 and -90 <= float(latitude) <= 90
+    except (TypeError, ValueError):
+        valid = False
+    return [] if valid else ["missing_grounded_via_point"]
+
+
 def _validate_bbox(arguments: dict[str, Any]) -> list[str]:
     """Validate a complete bounding box in nested or flat form."""
 
@@ -272,8 +298,8 @@ _MAP_SPECS = [
     # Replay benchmark state can supply the active session implicitly; live
     # execution still reports a structured missing-session error when needed.
     _spec(MAP_TOOL_NAME, "get_route_session", "Read a route session.", MapToolArguments, _LIVE_REPLAY),
-    _spec(MAP_TOOL_NAME, "add_via", "Add a via point and replan.", MapToolArguments, _LIVE_REPLAY, side_effect=True, validator=_require_any(("via_point", "destination_id", "candidate_id"))),
-    _spec(MAP_TOOL_NAME, "add_via_and_replan", "Add a via point and replan.", MapToolArguments, _LIVE_REPLAY, side_effect=True, validator=_require_any(("via_point", "destination_id", "candidate_id"))),
+    _spec(MAP_TOOL_NAME, "add_via", "Add a resolved via point and replan.", MapToolArguments, _LIVE_REPLAY, side_effect=True, validator=_validate_add_via),
+    _spec(MAP_TOOL_NAME, "add_via_and_replan", "Add a resolved via point and replan.", MapToolArguments, _LIVE_REPLAY, side_effect=True, validator=_validate_add_via),
     _spec(MAP_TOOL_NAME, "remove_via_and_replan", "Remove a via point and replan.", MapToolArguments, _LIVE, side_effect=True, validator=_require_any(("via_point_index", "via_point_name"))),
     _spec(MAP_TOOL_NAME, "replace_destination", "Replace the active destination.", MapToolArguments, _LIVE_REPLAY, side_effect=True, validator=_require_any(("destination", "destination_id", "candidate_id"))),
     _spec(MAP_TOOL_NAME, "replan_from_current_pose", "Replan from the current pose.", MapToolArguments, _LIVE_REPLAY, side_effect=True, validator=_require_any(("origin", "current_pose"))),

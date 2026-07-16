@@ -53,6 +53,7 @@ class ToolResponseV2(BaseModel):
         executor: Executor profile, such as ``live`` or ``urbannav_replay``.
         latency_ms: Measured executor latency in milliseconds.
         state_revision: Route/environment revision after execution.
+        base_state_revision: Revision against which execution was committed.
         state_delta: Explicit state mutation caused by the operation.
         idempotency_key: Key used to deduplicate side-effecting calls.
         replay_key: Frozen replay record key when available.
@@ -71,6 +72,7 @@ class ToolResponseV2(BaseModel):
     executor: str | None = None
     latency_ms: float | None = Field(default=None, ge=0.0)
     state_revision: str | int | None = None
+    base_state_revision: str | int | None = None
     state_delta: dict[str, Any] = Field(default_factory=dict)
     idempotency_key: str | None = None
     replay_key: str | None = None
@@ -108,6 +110,10 @@ class ToolResponseV2(BaseModel):
             raise TypeError("response must be a mapping or expose to_dict()")
         result = payload.get("result")
         result_mapping = result if isinstance(result, dict) else {}
+        # revision=0 是合法的初始版本，不能用 ``or`` 当成缺失值。
+        state_revision = result_mapping.get("state_revision")
+        if state_revision is None:
+            state_revision = result_mapping.get("route_revision")
         return cls(
             tool=str(payload.get("tool") or ""),
             op=op or result_mapping.get("op"),
@@ -118,7 +124,9 @@ class ToolResponseV2(BaseModel):
             call_id=payload.get("call_id"),
             executor=executor,
             latency_ms=latency_ms,
-            state_revision=result_mapping.get("state_revision") or result_mapping.get("route_revision"),
+            state_revision=state_revision,
+            base_state_revision=result_mapping.get("base_state_revision"),
             state_delta=dict(result_mapping.get("state_delta") or {}),
+            idempotency_key=result_mapping.get("idempotency_key"),
             replay_key=result_mapping.get("replay_key") or result_mapping.get("cache_key"),
         )

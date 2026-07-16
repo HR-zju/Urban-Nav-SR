@@ -313,6 +313,7 @@ async def _compute_combined_route_plan(
 
 
 ROUTE_SESSIONS: Dict[str, Dict[str, Any]] = {}
+ROUTE_SESSION_MUTATION_RESULTS: Dict[str, Dict[str, Dict[str, Any]]] = {}
 ROUTE_SESSIONS_LOADED = False
 
 
@@ -350,6 +351,11 @@ def _load_route_sessions() -> None:
             normalized_id = str(session.get("session_id") or session_id).strip()
             session["session_id"] = normalized_id
             ROUTE_SESSIONS[normalized_id] = session
+    mutation_results = payload.get("mutation_results") if isinstance(payload, dict) else None
+    if isinstance(mutation_results, dict):
+        for session_id, entries in mutation_results.items():
+            if isinstance(entries, dict):
+                ROUTE_SESSION_MUTATION_RESULTS[str(session_id)] = entries
 
 
 def _persist_route_sessions() -> None:
@@ -362,6 +368,7 @@ def _persist_route_sessions() -> None:
         "version": 1,
         "updated_at": datetime.now().isoformat(),
         "sessions": ROUTE_SESSIONS,
+        "mutation_results": ROUTE_SESSION_MUTATION_RESULTS,
     }
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -384,6 +391,47 @@ def _save_persisted_route_session(session: Dict[str, Any]) -> Dict[str, Any]:
     ROUTE_SESSIONS[session_id] = session
     _persist_route_sessions()
     return session
+
+
+def _get_route_mutation_result(session_id: str, idempotency_key: str | None) -> Optional[Dict[str, Any]]:
+    """Return a cached side-effect result for an idempotency key.
+
+    Args:
+        session_id: Route session id.
+        idempotency_key: Optional mutation key.
+
+    Returns:
+        Deep-copy-safe JSON mapping when previously committed, otherwise ``None``.
+    """
+
+    _load_route_sessions()
+    if not idempotency_key:
+        return None
+    value = (ROUTE_SESSION_MUTATION_RESULTS.get(session_id) or {}).get(idempotency_key)
+    return json.loads(json.dumps(value)) if isinstance(value, dict) else None
+
+
+def _save_route_mutation_result(
+    session_id: str,
+    idempotency_key: str | None,
+    result: Dict[str, Any],
+) -> None:
+    """Persist one committed mutation result for exact retry replay.
+
+    Args:
+        session_id: Route session id.
+        idempotency_key: Optional mutation key.
+        result: JSON-compatible committed response.
+
+    Returns:
+        None.
+    """
+
+    if not idempotency_key:
+        return
+    _load_route_sessions()
+    ROUTE_SESSION_MUTATION_RESULTS.setdefault(session_id, {})[idempotency_key] = json.loads(json.dumps(result))
+    _persist_route_sessions()
 
 
 def _cache_route_plan_on_session(session: Dict[str, Any], route_plan: Dict[str, Any]) -> None:

@@ -58,6 +58,9 @@ class MapToolArguments(StrictArguments):
         insert_before_index: Via insertion index.
         via_point_index: Via removal index.
         via_point_name: Via removal name.
+        expected_state_revision: Optimistic concurrency revision for mutations.
+        idempotency_key: Stable deduplication key for mutations.
+        source_event_id: External user event grounding the mutation.
     """
 
     op: str
@@ -106,6 +109,9 @@ class MapToolArguments(StrictArguments):
     waypoint_ego: list[float] | None = None
     next_waypoint: list[float] | None = None
     image_ref: str | None = None
+    expected_state_revision: int | None = Field(default=None, ge=0)
+    idempotency_key: str | None = None
+    source_event_id: str | None = None
 
 
 class ImageToolArguments(StrictArguments):
