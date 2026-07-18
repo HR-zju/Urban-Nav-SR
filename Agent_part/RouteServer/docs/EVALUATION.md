@@ -105,6 +105,7 @@ here.
     \hline
     Gemma-4-12B             & 78.79 & 99.88 & 78.79 & 75.49 & 56.39 & 74.28 \\
     Molmo2-4B               & 79.99 & \textbf{99.89} & 79.99 & 77.66 & \textbf{66.27} & 76.49 \\
+    LLaVA-OneVision-1.5-8B  & 78.55 & 99.56 & 78.55 & 75.87 & 58.49 & 73.08 \\
     Qwen3.5-27B             & 79.90 & 99.88 & 79.90 & 76.91 & 60.50 & 75.98 \\
     Qwen3-VL-32B-Instruct   & 80.09 & 99.88 & 80.09 & 77.25 & 61.83 & 75.98 \\
     InternVL3.5-14B         & \textbf{80.31} & \textbf{99.89} & \textbf{80.31} & \textbf{77.69} & 64.10 & \textbf{78.53} \\
@@ -132,9 +133,86 @@ here.
     InternVL2.5-78B        & \textbf{80.21} & 99.88 & \textbf{80.21} & 77.27 & 61.02 & 75.81 \\
     InternVL3.5-8B         & 75.65 & 97.51 & 75.65 & 68.93 & 51.42 & 72.23 \\
     InternVL3.5-38B        & 80.07 & 99.88 & 80.07 & 76.99 & 59.78 & 75.98 \\
+    LLaVA-OneVision-1.5-4B & 79.51 & 99.82 & 79.51 & 77.07 & 61.40 & 75.64 \\
+    LLaVA-NeXT-Video-32B   & 78.41 & 99.50 & 78.41 & 75.69 & 55.96 & 74.62 \\
     \hline
   \end{tabular}
 \end{table*}
+```
+
+### UrbanNav Eval v2：固定分母与排序敏感主表
+
+`urbannav_eval_v2` 不修改模型预测，也不覆盖上述 v1 结果。它直接读取既有
+`predictions.jsonl`，将缺失 prediction、空候选列表和
+`prediction_exception` 全部按失败计入固定分母。主表以 `MRR@5` 和
+`Hit@3` 替代接近饱和的 `Hit@5`，并移除在 controlled replay 下与 DS
+退化为相同数值的普通 RS。`Task SPL` 对 multi-stop 强制完整序列、逐段路线
+成功和 leg continuity，对 route-update 强制 update success。
+
+下表包含当前已取回完整 prediction artifact、并已实际生成
+`eval_v2/summary.json` 的 18 个模型。服务器结果已同步到本地后统一重算；模型
+预测保持不变，不能直接由 v1 汇总值推导 v2 指标。修复后仍然缺失或无效的预测
+继续按零分计入 15,000 条固定分母。
+
+```latex
+\begin{table*}[t]
+  \centering
+  \scriptsize
+  \setlength{\tabcolsep}{3.5pt}
+  \caption{\textbf{UrbanNav final-15K results under the v2 fixed-denominator evaluator.}
+  MRR@5 measures the rank of the first acceptable destination; Hit@3 measures
+  top-3 candidate recall. Task SPL applies ordered-stop continuity and
+  route-update constraints. Missing candidates and invalid predictions receive
+  zero credit. All values are percentages.}
+  \label{tab:urbannav_main_v2}
+  \begin{tabular}{lrrrrrrr}
+    \hline
+    Method & DS $\uparrow$ & MRR@5 $\uparrow$ & Hit@3 $\uparrow$ & Task SPL $\uparrow$ & Multi-stop $\uparrow$ & Stop Recall $\uparrow$ & Update $\uparrow$ \\
+    \hline
+    Doubao-Seed-2.0-Lite & 77.03 & 84.70 & 93.33 & 72.79 & 56.54 & 75.14 & 75.13 \\
+    Qwen3.5-2B           & 77.30 & 85.66 & 94.32 & 74.47 & 49.48 & 64.59 & 77.00 \\
+    Qwen3.5-4B           & 80.16 & 88.10 & 97.13 & 76.08 & 62.17 & 79.52 & 77.00 \\
+    Qwen3.5-9B           & 78.38 & 86.64 & 95.84 & 74.17 & 52.77 & 72.98 & 74.79 \\
+    Gemma-4-31B          & 78.79 & 87.08 & 96.64 & 74.29 & 56.39 & 76.10 & 74.28 \\
+    Molmo2-4B            & 79.99 & 88.15 & \textbf{97.21} & 76.30 & \textbf{66.27} & \textbf{82.11} & 76.49 \\
+    InternVL2.5-8B       & 79.06 & 87.43 & 96.80 & 74.91 & 55.34 & 75.30 & 73.94 \\
+    InternVL2.5-38B      & 79.95 & 87.91 & 96.96 & 75.65 & 59.92 & 78.59 & 75.13 \\
+    InternVL2.5-78B      & 80.21 & 88.11 & 97.12 & 76.01 & 61.02 & 79.00 & 75.81 \\
+    InternVL3-8B         & 79.48 & 87.68 & 96.63 & 75.38 & 58.11 & 77.06 & 74.96 \\
+    InternVL3-14B        & 77.80 & 86.66 & 95.56 & 73.90 & 54.68 & 75.14 & 75.30 \\
+    InternVL3-38B        & 79.41 & 87.52 & 96.78 & 74.97 & 57.82 & 77.23 & 74.11 \\
+    InternVL3-78B        & 80.16 & 88.17 & 97.13 & 76.15 & 62.40 & 79.80 & 77.00 \\
+    InternVL3.5-14B      & \textbf{80.31} & \textbf{88.23} & 97.08 & \textbf{76.33} & 64.10 & 80.81 & \textbf{78.53} \\
+    InternVL3.5-38B      & 80.07 & 87.93 & 96.89 & 75.70 & 59.78 & 78.27 & 75.98 \\
+    LLaVA-OneVision-1.5-4B & 79.51 & 87.71 & 95.48 & 75.88 & 61.40 & 78.32 & 75.64 \\
+    LLaVA-OneVision-1.5-8B & 78.55 & 86.58 & 94.78 & 74.80 & 58.49 & 75.79 & 73.08 \\
+    LLaVA-NeXT-Video-32B & 78.41 & 87.11 & 96.44 & 74.54 & 55.96 & 75.91 & 74.62 \\
+    \hline
+    RouteServer-Replay-Distance & 81.13 & 86.96 & 95.54 & 81.03 & 65.55 & 84.54 & 91.65 \\
+    \hline
+  \end{tabular}
+\end{table*}
+```
+
+粗体仅在模型行中比较；`RouteServer-Replay-Distance` 是使用冻结候选与路线距离的
+非生成式 control，不与模型能力直接排名。InternVL3.5-14B 的 artifact 缺失 4 条
+prediction；LLaVA 修复结果仍分别包含 27、213 和 30 条 exception，均已按失败计分。
+
+完整机器可读汇总位于：
+
+```text
+data/benchmark/urbannav_module1_runs/eval_v2_main_table_local.json
+data/benchmark/urbannav_module1_runs/eval_v2_main_table_local.md
+```
+
+单模型重算命令：
+
+```bash
+PYTHONPATH=src python tools/evaluation/run_urbannav_eval_v2.py \
+  --dataset data/benchmark/urbannav_v2_osm_local_osrm_foot_final_15k/task_gt.jsonl \
+  --predictions data/benchmark/urbannav_module1_runs/<run>/predictions.jsonl \
+  --output-dir data/benchmark/urbannav_module1_runs/<run>/eval_v2 \
+  --run-id <model>
 ```
 
 按任务类型，`final15k_corrected_v1` 的 Doubao 结果为：
@@ -230,6 +308,38 @@ multi-stop 的主指标应看逐站召回、序列成功和任务 SPL。这里�
 | `route_update_add_via` | 587 | 0.7598 | 1.0000 | 0.7598 | 0.7598 |
 
 Qwen3-VL 当前在 Module 1 中按文本候选选择协议评估，未输入图像或 FPV/BEV。
+
+按任务类型，`llava-onevision-1.5-4b` repaired 的结果为：
+
+| Category | Cases | Destination Success | Task Hit@5 | Route Success | Task SPL |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `implicit_need_navigation` | 7573 | 0.7635 | 1.0000 | 0.7635 | 0.7635 |
+| `poi_navigation` | 4744 | 0.8531 | 0.9998 | 0.8531 | 0.8531 |
+| `multi_stop_route` | 2096 | 0.7886 | 0.9874 | 0.7886 | 0.6140 |
+| `route_update_add_via` | 587 | 0.7564 | 1.0000 | 0.7564 | 0.7564 |
+
+按任务类型，`llava-onevision-1.5-8b` repaired 的结果为：
+
+| Category | Cases | Destination Success | Task Hit@5 | Route Success | Task SPL |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `implicit_need_navigation` | 7573 | 0.7506 | 1.0000 | 0.7506 | 0.7506 |
+| `poi_navigation` | 4744 | 0.8520 | 1.0000 | 0.8520 | 0.8520 |
+| `multi_stop_route` | 2096 | 0.7762 | 0.9690 | 0.7762 | 0.5849 |
+| `route_update_add_via` | 587 | 0.7308 | 1.0000 | 0.7308 | 0.7308 |
+
+按任务类型，`llava-next-video-32b` repaired 的结果为：
+
+| Category | Cases | Destination Success | Task Hit@5 | Route Success | Task SPL |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `implicit_need_navigation` | 7573 | 0.7587 | 1.0000 | 0.7587 | 0.7587 |
+| `poi_navigation` | 4744 | 0.8423 | 1.0000 | 0.8423 | 0.8423 |
+| `multi_stop_route` | 2096 | 0.7543 | 0.9641 | 0.7543 | 0.5596 |
+| `route_update_add_via` | 587 | 0.7462 | 1.0000 | 0.7462 | 0.7462 |
+
+LLaVA models are evaluated with text-only Module 1 inputs. The reported rows
+merge only valid repair predictions into the original 15K runs; the remaining
+27, 213, and 30 exceptions for the 4B, 8B, and 32B models, respectively, remain
+failures in the metric denominators.
 
 按任务类型，`internvl2.5-78b` 的结果为：
 
