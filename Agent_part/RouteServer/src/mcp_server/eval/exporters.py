@@ -29,6 +29,7 @@ from mcp_server.agent.stage2 import (
     final_navigation_user_content,
 )
 from mcp_server.agent.tool_schema import get_tool_definitions
+from mcp_server.contracts.reasoning import REASONING_TRACE_V2_SCHEMA_VERSION
 from mcp_server.runtime.system1_contract import (
     SYSTEM1_TARGET_FIELD_TRAJECTORY_EGO_T,
     SYSTEM1_TARGET_FORMAT_EGO_POSE_XYT_FLU_V1,
@@ -38,15 +39,16 @@ from mcp_server.runtime.system1_contract import (
 
 
 DEFAULT_AGENT_SYSTEM_PROMPT = (
-    "You are a sidewalk navigation agent. First reason about whether external map, image, "
-    "or user-interaction context is needed. When needed, emit a tool call through the "
-    "tool_call role. <ToolDecision>.reason_code is optional and should use compact values "
-    "such as need_map_context, need_visual_crop, need_user_clarification, or "
-    "local_context_sufficient while keeping the free-text reason field. After tool responses, "
-    "produce the final navigation CoT and finish block. Raw tool_response content is context; "
-    "summarize only its decision-relevant effect in <ToolResultUse>. <Plan> is symbolic local "
-    "navigation policy only; do not output CFM action chunks, ego_delta_xyt, or System1Output "
-    "in assistant text."
+    "You are the System2 policy of an urban assistive navigation agent. Decide whether map, "
+    "image, route, or user-interaction tools are needed, and emit typed tool_call roles only "
+    "when evidence is insufficient. After any tool_response, produce exactly the five "
+    "ReasoningTraceV2 sections: TaskGrounding, EvidenceGrounding, CrossModalAlignment, "
+    "ConstraintApplicability, and Decision, followed by one finish block. Tool responses are "
+    "masked environment context; summarize their decision-relevant effect in ToolResultUse "
+    "between EvidenceGrounding and CrossModalAlignment. Cite only prompt-visible evidence. "
+    "FPV governs immediate safety, and social or traffic constraints require explicit entity, "
+    "selected-path, and travel-mode support. Only navigate may append masked SYS1 readout "
+    "tokens. Never put trajectory, action, segmentation, or private teacher labels in assistant text."
 )
 
 _FINISH_RE = re.compile(r"<finish>(.*?)</finish>", re.DOTALL)
@@ -106,7 +108,7 @@ def trace_to_ms_swift_stage2_row(
     trace: AgentTrace,
     case: AgentStage2Case | None = None,
     *,
-    readout_placement: str = READOUT_PLACEMENT_USER_PROMPT_V1,
+    readout_placement: str = READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2,
 ) -> dict:
     """Convert one ``AgentTrace`` to a trainable ms-swift agent-template JSONL row.
 
@@ -169,11 +171,17 @@ def trace_to_ms_swift_stage2_row(
     tools = trace.tools or (case.tools if case is not None and case.tools else get_tool_definitions())
     observation_meta = case.to_nav_observation().to_dict() if case is not None else {}
     system2_supervision = _system2_supervision_from_trace(trace, supervision)
+    system1_enabled = _final_decision_type_from_messages(messages) == "navigate"
     system1_export = _system1_export_supervision(
         supervision,
         readout_placement=readout_placement,
+        enabled=system1_enabled,
     )
-    system1_supervision = _system1_supervision_from_supervision(system1_export)
+    system1_supervision = (
+        _system1_supervision_from_supervision(system1_export)
+        if system1_enabled
+        else {"enabled": False, "target_type": "none"}
+    )
     step_result = AgentStepResult.from_trace(
         trace,
         case=case,
@@ -186,6 +194,9 @@ def trace_to_ms_swift_stage2_row(
         "messages": messages,
         "tools": json.dumps(tools, ensure_ascii=False, sort_keys=True),
         "images": case.images if case is not None else [],
+        "image_roles": case.image_roles if case is not None else [],
+        "available_modalities": _available_modalities(case, messages=messages),
+        "source_group_id": trace.case_id,
         "observation_meta": observation_meta,
         "system2_supervision": system2_supervision,
         "system1_supervision": system1_supervision,
@@ -196,10 +207,13 @@ def trace_to_ms_swift_stage2_row(
             "system1_readout_placement": readout_placement,
             "system1_readout_tokens": (
                 list(SYSTEM1_READOUT_TOKENS)
-                if readout_placement == READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2
-                else list(NAVIGATION_READOUT_TOKENS)
+                if system1_enabled and readout_placement == READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2
+                else list(NAVIGATION_READOUT_TOKENS) if system1_enabled else []
             ),
             "system1_readout_lm_label": -100,
+            "reasoning_schema_version": (
+                REASONING_TRACE_V2_SCHEMA_VERSION if _messages_use_reasoning_v2(messages) else "legacy_v1"
+            ),
             "system1_target_field": (
                 SYSTEM1_TARGET_FIELD_TRAJECTORY_EGO_T
                 if system1_export.get("trajectory_ego_t") is not None
@@ -223,7 +237,12 @@ def trace_to_ms_swift_stage2_row(
             "agent_step_result": step_result.to_dict(),
         },
     }
-    if supervision.get("pixel_trajectory") is not None:
+    if case is not None and isinstance(case.metadata.get("reasoning_input_context"), dict):
+        # 仅显式声明为模型输入的上下文可以进入 QA prompt，监督字段不会从 ground_truth 回填。
+        row["reasoning_input_context"] = dict(case.metadata["reasoning_input_context"])
+    if case is not None and isinstance(case.metadata.get("reasoning_qa_label_validity"), dict):
+        row["reasoning_qa_label_validity"] = dict(case.metadata["reasoning_qa_label_validity"])
+    if system1_enabled and supervision.get("pixel_trajectory") is not None:
         # 顶层监督字段给 SideWalk trainer 的 trajectory loss 用，不写入 assistant target。
         row["pixel_trajectory"] = supervision["pixel_trajectory"]
     for key in (
@@ -295,12 +314,18 @@ def _system1_supervision_from_supervision(supervision: dict) -> dict:
     return {key: value for key, value in payload.items() if value is not None}
 
 
-def _system1_export_supervision(supervision: dict, *, readout_placement: str) -> dict:
+def _system1_export_supervision(
+    supervision: dict,
+    *,
+    readout_placement: str,
+    enabled: bool = True,
+) -> dict:
     """Normalize System1 labels for the exported ms-swift contract.
 
     Args:
         supervision: Merged case/trace supervision dictionary.
         readout_placement: v1/v2 readout placement requested by the exporter.
+        enabled: Whether the final System2 decision is ``navigate``.
 
     Returns:
         A copied supervision dictionary.  For v2 System1 rows,
@@ -309,6 +334,9 @@ def _system1_export_supervision(supervision: dict, *, readout_placement: str) ->
         silently consume the historical ``x_right/y_front`` convention.
     """
 
+    if not enabled:
+        # 交互和终态 row 只训练 LM/tool policy，不能携带连续控制真值。
+        return {}
     exported = dict(supervision)
     # v1 仅用于历史兼容；只有 v2 System1 row 进入生产坐标转换闸门。
     if readout_placement != READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2:
@@ -383,10 +411,26 @@ def _messages_with_assistant_suffix_readout(messages: list[dict]) -> list[dict]:
     converted = [dict(message) for message in messages]
     final_index = _find_final_assistant_message_index(converted)
     if final_index is None:
-        raise ValueError("Stage2 row is missing final assistant <finish> turn.")
+        # Online runner 会先导出 model prefix 再生成 final assistant。此时仅把
+        # 最后 user turn 规范成 v2 文本触发，不得提前伪造 finish/readout。
+        readout_index = _find_readout_user_message_index(converted, before=len(converted))
+        if readout_index is None:
+            readout_index = _find_final_user_message_index(converted, before=len(converted))
+        if readout_index is None:
+            raise ValueError("Stage2 prefix is missing final decision user turn.")
+        has_tool_roles = any(
+            message.get("role") == "tool_call" for message in converted if isinstance(message, dict)
+        )
+        converted[readout_index]["content"] = final_navigation_user_content(
+            tool_used=has_tool_roles,
+            readout_placement=READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2,
+        )
+        return converted
     readout_index = _find_readout_user_message_index(converted, before=final_index)
     if readout_index is None:
-        raise ValueError("Stage2 row is missing v1 final readout user turn.")
+        readout_index = _find_final_user_message_index(converted, before=final_index)
+    if readout_index is None:
+        raise ValueError("Stage2 row is missing final decision user turn.")
     has_tool_roles = any(message.get("role") == "tool_call" for message in converted if isinstance(message, dict))
     converted[readout_index]["content"] = final_navigation_user_content(
         tool_used=has_tool_roles,
@@ -398,6 +442,79 @@ def _messages_with_assistant_suffix_readout(messages: list[dict]) -> list[dict]:
         readout_placement=READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2,
     )
     return converted
+
+
+def _find_final_user_message_index(messages: list[dict], *, before: int) -> int | None:
+    """Return the last user turn before the final assistant response."""
+
+    for index in range(before - 1, -1, -1):
+        if messages[index].get("role") == "user":
+            return index
+    return None
+
+
+def _final_decision_type_from_messages(messages: list[dict]) -> str:
+    """Return canonical final decision type from exported messages."""
+
+    final_index = _find_final_assistant_message_index(messages)
+    if final_index is None:
+        return "invalid"
+    match = _FINISH_RE.search(str(messages[final_index].get("content") or ""))
+    if match is None:
+        return "invalid"
+    try:
+        payload = json.loads(match.group(1).strip())
+    except json.JSONDecodeError:
+        return "invalid"
+    if not isinstance(payload, dict):
+        return "invalid"
+    raw = str(payload.get("decision_type") or "navigate").lower()
+    return {"finish": "complete_task", "stop": "abort_task"}.get(raw, raw)
+
+
+def _messages_use_reasoning_v2(messages: list[dict]) -> bool:
+    """Return whether the final assistant uses the five-section V2 grammar."""
+
+    final_index = _find_final_assistant_message_index(messages)
+    return final_index is not None and "<TaskGrounding>" in str(messages[final_index].get("content") or "")
+
+
+def _available_modalities(
+    case: AgentStage2Case | None,
+    *,
+    messages: list[dict],
+) -> list[str]:
+    """Return explicitly model-visible modality capabilities for QA gates.
+
+    Args:
+        case: Optional source Stage2 case.
+        messages: Exported causal conversation including tool responses.
+
+    Returns:
+        Sorted modality names. Image count is never used to infer BEV because
+        multiple images may all be temporal FPV frames.
+    """
+
+    modalities = {"instruction"}
+    if case is not None:
+        for role in case.image_roles:
+            normalized = str(role).lower()
+            modalities.add("fpv" if normalized.startswith("fpv") or normalized == "front" else normalized)
+        observation = case.observation
+        if any(observation.get(key) is not None for key in ("route_context", "route_session_id", "route_id", "waypoints")):
+            modalities.add("route")
+        if observation.get("tracked_agents") is not None or observation.get("tracks") is not None:
+            modalities.add("track")
+        if observation.get("traffic_controls") is not None or observation.get("controls") is not None:
+            modalities.add("control")
+        if observation.get("selected_path") is not None or observation.get("selected_corridor_ref") is not None:
+            modalities.add("selected_path")
+    for message in messages:
+        if message.get("role") != "tool_response":
+            continue
+        content = str(message.get("content") or "")
+        modalities.add("tool_route" if "map_tool" in content else "tool")
+    return sorted(modalities)
 
 
 def _strip_v2_finish_supervision_fields(text: str) -> str:
@@ -464,7 +581,7 @@ def write_ms_swift_jsonl(
     path: str | Path,
     *,
     cases_by_id: dict[str, AgentEvalCase] | None = None,
-    readout_placement: str = READOUT_PLACEMENT_USER_PROMPT_V1,
+    readout_placement: str = READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2,
 ) -> None:
     """Compatibility wrapper for ``write_ms_swift_stage2_jsonl``."""
 
@@ -481,7 +598,7 @@ def write_ms_swift_stage2_jsonl(
     path: str | Path,
     *,
     cases_by_id: dict[str, AgentStage2Case] | None = None,
-    readout_placement: str = READOUT_PLACEMENT_USER_PROMPT_V1,
+    readout_placement: str = READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2,
 ) -> None:
     """Write ms-swift agent-template JSONL for Stage2 cold-start training.
 

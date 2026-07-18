@@ -3,16 +3,17 @@
 该模块是 Stage2 trace 的正式拼装入口。它不负责“选哪个工具”，只负责把已经确定的
 ``ToolCall`` 和 ``ToolResponse`` 组织成固定因果顺序：
 
-``user -> assistant think -> tool_call -> tool_response -> user [TRAJ_*] -> assistant final``
+``user -> assistant think -> tool_call -> tool_response -> user trigger -> assistant final + [SYS1_*]``
 
 no-tool replay 使用同一 schema 的短序列：
 
-``user -> assistant think -> user [TRAJ_*] -> assistant final``
+``user -> assistant think -> user trigger -> assistant final + [SYS1_*]``
 
 重要因果模型:
-    SideWalk trajectory head 从 ``[TRAJ_i]`` token 的 hidden state 读出轨迹点。
+    SideWalk System1 从 ``[SYS1_i]`` token 的 hidden state 读取连续策略条件。
     对自回归 Transformer hidden state 只能 attend 到当前位置之前的上下文。因此
-    ``[TRAJ_i]`` 必须位于 ``tool_response`` 之后，工具结果才会影响轨迹监督。
+    V2 ``[SYS1_i]`` 必须位于 ``tool_response``、五段 reasoning 和 ``finish`` 之后。
+    ``user_prompt_v1`` 的 ``[TRAJ_i]`` 仅用于旧回放兼容。
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from typing import Any
 
 from mcp_server.agent.schemas import AgentStage2Case, AgentTrace, ToolCall, ToolResponse
 from mcp_server.agent.stage2 import (
+    READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2,
     build_agent_state,
     build_agent_think_text,
     build_final_assistant_text,
@@ -42,10 +44,12 @@ class AgenticStage2TraceBuilderConfig:
     属性:
         source: 写入 ``model_run`` 和 final ``<finish>.teacher_source`` 的来源名。
         compute_metrics: True 时在 build 阶段直接填充协议级 metrics。
+        readout_placement: 新数据默认使用 assistant suffix V2；V1 仅供旧回放。
     """
 
     source: str = "agentic_stage2_builder"
     compute_metrics: bool = True
+    readout_placement: str = READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2
 
 
 class AgenticStage2TraceBuilder:
@@ -132,9 +136,12 @@ class AgenticStage2TraceBuilder:
                 metadata={"stage2_step": "tool_response"},
             )
         trace.add_turn(
-            # no-tool 和 tool 路径都必须在 final assistant 前插入 [TRAJ_i] readout。
+            # v2 user turn 只触发最终决策；System1 query 位于 assistant finish 之后。
             "user",
-            final_navigation_user_content(tool_used=call is not None),
+            final_navigation_user_content(
+                tool_used=call is not None,
+                readout_placement=self.config.readout_placement,
+            ),
             metadata={"stage2_step": "trajectory_readout_prompt"},
         )
 
@@ -145,6 +152,7 @@ class AgenticStage2TraceBuilder:
             response=resolved_response,
             source=self.config.source,
             phase1_response=phase1_response,
+            readout_placement=self.config.readout_placement,
         )
         trace.add_turn(
             "assistant",

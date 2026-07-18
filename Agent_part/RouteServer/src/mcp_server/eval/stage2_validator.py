@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from mcp_server.agent.finish_schema import finish_trajectory_matches
+from mcp_server.agent.reasoning_text import parse_reasoning_target_v2
+from mcp_server.agent.reasoning_validation import validate_reasoning_target_v2
 from mcp_server.agent.schemas import (
     AGENT_STAGE2_CASE_SCHEMA_VERSION,
     AGENT_STAGE2_TRACE_SCHEMA_VERSION,
@@ -25,6 +27,7 @@ from mcp_server.agent.stage2 import (
     READOUT_PLACEMENT_USER_PROMPT_V1,
     READOUT_PLACEMENTS,
     SYSTEM1_READOUT_TOKENS,
+    stage2_evidence_catalog,
 )
 from mcp_server.agent.tool_parser import parse_finish_text
 from mcp_server.agent.tool_schema import USER_INTERACTION_TOOL_NAME, validate_tool_call
@@ -47,6 +50,15 @@ STAGE2_ROW_ROLE_SEQUENCE = STAGE2_TOOL_ROW_ROLE_SEQUENCE
 FINAL_COT_REQUIRED_BASE_TAGS = ("<Scene>", "<FPVScene>", "<BEVContext>", "<CrossView>", "<Plan>", "<finish>")
 FINAL_COT_REQUIRED_TOOL_TAGS = FINAL_COT_REQUIRED_BASE_TAGS + ("<ToolResultUse>",)
 FINAL_COT_REQUIRED_TAGS = FINAL_COT_REQUIRED_TOOL_TAGS
+FINAL_COT_V2_REQUIRED_BASE_TAGS = (
+    "<TaskGrounding>",
+    "<EvidenceGrounding>",
+    "<CrossModalAlignment>",
+    "<ConstraintApplicability>",
+    "<Decision>",
+    "<finish>",
+)
+FINAL_COT_V2_REQUIRED_TOOL_TAGS = FINAL_COT_V2_REQUIRED_BASE_TAGS + ("<ToolResultUse>",)
 USER_WAIT_MOTION_POLICIES = {
     "stop",
     "slow_down",
@@ -165,33 +177,59 @@ def validate_stage2_trace(trace: AgentTrace, case: AgentStage2Case | None = None
 
     readout_index = 4 if has_tool_roles else 2
     final_index = 5 if has_tool_roles else 3
+    finish: dict[str, Any] | None = None
     final_text_for_readout = trace.turns[final_index].content if len(trace.turns) > final_index else ""
-    if len(trace.turns) > readout_index:
-        # 这里直接检查所有 [TRAJ_i]，保证 trajectory head 的 readout token 完整出现。
-        readout = trace.turns[readout_index].content
-        if not isinstance(readout, str) or not _contains_all_v1_readout_tokens(readout):
-            if not _assistant_suffix_readout_valid(str(final_text_for_readout or "")):
-                errors.append("missing_readout_tokens")
-    elif not _assistant_suffix_readout_valid(str(final_text_for_readout or "")):
-        errors.append("missing_readout_tokens")
     if len(trace.turns) > final_index:
         final_text = trace.turns[final_index].content
         if not isinstance(final_text, str):
             errors.append("final_assistant_not_text")
         else:
-            required_tags = FINAL_COT_REQUIRED_TOOL_TAGS if has_tool_roles else FINAL_COT_REQUIRED_BASE_TAGS
+            is_v2 = "<TaskGrounding>" in final_text
+            required_tags = (
+                FINAL_COT_V2_REQUIRED_TOOL_TAGS if has_tool_roles else FINAL_COT_V2_REQUIRED_BASE_TAGS
+            ) if is_v2 else (
+                FINAL_COT_REQUIRED_TOOL_TAGS if has_tool_roles else FINAL_COT_REQUIRED_BASE_TAGS
+            )
             for tag in required_tags:
                 if tag not in final_text:
                     errors.append(f"final_missing_tag:{tag}")
-            finish, finish_errors = parse_finish_text(final_text)
-            errors.extend(f"finish:{item}" for item in finish_errors)
-            if finish is not None and case is not None:
+            if is_v2:
+                parsed = parse_reasoning_target_v2(final_text)
+                errors.extend(f"reasoning_v2:{item}" for item in parsed.errors)
+                if parsed.target is not None:
+                    finish = parsed.target.finish.model_dump(mode="json", exclude_none=True)
+                    catalog = stage2_evidence_catalog(case, call=call) if case is not None else []
+                    validation = validate_reasoning_target_v2(
+                        parsed.target,
+                        evidence_catalog=catalog,
+                        travel_mode=str(case.observation.get("mode") or "foot") if case is not None else None,
+                        assistant_text=final_text,
+                        require_navigation_readout=_assistant_suffix_readout_valid(final_text),
+                        tool_result_use=parsed.tool_result_use,
+                    )
+                    errors.extend(f"reasoning_v2:{item}" for item in validation.errors)
+                    warnings.extend(f"reasoning_v2:{item}" for item in validation.warnings)
+            else:
+                finish, finish_errors = parse_finish_text(final_text)
+                errors.extend(f"finish:{item}" for item in finish_errors)
+            if finish is not None and case is not None and not is_v2:
                 expected_traj = case.ground_truth.get("pixel_trajectory")
                 if expected_traj and not finish_trajectory_matches(finish, expected_traj):
                     # 文本 finish 和顶层 trajectory supervision 必须等价，否则 LM/traj loss 目标冲突。
                     errors.append("finish_trajectory_mismatch")
     else:
         errors.append("missing_final_assistant")
+
+    decision_type = _canonical_finish_decision(finish)
+    readout_text = trace.turns[readout_index].content if len(trace.turns) > readout_index else ""
+    has_v1_readout = isinstance(readout_text, str) and _contains_all_v1_readout_tokens(readout_text)
+    has_v2_readout = _assistant_suffix_readout_valid(str(final_text_for_readout or ""))
+    if decision_type == "navigate":
+        if not has_v1_readout and not has_v2_readout:
+            errors.append("missing_readout_tokens")
+    elif decision_type in {"ask_user", "complete_task", "abort_task"}:
+        if has_v1_readout or has_v2_readout:
+            errors.append("non_navigation_has_readout_tokens")
 
     for index, turn in enumerate(trace.turns):
         if turn.role != "assistant" or not isinstance(turn.content, str):
@@ -287,31 +325,56 @@ def validate_ms_swift_stage2_row(row: dict[str, Any]) -> Stage2ValidationResult:
     if len(messages) > final_index:
         final_text = messages[final_index].get("content")
         finish: dict[str, Any] | None = None
-        required_tags = FINAL_COT_REQUIRED_TOOL_TAGS if has_tool_roles else FINAL_COT_REQUIRED_BASE_TAGS
+        is_v2 = isinstance(final_text, str) and "<TaskGrounding>" in final_text
+        required_tags = (
+            FINAL_COT_V2_REQUIRED_TOOL_TAGS if has_tool_roles else FINAL_COT_V2_REQUIRED_BASE_TAGS
+        ) if is_v2 else (
+            FINAL_COT_REQUIRED_TOOL_TAGS if has_tool_roles else FINAL_COT_REQUIRED_BASE_TAGS
+        )
         if not isinstance(final_text, str) or not all(tag in final_text for tag in required_tags):
             errors.append("row_final_cot_invalid")
         else:
-            finish, finish_errors = parse_finish_text(final_text)
-            errors.extend(f"row_finish:{item}" for item in finish_errors)
+            if is_v2:
+                parsed = parse_reasoning_target_v2(final_text)
+                errors.extend(f"row_reasoning_v2:{item}" for item in parsed.errors)
+                if parsed.target is not None:
+                    finish = parsed.target.finish.model_dump(mode="json", exclude_none=True)
+                    validation = validate_reasoning_target_v2(
+                        parsed.target,
+                        evidence_catalog=_row_evidence_catalog(row),
+                        assistant_text=final_text,
+                        require_navigation_readout=readout_placement == READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2
+                        and parsed.target.finish.decision_type == "navigate",
+                        tool_result_use=parsed.tool_result_use,
+                    )
+                    errors.extend(f"row_reasoning_v2:{item}" for item in validation.errors)
+                    warnings.extend(f"row_reasoning_v2:{item}" for item in validation.warnings)
+            else:
+                finish, finish_errors = parse_finish_text(final_text)
+                errors.extend(f"row_finish:{item}" for item in finish_errors)
             if (
                 finish is not None
                 and row.get("pixel_trajectory") is not None
+                and not is_v2
                 and readout_placement != READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2
                 and not finish_trajectory_matches(finish, row.get("pixel_trajectory"))
             ):
                 errors.append("row_finish_trajectory_mismatch")
+        decision_type = _canonical_finish_decision(finish)
         if readout_placement == READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2:
-            if finish is None or finish.get("decision_type") != "navigate":
-                errors.append("row_v2_finish_decision_type_not_navigate")
             if len(messages) > readout_index and _contains_all_v1_readout_tokens(str(messages[readout_index].get("content"))):
                 errors.append("row_v2_legacy_user_readout_tokens")
-            if not isinstance(final_text, str) or not _assistant_suffix_readout_valid(final_text):
-                errors.append("row_missing_assistant_suffix_readout")
-            _validate_system1_v2_targets(row, errors=errors)
-        elif len(messages) > readout_index and not _contains_all_v1_readout_tokens(str(messages[readout_index].get("content"))):
-            errors.append("row_missing_readout_tokens")
-        elif len(messages) <= readout_index:
-            errors.append("row_missing_readout_tokens")
+            if decision_type == "navigate":
+                if not isinstance(final_text, str) or not _assistant_suffix_readout_valid(final_text):
+                    errors.append("row_missing_assistant_suffix_readout")
+                _validate_system1_v2_targets(row, errors=errors)
+            elif isinstance(final_text, str) and _contains_all_v2_readout_tokens(final_text):
+                errors.append("row_non_navigation_has_system1_readout")
+        elif decision_type == "navigate":
+            if len(messages) > readout_index and not _contains_all_v1_readout_tokens(str(messages[readout_index].get("content"))):
+                errors.append("row_missing_readout_tokens")
+            elif len(messages) <= readout_index:
+                errors.append("row_missing_readout_tokens")
     else:
         errors.append("row_missing_final_assistant")
     if not row.get("images"):
@@ -359,6 +422,82 @@ def _row_readout_placement(row: dict[str, Any]) -> str:
     if placement not in READOUT_PLACEMENTS:
         return READOUT_PLACEMENT_USER_PROMPT_V1
     return placement
+
+
+def _canonical_finish_decision(finish: dict[str, Any] | None) -> str:
+    """Normalize V1/V2 finish decisions for conditional readout checks."""
+
+    if finish is None:
+        return "invalid"
+    raw = str(finish.get("decision_type") or "").strip().lower()
+    if raw:
+        return {"finish": "complete_task", "stop": "abort_task"}.get(raw, raw)
+    route_action = str(finish.get("route_action") or "").strip().lower()
+    if route_action in {"request_user_input", "ask_user", "ask-user", "clarify"}:
+        return "ask_user"
+    if route_action in {"finish", "complete_task"}:
+        return "complete_task"
+    if route_action in {"stop", "abort_task"} and finish.get("trajectory_type") != "stop_hold":
+        return "abort_task"
+    return "navigate"
+
+
+def _row_evidence_catalog(row: dict[str, Any]) -> list[str]:
+    """Recover input-visible evidence references from one exported row."""
+
+    refs = {"instruction.active"}
+    images = row.get("images") if isinstance(row.get("images"), list) else []
+    if images:
+        refs.update({"fpv.current", "corridor.left", "corridor.center", "corridor.right"})
+    if len(images) > 1:
+        refs.update({"bev.current", "route.active"})
+    observation = row.get("observation_meta") if isinstance(row.get("observation_meta"), dict) else {}
+    if observation.get("route_state") or observation.get("route_session_id"):
+        refs.add("route.active")
+    if observation.get("goal") or observation.get("destination"):
+        refs.add("goal.active")
+    _collect_row_refs(observation, refs=refs)
+    for message in row.get("messages") or []:
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") == "tool_call":
+            payload, _ = _json_dict(message.get("content"))
+            if payload is None:
+                continue
+            call = ToolCall.from_dict(payload)
+            suffix = call.call_id or f"{call.tool}_{call.op or 'call'}"
+            safe = "".join(char if char.isalnum() or char in {"_", "-"} else "_" for char in str(suffix))
+            refs.update({"tool.latest", f"tool.{safe}"})
+            if call.tool == "map_tool":
+                refs.add("route.active")
+        elif message.get("role") == "tool_response":
+            payload, _ = _json_dict(message.get("content"))
+            if payload is not None:
+                _collect_row_refs(payload.get("result"), refs=refs)
+    return sorted(refs)
+
+
+def _collect_row_refs(payload: Any, *, refs: set[str]) -> None:
+    """Collect explicit ids from nested model-visible row context."""
+
+    if isinstance(payload, str):
+        return
+    if isinstance(payload, list):
+        for item in payload:
+            if isinstance(item, str) and "." in item:
+                refs.add(item)
+            else:
+                _collect_row_refs(item, refs=refs)
+        return
+    if not isinstance(payload, dict):
+        return
+    for key in ("ref", "evidence_ref", "asset_id"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            refs.add(value)
+    for value in payload.values():
+        if isinstance(value, (dict, list)):
+            _collect_row_refs(value, refs=refs)
 
 
 def _validate_system1_v2_targets(row: dict[str, Any], *, errors: list[str]) -> None:

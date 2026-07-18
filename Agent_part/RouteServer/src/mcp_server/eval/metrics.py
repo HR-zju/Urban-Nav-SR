@@ -11,6 +11,7 @@ import re
 from typing import Any
 
 from mcp_server.agent.finish_schema import finish_trajectory_matches
+from mcp_server.agent.reasoning_text import parse_reasoning_target_v2
 from mcp_server.agent.schemas import AgentMetricResult, AgentStage2Case, AgentTrace, ToolCall, ToolResponse
 from mcp_server.agent.stage2 import NAVIGATION_READOUT_TOKENS, SYSTEM1_READOUT_TOKENS, TOOL_DECISION_REASON_CODES
 from mcp_server.agent.tool_parser import parse_finish_text, parse_tool_call_text
@@ -144,7 +145,10 @@ def _role_order_valid(trace: AgentTrace) -> bool:
         final_assistant = _first_final_assistant_index(trace, start=(tool_response + 1 if tool_response is not None else 0))
         return (
             all(index is not None for index in (initial_user, think, tool_call, tool_response, final_assistant))
-            and _final_assistant_has_suffix_readout(trace, final_assistant)
+            and (
+                _final_assistant_has_suffix_readout(trace, final_assistant)
+                or _final_decision_type(trace) != "navigate"
+            )
         )
     tool_response = _first_index(trace, "tool_response", start=(think + 1 if think is not None else 0))
     if tool_response is not None:
@@ -156,11 +160,24 @@ def _role_order_valid(trace: AgentTrace) -> bool:
     final_assistant = _first_final_assistant_index(trace, start=(think + 1 if think is not None else 0))
     return (
         all(index is not None for index in (initial_user, think, final_assistant))
-        and _final_assistant_has_suffix_readout(trace, final_assistant)
+        and (
+            _final_assistant_has_suffix_readout(trace, final_assistant)
+            or _final_decision_type(trace) != "navigate"
+        )
     )
 
 
 def _trajectory_readout_order_valid(trace: AgentTrace) -> bool:
+    if _final_decision_type(trace) != "navigate":
+        # ask_user/terminal turn 不应携带任何 System1 query。
+        return not any(
+            isinstance(turn.content, str)
+            and (
+                _contains_readout_tokens(turn.content)
+                or _contains_system1_readout_tokens(turn.content)
+            )
+            for turn in trace.turns
+        )
     last_tool_response = None
     for index, turn in enumerate(trace.turns):
         if turn.role == "tool_response":
@@ -221,16 +238,36 @@ def _final_assistant_has_suffix_readout(trace: AgentTrace, index: int | None) ->
 
 
 def _final_cot_valid(trace: AgentTrace) -> bool:
-    required_tags = ("<Scene>", "<FPVScene>", "<BEVContext>", "<CrossView>", "<Plan>", "<finish>")
     final_text = ""
     for turn in reversed(trace.turns):
         if turn.role == "assistant" and isinstance(turn.content, str) and "<finish>" in turn.content:
             final_text = turn.content
             break
-    if not final_text or not all(tag in final_text for tag in required_tags):
+    if not final_text:
         return False
+    if "<TaskGrounding>" in final_text:
+        if not parse_reasoning_target_v2(final_text).valid:
+            return False
+    else:
+        required_tags = ("<Scene>", "<FPVScene>", "<BEVContext>", "<CrossView>", "<Plan>", "<finish>")
+        if not all(tag in final_text for tag in required_tags):
+            return False
     has_tool_call = any(turn.role == "tool_call" for turn in trace.turns)
     return "<ToolResultUse>" in final_text if has_tool_call else True
+
+
+def _final_decision_type(trace: AgentTrace) -> str:
+    """Return the canonical decision type from the final finish payload."""
+
+    for turn in reversed(trace.turns):
+        if turn.role != "assistant" or not isinstance(turn.content, str) or "<finish>" not in turn.content:
+            continue
+        finish, errors = parse_finish_text(turn.content)
+        if errors or finish is None:
+            return "invalid"
+        raw = str(finish.get("decision_type") or "navigate").lower()
+        return {"finish": "complete_task", "stop": "abort_task"}.get(raw, raw)
+    return "invalid"
 
 
 def _tool_result_use_valid(trace: AgentTrace) -> bool:
@@ -308,6 +345,9 @@ def _finish_trajectory_consistent(
         return None
     if not finishes:
         return 0.0
+    if finishes[-1].get("schema_version") == "urbannav_finish_v2":
+        # V2 连续轨迹只存在顶层 System1 supervision，assistant finish 不再复制数值标签。
+        return None
     # Text finish 与顶层 pixel_trajectory 等价时，LM target 和 trajectory head target 不冲突。
     return 1.0 if finish_trajectory_matches(finishes[-1], expected) else 0.0
 

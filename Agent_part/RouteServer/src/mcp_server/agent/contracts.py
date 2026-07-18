@@ -367,7 +367,10 @@ class NavigationDecision:
             return None
         return cls(
             route_action=str(finish.get("route_action")) if finish.get("route_action") is not None else None,
-            intent=str(finish.get("intent")) if finish.get("intent") is not None else None,
+            # V2 用 motion 取代旧 intent；兼容视图只做字段映射，不改变动作语义。
+            intent=str(finish.get("intent") or finish.get("motion"))
+            if finish.get("intent") is not None or finish.get("motion") is not None
+            else None,
             instruction_text=finish.get("instruction_text"),
             tool_used=bool(finish.get("tool_used")) if finish.get("tool_used") is not None else None,
             finish=dict(finish),

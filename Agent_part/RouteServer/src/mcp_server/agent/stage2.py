@@ -15,6 +15,7 @@ import json
 import re
 from typing import Any
 
+from mcp_server.agent.reasoning_text import parse_or_adapt_reasoning_text, render_reasoning_target_v2
 from mcp_server.agent.finish_schema import (
     build_finish_payload,
     canonicalize_finish_trajectory,
@@ -22,6 +23,17 @@ from mcp_server.agent.finish_schema import (
 )
 from mcp_server.agent.schemas import AgentStage2Case, ToolCall, ToolResponse
 from mcp_server.agent.tool_schema import IMAGE_TOOL_NAME, MAP_TOOL_NAME, USER_INTERACTION_TOOL_NAME
+from mcp_server.contracts.reasoning import (
+    CrossModalAlignmentV2,
+    DecisionV2,
+    EvidenceGroundingV2,
+    FinishV2,
+    GroundedFactV2,
+    ReasoningTargetV2,
+    ReasoningTraceV2,
+    TaskGroundingV2,
+    UserRequestV2,
+)
 
 
 TRAJECTORY_TOKEN_COUNT = 16
@@ -90,7 +102,7 @@ def initial_user_content(case: AgentStage2Case) -> str:
 def final_navigation_user_content(
     *,
     tool_used: bool = True,
-    readout_placement: str = READOUT_PLACEMENT_USER_PROMPT_V1,
+    readout_placement: str = READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2,
 ) -> str:
     """Return the final readout prompt containing all trajectory query tokens.
 
@@ -160,6 +172,9 @@ def append_system1_readout(
 
     block = system1_readout_block(readout_placement=readout_placement)
     if not block:
+        return text
+    # ask_user/terminal turn 由 runtime 处理，不允许把它伪装成 CFM 导航样本。
+    if _finish_decision_type(text) not in {None, "navigate"}:
         return text
     if "<readout>" in text:
         return text
@@ -334,9 +349,9 @@ def build_final_assistant_text(
     response: ToolResponse | None,
     source: str,
     phase1_response: str | None = None,
-    readout_placement: str = READOUT_PLACEMENT_USER_PROMPT_V1,
+    readout_placement: str = READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2,
 ) -> str:
-    """Build the final assistant CoT and ``<finish>`` target.
+    """Build the canonical V2 assistant CoT and ``<finish>`` target.
 
     输入:
         Stage2 case、可选工具调用/返回，以及可选 Phase1 CoT response。
@@ -344,68 +359,392 @@ def build_final_assistant_text(
         assistant 后缀。
 
     输出:
-        最终 assistant content。若 case 中已有 Phase1 CoT 会插入
-        tool 路径会插入 ``<ToolResultUse>`` 并补齐 ``<finish>`` 的 tool fields。
-        no-tool 路径不写 ``<ToolResultUse>``，避免把不存在的环境返回变成 LM target。
+        ``ReasoningTraceV2`` 五段 CoT、V2 finish，以及 navigate-only readout。
+        旧 Phase1 CoT 只作为输入，经 adapter 转成 V2 后再写出；连续轨迹不进入
+        assistant target。tool 路径写 ``<ToolResultUse>``，no-tool 路径不写。
+
+    Raises:
+        ValueError: Phase1 target 无法解析或适配为 V2 contract。
     """
 
     tool_use = _tool_result_use(call=call, response=response) if call is not None and response is not None else None
-    finish_extra = _finish_extra(case=case, call=call, response=response, source=source)
     base_response = (phase1_response or _find_phase1_response(case)).strip()
     if base_response:
-        text = _insert_tool_result_use(base_response, tool_use) if tool_use is not None else base_response
-        return append_system1_readout(
-            _augment_finish(text, finish_extra),
-            readout_placement=readout_placement,
+        parsed = parse_or_adapt_reasoning_text(base_response)
+        if not parsed.valid or parsed.target is None:
+            raise ValueError(f"Phase1 reasoning target cannot be adapted to V2: {parsed.errors}")
+        target = _stage2_reasoning_target(
+            parsed.target,
+            case=case,
+            call=call,
+            response=response,
         )
+    else:
+        target = _fallback_reasoning_target(case=case, call=call, response=response)
 
-    scene = {
-        "summary": "offline Stage2 teacher sample",
-        "request": case.user_request,
-        "tool_context_available": tool_use is not None,
-    }
-    fpv_scene = {
-        "navigable_area": "use visible sidewalk and obstacle cues from FPV",
-        "risk": "unknown_without_manual_scene_label",
-    }
-    bev_context = {
-        "route_session_id": case.observation.get("route_session_id") or case.observation.get("session_id"),
-        "current_location": case.observation.get("current_location") or case.observation.get("origin"),
-        "mode": case.observation.get("mode") or "foot",
-    }
-    cross_view = {
-        "alignment": "use FPV appearance with BEV route context",
-        "tool_result": "available_before_trajectory_readout" if tool_use is not None else "not_used",
-    }
-    plan = {
-        "route_action": finish_extra["route_action"],
-        "next_step": (
-            "produce local trajectory from FPV, BEV, and tool result"
-            if tool_use is not None
-            else "produce local trajectory from FPV, BEV, and route state"
-        ),
-    }
+    text = render_reasoning_target_v2(target, tool_result_use=tool_use)
+    return append_system1_readout(text, readout_placement=readout_placement)
+
+
+def stage2_evidence_catalog(
+    case: AgentStage2Case,
+    *,
+    call: ToolCall | None = None,
+    response: ToolResponse | None = None,
+) -> list[str]:
+    """Build the input-visible evidence-reference catalog for one Stage2 turn.
+
+    Args:
+        case: Stage2 observation and request.
+        call: Optional executed tool call.
+        response: Optional environment tool response.
+
+    Returns:
+        Stable sorted references usable by V2 grounding validation. Supervision
+        fields from ``ground_truth`` are intentionally excluded.
+    """
+
+    refs = {"instruction.active"}
+    images = case.observation.get("images")
+    has_fpv = bool(case.images)
+    has_bev = "bev" in case.image_roles
+    if isinstance(images, dict):
+        has_fpv = bool(images.get("fpv") or images.get("front") or has_fpv)
+        has_bev = bool(images.get("bev") or has_bev)
+    if has_fpv:
+        refs.update({"fpv.current", "corridor.left", "corridor.center", "corridor.right"})
+    if has_bev:
+        refs.add("bev.current")
+
+    observation = case.observation
+    if observation.get("destination") is not None or observation.get("goal") is not None:
+        refs.add("goal.active")
+    route_keys = ("route_session_id", "session_id", "route_id", "route_polyline", "waypoints")
+    if has_bev or any(observation.get(key) is not None for key in route_keys):
+        refs.add("route.active")
+
+    for payload in (observation, case.metadata.get("nav_observation") if isinstance(case.metadata, dict) else None):
+        if isinstance(payload, dict):
+            _collect_evidence_refs(payload, refs=refs)
+
     if call is not None:
-        plan["tool"] = call.tool
-        plan["op"] = call.op
-    if tool_use is not None:
-        bev_context["tool_result_summary"] = tool_use.get("result_summary")
-        cross_view["tool_grounding"] = tool_use.get("navigation_effect")
-        plan["tool_result_use"] = tool_use.get("used_for")
-    finish = dict(finish_extra)
-    tool_result_block = f"<ToolResultUse>{json_dumps(tool_use)}</ToolResultUse>\n" if tool_use is not None else ""
-    return append_system1_readout(
-        "<think>\n"
-        f"<Scene>{json_dumps(scene)}</Scene>\n"
-        f"<FPVScene>{json_dumps(fpv_scene)}</FPVScene>\n"
-        f"<BEVContext>{json_dumps(bev_context)}</BEVContext>\n"
-        f"<CrossView>{json_dumps(cross_view)}</CrossView>\n"
-        f"<Plan>{json_dumps(plan)}</Plan>\n"
-        f"{tool_result_block}"
-        "</think>\n"
-        f"<finish>{json_dumps(finish)}</finish>",
-        readout_placement=readout_placement,
+        refs.add("tool.latest")
+        refs.add(_tool_evidence_ref(call))
+        if call.tool == MAP_TOOL_NAME:
+            refs.add("route.active")
+    if response is not None and isinstance(response.result, dict):
+        _collect_evidence_refs(response.result, refs=refs)
+    return sorted(refs)
+
+
+def _stage2_reasoning_target(
+    base: ReasoningTargetV2,
+    *,
+    case: AgentStage2Case,
+    call: ToolCall | None,
+    response: ToolResponse | None,
+) -> ReasoningTargetV2:
+    """Augment one adapted Phase1 target with Stage2 tool and control state."""
+
+    trace = base.reasoning
+    evidence_payload = trace.evidence_grounding.model_dump(mode="json")
+    tool_refs = list(evidence_payload.get("tool_evidence_refs") or [])
+    facts = list(evidence_payload.get("relevant_facts") or [])
+    if call is not None:
+        tool_ref = _tool_evidence_ref(call)
+        for ref in ("tool.latest", tool_ref):
+            if ref not in tool_refs:
+                tool_refs.append(ref)
+        facts.append(
+            GroundedFactV2(
+                fact_code="tool_result_available" if response is not None and response.success else "tool_result_failed",
+                evidence_refs=[tool_ref],
+            ).model_dump(mode="json")
+        )
+    evidence_payload["tool_evidence_refs"] = tool_refs
+    evidence_payload["relevant_facts"] = facts
+
+    decision_type = _stage2_decision_type(case=case, call=call, response=response, default=base.finish.decision_type)
+    decision = trace.decision
+    if decision_type != "navigate":
+        decision = DecisionV2(
+            motion="stop",
+            speed="stop",
+            social_action="wait" if decision_type == "ask_user" else "none",
+            selected_corridor_ref=None,
+            fallback="stop",
+            confidence=decision.confidence,
+            reason_codes=[decision_type],
+        )
+    updated_trace = ReasoningTraceV2(
+        task_grounding=trace.task_grounding,
+        evidence_grounding=EvidenceGroundingV2.model_validate(evidence_payload),
+        cross_modal_alignment=trace.cross_modal_alignment,
+        constraint_applicability=trace.constraint_applicability,
+        decision=decision,
     )
+    finish = _build_finish_v2(
+        case=case,
+        decision=decision,
+        decision_type=decision_type,
+        call=call,
+        response=response,
+        previous=base.finish,
+    )
+    return ReasoningTargetV2(reasoning=updated_trace, finish=finish)
+
+
+def _fallback_reasoning_target(
+    *,
+    case: AgentStage2Case,
+    call: ToolCall | None,
+    response: ToolResponse | None,
+) -> ReasoningTargetV2:
+    """Build a conservative cold-start V2 target without fabricated geometry."""
+
+    catalog = set(stage2_evidence_catalog(case, call=call, response=response))
+    route_available = "route.active" in catalog
+    fpv_available = "fpv.current" in catalog
+    desired_direction = _desired_direction_from_case(case)
+    motion = {
+        "left": "turn_left",
+        "right": "turn_right",
+        "stop": "stop",
+    }.get(desired_direction, "go_straight")
+    decision_type = _stage2_decision_type(case=case, call=call, response=response, default="navigate")
+    confidence = _confidence_from_case(case)
+    decision = DecisionV2(
+        motion="stop" if decision_type != "navigate" else motion,
+        speed="stop" if decision_type != "navigate" or motion == "stop" else "normal",
+        social_action="wait" if decision_type == "ask_user" else "unknown",
+        selected_corridor_ref=None,
+        fallback="stop" if decision_type != "navigate" else "slow",
+        confidence=confidence,
+        reason_codes=["cold_start_without_dense_scene_label"],
+    )
+    task_refs = ["instruction.active"]
+    route_refs = ["route.active"] if route_available else []
+    fpv_refs = ["fpv.current"] if fpv_available else []
+    tool_refs = []
+    facts = [GroundedFactV2(fact_code="active_instruction_available", evidence_refs=task_refs)]
+    if route_available:
+        facts.append(GroundedFactV2(fact_code="route_context_available", evidence_refs=route_refs))
+    if fpv_available:
+        facts.append(GroundedFactV2(fact_code="fpv_observation_available", evidence_refs=fpv_refs))
+    if call is not None:
+        tool_ref = _tool_evidence_ref(call)
+        tool_refs = ["tool.latest", tool_ref]
+        facts.append(
+            GroundedFactV2(
+                fact_code="tool_result_available" if response is not None and response.success else "tool_result_failed",
+                evidence_refs=[tool_ref],
+            )
+        )
+    trace = ReasoningTraceV2(
+        task_grounding=TaskGroundingV2(
+            goal_ref="goal.active" if "goal.active" in catalog else None,
+            route_ref="route.active" if route_available else None,
+            local_objective="follow_instruction" if not route_available else "continue_route",
+            instruction_constraints=[],
+        ),
+        evidence_grounding=EvidenceGroundingV2(
+            task_evidence_refs=task_refs,
+            route_evidence_refs=route_refs,
+            fpv_evidence_refs=fpv_refs,
+            tool_evidence_refs=tool_refs,
+            relevant_facts=facts,
+        ),
+        cross_modal_alignment=CrossModalAlignmentV2(
+            available=fpv_available and route_available,
+            desired_direction=desired_direction,
+            route_to_fpv="unknown",
+            selected_corridor_ref=None,
+            status="insufficient_evidence",
+            evidence_refs=[*route_refs, *fpv_refs] if fpv_available and route_available else [],
+        ),
+        constraint_applicability={"applicable": [], "not_applicable": []},
+        decision=decision,
+    )
+    finish = _build_finish_v2(
+        case=case,
+        decision=decision,
+        decision_type=decision_type,
+        call=call,
+        response=response,
+        previous=None,
+    )
+    return ReasoningTargetV2(reasoning=trace, finish=finish)
+
+
+def _build_finish_v2(
+    *,
+    case: AgentStage2Case,
+    decision: DecisionV2,
+    decision_type: str,
+    call: ToolCall | None,
+    response: ToolResponse | None,
+    previous: FinishV2 | None,
+) -> FinishV2:
+    """Build decision-specific V2 finish fields without continuous labels."""
+
+    payload: dict[str, Any] = {
+        "decision_type": decision_type,
+        "route_action": _route_action(call),
+        "tool_used": call is not None,
+    }
+    if decision_type == "navigate":
+        previous_trajectory_type = previous.trajectory_type if previous and previous.decision_type == "navigate" else None
+        payload.update(
+            {
+                "motion": decision.motion,
+                "speed": decision.speed,
+                "social_action": decision.social_action,
+                "confidence_level": decision.confidence,
+                "trajectory_type": "stop_hold"
+                if decision.motion == "stop"
+                else previous_trajectory_type or str(case.ground_truth.get("trajectory_type") or "local_navigation"),
+            }
+        )
+    elif decision_type == "ask_user":
+        payload["user_request"] = _user_request_from_tool(case=case, call=call, response=response)
+    else:
+        default_code = "arrival_confirmed" if decision_type == "complete_task" else "navigation_aborted"
+        payload.update(
+            {
+                "reason_code": case.ground_truth.get("reason_code") or (previous.reason_code if previous else None) or default_code,
+                "reason": case.ground_truth.get("reason") or (previous.reason if previous else None),
+                "evidence_refs": case.ground_truth.get("terminal_evidence_refs")
+                or (list(previous.evidence_refs) if previous else []),
+                "retryable": case.ground_truth.get("retryable")
+                if "retryable" in case.ground_truth
+                else (previous.retryable if previous else None),
+            }
+        )
+    return FinishV2.model_validate(payload)
+
+
+def _stage2_decision_type(
+    *,
+    case: AgentStage2Case,
+    call: ToolCall | None,
+    response: ToolResponse | None,
+    default: str,
+) -> str:
+    """Resolve the runtime control decision from explicit inputs only."""
+
+    raw = str(case.ground_truth.get("decision_type") or default or "navigate").strip().lower()
+    raw = {"finish": "complete_task", "stop": "abort_task"}.get(raw, raw)
+    if call is not None and call.tool == USER_INTERACTION_TOOL_NAME:
+        result = response.result if response is not None and isinstance(response.result, dict) else {}
+        requires_user = bool(result.get("requires_user_response", result.get("await_user", True)))
+        if requires_user:
+            return "ask_user"
+    return raw if raw in {"navigate", "ask_user", "complete_task", "abort_task"} else "navigate"
+
+
+def _user_request_from_tool(
+    *,
+    case: AgentStage2Case,
+    call: ToolCall | None,
+    response: ToolResponse | None,
+) -> UserRequestV2:
+    """Build a bounded user-interaction request from the executed tool turn."""
+
+    args = call.arguments if call is not None else {}
+    result = response.result if response is not None and isinstance(response.result, dict) else {}
+    raw_choices = result.get("choices") or result.get("options") or args.get("choices") or args.get("options") or []
+    choices: list[str] = []
+    for item in raw_choices:
+        if isinstance(item, dict):
+            value = item.get("label") or item.get("text") or item.get("id")
+        else:
+            value = item
+        if value is not None:
+            choices.append(str(value))
+    raw_policy = str(result.get("motion_policy_while_waiting") or args.get("motion_policy_while_waiting") or "stop")
+    policy = raw_policy if raw_policy in {"stop", "slow_down", "handover_to_safety_controller"} else "stop"
+    return UserRequestV2(
+        question=str(
+            result.get("question")
+            or result.get("message")
+            or args.get("question")
+            or args.get("message")
+            or case.user_request
+        ),
+        choices=choices,
+        motion_policy_while_waiting=policy,
+    )
+
+
+def _desired_direction_from_case(case: AgentStage2Case) -> str:
+    """Normalize explicit local intent into a route direction."""
+
+    raw = str(case.ground_truth.get("intent") or case.observation.get("intent") or "").lower()
+    if "left" in raw:
+        return "left"
+    if "right" in raw:
+        return "right"
+    if raw in {"stop", "hold", "arrive", "stop_at_goal"}:
+        return "stop"
+    if raw in {"straight", "go_straight", "continue", "follow_sidewalk_route"}:
+        return "straight"
+    return "unknown"
+
+
+def _confidence_from_case(case: AgentStage2Case) -> str:
+    """Normalize teacher confidence without inventing high confidence."""
+
+    raw = str(case.ground_truth.get("confidence_level") or "medium").lower()
+    return {"normal": "high", "high": "high", "medium": "medium", "low": "low"}.get(raw, "unknown")
+
+
+def _tool_evidence_ref(call: ToolCall) -> str:
+    """Return a stable evidence reference for one tool response."""
+
+    suffix = call.call_id or f"{call.tool}_{call.op or 'call'}"
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", str(suffix))
+    return f"tool.{safe}"
+
+
+def _collect_evidence_refs(payload: Any, *, refs: set[str]) -> None:
+    """Collect explicit reference ids from runtime-visible nested payloads."""
+
+    if isinstance(payload, str):
+        if "." in payload:
+            refs.add(payload)
+        return
+    if isinstance(payload, list):
+        for item in payload:
+            _collect_evidence_refs(item, refs=refs)
+        return
+    if not isinstance(payload, dict):
+        return
+    for key in ("ref", "evidence_ref", "asset_id"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            refs.add(value)
+    for key in ("evidence_catalog", "context_assets", "evidence_refs", "trigger_refs"):
+        if key in payload:
+            _collect_evidence_refs(payload[key], refs=refs)
+    for value in payload.values():
+        if isinstance(value, (dict, list)):
+            _collect_evidence_refs(value, refs=refs)
+
+
+def _finish_decision_type(text: str) -> str | None:
+    """Parse only the finish decision needed by readout gating."""
+
+    match = _FINISH_RE.search(text)
+    if match is None:
+        return None
+    try:
+        payload = json.loads(match.group(1).strip())
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    decision = str(payload.get("decision_type") or "").lower()
+    return {"finish": "complete_task", "stop": "abort_task"}.get(decision, decision or None)
 
 
 def _available_context(case: AgentStage2Case) -> list[str]:

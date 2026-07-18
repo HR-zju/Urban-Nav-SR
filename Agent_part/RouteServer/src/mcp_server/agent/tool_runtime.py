@@ -22,6 +22,7 @@ from typing import Any, Awaitable, Callable
 
 from mcp_server.agent.schemas import AgentStage2Case, AgentTrace, ToolCall, ToolResponse
 from mcp_server.agent.stage2 import (
+    READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2,
     build_final_assistant_text,
     final_navigation_user_content,
     initial_user_content,
@@ -159,12 +160,15 @@ class AgentToolRuntimeConfig:
         review_artifact_dir: Optional directory for runtime log and trace JSON
             artifacts.  When set, ``RuntimeTraceLogger`` writes review files
             for every case.
+        readout_placement: Causal System1 query placement. New runtime defaults
+            to assistant-suffix V2.
     """
 
     source: str = "agent_tool_runtime"
     compute_metrics: bool = True
     budget: ToolBudget = field(default_factory=ToolBudget)
     review_artifact_dir: str | Path | None = None
+    readout_placement: str = READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2
 
 
 class AgentToolRuntime:
@@ -288,7 +292,10 @@ class AgentToolRuntime:
         # [TRAJ_i] readout 必须在 tool_response 后，trajectory head 的 hidden state 才能看到工具结果。
         trace.add_turn(
             "user",
-            final_navigation_user_content(tool_used=call is not None),
+            final_navigation_user_content(
+                tool_used=call is not None,
+                readout_placement=self.config.readout_placement,
+            ),
             metadata={"stage2_step": "trajectory_readout_prompt"},
         )
         if final_assistant_output is not None:
@@ -306,6 +313,7 @@ class AgentToolRuntime:
                 response=response,
                 source=self.config.source,
                 phase1_response=phase1_response,
+                readout_placement=self.config.readout_placement,
             )
         trace.add_turn(
             "assistant",

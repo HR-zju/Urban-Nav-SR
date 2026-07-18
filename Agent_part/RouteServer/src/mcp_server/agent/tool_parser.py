@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from mcp_server.agent.schemas import ToolCall
+from mcp_server.agent.reasoning_text import parse_reasoning_target_v2
 from mcp_server.agent.tool_schema import MAP_TOOL_NAME, MAP_TOOL_OPS, normalize_map_tool_arguments, validate_tool_call
 from mcp_server.contracts.tool import ToolCallV2
 from mcp_server.runtime.interfaces import System2Action, System2ActionType
@@ -227,6 +228,12 @@ def parse_system2_action_text(
         )
 
     finish = dict(parsed.finish or {})
+    if "<TaskGrounding>" in text:
+        # V2 final turn 必须整体验证，不能只因 finish JSON 可解析就进入 runtime。
+        reasoning = parse_reasoning_target_v2(text)
+        if not reasoning.valid or reasoning.target is None:
+            return None, [f"reasoning_v2_invalid:{item}" for item in reasoning.errors]
+        finish = reasoning.target.finish.model_dump(mode="json", exclude_none=True)
     decision_type, legacy_decision = _finish_decision_type(finish, text=text)
     has_readout = _SYSTEM1_READOUT_RE.search(text) is not None
     if decision_type != System2ActionType.NAVIGATE.value and has_readout:

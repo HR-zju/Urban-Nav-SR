@@ -237,6 +237,31 @@ class AgentEvalCase:
             return [str(item) for item in ordered if item]
         return []
 
+    @property
+    def image_roles(self) -> list[str]:
+        """Return one explicit modality role for every ordered image.
+
+        Returns:
+            Roles aligned with :attr:`images`. List-based inputs must declare
+            ``observation.image_roles``; otherwise they are conservatively
+            treated as FPV frames instead of guessing that image two is BEV.
+        """
+
+        images = self.observation.get("images")
+        declared = self.observation.get("image_roles")
+        if isinstance(images, list):
+            if isinstance(declared, list) and len(declared) == len(self.images):
+                return [str(item) for item in declared]
+            return ["fpv" for _ in self.images]
+        if isinstance(images, dict):
+            ordered_keys = [key for key in ("fpv", "front", "bev") if images.get(key)]
+            ordered_keys.extend(key for key, value in images.items() if key not in {"fpv", "front", "bev"} and value)
+            return [
+                "fpv" if key in {"fpv", "front"} else "goal_image" if key in {"goal", "goal_image"} else key
+                for key in ordered_keys
+            ]
+        return []
+
 
 @dataclass
 class AgentStage2Case(AgentEvalCase):

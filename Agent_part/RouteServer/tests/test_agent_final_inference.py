@@ -15,7 +15,6 @@ from mcp_server.agent.final_inference import (
     run_routeserver_final_inference,
     write_routeserver_final_inference_artifacts,
 )
-from mcp_server.agent.finish_schema import finish_trajectory_matches
 from mcp_server.agent.schemas import AgentStage2Case, ToolCall, ToolResponse
 from mcp_server.agent.stage2 import (
     build_agent_state,
@@ -50,11 +49,12 @@ class FinalInferenceInterfaceTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIsNotNone(result.finish)
-        self.assertIn("trajectory_grid1000", result.finish)
-        self.assertEqual(result.finish["trajectory_coord_frame"], "norm1000")
+        self.assertEqual(result.finish["schema_version"], "urbannav_finish_v2")
+        self.assertEqual(result.finish["decision_type"], "navigate")
+        self.assertNotIn("trajectory_grid1000", result.finish)
         self.assertNotIn("trajectory", result.finish)
-        self.assertTrue(finish_trajectory_matches(result.finish, request.supervision["pixel_trajectory"]))
-        self.assertEqual(result.trajectory, request.supervision["pixel_trajectory"])
+        self.assertIsNone(result.trajectory)
+        self.assertEqual(result.ms_swift_row["pixel_trajectory"], request.supervision["pixel_trajectory"])
         self.assertTrue(result.validation_report["trace"]["valid"], result.validation_report["trace"]["errors"])
         self.assertTrue(result.validation_report["ms_swift_row"]["valid"], result.validation_report["ms_swift_row"]["errors"])
         roles = [message["role"] for message in result.ms_swift_row["messages"]]

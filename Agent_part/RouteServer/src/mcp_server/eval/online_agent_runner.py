@@ -656,26 +656,29 @@ def _stage2_output_contract(*, target: str, has_tool_response: bool) -> dict[str
     return {
         "required_text_shape": (
             "<think>\n"
-            "<Scene>{json}</Scene>\n"
-            "<FPVScene>{json}</FPVScene>\n"
-            "<BEVContext>{json}</BEVContext>\n"
-            "<CrossView>{json}</CrossView>\n"
-            "<Plan>{json}</Plan>\n"
+            "<TaskGrounding>{json}</TaskGrounding>\n"
+            "<EvidenceGrounding>{json}</EvidenceGrounding>\n"
             + ("<ToolResultUse>{json}</ToolResultUse>\n" if has_tool_response else "")
+            + "<CrossModalAlignment>{json}</CrossModalAlignment>\n"
+            "<ConstraintApplicability>{json}</ConstraintApplicability>\n"
+            "<Decision>{json}</Decision>\n"
             + "</think>\n"
-            "<finish>{json}</finish>"
+            "<finish>{json}</finish>\n"
+            "navigate only: the runtime appends the registered masked System1 readout suffix"
         ),
         "rules": [
             "Every JSON block must be valid compact JSON.",
             "<finish> must be outside <think>.",
-            "trajectory_grid1000 must contain exactly 16 [x,y] integer points in [0,1000].",
-            "trajectory_coord_frame must be \"norm1000\".",
-            "Do not emit legacy finish.trajectory or trajectory_norm.",
-            "Use route_action=request_user_input only when user_interaction_tool asks for clarification.",
+            "Use exactly the five V2 reasoning sections in the declared order.",
+            "Evidence refs must resolve to instruction, route, waypoint, FPV, BEV, control, track, corridor, or tool inputs.",
+            "Do not emit trajectory_grid1000, trajectory, trajectory_norm, trajectory_ego_t, or action labels in assistant text.",
+            "finish.decision_type must be navigate, ask_user, complete_task, or abort_task.",
+            "Only navigate may contain motion/speed/social_action and a trailing [SYS1_i] readout.",
+            "ask_user and terminal decisions must not contain any [SYS1_i] or [TRAJ_i] token.",
             "If a tool_response is available, include <ToolResultUse> summarizing tool_used, used_for, result_summary, route_update, and navigation_effect.",
             "<ToolResultUse>.tool_used must be true when the prefix contains a tool_response.",
             "Raw tool_response is environment context; summarize only its decision-relevant effect in <ToolResultUse>.",
-            "<Plan> encodes symbolic local navigation policy only; do not output CFM action chunks, ego_delta_xyt, or System1Output in assistant text.",
+            "<Decision> is symbolic local policy only; continuous CFM output remains a masked sidecar target.",
         ],
         "tool_result_use_shape": {
             "tool_used": has_tool_response,
@@ -685,17 +688,15 @@ def _stage2_output_contract(*, target: str, has_tool_response: bool) -> dict[str
             "navigation_effect": "state how the tool result affects the local trajectory",
         },
         "finish_shape": {
+            "schema_version": "urbannav_finish_v2",
+            "decision_type": "navigate",
             "route_action": "continue_navigation",
             "tool_used": has_tool_response,
-            "tool": "map_tool" if has_tool_response else None,
-            "op": "search_poi" if has_tool_response else None,
-            "trajectory_grid1000": [[500, 900], [500, 875], [500, 850], [500, 825], [500, 800], [500, 775], [500, 750], [500, 725], [500, 700], [500, 675], [500, 650], [500, 625], [500, 600], [500, 575], [500, 550], [500, 525]],
-            "trajectory_coord_frame": "norm1000",
-            "intent": "follow_sidewalk_route",
+            "motion": "go_straight",
+            "speed": "normal",
+            "social_action": "none",
             "confidence_level": "medium",
             "trajectory_type": "local_navigation",
-            "trajectory_validity": "valid",
-            "teacher_source": "openai_compatible_live_llm",
         },
     }
 
