@@ -67,6 +67,8 @@ user_response / emergency_stop                  controller feedback
 
 System2 是低频认知与任务策略，System1 是高频局部连续策略。两者通过 LVLM hidden state 和稳定的 `[SYS1_i]` readout token 连接，不通过额外 RouteBelief 神经模块连接。
 
+总体图右侧的 `terminal_control` 属于 runtime execution plane，不属于 System1。`complete_task` 只有在权威到达证据通过验证后才转换为成功；`abort_task`、外部 `cancel` 和 runtime failure 都不生成 `[SYS1_i]`，而是进入确定性 `halt()`。被拒绝的完成请求重新进入 System2，不能由 `<finish>` 标签直接结束 episode。
+
 总体框架进一步分为三个互相解耦的执行平面：
 
 | 平面 | 核心职责 | 不负责 |
@@ -129,6 +131,32 @@ pose -> RouteContext -> handcrafted belief -> local policy
 ```
 
 否则训练数据会绑定特定定位、地图和手工状态压缩流程。
+
+### 1.4 当前 canonical 基线
+
+修改后的框架以以下版本组合为唯一生产主线；legacy 字段只允许在输入 adapter 中双读，不能由新 exporter 继续生成：
+
+| 边界 | Canonical contract | Owner |
+| --- | --- | --- |
+| System2 决策 | `tool_call|ask_user|navigate|complete_task|abort_task` | RouteServer runtime + ms-swift action space v4 |
+| assistant 回合 | `<finish>.decision_type`；只有 `navigate` 追加 `assistant_suffix_v2` readout | ms-swift prompt/exporter |
+| System1 target | `trajectory_ego_t[T,3]`, `ego_pose_xyt_flu_v1` | RouteServer exporter + ms-swift trainer |
+| 工具 | `ToolCallV2/ToolResponseV2` + `ToolSpecRegistry` | RouteServer |
+| session trace | `urbannav_episode_trace_v2` | RouteServer runtime |
+| session row | `urbannav_episode_per_decision_v3` | ms-swift exporter |
+| 任务终态 | `complete_task -> ArrivalVerifier`; `abort_task -> failed`; external `cancel -> cancelled` | RouteServer `terminal_control` |
+
+因此主数据流固定为：
+
+```text
+observation + task/dialogue/control revisions
+-> one System2 decision
+-> optional typed tool/HITL re-entry
+-> navigate only: [SYS1_i] -> System1 -> safety -> short execution
+-> environment feedback / external event
+-> EpisodeTraceV2
+-> per-decision session SFT/DAgger row
+```
 
 ---
 
@@ -381,6 +409,18 @@ trajectory_type = stop_hold
 
 该路径仍调用 System1，生成短时保持/减速轨迹并经过 Safety 与 execution。`abort_task` 则禁止 readout/CFM，由 execution layer 直接执行确定性停车。
 
+五类 System2 决策的执行语义固定如下：
+
+| `decision_type` | 必要 payload | 下一节点 | 调用 System1 | 任务终态 |
+| --- | --- | --- | --- | --- |
+| `tool_call` | `ToolCallV2` | tool executor -> System2 | 否 | 否 |
+| `ask_user` | `user_request` | `prepare_hitl -> await_hitl -> System2` | 否 | 否，进入 waiting |
+| `navigate` | symbolic finish + `[SYS1_i]` | System1 -> safety -> dispatch | 是 | 否 |
+| `complete_task` | `TerminalDecision(outcome=succeeded)` | `terminal_control` | 否 | 仅 ArrivalVerifier 接受后成功 |
+| `abort_task` | `TerminalDecision(outcome=failed, reason_code=...)` | `terminal_control` | 否 | failed |
+
+外部 `pause/emergency_stop/cancel` 不属于模型 action space：`pause/emergency_stop` 抢占当前 lease 后保持 waiting，`cancel` 进入 `cancelled` 并调用幂等 `halt()`。`route_action` 只描述路线操作，不能再次承载 ask/complete/abort 语义。
+
 ### 4.2 Readout anchor 不是动作
 
 `[TRAJ_i]` 和 `[SYS1_i]` 是 hidden-state 查询位置：
@@ -553,9 +593,9 @@ checkpoint System1 config 中，推理后必须反归一化。checkpoint 和 inf
 必须保存 `system1_target_field`、`system1_target_format` 和 `normalized`，禁止只根据
 `[T,3]` shape 决定是否反归一化或累计积分。
 
-### 4.4 FPV 文本轨迹
+### 4.4 Legacy/辅助 FPV 文本轨迹
 
-Phase A 局部 CoT 数据可在 assistant `<finish>` 中使用：
+旧 Phase A 或独立视觉 grounding 数据曾在 assistant `<finish>` 中使用：
 
 ```json
 {
@@ -571,13 +611,14 @@ x_{px}=\frac{x_{grid}}{1000}W,\qquad
 y_{px}=\frac{y_{grid}}{1000}H.
 \]
 
-这是图像平面可视化/文本监督，不是 metric ego control。
+这是图像平面可视化/兼容监督，不是 metric ego control，也不是生产 V2 Full CoT
+或 section QA 的字段。新 exporter 不再写出它。
 
 ### 4.5 Stage2 v1 与 v2 finish
 
 两种数据视图必须区分：
 
-**v1 / local or compatibility row**
+**v1 / read-only compatibility row**
 
 ```text
 assistant <finish> contains trajectory_grid1000
@@ -639,41 +680,175 @@ a_{t,k+1}^{S2}=\pi_{\theta}^{S2}
 
 其中 \(c\) 是 tool call，\(r\) 是 tool response。这样支持多工具串联、路线修改和失败恢复。
 
-### 5.3 社会导航语义
+### 5.3 ReasoningTraceV2 与社会导航语义
 
-主干 prompt 使用同构结构：
+生产 CoT 已统一为五个强类型 section；旧
+`FPVScene/BEVContext/CrossView/Plan` 只由输入 adapter 读取，新 exporter 不再写出：
 
-```text
-<FPVScene>
-  navigable_support / conditional_support
-  risk_objects / blocked_by
-  agents / controls
-  visibility / local_risk / social_risk
+| Section | 只回答什么 | 禁止承载 |
+| --- | --- | --- |
+| `TaskGrounding` | goal、route、局部目标和指令约束 | 局部安全猜测、连续 waypoint |
+| `EvidenceGrounding` | task/route/FPV/tool 引用和受支持事实 | teacher 私有判断、未来 GT |
+| `CrossModalAlignment` | route 方向到当前 FPV corridor 的对应关系 | metric waypoint 重复编码 |
+| `ConstraintApplicability` | 真正与选中路径相交且适用的社会/交通约束 | 看见实体就机械套规则 |
+| `Decision` | motion、speed、social action、fallback、confidence | CFM action chunk |
 
-<BEVContext>
-  available / route_summary / intent / target_direction
-
-<CrossView>
-  available / route_to_fpv_direction / safe_corridor / alignment
-
-<Plan>
-  motion_primitive / lateral_preference / avoidance_side
-  speed_policy / social_action / safety_policy
-  contingency / validity
-
-<finish>
-  decision_type / route_action / intent / confidence / social_action / ...
-```
-
-FPV-only row 仍保留相同 schema，只把：
+规范顺序是：
 
 ```text
-BEVContext.available = false
-CrossView.available = false
-CrossView.alignment = fpv_only
+<think>
+  <TaskGrounding>{...}</TaskGrounding>
+  <EvidenceGrounding>{...}</EvidenceGrounding>
+  optional <ToolResultUse>{...}</ToolResultUse>
+  <CrossModalAlignment>{...}</CrossModalAlignment>
+  <ConstraintApplicability>{...}</ConstraintApplicability>
+  <Decision>{...}</Decision>
+</think>
+<finish>{"schema_version":"urbannav_finish_v2","decision_type":"..."}</finish>
+navigate only: <readout>[SYS1_0] ... [SYS1_15]</readout>
 ```
 
-这样 FPV-only 与 FPV-BEV 可以混合训练，不需要两套互斥输出语法。
+`ToolResultUse` 只有一个合法位置：`EvidenceGrounding` 之后、跨模态对齐之前。这样工具结果先成为证据，再影响对齐、约束和决策：
+
+\[
+tool\_response \prec Evidence \prec ToolResultUse
+\prec Alignment \prec Constraint \prec Decision \prec finish \prec SYS1.
+\]
+
+社会/交通约束必须满足：
+
+\[
+Applicable(c)=Observed(c)\land Intersects(c, path)\land ModeValid(c).
+\]
+
+例如 `yield_to_crossing_agent` 至少需要 `track.*` 和 `corridor.*`/`route.*` 引用；单帧出现 pedestrian 不能直接产生 yield 真值。`wait_for_pedestrian_signal` 同时需要 `control.*`、受控路径引用和 pedestrian travel mode。弱启发式只可进入 metadata/review，不能成为 `ConstraintApplicability.applicable`。
+
+FPV-only 与 FPV-BEV 共用同一 V2 schema。FPV-only 使用：
+
+```text
+CrossModalAlignment.available = false
+CrossModalAlignment.status = insufficient_evidence | not_visible
+```
+
+它不伪造 route-to-FPV 对齐；`Decision` 仍可依据当前 FPV 证据输出保守局部策略。
+
+#### 5.3.1 Prompt 合同与监督边界
+
+生产 Prompt V2 由 `ms-swift/swift/sidewalk_nav/prompt.py` 中的
+`DEFAULT_REASONING_V2_SYSTEM_PROMPT` 和具体 task template 共同构成。system prompt
+只固定长期不变的行为约束：辅助导航对象、证据优先级、社会导航原则、禁止泄漏的
+sidecar label，以及结构化输出纪律。它不把某条样本的 route、agent 或风险事实写死。
+
+每条样本的 user prompt 只渲染当前可见输入：
+
+```text
+ordered images + image_roles
+instruction / dialogue
+model_visible_context
+evidence_catalog
+task_family / task_type / question     # 仅 QA row
+```
+
+对应的 assistant target 分为两类：
+
+```text
+Full CoT:
+  five ReasoningTraceV2 sections
+  -> finish
+  -> navigate-only masked [SYS1_i]
+
+Section QA:
+  exactly one requested V2 section
+  -> no finish
+  -> no [SYS1_i]
+  -> no trajectory/action/segmentation sidecar
+```
+
+因此 `[SYS1_i]` 不是社会行为文本，也不是离散方向标签；它只是 System1 从 LVLM
+hidden state 读取连续控制条件的 masked latent slot。社会行为只在有证据时写入
+`EvidenceGrounding`、`ConstraintApplicability` 和 `Decision`，连续运动真值始终保存在
+顶层 `trajectory_ego_t`。
+
+Prompt 中“FPV 对即时安全权威”的含义是证据优先级，而不是允许 teacher 从单帧猜测
+agent 运动。下面三项必须同时成立，才能输出适用的社会/交通约束：
+
+```text
+entity/control observed
+selected path relation supported
+travel mode applicable
+```
+
+缺少任何一项时必须写 `unknown`、空 `applicable`，或不导出对应 QA；不能为了填满
+CoT 而生成 yield、pass、TTC 或 right-of-way 伪真值。
+
+### 5.4 Full CoT 与 section QA 的单源投影
+
+Full CoT、Map QA 和 SocialNav QA 不是三套独立标注。它们都从一个
+`ReasoningTraceV2` 投影：
+
+```text
+ReasoningTraceV2
+  + finish                  -> Full CoT row
+  + one selected section    -> LM-only QA row
+  + trajectory_ego_t        -> navigate-only joint System1 row
+```
+
+当前 QA registry 包含：
+
+```text
+Map:
+  instruction_to_map_selection
+  map_route_state_reading
+  route_to_fpv_grounding
+  local_route_executability
+  control_path_applicability
+
+SocialNav:
+  social_traversability
+  social_agent_path_relation
+  social_constraint_applicability
+  social_trajectory_selection
+```
+
+这里的“registry 已实现”只表示任务、section 投影和 gate 已有代码，不表示当前数据已经
+具备四类 SocialNav 强标签。实际监督等级如下：
+
+| QA | 投影 section | 最低输入/标签要求 | 当前定位 |
+| --- | --- | --- | --- |
+| `social_traversability` | `EvidenceGrounding` | FPV；最好有 segmentation/human，当前也允许 `validated_vlm_teacher` | 弱观察蒸馏，不是真实交互真值 |
+| `social_agent_path_relation` | `EvidenceGrounding` | FPV + `track` + `selected_path`；tracked agents/human | 强关系监督 |
+| `social_constraint_applicability` | `ConstraintApplicability` | FPV + `track` + `selected_path`；tracked agents/human | 强约束监督 |
+| `social_trajectory_selection` | `Decision` | FPV + `selected_path`；demonstration/human/validated controller | 强策略监督 |
+
+每个 QA 必须同时通过 modality gate、`valid=true`、置信度阈值、evidence refs 和
+`label_source` 白名单。QA answer 虽然直接渲染同一个 V2 section，但问题语义仍必须
+被该 section 的具体字段回答。例如：
+
+```text
+social_traversability
+  requires relevant_facts describing clear/blocked/social support
+
+social_agent_path_relation
+  requires track.* and selected corridor/path relations
+
+social_constraint_applicability
+  requires applicable/not_applicable entries with trigger_refs
+
+social_trajectory_selection
+  requires evidence-backed motion/speed/social_action/fallback
+```
+
+只有 generic `fpv.current` 或 `corridor.center` 引用、但 `relevant_facts=[]` 的样本，不应
+被解释为高质量 SocialNav QA。当前 view exporter 的
+`derive_observational_teacher_qa=true` 会把 route-to-FPV、local executability 和
+`social_traversability` 作为明确标记的 `validated_vlm_teacher` 蒸馏视图补出；它们只适合
+低权重蒸馏或人工复核。构建强监督训练集时应传
+`--no-vlm-observational-qa`，只保留 source 中显式给出的 label-validity gate。
+
+因此 smoke 样本出现一个名为 `social_traversability` 的 row，并不意味着已经获得
+真实 SocialNav 标注。如果输入没有 `track`、`selected_path`、时序 agent 关系或人工/
+controller 标签，则后三类 SocialNav QA 必须缺席。trajectory endpoint heuristic 也不能
+冒充社会交互真值。
 
 ---
 
@@ -1001,6 +1176,28 @@ START
   -> END
 ```
 
+#### 8.1.1 终态控制的权威边界
+
+需要严格区分以下五个名称相近但职责不同的对象：
+
+| 名称 | 所属层 | 语义 |
+| --- | --- | --- |
+| assistant `<finish>` | 文本协议 | 结束当前 assistant turn，不结束任务 |
+| `decision_type=complete_task` | System2 | 请求完成，仍需验证 |
+| `terminal_control` | runtime | 验证终态、调用 `halt()`、确定 episode status |
+| graph `finish` node | runtime | 只消费已确定的 status/reason 并写入 TaskState/trace |
+| `navigate + stop_hold` | System1 | 临时保持轨迹，不是终态 |
+
+默认 `RuntimeTerminalValidator` 只接受 runtime 中值严格为 `true` 的权威字段：
+
+```text
+observation_info.arrival_success|goal_reached|route_completed
+environment_result.info.arrival_success|goal_reached|route_completed
+successful ToolResponse.result.arrival_success|goal_reached|route_completed
+```
+
+模型给出的 `TerminalDecision.evidence_refs` 只进入审计 metadata。`complete_task` 验证失败时写入 `terminal_validation(accepted=false)`，清空待提交终态并重新进入 System2；超过 `max_terminal_rejections` 后以 `terminal_validation_retry_exhausted` 失败。环境自身返回 `done=true` 时可以直接提供 terminal status，但仍必须经过同一个 `terminal_control -> halt -> finish` 路径。
+
 `event_before_*` 不是模型节点，而是统一事件闸门。它在 System2、Safety 和 Dispatch 等副作用边界前 claim 外部事件，调用纯 reducer，完成后才 acknowledge；异常时 release，保证事件可重试。
 
 Runtime budget 包括：
@@ -1056,6 +1253,8 @@ resume / external user_response
 ```
 
 工具执行和 waiting-state 写入都发生在 `interrupt()` 之前的独立节点，避免恢复时重复副作用。`user_response` 消费后会从瞬时 graph 字段清除，长期对话只保存在有界 `DialogueState` 中。
+
+`ask_user` 不调用 CFM。当前 runtime 会把 `motion_policy_while_waiting` 持久化到 `PendingInteraction`；真实 robot adapter 必须把 `stop/slow_down/handover_to_safety_controller` 映射为确定性的控制器行为。该硬件等待策略尚不能由 LangGraph checkpoint 本身证明，不能用模型生成一条未验证的零轨迹替代。
 
 ### 8.4 Safety Validator
 
@@ -1142,7 +1341,7 @@ external_events optional
 
 ```text
 lifecycle:
-  episode_started / system_message / episode_finished
+  episode_started / system_message
 
 model and tools:
   observation_received / model_output
@@ -1157,6 +1356,9 @@ continuous execution:
   system1_output / safety_validation / safety_intervention
   action_dispatched / action_preempted
   controller_feedback / environment_step
+
+terminal control:
+  terminal_validation / control_halted / episode_finished
 ```
 
 每个 event 包含：
@@ -1192,6 +1394,10 @@ model_output(decision_id)
   -> tool_call -> tool_response -> next model_output
   -> interaction_requested -> interrupt -> interaction_resolved -> next model_output
   -> navigate finish -> readout_requested -> system1_output
+  -> complete_task -> terminal_validation
+       accepted -> control_halted -> episode_finished(succeeded)
+       rejected -> next model_output
+  -> abort_task -> terminal_validation -> control_halted -> episode_finished(failed)
 system1_output
 event gate / freshness check
 safety_validation -> optional safety_intervention
@@ -1245,6 +1451,16 @@ has(system1\_output)\land has(action\_dispatched)
 | preempted System1 output | 可在 trace 中审计 | 否 | 不作为 target |
 | reward/replay key | 否 | 否 | rollout/RL metadata |
 
+V2 section QA 使用固定 mask：
+
+```json
+{"lm":true,"system1_action":false,"trajectory":false,"segmentation":false}
+```
+
+QA row 不携带 `pixel_trajectory`、`trajectory_ego_t` 或 segmentation sidecar。
+完整 navigate row 才可同时启用 LM 与 System1 loss；`ask_user/complete_task/abort_task`
+不含 readout，也不启用 System1 loss。
+
 ---
 
 ## 10. 训练数据与目标函数
@@ -1268,6 +1484,9 @@ has(system1\_output)\land has(action\_dispatched)
   ],
   "tools": "[...]",
   "images": ["fpv.jpg", "bev.jpg"],
+  "image_roles": ["fpv", "bev"],
+  "available_modalities": ["instruction", "fpv", "bev", "route"],
+  "source_group_id": "episode-001:decision:3",
   "trajectory_ego_t": [[0.4, 0.0, 0.0], [0.9, 0.1, 0.08]],
   "trajectory_policy": {
     "system1_target_field": "trajectory_ego_t",
@@ -1282,12 +1501,15 @@ has(system1\_output)\land has(action\_dispatched)
   "action_mask": [true, true],
   "contract_meta": {
     "episode_trace_schema": "urbannav_episode_trace_v2",
+    "action_space_contract": "sidewalk_action_space_v4",
     "system1_readout_placement": "assistant_suffix_v2",
     "system1_readout_lm_label": -100,
     "environment_observation_lm_label": -100,
     "external_event_lm_label": -100,
     "runtime_state_lm_label": -100,
-    "tool_response_lm_label": -100
+    "terminal_validation_lm_label": -100,
+    "tool_response_lm_label": -100,
+    "reasoning_schema_version": "urbannav_reasoning_trace_v2"
   },
   "sidewalk_meta": {
     "prompt_template": "agentic_stage2_cot_trajectory",
@@ -1304,7 +1526,22 @@ has(system1\_output)\land has(action\_dispatched)
 
 `trajectory_policy` 是 active System1 row 的强合同，不是说明性 metadata。当前 trainer 会校验它与 checkpoint 的 `system1_target_field/format` 一致。事件级 exporter 目前已经按 `decision_id` 选择有效 `trajectory_ego_t/action_mask`，但尚未把 `System1Output.metadata` 中的 canonical policy 完整复制为顶层 `trajectory_policy`；因此该 exporter 直接产出的 active System1 row 在进入生产 trainer 前仍需补齐此字段。这是当前实现缺口，不能依赖 trainer 默认值绕过。
 
-### 10.2 联合损失
+### 10.2 同源多任务视图
+
+同一个 `source_group_id` 可以生成三种 row，但每条 row 只激活自身合法 loss：
+
+| Row view | assistant target | LM | System1 | seg/pixel traj |
+| --- | --- | --- | --- | --- |
+| Full CoT | 五段 V2 + finish | 是 | 否或按 navigate 配置 | 默认否 |
+| Map/Social section QA | 一个 V2 section | 是 | 否 | 否 |
+| Joint navigate | 五段 V2 + finish + masked readout | 是 | `trajectory_ego_t` | 默认否 |
+| ask/terminal | 五段 V2 + finish，无 readout | 是 | 否 | 否 |
+
+新 QA 生成器不依据图片数量猜模态。`images` 保留原始有序列表，
+`image_roles` 显式区分 `fpv_history/fpv/bev/goal_image`；否则多帧 FPV 会被误当成
+FPV+BEV 并产生错误的 CrossModalAlignment 标签。
+
+### 10.3 联合损失
 
 当前推荐主线：
 
@@ -1336,7 +1573,7 @@ has(system1\_output)\land has(action\_dispatched)
 
 但它们不是 CFM 主线的必要组成。大规模 System1 训练不应要求 `pixel_trajectory`。
 
-### 10.3 训练课程
+### 10.4 训练课程
 
 **Phase A：local multimodal SFT**
 
@@ -1379,7 +1616,7 @@ environment transition is reproducible
 
 RL 不是 SFT 失败时的 fallback。
 
-### 10.4 Multi-tick / per-decision exporter
+### 10.5 Multi-tick / per-decision exporter
 
 对新 event-driven trace，ms-swift exporter 为每个 System2 decision 构造历史前缀：
 
@@ -1393,7 +1630,7 @@ row_j=Export(e_{0:end(decision_j)}).
 row_j=Export(e_{tick\ge t_j-W+1:\,end(decision_j)}).
 \]
 
-环境 observation、external event、runtime state 和 tool response 保持 context role，只有 assistant/tool-call action 是 LM target。System1 target 从当前 `decision_id` 的 `system1_output` 读取，并且必须存在 `action_dispatched` 且不存在 `action_preempted`。DAgger correction 的主键为：
+环境 observation、external event、runtime state、terminal validation 和 tool response 保持 context role，只有 assistant/tool-call action 是 LM target。被拒绝的完成请求作为下一轮 System2 的 `<TerminalValidation>` user context，label 固定为 `-100`，不能训练模型复述 validator。System1 target 从当前 `decision_id` 的 `system1_output` 读取，并且必须存在 `action_dispatched` 且不存在 `action_preempted`。DAgger correction 的主键为：
 
 ```text
 trace.metadata.dagger_corrections[decision_id]
@@ -1486,7 +1723,7 @@ environment-specific reset fields
 | `route_session_id` | `str|null` | 绑定 RouteSession |
 | `task_revision` | `int>=0` | 任务语义 revision |
 | `route_revision` | `int>=0` | committed route revision |
-| `status` | `active|paused|cancelled|completed` | 任务生命周期 |
+| `status` | `active|paused|cancelled|completed|failed` | 任务生命周期 |
 | `last_event_id` | `str|null` | 最后接受的外部事件 |
 
 #### DialogueState
@@ -1569,27 +1806,30 @@ retryable: bool
 
 `complete_task` 必须绑定 `outcome=succeeded`，`abort_task` 必须绑定 `outcome=failed`。模型给出的 `evidence_refs` 只用于审计，不能替代 runtime 到达验证。
 
-assistant `<finish>` 主干 superset 为：
+assistant `FinishV2` 公共字段为：
 
 ```text
+schema_version = urbannav_finish_v2
 decision_type
-route_action
-intent
-confidence_level
-trajectory_type
-trajectory_validity
-map_context_available
-social_action
+route_action optional
 tool_used optional
-teacher_source optional
 ```
 
-Phase A/v1 文本轨迹还可包含：
+按决策分区：
 
 ```text
-trajectory_grid1000
-trajectory_coord_frame = norm1000
+navigate:
+  motion / speed / social_action / confidence_level / trajectory_type
+ask_user:
+  user_request.question / choices / motion_policy_while_waiting
+complete_task | abort_task:
+  reason_code / reason / evidence_refs / retryable
 ```
+
+不同分区字段不能混用。`route_action` 只表示路线操作，不承担任务终态；
+`decision_type` 才决定 runtime 控制流。旧 V1 的 `intent`、
+`trajectory_validity`、`map_context_available` 和 `trajectory_grid1000` 仅由
+adapter 读取。
 
 仅 `decision_type=navigate` 的 v2 System1 row 在 assistant `finish` 后追加：
 
@@ -1852,6 +2092,9 @@ episode_id
 messages
 tools                  # 当前 exporter 为 JSON string
 images
+image_roles             # 与 images 一一对应，禁止按数量猜 BEV
+available_modalities    # QA capability gate
+source_group_id         # Full CoT/QA/System1 同源关联
 trajectory_ego_t optional
 action_ego_t optional, legacy/ablation
 action_mask optional
@@ -1884,6 +2127,7 @@ external_event_lm_label = -100
 runtime_state_lm_label = -100
 terminal_validation_lm_label = -100
 tool_response_lm_label = -100
+reasoning_schema_version = urbannav_reasoning_trace_v2 | legacy_v1
 ```
 
 `sidewalk_meta`：
@@ -1907,6 +2151,7 @@ system1_supervision_valid
 | tool call | trace | 是 | 是 | 间接条件 | tool metrics |
 | tool response | trace | 是 | 否 | 间接条件 | tool metrics |
 | symbolic finish | trace | 自回归 | 是 | query 前置条件 | text/action metrics |
+| ReasoningTraceV2 section QA | derived row | 是 | 是 | 否 | section accuracy/grounding |
 | `[SYS1_i]` | row | 是 | 否 | latent query | query diagnostics |
 | `trajectory_ego_t` | trace/row top-level | 否 | 否 | 是 | ADE/FDE/safety |
 | safety/intervention/controller | trace | 后续 decision 可见必要摘要 | 否 | preempted 不监督 | closed-loop metrics |
@@ -1927,6 +2172,102 @@ raw sensors/user events/provider state
   -> per-decision exporter
   -> ms-swift messages + top-level System1 supervision
 ```
+
+### 11.11 Evidence-conditioned Reasoning V2 离线标注链
+
+当前 Phase-A/E2E 标注使用三个不可混用的 artifact：
+
+```text
+existing FPV/BEV/instruction/route assets
+  -> ReasoningSourceV2          # 冻结 teacher/model 可见输入
+  -> ReasoningAnnotationV2      # 原始回答、修复历史、验证结果
+  -> ReasoningTrainingViewV2    # Full CoT 或单 section QA
+  -> ms-swift manifest row      # messages + navigate-only System1 sidecar
+```
+
+`ReasoningSourceV2` 是唯一 teacher 输入合同。核心字段为：
+
+| 字段组 | 字段 | 语义 |
+| --- | --- | --- |
+| identity | `source_group_id/dataset_source/source_record_id/split_group_id` | 同源视图关联和防泄漏 split |
+| vision | `images/image_roles/available_modalities` | 显式 FPV history/current、BEV current、goal image 顺序 |
+| task | `instruction/travel_mode/model_visible_context` | 当前指令以及已冻结 goal/route/waypoint/tool evidence |
+| grounding | `evidence_catalog` | teacher 可引用的完整地址空间 |
+| optional condition | `goal_geometry/route_points_ego_t` | Goal Encoder 或路线条件，不进入 assistant target |
+| System1 sidecar | `trajectory_ego_t/trajectory_policy/action_mask/system1_enabled` | 仅训练连续 head，teacher 不可见 |
+| audit | `reasoning_qa_label_validity/teacher_private_context/metadata/source_fingerprint` | QA provenance、私有审计和不可变绑定 |
+
+route/waypoint 只有在来源可验证时才进入模型：显式
+`independent_route_evidence=true`，或 provenance 为 map provider、route session、tool
+response、frozen route、人工标注。仅出现 `route_context`、`route_points_ego_t` 或
+`intent_gt` 不足以证明独立性；无来源字段会被删除并记录
+`metadata.unverified_route_context_dropped=true`。由 future trajectory、demonstration、
+ground truth 构造的 pseudo goal 默认也被隔离。
+
+teacher 只接收 image、instruction、`model_visible_context` 和
+`evidence_catalog`。以下字段不进入请求：
+
+```text
+trajectory_ego_t / action_mask / segmentation / pixel trajectory
+teacher_private_context / future GT / private teacher judgment
+```
+
+teacher 返回 JSON 形式的 `ReasoningTargetV2`，随后经过强 schema、引用可解析、
+constraint-to-path applicability、finish 合法性校验。当前 E2E 标注阶段固定
+`decision_type=navigate`，且没有实际 tool call，因此 `tool_evidence_refs=[]`。
+非法回答使用 validator error 原因做有限 repair；没有 rule/template fallback。
+
+QA 不是第二套标签，而是对同一个 `ReasoningTraceV2` section 的确定性投影。
+所有 QA 都必须同时满足 modality、label source、confidence 和 evidence refs gate。
+其中 `validated_vlm_teacher` 只允许生成观测型
+`route_to_fpv_grounding/local_route_executability/social_traversability`；涉及跟踪运动、
+traffic-control region 或社会约束适用性的 QA 必须来自 tracked/calibrated/human label。
+QA view 物理删除 trajectory/policy/action mask，并固定只启用 LM loss。
+
+实现入口：
+
+```text
+contracts/reasoning_dataset.py       # 三个 Pydantic artifact
+data/reasoning_source.py             # legacy assets -> frozen source
+teacher/reasoning_v2_teacher.py      # VLM call, repair, resume
+data/reasoning_views.py              # accepted target -> Full CoT/QA
+qa/reasoning_views.py                # sparse QA registry and gates
+tools/model_processing/
+  build_reasoning_v2_sources.py
+  label_reasoning_v2.py
+  export_reasoning_v2_views.py
+```
+
+服务器 pilot 命令：
+
+```bash
+cd Agent_part/RouteServer
+
+PYTHONPATH=src python tools/model_processing/build_reasoning_v2_sources.py \
+  --input-jsonl /data/input.jsonl \
+  --output-jsonl /data/reasoning_source_v2.jsonl \
+  --report-json /data/reasoning_source_v2.report.json \
+  --dataset-source sidewalk \
+  --limit 10
+
+# Provider/model/base URL/API key 只通过环境变量注入；凭据不得写入 artifact。
+PYTHONPATH=src python tools/model_processing/label_reasoning_v2.py \
+  --source-jsonl /data/reasoning_source_v2.jsonl \
+  --annotation-jsonl /data/reasoning_annotation_v2.jsonl \
+  --report-json /data/reasoning_annotation_v2.report.json \
+  --concurrency 2 \
+  --max-retries 2
+
+PYTHONPATH=src python tools/model_processing/export_reasoning_v2_views.py \
+  --source-jsonl /data/reasoning_source_v2.jsonl \
+  --annotation-jsonl /data/reasoning_annotation_v2.jsonl \
+  --output-jsonl /data/reasoning_training_view_v2.jsonl \
+  --report-json /data/reasoning_training_view_v2.report.json
+```
+
+这条链只训练“已有 evidence 条件下如何做 grounded navigate 决策”。tool policy、
+ask-user、route update、complete/abort 和 multi-tick recovery 必须在后续 Stage2/session
+trace 中监督，不能由本阶段 teacher 伪造。
 
 ---
 
@@ -1951,10 +2292,11 @@ one observation
 EpisodeRuntime.run()
 -> event gates control external events and revisions
 -> LangGraph controls tools/HITL/System1/safety/execution/env
+-> terminal requests pass terminal_control and deterministic halt
 -> EpisodeTraceV2
 ```
 
-适合部署和冻结 benchmark，`System2Policy/System1Policy/SafetyValidator/EpisodeEnvironment` 通过 Protocol 注入。外部事件通过 `EpisodeRuntime.submit_event()` 独立进入，不能伪装成下一次普通 `Env.step`。
+适合部署和冻结 benchmark，`System2Policy/System1Policy/SafetyValidator/TerminalValidator/EpisodeEnvironment` 通过 Protocol 注入。外部事件通过 `EpisodeRuntime.submit_event()` 独立进入，不能伪装成下一次普通 `Env.step`。任务成功只能来自 `complete_task + accepted terminal_validation` 或环境提供的权威 arrival terminal；graph `finish` 不允许缺省生成成功状态。
 
 ### 12.3 ms-swift-owned rollout scheduler
 
@@ -1967,6 +2309,425 @@ POST /v1/episodes/{episode_id}/events
 ```
 
 `UrbanNavEnvClient.step()` 要求 numeric reward，并在 replay/RL 模式要求 `replay_key`。`submit_event()` 支持主动任务修改、HITL 回答和暂停/恢复，`resume_if_waiting` 只用于唤醒已经持久化 waiting state 的 graph。该路径用于 session rollout、DAgger 数据采集和后续 RL，而不是在 ms-swift 内复制环境。
+
+### 12.4 两层闭环的关系
+
+代码校阅时应先区分两个不同时间尺度的循环：
+
+```text
+Agent 大闭环（低频、任务级）
+  observation / external event
+  -> System2 decision
+  -> tool | ask_user | navigate | complete_task | abort_task
+  -> task/route/dialogue/control state update
+  -> next System2 decision or terminal
+
+E2E 导航小闭环（高频、运动级）
+  navigate decision + current multimodal observation
+  -> LVLM latent readout
+  -> Direct/CFM System1
+  -> canonical short trajectory
+  -> safety
+  -> execute short prefix
+  -> controller/environment feedback
+```
+
+二者不是两个并列 agent。小闭环是大闭环中 `navigate` 分支的一次短时执行：
+
+\[
+\text{AgentLoop}
+=\text{System2}\Big(
+\text{Tool/HITL/Terminal},
+\underbrace{\text{System1}\rightarrow\text{Safety}\rightarrow\text{Execute}}_{\text{仅 navigate 时进入}}
+\Big).
+\]
+
+因此代码责任固定为：
+
+| 问题 | 权威模块 | 不应由谁隐式处理 |
+| --- | --- | --- |
+| 当前任务、路线和对话是否需要修改 | RouteServer System2/runtime | CFM head |
+| 是否调用工具、询问用户或请求终止 | `System2Policy` | controller |
+| 当前 `navigate` 应生成什么短轨迹 | ms-swift LVLM + System1 head | route tool |
+| 轨迹是否可执行 | `SafetyValidator` | LM 文本声明 |
+| 执行多少步、何时抢占 | execution manager/controller | CFM sampler |
+| 是否真正到达 | `TerminalValidator` / environment | `<finish>` 标签 |
+| episode 如何回流训练 | `EpisodeTraceV2` exporter | 在线 graph 内临时拼 row |
+
+### 12.5 Agent 大闭环：代码逐步对应
+
+#### 12.5.1 入口和状态所有权
+
+大闭环入口是：
+
+```text
+Agent_part/RouteServer/src/mcp_server/runtime/graph.py
+  build_episode_graph()
+  EpisodeRuntime.run()
+  EpisodeRuntime.resume()
+  EpisodeRuntime.submit_event()
+  EpisodeRuntime.resume_with_event()
+```
+
+`EpisodeRuntime.run()` 建立一个 episode 的初始 `TaskState`、`DialogueState`、`ControlState` 和 `EpisodeTraceV2`；`build_episode_graph()` 只编排节点，不在节点外维护第二套隐式 session。外部用户事件由 `ExternalEventStore` 持有，并通过 `runtime/events.py::reduce_external_event()` 以纯状态变换更新任务、对话和控制状态。
+
+每次决策所需的最小权威状态为：
+
+```text
+episode_id / tick_id
+observation / observation_id / observation_info
+task_state.task_revision / task_state.route_revision
+dialogue_state / control_state.control_epoch
+decision_id / active action_id
+last_tool_response / latest_external_event
+episode_trace
+```
+
+不能额外创建一个与这些 revision 无关的 `route_context` 或 model-private session 作为执行真值。
+
+#### 12.5.2 LangGraph 节点和事件
+
+当前真实节点链可按下表逐项核对：
+
+| 阶段 | 代码入口 | 主要输入 | 主要输出 | 关键 trace 事件 | 后继 |
+| --- | --- | --- | --- | --- | --- |
+| 初始化观测 | `graph.py::observe()` | `initial_context` 或上一 tick observation | `observation_id`、replay info | `OBSERVATION_RECEIVED` | external event gate |
+| 外部事件闸门 | `graph.py::event_gate()` | pending event + 三类 state | revisioned state、event route | `EXTERNAL_EVENT_RECEIVED`、`TASK_STATE_UPDATED`、`REVISION_CONFLICT` 等 | System2 / wait / terminal / 原节点 |
+| 慢策略决策 | `graph.py::system2()` | 当前完整 graph state | typed `System2Action`、`decision_id` | `MODEL_OUTPUT` | tool / HITL / System1 / terminal |
+| 工具执行 | `graph.py::execute_tool()` | `ToolCallV2` + task/route revision | `ToolResponseV2`、state delta | `TOOL_CALL`、`TOOL_RESPONSE`、`ROUTE_STATE_DELTA` | 回到 System2 |
+| 等待用户 | `prepare_interaction()`、`await_interaction()` | `user_request` | persisted `PendingInteraction` | `INTERACTION_REQUESTED`、`USER_INTERRUPT` | interrupt/resume 后回 System2 |
+| 轨迹生成 | `graph.py::system1()` | `navigate` decision + observation/state | bound `System1Output` | `SYSTEM1_OUTPUT` | safety |
+| 安全验证 | `graph.py::safety()` | canonical trajectory | accept / replacement / reject | `SAFETY_VALIDATION`、可选 `SAFETY_INTERVENTION` | dispatch / System2 / terminal |
+| 下发动作 | `graph.py::dispatch_action()` | fresh executable output | `ExecutionLease` | `ACTION_DISPATCHED` | await execution |
+| 执行竞争 | `graph.py::await_execution()` | lease + event store | feedback 或 preemption | `CONTROLLER_FEEDBACK`、`ENVIRONMENT_STEP` 或 `ACTION_PREEMPTED` | observe / System2 / terminal |
+| 终态控制 | `graph.py::terminal_control()` | terminal request 或环境终态 | accepted terminal status + halt ack | `TERMINAL_VALIDATION`、`CONTROL_HALTED` | System2 或 finish |
+| 最终提交 | `graph.py::finish()` | 已验证 status/reason + stopped control | final task/trace | `EPISODE_FINISHED` | END |
+
+图边在同一文件的 `StateGraph` 注册段集中声明。代码校阅时，不应只看某个 node 的实现，还要核对 conditional edge 是否把拒绝、等待和抢占送回正确分支。
+
+#### 12.5.3 一次完整 episode 的伪代码
+
+下面的伪代码与当前 graph 的控制语义对应，不是另起一套实现：
+
+```python
+state = initialize_episode()
+state.observation = await environment.reset(state.initial_context)
+
+while not state.done:
+    # 每个高延迟边界前先消费外部事件；任务修改可以抢占当前动作。
+    state = await ingest_external_event_if_any(state)
+    if state.paused:
+        state = await interrupt_and_resume(state)
+        continue
+    if state.cancelled:
+        break
+
+    decision = await system2_policy.decide(state)
+
+    if decision.action_type == "tool_call":
+        state.last_tool_response = await tool_executor.execute(
+            bind_task_route_revision(decision.tool_call, state)
+        )
+        continue
+
+    if decision.action_type == "ask_user":
+        persist_pending_interaction(state, decision.user_request)
+        await interrupt_and_enqueue_correlated_response(state)
+        continue
+
+    if decision.action_type == "navigate":
+        chunk = await system1_policy.predict(state)
+        chunk = bind_execution_context(chunk, state)
+        verdict = await safety_validator.validate(chunk, state)
+        if not verdict.accepted and not verdict.intervention:
+            continue
+        lease = await execution_manager.dispatch(verdict.output, state)
+        feedback_or_event = await race_controller_and_external_event(lease)
+        if feedback_or_event.is_event:
+            await execution_manager.preempt(state.episode_id)
+            continue
+        state.observation = feedback_or_event.result.observation
+        state.tick_id += 1
+        continue
+
+    # complete_task / abort_task 都先验证并确定性停车。
+    terminal = await terminal_validator.validate(decision, state)
+    if not terminal.accepted:
+        state.terminal_validation = terminal
+        continue
+    await execution_manager.halt(state.episode_id, terminal.reason_code)
+    state = finalize_episode(state, terminal)
+```
+
+#### 12.5.4 大闭环的六条不变量
+
+1. **只有 `navigate` 调用 System1。** `tool_call`、`ask_user`、`complete_task`、`abort_task` 不生成 `[SYS1_i]` chunk。
+2. **工具结果必须回到 System2。** 工具不能直接拼接一条 controller action 绕过模型的最终决策。
+3. **`tick_id` 只在真实 `ENVIRONMENT_STEP` 完成后递增。** tool turn、HITL turn 和被抢占的 chunk 都不是新环境 tick。
+4. **所有慢边界前检查外部事件。** 任务修改、暂停和取消不能等待完整 action chunk 执行结束。
+5. **System1 output 必须通过 revision freshness。** `runtime/execution.py::bind_system1_execution_context()` 绑定任务、路线、控制代、观测和 action id；dispatch 前由 execution manager 拒绝 stale output。
+6. **`finish()` 不能自行判成功。** `complete_task` 必须经 `TerminalValidator` 接受，所有终态必须经幂等 `halt()` 获得停车确认。
+
+### 12.6 E2E 导航小闭环：代码逐步对应
+
+#### 12.6.1 小闭环的起止边界
+
+小闭环从一个已确定的 `navigate` decision 开始，到短轨迹前缀产生 controller/environment feedback 结束：
+
+```text
+System2 navigate
+  -> canonical assistant finish + [SYS1_i]
+  -> multimodal template encode
+  -> LVLM final hidden states
+  -> System1 condition
+  -> Direct/CFM trajectory head
+  -> System1Output trajectory_ego_t
+  -> freshness + safety
+  -> execute first M steps
+  -> next observation / preemption
+```
+
+它不负责修改目的地、判断任务最终成功或维护多轮 route session；这些都在大闭环中完成。
+
+#### 12.6.2 Prompt、因果顺序和 readout
+
+训练/推理 prompt 的主要入口是：
+
+```text
+ms-swift/swift/sidewalk_nav/prompt.py::SideWalkPromptManager
+ms-swift/swift/sidewalk_nav/tokens.py
+ms-swift/swift/sidewalk_nav/models/latent_query.py
+ms-swift/swift/sidewalk_nav/models/goal_encoder.py
+```
+
+其中生产 Reasoning V2 使用两个不同模板入口：
+
+```text
+reasoning_v2_cot_system1:
+  system = DEFAULT_REASONING_V2_SYSTEM_PROMPT
+  user   = multimodal evidence + full reasoning instruction
+  target = five sections + finish + navigate-only readout
+
+qa_reasoning_v2:
+  system = DEFAULT_REASONING_V2_SYSTEM_PROMPT
+  user   = task_family + task_type + requested section + question
+  target = exactly one section
+```
+
+旧 `Scene/FPVScene/BEVContext/CrossView/Plan` prompt 仅用于 legacy 数据读取和消融，
+不能与生产 ReasoningTraceV2 target 混写。`DEFAULT_REASONING_V2_SYSTEM_PROMPT` 中的
+社会导航原则是推理约束，不是每条 row 都必须填充的社会标签；没有 agent/path/control
+证据时，SocialNav 字段应为空或 `unknown`，相应 QA row 也应被 gate 掉。
+
+`navigate` row 的因果顺序固定为：
+
+```text
+system + user observation/instruction + images + optional goal
+-> optional tool_call
+-> tool_response
+-> assistant <think>/<finish decision_type=navigate>
+-> [SYS1_0] ... [SYS1_Q-1]
+```
+
+编码后的监督规则为：
+
+| token/字段 | attention 可见 | LM label | System1 用途 |
+| --- | --- | --- | --- |
+| system/user/images/goal | 是 | `-100` | LVLM 条件 |
+| tool response | 是 | `-100` | 工具返回条件，不做 CE |
+| assistant symbolic answer | 因果可见 | 正常 token label | System2 LM CE |
+| `[SYS1_i]` / legacy `[TRAJ_i]` | 是 | 强制 `-100` | 提取连续控制 latent |
+| top-level `trajectory_ego_t` | 不进入 token 序列 | 无 | System1 target |
+
+`tokens.py::find_traj_token_indices()` 定位 readout；`mask_readout_token_labels()` 保证它们不被 LM CE 当作要生成的普通词。启用 InternNav-style isolated query 后，`latent_query.py::SidewalkLatentQueryTable` 在 embedding lookup 时执行：
+
+\[
+e_{q_i}=Q_i\quad\text{而不是}\quad E_{vocab}([SYS1_i]),
+\]
+
+其中 token id 只负责稳定定位，独立参数 \(Q_i\) 才是被 System1 loss 优化的 latent query。可选 `[GOAL_i]` 由 `SidewalkGoalEncoder` 把规范化坐标目标映射到 LVLM hidden space；图像目标仍作为图像输入，不应伪装成数值坐标 token。
+
+#### 12.6.3 LVLM 到 System1 condition
+
+设 LVLM 最后一层输出为：
+
+\[
+H=F_\theta(I_{fpv},I_{bev},I_{goal},U,R_{tool},Q_{sys1})
+\in\mathbb R^{B\times S\times D}.
+\]
+
+`system1_condition.py::build_system1_condition()` 提供三个可消融模式：
+
+```text
+traj_query_only: z = H[SYS1 positions], memory = None
+vlm_memory:      z = masked_mean(H_prompt), memory = H_prompt
+hybrid:          z = H[SYS1 positions], memory = H_prompt
+```
+
+这里 `H_prompt` 的 mask 由 expanded attention mask 和 LM labels 构造。`labels != -100` 的 teacher-forced assistant target 会被排除，防止 action head 通过 cross-attention 直接读取训练答案；位于它之前的 tool response 保持可见，因为它是当前决策的合法环境条件。默认训练还会 detach prompt memory，避免 CFM cross-attention 无约束地更新整段 prompt token 表征。
+
+#### 12.6.4 CFM 前向、损失和采样
+
+生产 target 为固定 ego FLU 参考帧中的累计相对轨迹：
+
+\[
+X_1=\{[x_i^{forward},y_i^{left},\psi_i^{ccw}]\}_{i=1}^{T}
+\in\mathbb R^{T\times3}.
+\]
+
+代码入口是 `models/flow_action_head.py::FlowActionTrajectoryHead`。基础 CFM 使用：
+
+\[
+X_t=(1-t)X_0+tX_1,
+\qquad V^*=X_1-X_0,
+\]
+
+\[
+\hat V_\phi
+=D_\phi\big(E_{step}+W_z z+W_xX_t+W_t\gamma(t),\ C\big),
+\]
+
+\[
+\mathcal L_{CFM}
+=\frac{\sum_{i}m_i\|\hat V_{\phi,i}-V_i^*\|_2^2}
+{\sum_i m_i}.
+\]
+
+其中 \(C\) 是可选 prompt memory，\(m_i\) 是 `action_mask`。启用 AURA-lite anchor 时，\(X_0\) 来自分类器选择的 motion anchor 加噪声，并叠加 anchor CE、endpoint、smoothness 和 kinematic validity loss；不开启时保持基础 zero/noise CFM。
+
+推理时 `sample_actions()` 用 Euler 积分：
+
+\[
+X^{k+1}=X^k+\Delta t\,\hat V_\phi(X^k,t_k\mid z,C),
+\qquad \Delta t=1/K.
+\]
+
+公平消融 `models/action_head_heads.py::DirectQueryActionHead` 复用相同 \((z,C)\)、相同 `[T,3]` target 和 mask，只把 flow objective 换成一次性 masked regression。比较时不能再启用旧 FPV pixel trajectory head 作为所谓 CFM baseline。
+
+#### 12.6.5 训练前向和梯度边界
+
+训练入口是 `trainers/trainer.py::SidewalkSeq2SeqTrainer.compute_loss()`：
+
+```text
+1. 从 batch 弹出 trajectory_ego_t/action_mask 等 sidecar 字段
+2. 调用 ms-swift 原生 forward 计算 LM CE，并捕获最后层 hidden states
+3. 从 [SYS1_i] 位置构造 System1Condition
+4. 校验 checkpoint 绑定的 target field/format 和 trajectory_policy
+5. 调用 action_head.loss()
+6. L = L_LM + lambda_system1 * L_System1 + optional segmentation losses
+```
+
+生产配置只允许：
+
+```text
+system1_target_field = trajectory_ego_t
+system1_target_format = ego_pose_xyt_flu_v1
+```
+
+缺少该字段的纯 LM/VQA row 将关闭本 row 的 action loss；trainer 不再隐式回退到 `action_ego_t`。`action_ego_t` 只允许在显式 delta-action 消融配置和独立 checkpoint 中使用。
+
+梯度边界由配置控制，但语义必须保持：
+
+```text
+LM CE                 -> assistant/tool-call token 参数
+System1 loss          -> action head + isolated query；是否回传 LVLM 由 freeze/detach 配置决定
+tool response         -> 作为上下文，不产生 LM CE
+trajectory_ego_t      -> 只作为 top-level tensor target，不写进 assistant target
+```
+
+#### 12.6.6 Head 输出到执行反馈
+
+离线 head 推理入口为 `cli/infer.py::infer_head_dataset()`。它输出：
+
+```yaml
+system1_chunk_ego: [[x_forward_m, y_left_m, yaw_rel_ccw_rad], ...]
+action_chunk_metadata:
+  system1_target_field: trajectory_ego_t
+  system1_target_format: ego_pose_xyt_flu_v1
+  system1_condition_mode: traj_query_only | vlm_memory | hybrid
+  normalized: false
+  flow_steps: K
+trajectory_policy:
+  representation: cumulative_relative_pose
+  coordinate_frame: current_ego_flu
+  dt_sec: 0.2
+```
+
+`adapters/action_runtime_adapter.py::ActionRuntimeAdapter.adapt_inference_row()` 严格读取 metadata，不根据 `[T,3]` shape 猜测累计轨迹还是 delta action。若 controller 消费 rolling body delta，则执行：
+
+\[
+\Delta p_i^{body}=R(-\psi_{i-1})(p_i-p_{i-1}),
+\qquad
+\Delta\psi_i=wrap(\psi_i-\psi_{i-1}).
+\]
+
+RouteServer 接收的权威结构是 `runtime/interfaces.py::System1Output`。随后：
+
+```text
+bind_system1_execution_context()
+-> SafetyValidator.validate()
+-> EnvironmentExecutionManager.dispatch()
+-> execute first M steps
+-> controller feedback or external-event preemption
+-> EnvironmentStepResult
+```
+
+当前需要明确保留的实现边界是：`ms-swift` 已有 checkpoint/head 推理和 `ActionRuntimeAdapter`，RouteServer 已有 `System1Policy` Protocol、freshness/safety/execution graph；但将一个生产 checkpoint 服务统一封装成 RouteServer `System1Policy.predict()` 的 live adapter 仍需在部署层完成。文档不能把这条尚未统一的桥接写成已经端到端部署完成。
+
+### 12.7 Trace 回流和逐 episode 校阅方法
+
+#### 12.7.1 从闭环事件到训练 row
+
+大闭环的训练真值来自 `EpisodeTraceV2`，不是 graph state 的最终快照。`ms-swift/swift/sidewalk_nav/data/agentic_episode_manifest.py::build_agentic_episode_trainable_rows()` 按 `decision_id` 切分：
+
+```text
+MODEL_OUTPUT(tool_call)
+-> TOOL_CALL
+-> TOOL_RESPONSE
+-> MODEL_OUTPUT(navigate)
+-> SYSTEM1_OUTPUT
+-> SAFETY_VALIDATION
+-> ACTION_DISPATCHED
+-> CONTROLLER_FEEDBACK / ACTION_PREEMPTED
+```
+
+导出规则必须保持：
+
+- tool response 进入后续 messages 上下文，但 labels 为 `-100`。
+- 只有 `navigate` decision 可以带 `[SYS1_i]` 和 System1 top-level supervision。
+- 只有经过 safety、实际 dispatch 且未被抢占/判 stale 的 chunk 才是有效 action supervision。
+- terminal validation rejection 要作为下一次 System2 的可见反馈，但 validator label 不能成为 LM target。
+- `validate_episode_for_rl()` 只有在 environment transition、numeric reward 和 replay key 可复现时才允许该 episode 进入 RL。
+
+#### 12.7.2 推荐的代码校阅顺序
+
+针对一个具体 episode，按以下顺序检查可以最快定位层级错误：
+
+1. **先看 trace 因果链。** 用 `episode_id -> tick_id -> decision_id -> action_id` 排序，确认事件没有跨 revision 重排。
+2. **再看 System2 action。** 对照 `runtime/interfaces.py::System2Action`，确认五类 action payload 互斥且完整。
+3. **工具 case 看 revision。** 对照 `ToolCallV2`、`ToolResponseV2` 和 `ROUTE_STATE_DELTA`，确认 route mutation 后 `route_revision` 增长。
+4. **HITL case 看 correlation。** `interaction_id` 必须从 request 延续到 external user response，旧回复不能解除新等待。
+5. **navigate case 看 readout。** 确认 `[SYS1_i]` 位于 final symbolic answer 之后、attention 为 1、labels 为 `-100`。
+6. **看 System1 metadata。** 必须是 metric `ego_pose_xyt_flu_v1`，且 task/route/control/observation binding 与当前 state 一致。
+7. **看执行证据。** 只有 `ACTION_DISPATCHED` 后接 `CONTROLLER_FEEDBACK + ENVIRONMENT_STEP` 才增加 tick；`ACTION_PREEMPTED` 不算成功执行。
+8. **看终态证据。** `complete_task` 后必须存在 accepted `TERMINAL_VALIDATION` 和 `CONTROL_HALTED`，然后才允许 `EPISODE_FINISHED:succeeded`。
+9. **最后看导出 row。** 检查 messages 因果顺序、loss mask、`system1_supervision_valid` 和 top-level trajectory 是否与 trace 同一 decision 对齐。
+
+#### 12.7.3 按故障现象定位代码
+
+| 现象 | 优先检查 |
+| --- | --- |
+| 工具调用成功但模型没有利用结果 | trace 的 tool response 顺序、exporter messages、prompt labels |
+| 用户修改目的地后仍执行旧轨迹 | event gate、task/route revision、freshness check、execution lease |
+| ask-user 无法恢复或串了回复 | `PendingInteraction.interaction_id`、event reducer、checkpointer |
+| `<finish>` 被直接记为到达 | action parser、`TerminalValidator`、`terminal_control()` |
+| CFM loss 异常低但闭环差 | teacher-answer memory leakage、坐标/归一化 metadata、action mask |
+| CFM 轨迹方向左右相反 | exporter 到 canonical FLU 的边界转换、yaw 正方向 |
+| safety 拒绝后仍下发动作 | safety conditional edge、`executable_system1_output`、dispatch freshness |
+| 被抢占 chunk 仍进入训练 | `ACTION_PREEMPTED` trace、per-decision exporter validity |
+| 离线 head 正常但 RouteServer 无法执行 | checkpoint-to-`System1Policy` adapter、runtime metadata、controller adapter |
+
+这套对照关系的校阅原则是：先验证 **事件和状态转移**，再验证 **模型张量与 loss**，最后验证 **controller 物理执行**。只检查最终 answer、最终轨迹或最终 success 任意一个结果，都不足以证明闭环正确。
 
 ---
 
@@ -2070,6 +2831,18 @@ src/mcp_server/contracts/episode.py
 src/mcp_server/contracts/task.py
   ExternalUserEvent / TaskState / DialogueState / ControlState
 
+src/mcp_server/contracts/reasoning.py
+  ReasoningTraceV2 / FinishV2 / five strongly typed sections
+
+src/mcp_server/agent/reasoning_text.py
+  V2 renderer/parser and conservative V1 adapter
+
+src/mcp_server/agent/reasoning_validation.py
+  evidence resolution, constraint applicability and finish/readout validation
+
+src/mcp_server/qa/reasoning_views.py
+  label-gated Map/Social section QA projections
+
 src/mcp_server/runtime/interfaces.py
   System2Action / TerminalDecision / System1Output / environment protocols
 
@@ -2124,6 +2897,15 @@ src/mcp_server/agent/stage2.py
 ```text
 swift/sidewalk_nav/prompt.py
   multimodal/social/agentic prompt schemas
+
+swift/sidewalk_nav/reasoning.py
+  training-side V2 contract, parser, renderer and legacy adapter
+
+swift/sidewalk_nav/data/reasoning_qa.py
+  sparse Map/Social QA registry and section projection
+
+swift/sidewalk_nav/data/qa_artifacts.py
+  canonical V2 QA bundle generation without continuous-label leakage
 
 swift/sidewalk_nav/tokens.py
   [TRAJ_i]/[SYS1_i] registration, indexing and LM masking
@@ -2180,16 +2962,22 @@ swift/sidewalk_nav/rollout/urbannav_env.py
 | Task/Dialogue/Control revision state | 已实现 | checkpoint-safe Pydantic contract |
 | action freshness 与短时域抢占 | 已实现框架 | task/route/control/observation 四重校验 |
 | complete/abort/cancel 终态合同 | 已实现 | 到达验证、结构化原因、幂等 halt 和双读迁移 |
+| terminal validation 训练回流 | 已实现 | rejected completion 作为 masked user context 回到下一次 System2 row |
 | RouteSession mutation CAS/idempotency | 已实现，单进程 | expected revision + idempotency key；分布式 store 未完成 |
 | EpisodeTraceV2 | 已实现 | event-sourced contract |
 | v2 assistant-suffix readout | 已实现 | `[SYS1_i]` 位于 finish 后且 LM mask |
+| ReasoningTraceV2 五段 CoT | 已实现 | RouteServer 单写、两仓强 schema 一致性测试 |
+| Map section QA | 已实现 | 同源投影、label source 与 modality gate、LM-only mask |
+| Social section QA 框架 | 已实现 | 四类任务和投影接口已固定；强标签覆盖取决于 track/path/human/controller 数据 |
+| Social observational QA | 部分实现 | `validated_vlm_teacher` 仅为弱蒸馏，批量强监督默认应关闭自动派生 |
+| V1 CoT/finish 读取兼容 | 已实现 | adapter 双读；新 Stage2 exporter 只写 V2 |
 | isolated latent queries | 已实现 | 独立 query table |
 | coordinate Goal Encoder | 已实现可选项 | 顶层 geometry，不进入 LM target |
 | Direct Action 与 CFM 消融 | 已实现 | 相同 condition/target/output |
 | AURA-lite anchor CFM | 已实现可选项 | fixed anchor + classifier + flow init |
 | System1 checkpoint save/load/head inference | 已实现 | sidecar files |
 | checkpoint -> EpisodeRuntime System1Policy adapter | 未统一 | graph Protocol 已有；生产 checkpoint service adapter 待实现 |
-| per-decision session SFT/DAgger exporter | 部分实现 | causal rows 和 preempt mask 已实现；active row 尚需补齐 trajectory_policy |
+| per-decision session SFT/DAgger exporter | 部分实现 | causal rows、terminal context 和 preempt mask 已实现；active row 尚需补齐 trajectory_policy |
 | UrbanNavEnvClient | 已实现 | strict reset/step/event HTTP client |
 | frozen episode benchmark | 已实现 | deterministic transitions、events、preemption 和 stale-action metrics |
 | 自动多模态 input-mode resolver | 未完成 | 当前依赖显式 prompt/image roles |
@@ -2223,3 +3011,7 @@ swift/sidewalk_nav/rollout/urbannav_env.py
 15. RouteSession mutation 必须使用 expected revision 和 idempotency context，模型不能直接修改内部 route object。
 16. 新 session trace 必须按 `decision_id` 导出；`tick_id` 仅表示环境 transition，不能覆盖同 tick 多次决策。
 17. active System1 trainable row 必须携带与 checkpoint 一致的 `trajectory_policy`，不能依赖 shape 或默认值推断。
+18. 新 Full CoT 只能写 `ReasoningTraceV2`；旧 modality-oriented CoT 只允许在 adapter 输入侧出现。
+19. `ToolResultUse` 只能位于 `EvidenceGrounding` 与 `CrossModalAlignment` 之间，并与 `finish.tool_used`、`tool_evidence_refs` 一致。
+20. QA 只能由同一 V2 section 投影，且必须通过显式 modality、label source 和 confidence gate；弱 social heuristic 不得提升为强真值。
+21. 多帧输入必须携带 `image_roles`；禁止用 `len(images)>1` 推断 BEV。
