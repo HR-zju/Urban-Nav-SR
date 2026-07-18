@@ -92,5 +92,8 @@ Agent_part/RouteServer/apps/nav-assistant/.build/
 /docker/
 key.txt
 data/
+# RouteServer 的 Python 数据合同/转换器是源码，不属于运行时数据目录。
+!Agent_part/RouteServer/src/mcp_server/data/
+!Agent_part/RouteServer/src/mcp_server/data/*.py
 Agent_part/RouteServer/examples/agent_eval/
 Agent_part/RouteServer/tests/fixtures/
