@@ -1,0 +1,86 @@
+paths:
+  data_root: /volume1/Datasets/foxglove/mcap_post/repaired
+  work_dir: ./work
+
+scan:
+  include_standalone_mcap: true
+  include_standalone_db3: false
+
+# Pure Python MCAP reader. No ROS installation is required.
+# Custom message types are decoded from ros2msg schemas embedded in the MCAP.
+reader: {}
+topics:
+  camera:
+    names:
+      - /camera_x001/image_raw/compressed
+    supported_types:
+      - sensor_msgs/msg/Image
+      - sensor_msgs/msg/CompressedImage
+    name_hints: [front, camera, image]
+
+  gps:
+    names:
+      - /baton/gnss/spp_fix
+    supported_types:
+      - sensor_msgs/msg/NavSatFix
+      - nav_msgs/msg/Odometry
+      - geometry_msgs/msg/PoseStamped
+    name_hints: [gps, gnss, fused]
+    coordinate_mode: auto
+    fields:
+      latitude: ""
+      longitude: ""
+      x: ""
+      y: ""
+      z: ""
+
+  vio:
+    names:
+      - /baton/stereo3/odometry_orig
+    supported_types:
+      - nav_msgs/msg/Odometry
+      - geometry_msgs/msg/PoseStamped
+    name_hints: [vio, odom, odometry]
+    # Stereo3's vehicle-forward direction is body +Y, whereas quaternion yaw
+    # points along body +X. Rotate the displayed heading by +90 degrees.
+    heading_yaw_offset_deg: 90.0
+    fields:
+      x: ""
+      y: ""
+      z: ""
+      qx: ""
+      qy: ""
+      qz: ""
+      qw: ""
+
+timestamps:
+  source: auto
+  minimum_header_valid_ratio: 0.80
+  minimum_header_overlap_ratio: 0.50
+
+preprocess:
+  output_width: 1280
+  output_height: 720
+  output_fps: 10
+  playback_speed: 2.0
+  max_source_camera_fps: 15
+  max_gps_fps: 25
+  max_vio_fps: 25
+  jpeg_quality: 85
+  max_review_duration_sec: 180
+  camera_max_gap_sec: 0.25
+  gps_max_gap_sec: 1.00
+  vio_max_gap_sec: 0.20
+  ffmpeg_crf: 23
+  ffmpeg_preset: veryfast
+
+review:
+  bad_reasons:
+    - 图像异常
+    - GPS异常
+    - VIO异常
+    - 时间不同步
+    - 数据缺失
+    - 场景无效
+    - 文件损坏
+    - 其他
