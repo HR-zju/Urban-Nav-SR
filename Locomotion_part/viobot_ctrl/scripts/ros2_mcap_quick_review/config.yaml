@@ -84,3 +84,10 @@ review:
     - 场景无效
     - 文件损坏
     - 其他
+
+# Optional first-pass decisions overlay. This affects only queues and display in
+# app.py; scan_files.py and preprocess.py still process every discovered bag.
+initial_decisions:
+  enabled: true
+  csv_path: ../data/decisions.csv
+  selected_manual_decisions: [KEEP, REVIEW]

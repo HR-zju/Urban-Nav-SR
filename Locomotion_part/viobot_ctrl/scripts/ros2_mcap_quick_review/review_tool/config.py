@@ -63,6 +63,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "数据缺失", "场景无效", "文件损坏", "其他",
         ]
     },
+    "initial_decisions": {
+        "enabled": False,
+        "csv_path": "",
+        "selected_manual_decisions": ["KEEP", "REVIEW"],
+    },
 }
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -87,6 +92,20 @@ def load_config(config_path: str | Path) -> dict[str, Any]:
         if not p.is_absolute():
             p = (base_dir / p).resolve()
         cfg["paths"][key] = str(p)
+    initial_csv = str(cfg["initial_decisions"].get("csv_path", "")).strip()
+    if initial_csv:
+        p = Path(initial_csv).expanduser()
+        if not p.is_absolute():
+            p = (base_dir / p).resolve()
+        cfg["initial_decisions"]["csv_path"] = str(p)
+    selected = cfg["initial_decisions"].get(
+        "selected_manual_decisions", ["KEEP", "REVIEW"]
+    )
+    if isinstance(selected, str):
+        selected = [selected]
+    cfg["initial_decisions"]["selected_manual_decisions"] = [
+        str(value).strip().upper() for value in selected if str(value).strip()
+    ]
     source = str(cfg["timestamps"]["source"]).lower()
     if source not in {"auto", "header", "record"}:
         raise ValueError("timestamps.source must be auto, header, or record")

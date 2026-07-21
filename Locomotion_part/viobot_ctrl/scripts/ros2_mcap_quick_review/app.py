@@ -6,6 +6,12 @@ import streamlit as st
 from review_tool.annotations import build_manifest, load_annotations, save_annotation
 from review_tool.config import load_config
 from review_tool.dataset import load_dataset
+from review_tool.initial_decisions import (
+    MATCHED,
+    attach_initial_decisions,
+    is_selected_manual_decision,
+    load_initial_decisions,
+)
 from review_tool.io_utils import read_json
 
 st.set_page_config(page_title="ROS2 / MCAP 快速审核", layout="wide")
@@ -17,6 +23,10 @@ def cached_dataset(path: str) -> pd.DataFrame:
 @st.cache_data(ttl=2)
 def cached_annotations(path: str) -> pd.DataFrame:
     return load_annotations(path)
+
+@st.cache_data(ttl=2)
+def cached_initial_decisions(path: str) -> pd.DataFrame:
+    return load_initial_decisions(path)
 
 def invalidate_cache():
     cached_dataset.clear()
@@ -54,6 +64,24 @@ def main():
         st.warning("数据清单为空，请先运行 scan_files.py。")
         st.stop()
 
+    initial_cfg = cfg.get("initial_decisions", {})
+    initial_enabled = False
+    initial_error = ""
+    initial_decisions = pd.DataFrame()
+    selected_manual_decisions = initial_cfg.get(
+        "selected_manual_decisions", ["KEEP", "REVIEW"]
+    )
+    if bool(initial_cfg.get("enabled", False)):
+        try:
+            initial_csv_path = str(initial_cfg.get("csv_path", "")).strip()
+            if not initial_csv_path:
+                raise ValueError("initial_decisions.csv_path 未配置")
+            initial_decisions = cached_initial_decisions(initial_csv_path)
+            dataset = attach_initial_decisions(dataset, initial_decisions)
+            initial_enabled = True
+        except Exception as exc:
+            initial_error = f"初筛决定加载失败：{type(exc).__name__}: {exc}"
+
     annotation_map = {row["bag_id"]: row.to_dict() for _, row in annotations.iterrows()}
     dataset = dataset.copy()
     dataset["label"] = dataset["bag_id"].map(
@@ -61,10 +89,39 @@ def main():
     )
 
     st.sidebar.title("审核队列")
+    if initial_error:
+        st.sidebar.warning(initial_error)
+    selected_mask = pd.Series(False, index=dataset.index)
+    filter_options = ["未审核", "全部", "Good", "Bad", "预处理错误"]
+    if initial_enabled:
+        selected_mask = is_selected_manual_decision(
+            dataset, selected_manual_decisions
+        )
+        filter_options = [
+            "初筛人工候选—未二筛",
+            "初筛人工候选—全部",
+            *filter_options,
+            "初筛匹配异常",
+        ]
     filter_mode = st.sidebar.radio(
-        "显示", ["未审核", "全部", "Good", "Bad", "预处理错误"], index=0
+        "显示", filter_options, index=0
     )
-    if filter_mode == "未审核":
+    if filter_mode == "初筛人工候选—未二筛":
+        rows = dataset[
+            selected_mask
+            & (dataset["label"] == "")
+            & dataset["status"].isin(["ready", "error"])
+        ].copy()
+    elif filter_mode == "初筛人工候选—全部":
+        rows = dataset[
+            selected_mask & dataset["status"].isin(["ready", "error"])
+        ].copy()
+    elif filter_mode == "初筛匹配异常":
+        rows = dataset[
+            dataset["initial_match_status"].ne(MATCHED)
+            & dataset["status"].isin(["ready", "error"])
+        ].copy()
+    elif filter_mode == "未审核":
         rows = dataset[
             (dataset["label"] == "") & dataset["status"].isin(["ready", "error"])
         ].copy()
@@ -85,6 +142,29 @@ def main():
     st.sidebar.metric("已审核", reviewed)
     st.sidebar.metric("Good / Bad", f"{good_count} / {bad_count}")
     st.sidebar.progress(reviewed / total if total else 0.0)
+    if initial_enabled:
+        matched_count = int(dataset["initial_match_status"].eq(MATCHED).sum())
+        selected_count = int(selected_mask.sum())
+        selected_good = int((selected_mask & dataset["label"].eq("Good")).sum())
+        selected_bad = int((selected_mask & dataset["label"].eq("Bad")).sum())
+        selected_unreviewed = int((selected_mask & dataset["label"].eq("")).sum())
+        with st.sidebar.expander("初筛关联统计", expanded=True):
+            st.write(f"CSV 记录：{len(initial_decisions)}")
+            st.write(f"成功匹配：{matched_count} / {total}")
+            selected_text = " / ".join(selected_manual_decisions)
+            st.write(f"人工候选（{selected_text}）：{selected_count}")
+            st.write(f"二筛未审核：{selected_unreviewed}")
+            st.write(f"二筛 Good / Bad：{selected_good} / {selected_bad}")
+            problems = dataset[dataset["initial_match_status"].ne(MATCHED)][
+                ["bag_id", "bag_path", "initial_record_id", "initial_match_status"]
+            ]
+            st.download_button(
+                "下载匹配异常 CSV",
+                data=problems.to_csv(index=False).encode("utf-8-sig"),
+                file_name="initial_decision_match_problems.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
 
     if rows.empty:
         st.success("当前筛选条件下没有数据。")
@@ -123,6 +203,27 @@ def main():
 
     st.title("ROS2 / MCAP 数据快速审核")
     st.caption(f"{current_index + 1} / {len(rows)} ｜ {bag_path}")
+    if initial_enabled:
+        status = row["initial_match_status"]
+        if status == MATCHED:
+            issues = row["initial_issues"] or "-"
+            st.info(
+                f"初筛人工决定：{row['initial_manual_decision'] or '-'} ｜ "
+                f"自动建议：{row['initial_auto_recommendation'] or '-'} ｜ "
+                f"记录 ID：{row['initial_record_id']} ｜ 问题：{issues}"
+            )
+            st.caption(f"初筛来源文件：{row['initial_source_name']}")
+        else:
+            status_labels = {
+                "no_record_id": "文件名中没有 rec_ 记录 ID",
+                "not_in_decisions": "记录 ID 不在初筛 CSV 中",
+                "decision_id_ambiguous": "初筛 CSV 中记录 ID 重复",
+                "dataset_id_ambiguous": "审核数据中记录 ID 重复或目录内有多个 ID",
+            }
+            st.warning(
+                "初筛匹配状态："
+                + status_labels.get(status, status or "未知")
+            )
 
     left, mid, _ = st.columns([1, 1, 5])
     if left.button("← 上一条", use_container_width=True):
@@ -184,7 +285,9 @@ def main():
         )
 
     st.divider()
-    dl1, dl2 = st.columns(2)
+    download_columns = 3 if initial_enabled else 2
+    download_cols = st.columns(download_columns)
+    dl1, dl2 = download_cols[:2]
     dl1.download_button(
         "下载 Good 文件清单",
         data=build_manifest(annotations, "Good"),
@@ -199,6 +302,18 @@ def main():
         mime="text/csv",
         use_container_width=True,
     )
+    if initial_enabled:
+        selected_ids = set(dataset.loc[selected_mask, "bag_id"])
+        selected_annotations = annotations[
+            annotations["bag_id"].isin(selected_ids)
+        ]
+        download_cols[2].download_button(
+            "下载初筛候选中的二筛 Good",
+            data=build_manifest(selected_annotations, "Good"),
+            file_name="initial_candidates_second_review_good.txt",
+            mime="text/plain",
+            use_container_width=True,
+        )
 
 if __name__ == "__main__":
     main()

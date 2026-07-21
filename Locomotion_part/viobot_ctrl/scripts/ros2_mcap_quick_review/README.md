@@ -42,6 +42,31 @@ paths:
   work_dir: /volume1/Datasets/mcap_review/work
 ```
 
+如需在页面中关联第一次筛选的 `decisions.csv`，增加：
+
+```yaml
+initial_decisions:
+  enabled: true
+  csv_path: /volume1/Datasets/mcap_review/decisions.csv
+  selected_manual_decisions: [KEEP, REVIEW]
+```
+
+该功能只在审核页面中附加初筛信息，不改变扫描和预处理范围。
+`scan_files.py` 仍扫描全部数据，`preprocess.py` 仍为全部候选数据生成视频。
+
+关联时不使用路径或完整文件名，而是使用文件名最后一个 `rec_` 后的记录 ID：
+
+```text
+2026-05-10...__rec_0eQJIq1Qt537ohaz.mcap
+20260510..._rec_0eQJIq1Qt537ohaz_repaired.mcap
+                         ^^^^^^^^^^^^^^^^
+                         相同的匹配 ID
+```
+
+ID 在下一个 `_` 或 `.` 之前结束，因此原始文件和带 `_repaired` 后缀的文件可以匹配。
+不含 `rec_`、CSV 中 ID 重复或实际数据中 ID 重复时，页面会将其列入
+“初筛匹配异常”，但不会阻止普通审核。
+
 并根据实际 Topic 修改：
 
 ```yaml
@@ -122,6 +147,25 @@ streamlit run app.py --server.address 0.0.0.0 --server.port 8501
 
 ```text
 http://NAS_IP:8501
+```
+
+启用 `initial_decisions` 后，页面默认显示“初筛人工候选—未二筛”：
+
+- 进入该队列的唯一条件是 `manual_decision` 为配置中的值，默认选择
+  `KEEP` 和 `REVIEW`；
+- `auto_recommendation` 和 `issues` 只在页面展示，不参与队列选择；
+- 初筛决定不会写回或改动 `decisions.csv`；
+- 二筛结果仍用现有的 Good / Bad 按钮写入 `annotations.csv`；
+- “全部”“未审核”“Good”“Bad”等原有队列仍然保留；
+- 页面可下载匹配异常 CSV，以及“初筛候选中的二筛 Good”文件清单。
+
+因此完整使用顺序仍然是：
+
+```bash
+python scan_files.py --config config.yaml
+python preprocess.py --config config.yaml --workers 1
+export REVIEW_CONFIG=$PWD/config.yaml
+streamlit run app.py --server.address 0.0.0.0 --server.port 8501
 ```
 
 ## 6. 导出标签

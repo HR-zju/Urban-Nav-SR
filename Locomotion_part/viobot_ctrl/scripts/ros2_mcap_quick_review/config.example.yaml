@@ -90,3 +90,10 @@ review:
     - 场景无效
     - 文件损坏
     - 其他
+
+# Optional first-pass decisions overlay. Matching uses the record ID immediately
+# after the final "rec_" in each file name. It does not limit preprocessing.
+initial_decisions:
+  enabled: false
+  csv_path: /path/to/decisions.csv
+  selected_manual_decisions: [KEEP, REVIEW]
