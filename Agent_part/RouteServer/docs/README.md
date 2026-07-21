@@ -14,6 +14,7 @@
 | [YELP_INSTRUCTION_DATA_DESIGN.md](YELP_INSTRUCTION_DATA_DESIGN.md) | Yelp 需求挖掘、taxonomy 扩展和 instruction set 构造流程。 |
 | [SIDEWALK_AGENT_EVAL_PROTOCOL.md](SIDEWALK_AGENT_EVAL_PROTOCOL.md) | SideWalk Agentic Stage2 评估协议。 |
 | [SIDEWALK_PHASE1_DATA_PIPELINE.md](SIDEWALK_PHASE1_DATA_PIPELINE.md) | SideWalk Phase1 数据生成与标注流水线。 |
+| [REASONING_V3_DATA_ANNOTATION_DESIGN.md](REASONING_V3_DATA_ANNOTATION_DESIGN.md) | Reasoning V3.3 六段 Full CoT 中文合同、四数据集监督边界、LVLM observation、确定性组合与训练消费。 |
 
 ## 工程运行
 
