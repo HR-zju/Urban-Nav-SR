@@ -68,9 +68,6 @@ def main():
     initial_enabled = False
     initial_error = ""
     initial_decisions = pd.DataFrame()
-    selected_manual_decisions = initial_cfg.get(
-        "selected_manual_decisions", ["KEEP", "REVIEW"]
-    )
     if bool(initial_cfg.get("enabled", False)):
         try:
             initial_csv_path = str(initial_cfg.get("csv_path", "")).strip()
@@ -91,19 +88,21 @@ def main():
     st.sidebar.title("审核队列")
     if initial_error:
         st.sidebar.warning(initial_error)
-    selected_mask = pd.Series(False, index=dataset.index)
+    manual_keep_mask = pd.Series(False, index=dataset.index)
+    manual_review_mask = pd.Series(False, index=dataset.index)
     manual_drop_mask = pd.Series(False, index=dataset.index)
     manual_decision_mask = pd.Series(False, index=dataset.index)
     filter_options = ["未审核", "全部", "Good", "Bad", "预处理错误"]
     if initial_enabled:
-        selected_mask = is_selected_manual_decision(
-            dataset, selected_manual_decisions
-        )
+        manual_keep_mask = is_selected_manual_decision(dataset, ["KEEP"])
+        manual_review_mask = is_selected_manual_decision(dataset, ["REVIEW"])
         manual_drop_mask = is_selected_manual_decision(dataset, ["DROP"])
-        manual_decision_mask = selected_mask | manual_drop_mask
+        manual_decision_mask = (
+            manual_keep_mask | manual_review_mask | manual_drop_mask
+        )
         filter_options = [
-            "初筛人工候选—未二筛",
-            "初筛人工候选—全部",
+            "初筛人工 KEEP—未二筛",
+            "初筛人工 REVIEW—未二筛",
             "初筛人工 DROP—未二筛",
             *filter_options,
             "初筛匹配异常",
@@ -111,15 +110,17 @@ def main():
     filter_mode = st.sidebar.radio(
         "显示", filter_options, index=0
     )
-    if filter_mode == "初筛人工候选—未二筛":
+    if filter_mode == "初筛人工 KEEP—未二筛":
         rows = dataset[
-            selected_mask
+            manual_keep_mask
             & (dataset["label"] == "")
             & dataset["status"].isin(["ready", "error"])
         ].copy()
-    elif filter_mode == "初筛人工候选—全部":
+    elif filter_mode == "初筛人工 REVIEW—未二筛":
         rows = dataset[
-            selected_mask & dataset["status"].isin(["ready", "error"])
+            manual_review_mask
+            & (dataset["label"] == "")
+            & dataset["status"].isin(["ready", "error"])
         ].copy()
     elif filter_mode == "初筛人工 DROP—未二筛":
         rows = dataset[
@@ -155,10 +156,14 @@ def main():
     st.sidebar.progress(reviewed / total if total else 0.0)
     if initial_enabled:
         matched_count = int(dataset["initial_match_status"].eq(MATCHED).sum())
-        selected_count = int(selected_mask.sum())
-        selected_good = int((selected_mask & dataset["label"].eq("Good")).sum())
-        selected_bad = int((selected_mask & dataset["label"].eq("Bad")).sum())
-        selected_unreviewed = int((selected_mask & dataset["label"].eq("")).sum())
+        manual_keep_count = int(manual_keep_mask.sum())
+        manual_keep_unreviewed = int(
+            (manual_keep_mask & dataset["label"].eq("")).sum()
+        )
+        manual_review_count = int(manual_review_mask.sum())
+        manual_review_unreviewed = int(
+            (manual_review_mask & dataset["label"].eq("")).sum()
+        )
         manual_drop_count = int(manual_drop_mask.sum())
         manual_drop_unreviewed = int(
             (manual_drop_mask & dataset["label"].eq("")).sum()
@@ -166,10 +171,12 @@ def main():
         with st.sidebar.expander("初筛关联统计", expanded=True):
             st.write(f"CSV 记录：{len(initial_decisions)}")
             st.write(f"成功匹配：{matched_count} / {total}")
-            selected_text = " / ".join(selected_manual_decisions)
-            st.write(f"人工候选（{selected_text}）：{selected_count}")
-            st.write(f"二筛未审核：{selected_unreviewed}")
-            st.write(f"二筛 Good / Bad：{selected_good} / {selected_bad}")
+            st.write(
+                f"人工 KEEP：{manual_keep_count}（未二筛 {manual_keep_unreviewed}）"
+            )
+            st.write(
+                f"人工 REVIEW：{manual_review_count}（未二筛 {manual_review_unreviewed}）"
+            )
             st.write(
                 f"人工 DROP：{manual_drop_count}（未二筛 {manual_drop_unreviewed}）"
             )

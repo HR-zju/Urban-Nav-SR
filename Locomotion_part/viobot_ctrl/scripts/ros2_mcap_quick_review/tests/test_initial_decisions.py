@@ -48,7 +48,7 @@ class InitialDecisionTests(unittest.TestCase):
             set(decisions["initial_match_status"]), {"decision_id_ambiguous"}
         )
 
-    def test_selects_manual_keep_and_review_but_not_drop(self):
+    def test_splits_keep_review_and_drop_into_separate_masks(self):
         decisions = pd.DataFrame([
             {
                 "initial_record_id": "keepid",
@@ -83,15 +83,17 @@ class InitialDecisionTests(unittest.TestCase):
         ])
 
         attached = attach_initial_decisions(dataset, decisions)
-        selected = is_selected_manual_decision(attached, ["KEEP", "REVIEW"])
+        manual_keep = is_selected_manual_decision(attached, ["KEEP"])
+        manual_review = is_selected_manual_decision(attached, ["REVIEW"])
         manual_drop = is_selected_manual_decision(attached, ["DROP"])
-        all_manual = selected | manual_drop
+        all_manual = manual_keep | manual_review | manual_drop
 
         self.assertEqual(attached.loc[0, "initial_match_status"], "matched")
         self.assertEqual(attached.loc[1, "initial_match_status"], "matched")
         self.assertEqual(attached.loc[2, "initial_match_status"], "matched")
         self.assertEqual(attached.loc[3, "initial_match_status"], "not_in_decisions")
-        self.assertEqual(selected.tolist(), [True, False, True, False])
+        self.assertEqual(manual_keep.tolist(), [True, False, False, False])
+        self.assertEqual(manual_review.tolist(), [False, False, True, False])
         self.assertEqual(manual_drop.tolist(), [False, True, False, False])
         self.assertEqual(all_manual.tolist(), [True, True, True, False])
 

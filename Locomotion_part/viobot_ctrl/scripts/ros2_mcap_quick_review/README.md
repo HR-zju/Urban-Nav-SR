@@ -48,7 +48,6 @@ paths:
 initial_decisions:
   enabled: true
   csv_path: /volume1/Datasets/mcap_review/decisions.csv
-  selected_manual_decisions: [KEEP, REVIEW]
 ```
 
 该功能只在审核页面中附加初筛信息，不改变扫描和预处理范围。
@@ -149,12 +148,12 @@ streamlit run app.py --server.address 0.0.0.0 --server.port 8501
 http://NAS_IP:8501
 ```
 
-启用 `initial_decisions` 后，页面默认显示“初筛人工候选—未二筛”：
+启用 `initial_decisions` 后，页面将人工决定拆成三个互斥的二筛队列，
+并默认显示“初筛人工 KEEP—未二筛”：
 
-- 进入该队列的唯一条件是 `manual_decision` 为配置中的值，默认选择
-  `KEEP` 和 `REVIEW`；
-- `manual_decision=DROP` 保留在独立的“初筛人工 DROP—未二筛”队列中，
-  不会混入 `KEEP/REVIEW` 候选队列；
+- `manual_decision=KEEP` 进入“初筛人工 KEEP—未二筛”；
+- `manual_decision=REVIEW` 进入“初筛人工 REVIEW—未二筛”；
+- `manual_decision=DROP` 进入“初筛人工 DROP—未二筛”；
 - 人工决定为空的自动 DROP 记录不属于人工 DROP 队列；
 - `auto_recommendation` 和 `issues` 只在页面展示，不参与队列选择；
 - 初筛决定不会写回或改动 `decisions.csv`；

@@ -89,5 +89,4 @@ review:
 # app.py; scan_files.py and preprocess.py still process every discovered bag.
 initial_decisions:
   enabled: true
-  csv_path: ../data/decisions.csv
-  selected_manual_decisions: [KEEP, REVIEW]
+  csv_path: ./decisions.csv

@@ -96,4 +96,3 @@ review:
 initial_decisions:
   enabled: false
   csv_path: /path/to/decisions.csv
-  selected_manual_decisions: [KEEP, REVIEW]
