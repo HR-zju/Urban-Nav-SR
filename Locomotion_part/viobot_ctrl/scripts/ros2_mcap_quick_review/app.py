@@ -92,14 +92,19 @@ def main():
     if initial_error:
         st.sidebar.warning(initial_error)
     selected_mask = pd.Series(False, index=dataset.index)
+    manual_drop_mask = pd.Series(False, index=dataset.index)
+    manual_decision_mask = pd.Series(False, index=dataset.index)
     filter_options = ["未审核", "全部", "Good", "Bad", "预处理错误"]
     if initial_enabled:
         selected_mask = is_selected_manual_decision(
             dataset, selected_manual_decisions
         )
+        manual_drop_mask = is_selected_manual_decision(dataset, ["DROP"])
+        manual_decision_mask = selected_mask | manual_drop_mask
         filter_options = [
             "初筛人工候选—未二筛",
             "初筛人工候选—全部",
+            "初筛人工 DROP—未二筛",
             *filter_options,
             "初筛匹配异常",
         ]
@@ -115,6 +120,12 @@ def main():
     elif filter_mode == "初筛人工候选—全部":
         rows = dataset[
             selected_mask & dataset["status"].isin(["ready", "error"])
+        ].copy()
+    elif filter_mode == "初筛人工 DROP—未二筛":
+        rows = dataset[
+            manual_drop_mask
+            & (dataset["label"] == "")
+            & dataset["status"].isin(["ready", "error"])
         ].copy()
     elif filter_mode == "初筛匹配异常":
         rows = dataset[
@@ -148,6 +159,10 @@ def main():
         selected_good = int((selected_mask & dataset["label"].eq("Good")).sum())
         selected_bad = int((selected_mask & dataset["label"].eq("Bad")).sum())
         selected_unreviewed = int((selected_mask & dataset["label"].eq("")).sum())
+        manual_drop_count = int(manual_drop_mask.sum())
+        manual_drop_unreviewed = int(
+            (manual_drop_mask & dataset["label"].eq("")).sum()
+        )
         with st.sidebar.expander("初筛关联统计", expanded=True):
             st.write(f"CSV 记录：{len(initial_decisions)}")
             st.write(f"成功匹配：{matched_count} / {total}")
@@ -155,6 +170,9 @@ def main():
             st.write(f"人工候选（{selected_text}）：{selected_count}")
             st.write(f"二筛未审核：{selected_unreviewed}")
             st.write(f"二筛 Good / Bad：{selected_good} / {selected_bad}")
+            st.write(
+                f"人工 DROP：{manual_drop_count}（未二筛 {manual_drop_unreviewed}）"
+            )
             problems = dataset[dataset["initial_match_status"].ne(MATCHED)][
                 ["bag_id", "bag_path", "initial_record_id", "initial_match_status"]
             ]
@@ -303,14 +321,14 @@ def main():
         use_container_width=True,
     )
     if initial_enabled:
-        selected_ids = set(dataset.loc[selected_mask, "bag_id"])
-        selected_annotations = annotations[
-            annotations["bag_id"].isin(selected_ids)
+        manual_decision_ids = set(dataset.loc[manual_decision_mask, "bag_id"])
+        manual_decision_annotations = annotations[
+            annotations["bag_id"].isin(manual_decision_ids)
         ]
         download_cols[2].download_button(
-            "下载初筛候选中的二筛 Good",
-            data=build_manifest(selected_annotations, "Good"),
-            file_name="initial_candidates_second_review_good.txt",
+            "下载全部人工决定中的二筛 Good",
+            data=build_manifest(manual_decision_annotations, "Good"),
+            file_name="initial_manual_second_review_good.txt",
             mime="text/plain",
             use_container_width=True,
         )

@@ -84,12 +84,16 @@ class InitialDecisionTests(unittest.TestCase):
 
         attached = attach_initial_decisions(dataset, decisions)
         selected = is_selected_manual_decision(attached, ["KEEP", "REVIEW"])
+        manual_drop = is_selected_manual_decision(attached, ["DROP"])
+        all_manual = selected | manual_drop
 
         self.assertEqual(attached.loc[0, "initial_match_status"], "matched")
         self.assertEqual(attached.loc[1, "initial_match_status"], "matched")
         self.assertEqual(attached.loc[2, "initial_match_status"], "matched")
         self.assertEqual(attached.loc[3, "initial_match_status"], "not_in_decisions")
         self.assertEqual(selected.tolist(), [True, False, True, False])
+        self.assertEqual(manual_drop.tolist(), [False, True, False, False])
+        self.assertEqual(all_manual.tolist(), [True, True, True, False])
 
     def test_duplicate_dataset_ids_are_not_silently_matched(self):
         decisions = pd.DataFrame([{

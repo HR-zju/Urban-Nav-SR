@@ -153,11 +153,16 @@ http://NAS_IP:8501
 
 - 进入该队列的唯一条件是 `manual_decision` 为配置中的值，默认选择
   `KEEP` 和 `REVIEW`；
+- `manual_decision=DROP` 保留在独立的“初筛人工 DROP—未二筛”队列中，
+  不会混入 `KEEP/REVIEW` 候选队列；
+- 人工决定为空的自动 DROP 记录不属于人工 DROP 队列；
 - `auto_recommendation` 和 `issues` 只在页面展示，不参与队列选择；
 - 初筛决定不会写回或改动 `decisions.csv`；
 - 二筛结果仍用现有的 Good / Bad 按钮写入 `annotations.csv`；
 - “全部”“未审核”“Good”“Bad”等原有队列仍然保留；
-- 页面可下载匹配异常 CSV，以及“初筛候选中的二筛 Good”文件清单。
+- 页面可下载匹配异常 CSV，以及“全部人工决定中的二筛 Good”文件清单。
+  后者包含人工 `KEEP`、`REVIEW`、`DROP` 中二筛标记为 Good 的数据，
+  但不包含人工决定为空的自动 DROP。
 
 因此完整使用顺序仍然是：
 
