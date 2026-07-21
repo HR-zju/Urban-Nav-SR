@@ -192,6 +192,7 @@ def build_reasoning_teacher_question(
         "model_visible_context": source.model_visible_context,
         "evidence_catalog": [item.model_dump(mode="json", exclude_none=True) for item in source.evidence_catalog],
     }
+    has_bev = "bev" in source.available_modalities
     skeleton = {
         "reasoning": {
             "schema_version": "urbannav_reasoning_trace_v2",
@@ -209,7 +210,7 @@ def build_reasoning_teacher_question(
                 "relevant_facts": [],
             },
             "cross_modal_alignment": {
-                "available": True,
+                "available": has_bev,
                 "desired_direction": "unknown",
                 "route_to_fpv": "unknown",
                 "selected_corridor_ref": None,
@@ -244,6 +245,40 @@ def build_reasoning_teacher_question(
     parts = [
         "Annotate this frozen input. Return one JSON object matching the skeleton exactly.",
         "ENUMS=" + json.dumps(_teacher_enum_contract(), ensure_ascii=False, separators=(",", ":")),
+        (
+            "For evidence_grounding.relevant_facts, every item MUST have exactly "
+            "{\"fact_code\":\"lower_snake_case\",\"evidence_refs\":[\"catalog.ref\"]}. "
+            "Do not emit ref, fact, text, description, or any other keys. fact_code is a compact "
+            "controlled-style identifier such as center_corridor_visible, route_turns_left, or "
+            "crossing_agent_on_path. Every evidence_refs value must be copied from FROZEN_INPUT "
+            "evidence_catalog; use [] when no catalog reference supports the fact."
+        ),
+        (
+            "For constraint_applicability.applicable, every item MUST have exactly "
+            "{\"constraint\":\"enum_value\",\"trigger_refs\":[\"catalog.ref\"],\"effect\":\"enum_value\"}. "
+            "Do not emit path_ref, controlled_path_refs, explanation, or any other keys. Every applicable "
+            "item must include at least one explicit path ref with prefix corridor., route., waypoint., "
+            "crosswalk., or bev. The wait_for_pedestrian_signal and use_designated_crossing constraints "
+            "additionally require a control.* ref in the same trigger_refs list. If either required ref is "
+            "absent from evidence_catalog, do not mark that constraint applicable. For "
+            "constraint_applicability.not_applicable, every item MUST have exactly "
+            "{\"constraint\":\"enum_value\",\"trigger_refs\":[\"catalog.ref\"],\"reason\":\"enum_value\"}."
+            " The yield_to_crossing_agent, follow_agent, pass_left, and pass_right constraints additionally "
+            "require a track.* ref and an explicit path ref in the same trigger_refs list. Seeing a person "
+            "in a single FPV image does not create a track ref. If evidence_catalog has no track.* entry, "
+            "do not mark any of those four constraints applicable; use a less specific visual-clearance "
+            "constraint only when its own path evidence is present. Emit at most 3 applicable items and "
+            "at most 3 not_applicable items; these are sparse examples, not exhaustive rule lists."
+        ),
+        (
+            "The FPV images are ordered oldest to current according to image_order. Use temporal change across "
+            "all FPV frames for scene evolution, but do not claim a tracked agent unless evidence_catalog has "
+            "a track.* ref. If available_modalities does not contain bev, cross_modal_alignment MUST remain "
+            "exactly unavailable: available=false, desired_direction=unknown, route_to_fpv=unknown, "
+            "selected_corridor_ref=null, status=insufficient_evidence, evidence_refs=[]. If bev is present and "
+            "cross_modal_alignment.available=true, evidence_refs MUST include bev.current and fpv.current or "
+            "a corridor.* ref."
+        ),
         "Keep applicable constraints sparse. Every applicable constraint must cite an explicit corridor/route/waypoint/crosswalk/BEV path ref. A single image may support visible occupancy or clearance but not a tracked motion claim.",
         "tool_evidence_refs must be [] in this stage. BEV and route refs belong in route_evidence_refs, not tool_evidence_refs.",
         "FROZEN_INPUT=" + json.dumps(visible, ensure_ascii=False, separators=(",", ":")),
@@ -335,6 +370,14 @@ def parse_reasoning_teacher_answer(answer: str) -> tuple[ReasoningTargetV2 | Non
         return None, ["teacher_output_not_object"]
     if isinstance(payload.get("target"), dict):
         payload = payload["target"]
+    reasoning = payload.get("reasoning")
+    if isinstance(reasoning, dict):
+        applicability = reasoning.get("constraint_applicability")
+        if isinstance(applicability, dict):
+            for key in ("applicable", "not_applicable"):
+                items = applicability.get(key)
+                if isinstance(items, list) and len(items) > 3:
+                    applicability[key] = items[:3]
     try:
         return ReasoningTargetV2.model_validate(payload), []
     except (TypeError, ValueError) as exc:
@@ -397,6 +440,7 @@ async def annotate_reasoning_source(
         validation = validate_reasoning_target_v2(
             target,
             evidence_catalog=[item.model_dump(mode="json") for item in source.evidence_catalog],
+            available_modalities=source.available_modalities,
             travel_mode=source.travel_mode,
             assistant_text=rendered,
             require_navigation_readout=False,

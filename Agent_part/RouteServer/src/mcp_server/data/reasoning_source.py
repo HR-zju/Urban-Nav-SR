@@ -56,6 +56,8 @@ class ReasoningSourceBuildConfig:
             from demonstration trajectory may remain model-visible.
         strict_image_roles: Reject ambiguous top-level image lists instead of
             guessing roles from image count.
+        media_root: Optional root used to resolve and validate relative image
+            paths before the source fingerprint is frozen.
     """
 
     dataset_source: str
@@ -67,6 +69,7 @@ class ReasoningSourceBuildConfig:
     disabled_system1_datasets: frozenset[str] = _DEFAULT_SYSTEM1_DISABLED_DATASETS
     allow_pseudo_goal_condition: bool = False
     strict_image_roles: bool = True
+    media_root: Path | None = None
 
 
 def build_reasoning_source_v2(
@@ -93,9 +96,10 @@ def build_reasoning_source_v2(
     if row.get("schema_version") == REASONING_SOURCE_V2_SCHEMA_VERSION:
         return ReasoningSourceV2.model_validate(row)
 
-    dataset_source = str(row.get("dataset_source") or row.get("source_dataset") or config.dataset_source).strip()
+    dataset_source = _dataset_source(row, fallback=config.dataset_source)
     source_record_id = _source_record_id(row, index=index)
-    source_group_id = str(row.get("source_group_id") or f"{dataset_source}:{source_record_id}")
+    source_namespace = _source_namespace(config.dataset_source, dataset_source=dataset_source)
+    source_group_id = str(row.get("source_group_id") or f"{source_namespace}:{source_record_id}")
     split_group_id = _split_group_id(row, source_record_id=source_record_id)
     images, image_roles = _ordered_images(row, config=config)
     instruction = str(
@@ -161,6 +165,8 @@ def build_reasoning_source_v2(
         "pseudo_goal_condition_dropped": dropped_pseudo_goal,
         "system1_disabled_reason": system1_reason,
         "source_path": row.get("source_path") or row.get("manifest_path"),
+        "source_namespace": source_namespace,
+        "media_root": str(config.media_root) if config.media_root is not None else None,
     }
     _drop_none(metadata)
     payload: dict[str, Any] = {
@@ -215,29 +221,36 @@ def build_reasoning_source_manifest(
         ValueError: On the first invalid row when ``skip_errors`` is false.
     """
 
-    outputs: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
     counters: Counter[str] = Counter()
-    for index, row in enumerate(iter_jsonl(input_jsonl)):
-        if limit is not None and index >= int(limit):
-            break
-        counters["input_rows"] += 1
-        try:
-            source = build_reasoning_source_v2(row, index=index, config=config)
-        except (TypeError, ValueError) as exc:
-            counters["rejected_rows"] += 1
-            errors.append({"index": index, "id": row.get("id"), "error": str(exc)})
-            if not skip_errors:
-                raise
-            continue
-        outputs.append(source.model_dump(mode="json", exclude_none=True))
-        counters["written_rows"] += 1
-        counters["system1_rows" if source.system1_enabled else "lm_only_rows"] += 1
-        if "bev" in source.available_modalities:
-            counters["fpv_bev_rows"] += 1
-        else:
-            counters["fpv_only_rows"] += 1
-    write_jsonl_atomic(output_jsonl, outputs)
+
+    def normalized_rows() -> Iterable[dict[str, Any]]:
+        for index, row in enumerate(iter_jsonl(input_jsonl)):
+            if limit is not None and index >= int(limit):
+                break
+            counters["input_rows"] += 1
+            try:
+                source = build_reasoning_source_v2(row, index=index, config=config)
+            except (TypeError, ValueError) as exc:
+                counters["rejected_rows"] += 1
+                if len(errors) < 100:
+                    errors.append({"index": index, "id": row.get("id"), "error": str(exc)})
+                if not skip_errors:
+                    raise
+                continue
+            counters["written_rows"] += 1
+            counters["system1_rows" if source.system1_enabled else "lm_only_rows"] += 1
+            fpv_frame_count = sum(role.startswith("fpv.") for role in source.image_roles)
+            counters[f"fpv_frames:{fpv_frame_count}"] += 1
+            if fpv_frame_count > 1:
+                counters["temporal_fpv_rows"] += 1
+            if "bev" in source.available_modalities:
+                counters["fpv_bev_rows"] += 1
+            else:
+                counters["fpv_only_rows"] += 1
+            yield source.model_dump(mode="json", exclude_none=True)
+
+    write_jsonl_atomic(output_jsonl, normalized_rows())
     return {
         "schema_version": "urbannav_reasoning_source_v2_build_report",
         "input_jsonl": str(input_jsonl),
@@ -262,11 +275,16 @@ def _ordered_images(
         pairs = [(image, _canonical_image_role(role)) for image, role in zip(images, roles)]
         return _select_image_pairs(pairs, config=config)
 
+    inferred_pairs = _paired_images_from_metadata(row, images=images)
+    if inferred_pairs:
+        return _select_image_pairs(inferred_pairs, config=config)
+
     fpv = _string_list(row.get("fpv_image_paths"))
     if not fpv:
         fpv = _string_list(row.get("history_fpv_image_paths"))
         current = _first_present(row, "fpv_image_path", "front_image_path", "image_path")
-        if current is not None and str(current) not in fpv:
+        if current is not None:
+            # Repeated paths are valid temporal padding and still require a current slot.
             fpv.append(str(current))
     bev = _string_list(row.get("bev_image_paths"))
     if not bev:
@@ -294,6 +312,77 @@ def _ordered_images(
     raise ValueError("reasoning source has no image input")
 
 
+def _dataset_source(row: Mapping[str, Any], *, fallback: str) -> str:
+    """Resolve dataset provenance without relying on a merged-file default."""
+
+    sidewalk_meta = row.get("sidewalk_meta")
+    if not isinstance(sidewalk_meta, Mapping):
+        sidewalk_meta = {}
+    instruction_meta = row.get("instruction_meta")
+    if not isinstance(instruction_meta, Mapping):
+        instruction_meta = {}
+    value = (
+        row.get("dataset_source")
+        or row.get("source_dataset")
+        or sidewalk_meta.get("source_dataset_resolved")
+        or instruction_meta.get("source_dataset")
+        or fallback
+    )
+    normalized = str(value or "").strip().lower().replace("_", "-")
+    aliases = {
+        "sidewalk-main": "sidewalk",
+        "sidewalk-extra": "sidewalk",
+        "foxglove-yaw-p90": "foxglove",
+        "egowalk-fpv-only": "egowalk",
+        "frodobots-qc": "frodobots",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _source_namespace(configured_source: str, *, dataset_source: str) -> str:
+    """Keep manifest-part identity separate from the canonical dataset family."""
+
+    configured = str(configured_source or "").strip().lower().replace("_", "-")
+    if configured and configured not in {"auto", "merged", "unknown"}:
+        return configured
+    return dataset_source
+
+
+def _paired_images_from_metadata(
+    row: Mapping[str, Any],
+    *,
+    images: list[str],
+) -> list[tuple[str, str]]:
+    """Recover image roles only from an explicit interleaved-pair contract."""
+
+    if not images:
+        return []
+    sidewalk_meta = row.get("sidewalk_meta")
+    if not isinstance(sidewalk_meta, Mapping):
+        return []
+    pair_order = str(
+        sidewalk_meta.get("multiframe_pair_order")
+        or sidewalk_meta.get("multiframe_order")
+        or ""
+    ).strip().lower()
+    if pair_order not in {
+        "fpv_bev_pairs",
+        "fpv_bev_pairs_oldest_to_newest",
+    }:
+        return []
+    if len(images) % 2:
+        raise ValueError("explicit fpv/bev pair order requires an even image count")
+    pairs: list[tuple[str, str]] = []
+    pair_count = len(images) // 2
+    for index in range(pair_count):
+        fpv = images[index * 2]
+        bev = images[index * 2 + 1]
+        fpv_role = "fpv.current" if index == pair_count - 1 else f"fpv.history_{index:02d}"
+        bev_role = "bev.current" if index == pair_count - 1 else f"bev.history_{index:02d}"
+        pairs.extend(((fpv, fpv_role), (bev, bev_role)))
+    return pairs
+
+
 def _select_image_pairs(
     pairs: list[tuple[str, str]],
     *,
@@ -316,11 +405,35 @@ def _select_image_pairs(
     selected = [*fpv_pairs, *bev_pairs, *other_pairs]
     if not any(role == "fpv.current" for _, role in selected):
         raise ValueError("reasoning source requires an explicit current FPV image")
-    images = [str(image) for image, _ in selected]
+    images = [_resolve_image_path(image, media_root=config.media_root) for image, _ in selected]
     roles = [role for _, role in selected]
     if len(set(roles)) != len(roles):
         raise ValueError(f"duplicate canonical image roles: {roles}")
     return images, roles
+
+
+def _resolve_image_path(value: str, *, media_root: Path | None) -> str:
+    """Resolve one image path against an explicit mounted dataset root.
+
+    Args:
+        value: Absolute or manifest-relative image path.
+        media_root: Optional mounted dataset root.
+
+    Returns:
+        Original path when no root is configured, otherwise an absolute path.
+
+    Raises:
+        ValueError: If the root-backed path does not resolve to a file.
+    """
+
+    path = Path(str(value)).expanduser()
+    if media_root is None:
+        return str(path)
+    candidate = path if path.is_absolute() else Path(media_root).expanduser() / path
+    resolved = candidate.resolve()
+    if not resolved.is_file():
+        raise ValueError(f"reasoning source image does not exist under media_root: {resolved}")
+    return str(resolved)
 
 
 def _build_model_visible_context(row: Mapping[str, Any], *, instruction: str) -> dict[str, Any]:
@@ -383,7 +496,12 @@ def _build_evidence_catalog(
         elif role.startswith("fpv.history_"):
             add(role, "fpv", "historical first-person observation")
         elif role == "bev.current":
-            add("bev.current", "bev", "current bird's-eye-view observation")
+            add(
+                "bev.current",
+                "bev",
+                "optional bird's-eye route and topology context",
+                **_bev_evidence_attributes(row),
+            )
         elif role.startswith("goal.image_"):
             add(role, "goal_image", "visual goal reference")
     if context.get("goal") is not None:
@@ -406,6 +524,33 @@ def _build_evidence_catalog(
     if tool_context is not None:
         add("tool.latest", "tool", "latest frozen tool response")
     return [entries[key] for key in sorted(entries)]
+
+
+def _bev_evidence_attributes(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Build model-visible BEV semantics without leaking private GT labels.
+
+    Args:
+        row: Original heterogeneous manifest row.
+
+    Returns:
+        Stable BEV-role metadata and optional synchronization metadata already
+        present in the source row.
+    """
+
+    result: dict[str, Any] = {
+        "semantic_role": "optional_route_topology_context",
+        "local_safety_authority": False,
+        "requires_fpv_safety_check": True,
+        "visual_convention": (
+            "Interpret visible route overlays, ego/goal markers, and local topology only; "
+            "do not infer unseen FPV clearance from BEV."
+        ),
+    }
+    for key in ("fps", "frame_dt_sec", "bev_frame_delta", "bev_time_delta_sec"):
+        value = row.get(key)
+        if value is not None:
+            result[key] = _sanitize_visible_value(value)
+    return result
 
 
 def _available_modalities(

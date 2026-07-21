@@ -28,6 +28,7 @@ def validate_reasoning_target_v2(
     target: ReasoningTargetV2,
     *,
     evidence_catalog: Iterable[Any] = (),
+    available_modalities: Iterable[str] | None = None,
     travel_mode: str | None = None,
     assistant_text: str | None = None,
     require_navigation_readout: bool = False,
@@ -42,6 +43,7 @@ def validate_reasoning_target_v2(
     Args:
         target: Strongly parsed reasoning and finish target.
         evidence_catalog: Strings or objects containing ``ref``/``id`` fields.
+        available_modalities: Optional input-visible modality names.
         travel_mode: Optional active travel mode for traffic-rule checks.
         assistant_text: Optional rendered assistant output.
         require_navigation_readout: Whether navigate text must carry readout.
@@ -61,7 +63,11 @@ def validate_reasoning_target_v2(
     elif cited_refs:
         warnings.append("evidence_catalog_missing")
 
-    _validate_alignment(target.reasoning, errors=errors)
+    _validate_alignment(
+        target.reasoning,
+        available_modalities=available_modalities,
+        errors=errors,
+    )
     _validate_constraints(target.reasoning, travel_mode=travel_mode, errors=errors, warnings=warnings)
     _validate_decision(target.reasoning, errors=errors, warnings=warnings)
 
@@ -137,11 +143,33 @@ def normalize_evidence_catalog(entries: Iterable[Any]) -> set[str]:
     return refs
 
 
-def _validate_alignment(trace: ReasoningTraceV2, *, errors: list[str]) -> None:
-    """Validate route-to-corridor consistency."""
+def _validate_alignment(
+    trace: ReasoningTraceV2,
+    *,
+    available_modalities: Iterable[str] | None,
+    errors: list[str],
+) -> None:
+    """Validate route-to-corridor consistency and modality availability."""
 
     alignment = trace.cross_modal_alignment
     decision = trace.decision
+    if available_modalities is not None:
+        modalities = {str(item) for item in available_modalities}
+        has_bev = "bev" in modalities
+        if not has_bev and alignment.available:
+            errors.append("alignment_available_without_bev")
+        if not has_bev and (
+            alignment.selected_corridor_ref is not None
+            or alignment.evidence_refs
+            or alignment.status not in {"not_visible", "insufficient_evidence"}
+        ):
+            errors.append("alignment_content_without_bev")
+        if has_bev and alignment.available:
+            refs = set(alignment.evidence_refs)
+            if "bev.current" not in refs:
+                errors.append("alignment_missing_bev_ref")
+            if not any(ref == "fpv.current" or ref.startswith("corridor.") for ref in refs):
+                errors.append("alignment_missing_fpv_ref")
     if alignment.status in {"aligned", "locally_blocked", "conflict"} and not alignment.evidence_refs:
         errors.append("alignment_missing_evidence_refs")
     if (

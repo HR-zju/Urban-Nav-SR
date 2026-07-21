@@ -1,72 +1,74 @@
-"""LangGraph-based closed-loop UrbanNav episode runtime."""
+"""Closed-loop UrbanNav runtime exports with optional dependency isolation.
 
-from mcp_server.runtime.graph import EpisodeRuntime, EpisodeRuntimeConfig, build_episode_graph
-from mcp_server.runtime.events import EventReduction, ExternalEventStore, InMemoryExternalEventStore, reduce_external_event
-from mcp_server.runtime.execution import (
-    EnvironmentExecutionManager,
-    ExecutionFeedback,
-    HaltFeedback,
-    ExecutionLease,
-    bind_system1_execution_context,
-    validate_system1_freshness,
-)
-from mcp_server.runtime.interfaces import (
-    EnvironmentStepResult,
-    ObservationResult,
-    SafetyResult,
-    System1Output,
-    System2Action,
-    System2ActionType,
-    TerminalDecision,
-    TerminalOutcome,
-    TerminalValidationResult,
-)
-from mcp_server.runtime.service import EpisodeRuntimeEventService
-from mcp_server.runtime.tool_adapters import (
-    LiveToolExecutorAdapter,
-    UrbanNavReplayToolExecutorAdapter,
-    bind_tool_call_context,
-    validate_tool_call_context,
-)
+Offline data tools import :mod:`mcp_server.runtime.system1_contract` but do not
+need LangGraph.  Lazy package exports keep that lightweight path usable while
+preserving the public runtime API for full RouteServer environments.
+"""
+
+from __future__ import annotations
+
+from importlib import import_module
+from typing import Any
+
 from mcp_server.runtime.system1_contract import (
     SYSTEM1_COORDINATE_FRAME_CURRENT_EGO_FLU,
     SYSTEM1_TARGET_FORMAT_EGO_POSE_XYT_FLU_V1,
     canonical_trajectory_policy,
     canonicalize_trajectory_ego_t,
 )
-from mcp_server.runtime.terminal import RuntimeTerminalValidator
+
+
+_LAZY_EXPORTS = {
+    "EpisodeRuntime": ("mcp_server.runtime.graph", "EpisodeRuntime"),
+    "EpisodeRuntimeConfig": ("mcp_server.runtime.graph", "EpisodeRuntimeConfig"),
+    "build_episode_graph": ("mcp_server.runtime.graph", "build_episode_graph"),
+    "EventReduction": ("mcp_server.runtime.events", "EventReduction"),
+    "ExternalEventStore": ("mcp_server.runtime.events", "ExternalEventStore"),
+    "InMemoryExternalEventStore": ("mcp_server.runtime.events", "InMemoryExternalEventStore"),
+    "reduce_external_event": ("mcp_server.runtime.events", "reduce_external_event"),
+    "EnvironmentExecutionManager": ("mcp_server.runtime.execution", "EnvironmentExecutionManager"),
+    "ExecutionFeedback": ("mcp_server.runtime.execution", "ExecutionFeedback"),
+    "HaltFeedback": ("mcp_server.runtime.execution", "HaltFeedback"),
+    "ExecutionLease": ("mcp_server.runtime.execution", "ExecutionLease"),
+    "bind_system1_execution_context": ("mcp_server.runtime.execution", "bind_system1_execution_context"),
+    "validate_system1_freshness": ("mcp_server.runtime.execution", "validate_system1_freshness"),
+    "EnvironmentStepResult": ("mcp_server.runtime.interfaces", "EnvironmentStepResult"),
+    "ObservationResult": ("mcp_server.runtime.interfaces", "ObservationResult"),
+    "SafetyResult": ("mcp_server.runtime.interfaces", "SafetyResult"),
+    "System1Output": ("mcp_server.runtime.interfaces", "System1Output"),
+    "System2Action": ("mcp_server.runtime.interfaces", "System2Action"),
+    "System2ActionType": ("mcp_server.runtime.interfaces", "System2ActionType"),
+    "TerminalDecision": ("mcp_server.runtime.interfaces", "TerminalDecision"),
+    "TerminalOutcome": ("mcp_server.runtime.interfaces", "TerminalOutcome"),
+    "TerminalValidationResult": ("mcp_server.runtime.interfaces", "TerminalValidationResult"),
+    "EpisodeRuntimeEventService": ("mcp_server.runtime.service", "EpisodeRuntimeEventService"),
+    "LiveToolExecutorAdapter": ("mcp_server.runtime.tool_adapters", "LiveToolExecutorAdapter"),
+    "UrbanNavReplayToolExecutorAdapter": (
+        "mcp_server.runtime.tool_adapters",
+        "UrbanNavReplayToolExecutorAdapter",
+    ),
+    "bind_tool_call_context": ("mcp_server.runtime.tool_adapters", "bind_tool_call_context"),
+    "validate_tool_call_context": ("mcp_server.runtime.tool_adapters", "validate_tool_call_context"),
+    "RuntimeTerminalValidator": ("mcp_server.runtime.terminal", "RuntimeTerminalValidator"),
+}
+
+
+def __getattr__(name: str) -> Any:
+    """Load heavy runtime symbols only when callers request them."""
+
+    target = _LAZY_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module_name, attribute_name = target
+    value = getattr(import_module(module_name), attribute_name)
+    globals()[name] = value
+    return value
 
 __all__ = [
-    "EnvironmentStepResult",
-    "EnvironmentExecutionManager",
-    "EventReduction",
-    "ExecutionFeedback",
-    "HaltFeedback",
-    "ExecutionLease",
-    "ExternalEventStore",
-    "EpisodeRuntime",
-    "EpisodeRuntimeConfig",
-    "EpisodeRuntimeEventService",
-    "LiveToolExecutorAdapter",
-    "InMemoryExternalEventStore",
-    "ObservationResult",
-    "SafetyResult",
     "System1Output",
     "SYSTEM1_COORDINATE_FRAME_CURRENT_EGO_FLU",
     "SYSTEM1_TARGET_FORMAT_EGO_POSE_XYT_FLU_V1",
-    "System2Action",
-    "System2ActionType",
-    "TerminalDecision",
-    "TerminalOutcome",
-    "TerminalValidationResult",
-    "RuntimeTerminalValidator",
-    "UrbanNavReplayToolExecutorAdapter",
-    "build_episode_graph",
-    "bind_system1_execution_context",
-    "bind_tool_call_context",
     "canonical_trajectory_policy",
     "canonicalize_trajectory_ego_t",
-    "reduce_external_event",
-    "validate_system1_freshness",
-    "validate_tool_call_context",
+    *sorted(_LAZY_EXPORTS),
 ]

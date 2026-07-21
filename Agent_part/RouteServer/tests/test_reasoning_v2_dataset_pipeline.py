@@ -28,6 +28,7 @@ from mcp_server.teacher.reasoning_v2_teacher import (
     annotate_reasoning_source,
     build_reasoning_teacher_question,
     label_reasoning_source_manifest,
+    parse_reasoning_teacher_answer,
 )
 
 
@@ -80,6 +81,89 @@ def test_source_normalization_uses_explicit_roles_and_canonical_system1() -> Non
     assert source.trajectory_policy["system1_target_format"] == "ego_pose_xyt_flu_v1"
     assert source.trajectory_policy["normalized"] is False
     assert "route.active" in {item.ref for item in source.evidence_catalog}
+
+
+def test_source_recovers_explicit_interleaved_pairs_and_dataset_provenance() -> None:
+    row = {
+        "id": "sidewalk-main:1",
+        "images": [
+            "fpv-0.jpg",
+            "bev-0.jpg",
+            "fpv-1.jpg",
+            "bev-1.jpg",
+            "fpv-2.jpg",
+            "bev-2.jpg",
+        ],
+        "sidewalk_meta": {
+            "source_dataset_resolved": "frodobots_qc",
+            "multiframe_pair_order": "fpv_bev_pairs",
+        },
+        "trajectory_ego_t": [[0.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.2, 1.0]],
+    }
+
+    source = build_reasoning_source_v2(
+        row,
+        index=0,
+        config=ReasoningSourceBuildConfig(dataset_source="merged"),
+    )
+
+    assert source.dataset_source == "frodobots"
+    assert source.images == ["fpv-0.jpg", "fpv-1.jpg", "fpv-2.jpg", "bev-2.jpg"]
+    assert source.image_roles == [
+        "fpv.history_00",
+        "fpv.history_01",
+        "fpv.current",
+        "bev.current",
+    ]
+    assert source.system1_enabled is False
+    assert source.metadata["system1_disabled_reason"] == "dataset_motion_labels_disabled"
+
+
+def test_source_preserves_duplicate_padding_as_five_temporal_slots() -> None:
+    row = {
+        "id": "padded-start",
+        "history_fpv_image_paths": ["/tmp/000000.jpg"] * 4,
+        "fpv_image_path": "/tmp/000000.jpg",
+    }
+
+    source = build_reasoning_source_v2(
+        row,
+        index=0,
+        config=ReasoningSourceBuildConfig(dataset_source="egowalk", max_fpv_frames=5),
+    )
+
+    assert source.images == ["/tmp/000000.jpg"] * 5
+    assert source.image_roles == [
+        "fpv.history_00",
+        "fpv.history_01",
+        "fpv.history_02",
+        "fpv.history_03",
+        "fpv.current",
+    ]
+
+
+def test_source_group_namespace_preserves_manifest_part_identity() -> None:
+    row = {
+        "id": "row:7",
+        "dataset_source": "sidewalk",
+        "fpv_image_paths": ["/tmp/fpv.jpg"],
+    }
+
+    main = build_reasoning_source_v2(
+        row,
+        index=7,
+        config=ReasoningSourceBuildConfig(dataset_source="sidewalk_main"),
+    )
+    extra = build_reasoning_source_v2(
+        row,
+        index=7,
+        config=ReasoningSourceBuildConfig(dataset_source="sidewalk_extra"),
+    )
+
+    assert main.dataset_source == extra.dataset_source == "sidewalk"
+    assert main.source_group_id == "sidewalk-main:row:7"
+    assert extra.source_group_id == "sidewalk-extra:row:7"
+    assert main.source_group_id != extra.source_group_id
 
 
 def test_source_rejects_ambiguous_multimodal_image_list() -> None:
@@ -241,6 +325,56 @@ def test_teacher_prompt_excludes_private_and_continuous_fields() -> None:
     assert "private_secret" not in prompt
     assert "trajectory_ego_t" not in prompt
     assert "pixel_trajectory" not in prompt
+
+
+def test_fpv_only_multiframe_prompt_disables_cross_modal_alignment() -> None:
+    source = build_reasoning_source_v2(
+        {
+            "id": "fpv-only-5f",
+            "instruction": "Continue safely.",
+            "fpv_image_paths": [f"/tmp/fpv-{index}.jpg" for index in range(5)],
+        },
+        index=0,
+        config=ReasoningSourceBuildConfig(dataset_source="egowalk", max_fpv_frames=5),
+    )
+
+    prompt = build_reasoning_teacher_question(source)
+
+    assert source.image_roles == [
+        "fpv.history_00",
+        "fpv.history_01",
+        "fpv.history_02",
+        "fpv.history_03",
+        "fpv.current",
+    ]
+    assert "temporal_fpv" in source.available_modalities
+    assert "bev" not in source.available_modalities
+    assert "\"cross_modal_alignment\":{\"available\":false" in prompt
+    assert "cross_modal_alignment MUST remain exactly unavailable" in prompt
+
+
+def test_teacher_parser_limits_sparse_constraint_examples() -> None:
+    payload = _target().model_dump(mode="json")
+    payload["reasoning"]["constraint_applicability"]["not_applicable"] = [
+        {
+            "constraint": constraint,
+            "trigger_refs": ["fpv.current"],
+            "reason": "insufficient_evidence",
+        }
+        for constraint in (
+            "maintain_clearance",
+            "slow_for_agent",
+            "yield_to_crossing_agent",
+            "follow_agent",
+            "pass_left",
+        )
+    ]
+
+    target, errors = parse_reasoning_teacher_answer(json.dumps(payload))
+
+    assert errors == []
+    assert target is not None
+    assert len(target.reasoning.constraint_applicability.not_applicable) == 3
 
 
 def _source(*, system1_enabled: bool) -> ReasoningSourceV2:

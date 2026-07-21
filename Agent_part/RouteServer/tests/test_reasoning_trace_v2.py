@@ -68,6 +68,32 @@ class ReasoningTraceV2ContractTest(unittest.TestCase):
                 ),
             )
 
+    def test_alignment_availability_must_match_bev_modality(self) -> None:
+        base = _valid_target()
+        alignment = base.reasoning.cross_modal_alignment.model_copy(
+            update={"evidence_refs": ["route.active", "bev.current", "corridor.left"]}
+        )
+        target = ReasoningTargetV2(
+            reasoning=base.reasoning.model_copy(update={"cross_modal_alignment": alignment}),
+            finish=base.finish,
+        )
+
+        fpv_only = validate_reasoning_target_v2(
+            target,
+            evidence_catalog=_evidence_catalog(),
+            available_modalities={"fpv", "temporal_fpv"},
+        )
+        fpv_bev = validate_reasoning_target_v2(
+            target,
+            evidence_catalog=[*_evidence_catalog(), "bev.current"],
+            available_modalities={"fpv", "temporal_fpv", "bev"},
+        )
+
+        self.assertFalse(fpv_only.valid)
+        self.assertIn("alignment_available_without_bev", fpv_only.errors)
+        self.assertIn("alignment_content_without_bev", fpv_only.errors)
+        self.assertTrue(fpv_bev.valid, fpv_bev.errors)
+
     def test_social_temporal_constraint_requires_track_and_path_refs(self) -> None:
         target = _valid_target()
         payload = target.reasoning.model_dump(mode="json")

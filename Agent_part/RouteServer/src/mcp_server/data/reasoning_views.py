@@ -72,6 +72,7 @@ def build_reasoning_training_views(
     validation = validate_reasoning_target_v2(
         target,
         evidence_catalog=[item.model_dump(mode="json") for item in source.evidence_catalog],
+        available_modalities=source.available_modalities,
         travel_mode=source.travel_mode,
         assistant_text=assistant_text,
         require_navigation_readout=source.system1_enabled,
@@ -244,7 +245,11 @@ def _effective_qa_validity(
     trace = annotation.target.reasoning
     confidence = _confidence_score(trace.decision.confidence)
     alignment_refs = tuple(trace.cross_modal_alignment.evidence_refs)
-    if trace.cross_modal_alignment.available and alignment_refs:
+    if (
+        {"fpv", "bev"}.issubset(source.available_modalities)
+        and trace.cross_modal_alignment.available
+        and alignment_refs
+    ):
         for task_type in ("route_to_fpv_grounding", "local_route_executability"):
             result.setdefault(
                 task_type,
