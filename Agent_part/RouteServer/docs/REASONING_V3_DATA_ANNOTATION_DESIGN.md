@@ -1,8 +1,19 @@
 # UrbanNav Reasoning V3.3 Full CoT 数据标注设计
 
-更新时间：2026-07-21。
+更新时间：2026-07-22。
 
-当前状态：V3.3 的 source、双阶段 LVLM teacher、GT 约束的 decision rationale、canonical composer、validator、训练 view、`ms-swift` consumer、section mask 与 provenance-aware sampler 已完成原理性实现。本版本只定义 Full CoT；VQA、typed `ToolResultUse` 和 agentic profile 仍是后续独立合同。
+当前状态分为四层，禁止把“代码已实现”表述成“生产数据已验收”：
+
+| 层级 | 当前状态 |
+| --- | --- |
+| 数据合同与实现 | V3.3 source、双阶段 LVLM teacher、GT 约束 rationale、composer、validator、training view、`ms-swift` adapter、section mask 与 sampler 已实现。 |
+| 本地定向验证 | `UrbanNav` 环境下 RouteServer 31 项、`ms-swift` 15 项 V3.3 定向测试通过。 |
+| 服务器生产验收 | 尚未完成四数据集真实 Qwen smoke、HTML 人审、质量门禁、真实 tokenizer 两步训练和 checkpoint 生成回读。 |
+| 本版本非目标 | VQA、typed `ToolResultUse` 和 agentic profile 仍是后续独立合同。 |
+
+文档职责也必须保持单一：本文是 writer/schema/teacher 的规范来源；`ms-swift` 的
+`docs/Task/sidewalk_unified_e2e_framework.md` 只定义训练消费边界，
+`docs/Task/sidewalk_agent_tools_e2e_flow.md` 维护资产、路径、命令和运行状态。
 
 ## 1. 核心结论
 
@@ -525,7 +536,9 @@ urbannav_reasoning_v3_3_fewshot_v1
 - conditional/blocked/forbidden 分类携带条件、blocker 或 reason；
 - actor/control rule 绑定 affected corridor 和 evidence；
 - RouteServer 与 ms-swift schema、profile digest 和 section mask 一致；
-- 四数据集真实 LVLM smoke、质量报告与 HTML 人工检阅通过后，才允许全量重标。
+- 四数据集真实 LVLM smoke、质量报告与 HTML 人工检阅通过；
+- 真实 base model 的 tokenizer/section mask、两步 LoRA 和 checkpoint 生成回读通过；
+- 只有以上报告全部落在新的 V3.3 run root，才允许全量重标。
 
 ## 20. 当前非目标
 

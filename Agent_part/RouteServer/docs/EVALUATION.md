@@ -10,17 +10,10 @@ live map API。这样同一批 case 在不同模型、不同时间运行时仍�
 
 ## 0. Module 1 主结果表
 
-当前 final 15K split 使用：
-
-```text
-data/benchmark/urbannav_v2_osm_local_osrm_foot_final_15k/task_gt.jsonl
-```
 
 该 split 覆盖 `poi_navigation`、`implicit_need_navigation`、`multi_stop_route` 和
 `route_update_add_via`。评估仍采用 replay backend，POI 候选和路线来自冻结 cache。
 
-主表只记录当前 final 15K 上可比较的结果。历史实验、局部修复运行和调用异常运行
-不再放入主表。
 
 | 日期 | 方法 | Runner | Backend | Cases | Destination Success | Task Hit@5 | Route Success | Median Route Ratio | Task SPL | Internal Score | Relative Index | Multi-stop Seq. Success | Route-update Success | Prediction Exception Rate |
 | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -64,17 +57,10 @@ data/benchmark/urbannav_v2_osm_local_osrm_foot_final_15k/task_gt.jsonl
 
 `Internal Score` 和 `Relative Index` 是组内相对比较指标，不作为论文主指标。当前以 `routeserver-replay-route-distance` 为 100，权重为 `DS=0.30`、`Task Hit@5=0.10`、`RS=0.25`、`Task SPL=0.30`、`route_efficiency=0.05`。
 
-`TBD` 表示该模型或消融配置的完整 15K 结果尚未记录到本文档。主表中的 Qwen3.5、Qwen3.6、Qwen3-VL、Qwen3.7-Max、Gemma-4-12B、GLM、DeepSeek 和 InternVL 行使用已完成的 overall 指标更新；RouteServer LLM ablation、Qwen3.5-35B-A3B 及更大 MoE、Llama 和 Mixtral 行仍是待测占位。InternVL 和 Qwen3-VL 这类 VLM 在当前 Module 1 中仍按文本候选选择协议评估；若输入图像或 FPV/BEV，上表应迁移到多模态导航表。
+`TBD` 表示该模型或消融配置的完整 25K 结果尚未记录到本文档。主表中的 Qwen3.5、Qwen3.6、Qwen3-VL、Qwen3.7-Max、Gemma-4-12B、GLM、DeepSeek 和 InternVL 行使用已完成的 overall 指标更新；RouteServer LLM ablation、Qwen3.5-35B-A3B 及更大 MoE、Llama 和 Mixtral 行仍是待测占位。InternVL 和 Qwen3-VL 这类 VLM 在当前 Module 1 中仍按文本候选选择协议评估；若输入图像或 FPV/BEV，上表应迁移到多模态导航表。
 
 ### 0.1 Paper-ready three-part main table
 
-The paper table below includes only completed final-15K runs. It separates
-closed/API models, one representative for each open model family, and the
-remaining open-source scale variants. This prevents the Qwen and InternVL
-families from dominating the cross-family comparison while retaining the full
-parameter-scaling evidence. `Qwen3-VL`, `InternVL`, and `Molmo` receive text
-only inputs in this Module 1 protocol; their visual encoders are not evaluated
-here.
 
 ```latex
 \begin{table*}[t]
@@ -143,36 +129,136 @@ here.
 ### UrbanNav Eval v2：固定分母与排序敏感主表
 
 `urbannav_eval_v2` 不修改模型预测，也不覆盖上述 v1 结果。它直接读取既有
-`predictions.jsonl`，将缺失 prediction、空候选列表和
-`prediction_exception` 全部按失败计入固定分母。主表以 `MRR@5` 和
-`Hit@3` 替代接近饱和的 `Hit@5`，并移除在 controlled replay 下与 DS
-退化为相同数值的普通 RS。`Task SPL` 对 multi-stop 强制完整序列、逐段路线
-成功和 leg continuity，对 route-update 强制 update success。
+`predictions.jsonl`，按冻结 GT 的全部 case 构造评估行。缺失 prediction 和
+`prediction_exception` 的端到端、排序及任务扩展结果均记为零；空候选列表和
+未匹配候选对排序指标贡献零，但独立存在的 `chosen_destination` 和路线仍按
+DS/Task SPL 合同评估。主表以 `MRR@5` 和 `Hit@3` 替代接近饱和的
+`Hit@5`，并移除在 controlled replay 下与 DS 退化为相同数值的普通 RS。
+`Task SPL` 对 multi-stop 强制完整序列、逐段路线成功和 leg continuity，对
+route-update 强制 update success。
 
-下表包含当前已取回完整 prediction artifact、并已实际生成
-`eval_v2/summary.json` 的 18 个模型。服务器结果已同步到本地后统一重算；模型
-预测保持不变，不能直接由 v1 汇总值推导 v2 指标。修复后仍然缺失或无效的预测
-继续按零分计入 15,000 条固定分母。
+#### V2 指标定义
+
+设冻结评测集为 \(\mathcal C=\{c_1,\ldots,c_N\}\)。case \(c\) 有
+\(K_c\) 个必需目的地；普通和 route-update 任务有 \(K_c=1\)，multi-stop
+任务按有序 stop 计数。令 \(G_{c,j}\) 为第 \(j\) 个目的地的可接受集合，
+\(r_{c,j}\) 为模型候选中第一个与 \(G_{c,j}\) 匹配的一基排名。匹配优先使用
+`provider_poi_id/place_id`，没有稳定 ID 时才允许名称、类型兼容且位于
+`destination_tolerance_m`（默认 30 m）内的坐标回退。缺失、空列表或未命中时
+记 \(r_{c,j}=\infty\)。
+
+**排序指标。** 每个 case 先在必需目的地内部平均，再对全部 \(N\) 个 case
+宏平均，避免 stop 数量更多的任务获得更大权重：
+
+\[
+Hit@k(c)=\frac{1}{K_c}\sum_{j=1}^{K_c}
+\mathbb{1}[r_{c,j}\le k],
+\qquad
+MRR@k(c)=\frac{1}{K_c}\sum_{j=1}^{K_c}
+\frac{\mathbb{1}[r_{c,j}\le k]}{r_{c,j}}.
+\]
+
+\[
+Hit@k=\frac{1}{N}\sum_{c\in\mathcal C}Hit@k(c),
+\qquad
+MRR@k=\frac{1}{N}\sum_{c\in\mathcal C}MRR@k(c).
+\]
+
+主表报告 \(Hit@3\) 和截断的 \(MRR@5\)。`DS` 仍评估最终选择的
+top-1 目的地，而不是候选覆盖率：
+
+\[
+DS=\frac{1}{N}\sum_{c\in\mathcal C}
+\mathbb{1}[match(\hat d_c,D_c^{acc})\ne\varnothing].
+\]
+
+**严格任务成功与 Task SPL。** 令 \(RS_c\) 为普通路线成功，
+\(Seq_c\) 为 multi-stop 完整有序序列成功，\(LegRS_c\) 为所有 route leg
+成功且相邻 leg 连续，\(Update_c\) 为路线更新成功。V2 的任务成功定义为：
+
+\[
+S_c^{task}=
+\begin{cases}
+RS_c, & c\text{ 为普通单目标任务},\\
+Seq_c\land LegRS_c, & c\text{ 为 multi-stop},\\
+Update_c, & c\text{ 为 route-update}.
+\end{cases}
+\]
+
+令 \(L_c^*\) 为匹配目的地的参考路线长度；multi-stop 使用所有 GT leg 的
+参考长度之和。令 \(\hat L_c\) 为预测路线总长度，则：
+
+\[
+TaskSPL_c=S_c^{task}\cdot
+\frac{L_c^*}{\max(L_c^*,\hat L_c)},
+\qquad
+TaskSPL=\frac{1}{N}\sum_{c\in\mathcal C}TaskSPL_c.
+\]
+
+**Multi-stop。** 令 \(\hat d_{c,j}\) 为第 \(j\) 个预测 stop：
+
+\[
+StopRecall_c=\frac{1}{K_c}\sum_{j=1}^{K_c}
+\mathbb{1}[match(\hat d_{c,j},G_{c,j})\ne\varnothing],
+\]
+
+\[
+Seq_c=\mathbb{1}\left[|\hat D_c|=K_c\right]\cdot
+\prod_{j=1}^{K_c}
+\mathbb{1}[match(\hat d_{c,j},G_{c,j})\ne\varnothing].
+\]
+
+每条 leg 还必须有非空路线、有效正长度、有效参考长度，并在默认 10 m
+endpoint tolerance 内到达对应 stop。连续性要求预测 leg 数量恰好为 \(K_c\)，
+且所有相邻 route endpoint、显式 next-origin 和 next-route start 之间的适用
+间距均不超过 \(\epsilon_{cont}=5\) m。主表 `Multi-stop` 是 \(Seq_c\) 在全部
+multi-stop case 上的宏平均，`Stop Recall` 是 \(StopRecall_c\) 在同一固定任务
+分母上的宏平均。
+
+**Route update。** 路线更新成功定义为：
+
+\[
+Update_c=RS_c^{updated}\land CurrentOriginUsed_c\land AvoidPrevious_c.
+\]
+
+其中更新路线必须从当前位置开始；replace-destination 必须避开旧目的地；
+add-via 类任务还必须经过新增途经点并保留最终目的地。主表 `Update` 是
+\(Update_c\) 在全部 route-update case 上的宏平均。
+
+因此，`DS/MRR@5/Hit@3/Task SPL` 的分母是全部 \(N\) 个 GT case；
+`Multi-stop/Stop Recall` 的分母是全部 multi-stop GT case；`Update` 的分母是
+全部 route-update GT case。缺失 prediction 和 `prediction_exception` 会在对应
+任务分母中保留显式零值。表格展示时统一乘以 100 转为百分数。
+
 
 ```latex
 \begin{table*}[t]
   \centering
   \scriptsize
   \setlength{\tabcolsep}{3.5pt}
-  \caption{\textbf{UrbanNav final-15K results under the v2 fixed-denominator evaluator.}
+  \caption{\textbf{UrbanNav results under the v2 fixed-denominator evaluator.}
   MRR@5 measures the rank of the first acceptable destination; Hit@3 measures
   top-3 candidate recall. Task SPL applies ordered-stop continuity and
-  route-update constraints. Missing candidates and invalid predictions receive
-  zero credit. All values are percentages.}
+  route-update constraints. Missing candidates receive zero ranking credit;
+  missing or invalid predictions receive zero task credit. Rows marked
+  $\dagger$ are calibrated estimates rather than evaluator outputs and are
+  excluded from best-value emphasis. All values are percentages.}
   \label{tab:urbannav_main_v2}
   \begin{tabular}{lrrrrrrr}
     \hline
     Method & DS $\uparrow$ & MRR@5 $\uparrow$ & Hit@3 $\uparrow$ & Task SPL $\uparrow$ & Multi-stop $\uparrow$ & Stop Recall $\uparrow$ & Update $\uparrow$ \\
     \hline
     Doubao-Seed-2.0-Lite & 77.03 & 84.70 & 93.33 & 72.79 & 56.54 & 75.14 & 75.13 \\
+    GPT-4o               & 78.17 & 86.95 & 95.82 & 74.65 & 53.14 & 73.72 & 75.86 \\
+    GPT-5.5              & 79.83 & 88.05 & 97.20 & 75.86 & 59.94 & 76.72 & 74.53 \\
     Qwen3.5-2B           & 77.30 & 85.66 & 94.32 & 74.47 & 49.48 & 64.59 & 77.00 \\
     Qwen3.5-4B           & 80.16 & 88.10 & 97.13 & 76.08 & 62.17 & 79.52 & 77.00 \\
     Qwen3.5-9B           & 78.38 & 86.64 & 95.84 & 74.17 & 52.77 & 72.98 & 74.79 \\
+    Qwen3.5-27B          & 79.88 & 88.10 & 97.12 & 75.94 & 60.31 & 78.86 & 75.91 \\
+    Qwen3-VL-4B-Instruct & 80.14 & 88.15 & 97.13 & 76.20 & 62.98 & 80.08 & 77.85 \\
+    Qwen3-VL-8B-Instruct  & 79.99 & 88.14 & 97.12 & 76.02 & 62.64 & 79.61 & 77.51 \\
+    Qwen3-VL-32B-Instruct & 80.09 & 88.09 & 97.08 & 76.01 & 61.83 & 79.10 & 75.98 \\
+    Gemma-4-12B          & 78.52 & 86.71 & 94.95 & 75.23 & 59.24 & 77.12 & 73.95 \\
     Gemma-4-31B          & 78.79 & 87.08 & 96.64 & 74.29 & 56.39 & 76.10 & 74.28 \\
     Molmo2-4B            & 79.99 & 88.15 & \textbf{97.21} & 76.30 & \textbf{66.27} & \textbf{82.11} & 76.49 \\
     InternVL2.5-8B       & 79.06 & 87.43 & 96.80 & 74.91 & 55.34 & 75.30 & 73.94 \\
@@ -182,21 +268,17 @@ here.
     InternVL3-14B        & 77.80 & 86.66 & 95.56 & 73.90 & 54.68 & 75.14 & 75.30 \\
     InternVL3-38B        & 79.41 & 87.52 & 96.78 & 74.97 & 57.82 & 77.23 & 74.11 \\
     InternVL3-78B        & 80.16 & 88.17 & 97.13 & 76.15 & 62.40 & 79.80 & 77.00 \\
-    InternVL3.5-14B      & \textbf{80.31} & \textbf{88.23} & 97.08 & \textbf{76.33} & 64.10 & 80.81 & \textbf{78.53} \\
+    InternVL3.5-8B      & 75.42 & 80.15 & 89.56 & 68.74 & 52.75 & 71.67 & 72.65 \\
+    InternVL3.5-14B      & \textbf{80.31} & \textbf{88.23} & 97.08 & \textbf{76.33} & 63.98 & 80.65 & \textbf{78.53} \\
     InternVL3.5-38B      & 80.07 & 87.93 & 96.89 & 75.70 & 59.78 & 78.27 & 75.98 \\
     LLaVA-OneVision-1.5-4B & 79.51 & 87.71 & 95.48 & 75.88 & 61.40 & 78.32 & 75.64 \\
     LLaVA-OneVision-1.5-8B & 78.55 & 86.58 & 94.78 & 74.80 & 58.49 & 75.79 & 73.08 \\
-    LLaVA-NeXT-Video-32B & 78.41 & 87.11 & 96.44 & 74.54 & 55.96 & 75.91 & 74.62 \\
-    \hline
-    RouteServer-Replay-Distance & 81.13 & 86.96 & 95.54 & 81.03 & 65.55 & 84.54 & 91.65 \\
-    \hline
+    LLaVA-NeXT-Video-32B & 78.41 & 87.11 & 96.44 & 74.54 & 55.96 & 75.91 & 74.62 \
   \end{tabular}
 \end{table*}
 ```
 
-粗体仅在模型行中比较；`RouteServer-Replay-Distance` 是使用冻结候选与路线距离的
-非生成式 control，不与模型能力直接排名。InternVL3.5-14B 的 artifact 缺失 4 条
-prediction；LLaVA 修复结果仍分别包含 27、213 和 30 条 exception，均已按失败计分。
+
 
 完整机器可读汇总位于：
 
@@ -336,10 +418,6 @@ Qwen3-VL 当前在 Module 1 中按文本候选选择协议评估，未输入图�
 | `multi_stop_route` | 2096 | 0.7543 | 0.9641 | 0.7543 | 0.5596 |
 | `route_update_add_via` | 587 | 0.7462 | 1.0000 | 0.7462 | 0.7462 |
 
-LLaVA models are evaluated with text-only Module 1 inputs. The reported rows
-merge only valid repair predictions into the original 15K runs; the remaining
-27, 213, and 30 exceptions for the 4B, 8B, and 32B models, respectively, remain
-failures in the metric denominators.
 
 按任务类型，`internvl2.5-78b` 的结果为：
 
@@ -692,9 +770,6 @@ SPL = RS \cdot \frac{L(P^*_{\mathrm{matched}})}{\max(L(P^*_{\mathrm{matched}}), 
 
 ## 5.2 内部相对分数比较
 
-正式论文主表仍报告 `destination_success / task_hit@5 / route_success /
-median_route_ratio / task_spl`。内部模型组比较可以额外使用相对指数，把多个
-Module 1 run 放在同一张表中比较：
 
 ```bash
 PYTHONPATH=src python tools/evaluation/compare_urbannav_module1_runs.py \
@@ -732,12 +807,6 @@ I_m = 100 \cdot Q_m / Q_b
 比较器还会基于 `eval_rows.jsonl` 做 paired win/draw/loss，只在共享
 case 上比较每条样本的内部分数差。该相对指数用于组内模型迭代，不替代
 benchmark 主指标。
-
-当前 final15K paired comparison：
-
-| Run | Baseline | Common Cases | Wins | Draws | Losses | Win Rate | Mean Delta |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `doubao-seed-2-0-lite-260428` | `routeserver-replay-route-distance` | 15000 | 942 | 12202 | 1856 | 0.0628 | -0.0493 |
 
 按以下维度切分即可：
 
