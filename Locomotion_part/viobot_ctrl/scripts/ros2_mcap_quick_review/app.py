@@ -267,6 +267,17 @@ def main():
 
     info = read_json(info_path, {}) or {}
     if info:
+        gt_info = info.get("render", {}).get("gt_overlay", {})
+        if gt_info.get("enabled"):
+            if gt_info.get("available"):
+                st.caption(
+                    "相机 GT 轨迹：已启用 ｜ 已叠加源帧 {} ｜ 跳过 {}".format(
+                        gt_info.get("applied_source_frames", 0),
+                        gt_info.get("skipped_source_frames", 0),
+                    )
+                )
+            else:
+                st.warning("相机 GT 轨迹已启用，但没有可用的 VIO 位姿序列。")
         warnings = info.get("warnings", [])
         if warnings:
             st.warning("；".join(str(x) for x in warnings))

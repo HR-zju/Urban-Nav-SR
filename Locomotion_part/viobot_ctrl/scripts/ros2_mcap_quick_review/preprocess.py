@@ -36,8 +36,14 @@ def main():
 
     candidates = df.copy()
     if not args.force:
-        allowed = {"pending"} | ({"error"} if args.retry_errors else set())
+        # Ready rows are cheap signature checks. Including them makes input or
+        # config changes rebuild automatically instead of requiring --force.
+        allowed = {"pending", "ready"} | ({"error"} if args.retry_errors else set())
         candidates = candidates[candidates["status"].isin(allowed)]
+        priority = candidates["status"].map({"pending": 0, "error": 1, "ready": 2})
+        candidates = candidates.assign(_priority=priority).sort_values(
+            "_priority", kind="stable"
+        ).drop(columns=["_priority"])
     if args.limit > 0:
         candidates = candidates.head(args.limit)
     rows = [row.to_dict() for _, row in candidates.iterrows()]

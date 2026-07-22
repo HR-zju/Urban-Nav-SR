@@ -9,6 +9,7 @@ from typing import Any
 import cv2
 import numpy as np
 from .extractors import quaternion_to_yaw
+from .gt_overlay import GroundTruthOverlay
 
 @dataclass
 class TimedFrame:
@@ -274,30 +275,46 @@ def render_review_video(output_path, frames, gps, vio, duration_sec, cfg, metada
     camera_gap = float(cfg.get("camera_max_gap_sec", 0.25))
     gps_gap, vio_gap = float(cfg.get("gps_max_gap_sec", 1.0)), float(cfg.get("vio_max_gap_sec", 0.2))
     vio_heading_offset = float(cfg.get("vio_heading_yaw_offset_deg", 0.0))
+    gt_overlay = GroundTruthOverlay(
+        vio,
+        cfg.get("gt_overlay", {}),
+        yaw_offset_deg=vio_heading_offset,
+    )
     duration_sec = max(float(duration_sec), 0.1)
     output_duration = duration_sec / speed
     output_count = max(1, int(math.ceil(output_duration * fps)))
     sink = VideoSink(output_path, width, height, fps, cfg)
     cached_path, cached_image = "", None
+    cached_gt_applied = False
     try:
         for frame_idx in range(output_count):
             data_t = min(duration_sec, frame_idx / fps * speed)
             canvas = np.zeros((height, width, 3), dtype=np.uint8)
             camera_panel = np.zeros((height, camera_w, 3), dtype=np.uint8)
             camera_delta = None
+            gt_visible = False
             idx = _nearest_index(frame_times, data_t)
             if idx is not None:
                 item = frames[idx]
                 camera_delta = item.t - data_t
                 if abs(camera_delta) <= camera_gap:
                     if item.path != cached_path:
-                        cached_image, cached_path = cv2.imread(item.path, cv2.IMREAD_COLOR), item.path
+                        cached_image = cv2.imread(item.path, cv2.IMREAD_COLOR)
+                        cached_path = item.path
+                        cached_gt_applied = (
+                            gt_overlay.draw(cached_image, item.t)
+                            if cached_image is not None
+                            else False
+                        )
                     if cached_image is not None:
                         camera_panel = _fit_image(cached_image, camera_w, height)
+                        gt_visible = cached_gt_applied
             if idx is None:
                 _put_text(camera_panel, "CAMERA TOPIC MISSING", (40, height // 2), 0.9, (0, 0, 255), 2)
             elif camera_delta is None or abs(camera_delta) > camera_gap:
                 _put_text(camera_panel, "CAMERA DATA MISSING / STALE", (40, height // 2), 0.85, (0, 0, 255), 2)
+            if gt_visible:
+                gt_overlay.draw_legend(camera_panel)
             overlay = camera_panel.copy()
             # Browser video controls cover the bottom of the frame while the
             # pointer is over the player.  Keep all review metadata above them.
@@ -332,4 +349,5 @@ def render_review_video(output_path, frames, gps, vio, duration_sec, cfg, metada
         "video_frame_count": output_count, "video_duration_sec": output_duration,
         "output_fps": fps, "playback_speed": speed,
         "output_width": width, "output_height": height,
+        "gt_overlay": gt_overlay.summary(),
     }

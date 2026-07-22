@@ -81,7 +81,29 @@ topics:
 ```
 
 `heading_yaw_offset_deg` 只旋转审核视频中的 VIO 朝向箭头，不修改 MCAP
-原始姿态。标准 `base_link` 数据通常保持 `0.0`；Stereo3 使用 `90.0`。
+原始姿态；启用 GT 叠加后也用于把 VIO 航向转换为车辆前进方向。标准
+`base_link` 数据通常保持 `0.0`；Stereo3 使用 `90.0`。
+
+如需在相机画面中显示 VIO 未来 GT 轨迹：
+
+```yaml
+gt_overlay:
+  enabled: true
+  horizons_sec: [4.0, 3.0, 2.0, 1.0]
+  trajectory_sample_fps: 20
+  camera_time_offset_ms: 0.0
+  intrinsics: [749.2058, 749.2058, 1003.1, 526.5258]
+  distortion: [1.5847e-5, -1.3585e-7, 4.7386e-11]
+  camera_height: 0.68
+  camera_x_offset: -0.1
+  pitch_deg: 8.0
+  odom_lateral_convention: left_positive
+  path_half_width: 0.22
+```
+
+`horizons_sec` 使用真实数据时间，不受审核视频 FPS 或倍速影响。轨迹先在
+原始相机图像上投影，再缩放进入审核面板。若相机时间需要校正，正的
+`camera_time_offset_ms` 表示为当前图像查询更早的 VIO 位姿。
 
 ## 3. 查看 Topic
 
@@ -112,7 +134,8 @@ python preprocess.py --config config.yaml --workers 1
 
 NAS 上建议先使用 1 个 worker，确认 CPU、内存和磁盘吞吐后再增至 2。
 
-修改 Topic、朝向偏移或渲染参数后，已有缓存不会自动重画，需要执行：
+输入 MCAP、Topic、时间、渲染或 GT 参数变化后会自动重画。只有需要无条件
+重建时才使用：
 
 ```bash
 python preprocess.py --config config.yaml --workers 1 --force

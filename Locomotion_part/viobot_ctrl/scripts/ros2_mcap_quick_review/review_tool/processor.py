@@ -1,4 +1,6 @@
 from __future__ import annotations
+import hashlib
+import json
 import shutil
 import time
 from dataclasses import dataclass
@@ -13,6 +15,8 @@ from .extractors import (
 from .io_utils import atomic_write_json, read_json
 from .rosbag_reader import RosbagReader
 from .video_renderer import TimedFrame, TimedPoint, render_review_video
+
+PROCESS_CACHE_VERSION = 2
 
 @dataclass
 class RawFrame:
@@ -135,26 +139,54 @@ def _selected_interval(source, frames, gps, vio, max_duration_sec):
         warnings.append(f"Review interval clipped to {max_duration_sec:.1f} seconds")
     return start_ns, end_ns, warnings
 
+def _cache_signature(bag_path: Path, cfg: dict) -> str:
+    if bag_path.is_file():
+        files = [bag_path]
+    else:
+        files = sorted(path for path in bag_path.rglob("*.mcap") if path.is_file())
+    sources = []
+    for path in files:
+        stat = path.stat()
+        sources.append({
+            "path": str(path.resolve()),
+            "size": int(stat.st_size),
+            "mtime_ns": int(stat.st_mtime_ns),
+        })
+    payload = {
+        "version": PROCESS_CACHE_VERSION,
+        "sources": sources,
+        "topics": cfg.get("topics", {}),
+        "timestamps": cfg.get("timestamps", {}),
+        "preprocess": cfg.get("preprocess", {}),
+        "gt_overlay": cfg.get("gt_overlay", {}),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
 def process_bag(row: dict[str, str], cfg: dict, force: bool = False) -> dict[str, Any]:
     bag_id = row["bag_id"]
     bag_path = Path(row["bag_path"])
     storage_id = row["storage_id"]
     cache_dir = Path(row["cache_dir"])
     output_video, info_path = cache_dir / "review.mp4", cache_dir / "info.json"
+    temporary_video = cache_dir / "review.tmp.mp4"
+    cache_signature = _cache_signature(bag_path, cfg)
 
     if output_video.exists() and info_path.exists() and not force:
         info = read_json(info_path, {}) or {}
-        selected = info.get("selected_topics", {})
-        return {
-            "bag_id": bag_id, "status": "ready", "error": "",
-            "camera_topic": selected.get("camera") or "",
-            "gps_topic": selected.get("gps") or "",
-            "vio_topic": selected.get("vio") or "",
-            "time_source": info.get("time_source", ""),
-            "duration_sec": str(info.get("duration_sec", "")),
-        }
+        if info.get("cache_signature") == cache_signature:
+            selected = info.get("selected_topics", {})
+            return {
+                "bag_id": bag_id, "status": "ready", "error": "",
+                "camera_topic": selected.get("camera") or "",
+                "gps_topic": selected.get("gps") or "",
+                "vio_topic": selected.get("vio") or "",
+                "time_source": info.get("time_source", ""),
+                "duration_sec": str(info.get("duration_sec", "")),
+            }
 
     cache_dir.mkdir(parents=True, exist_ok=True)
+    temporary_video.unlink(missing_ok=True)
     temp_dir = cache_dir / "_frames"
     if temp_dir.exists():
         shutil.rmtree(temp_dir)
@@ -243,15 +275,19 @@ def process_bag(row: dict[str, str], cfg: dict, force: bool = False) -> dict[str
         render_cfg["vio_heading_yaw_offset_deg"] = float(
             cfg["topics"]["vio"].get("heading_yaw_offset_deg", 0.0)
         )
+        render_cfg["gt_overlay"] = dict(cfg.get("gt_overlay", {}))
         render_stats = render_review_video(
-            output_video, frames, gps, vio, duration_sec, render_cfg,
+            temporary_video, frames, gps, vio, duration_sec, render_cfg,
             [
                 f"Time source: {time_source} | Camera: {camera_topic or 'NONE'}",
                 f"GPS: {gps_topic or 'NONE'} | VIO: {vio_topic or 'NONE'}",
             ],
         )
+        temporary_video.replace(output_video)
+        warnings.extend(render_stats.get("gt_overlay", {}).get("warnings", []))
         info = {
             "bag_id": bag_id, "bag_path": str(bag_path), "storage_id": storage_id,
+            "cache_signature": cache_signature,
             "available_topics": topic_types,
             "selected_topics": {"camera": camera_topic, "gps": gps_topic, "vio": vio_topic},
             "time_source": time_source, "timeline_start_ns": start_ns,
@@ -282,5 +318,6 @@ def process_bag(row: dict[str, str], cfg: dict, force: bool = False) -> dict[str
         }
     finally:
         reader.close()
+        temporary_video.unlink(missing_ok=True)
         if temp_dir.exists():
             shutil.rmtree(temp_dir, ignore_errors=True)

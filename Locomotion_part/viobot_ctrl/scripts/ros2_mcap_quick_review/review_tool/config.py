@@ -57,6 +57,19 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "ffmpeg_crf": 23,
         "ffmpeg_preset": "veryfast",
     },
+    "gt_overlay": {
+        "enabled": False,
+        "horizons_sec": [4.0, 3.0, 2.0, 1.0],
+        "trajectory_sample_fps": 20,
+        "camera_time_offset_ms": 0.0,
+        "intrinsics": [749.2058, 749.2058, 1003.1, 526.5258],
+        "distortion": [1.5847e-5, -1.3585e-7, 4.7386e-11],
+        "camera_height": 0.68,
+        "camera_x_offset": -0.1,
+        "pitch_deg": 8.0,
+        "odom_lateral_convention": "left_positive",
+        "path_half_width": 0.22,
+    },
     "review": {
         "bad_reasons": [
             "图像异常", "GPS异常", "VIO异常", "时间不同步",
