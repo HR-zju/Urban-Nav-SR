@@ -157,14 +157,93 @@ def test_multistop_ranking_averages_required_stops_and_checks_continuity() -> No
             "route_summary": {"distance_m": 200.0},
         }
     )
-    rows, summary, _ = evaluate_predictions_v2([case], [prediction])
+    missing_case_payload = dict(case.raw)
+    missing_case_payload["id"] = "multi-missing"
+    missing_case = UrbanNavCase.from_dict(missing_case_payload)
+    rows, summary, _ = evaluate_predictions_v2([case, missing_case], [prediction])
 
     assert rows[0]["task_hit@1"] == 0.5
     assert rows[0]["task_hit@3"] == 1.0
     assert rows[0]["task_mrr@5"] == 0.75
     assert rows[0]["task_success_v2"] is True
     assert rows[0]["task_spl_v2"] == 1.0
-    assert summary["summary"]["multi_stop_leg_continuity_success"] == 1.0
+    missing_multi = rows[1]["extended_metrics"]["multi_stop"]
+    assert missing_multi["sequence_success"] is False
+    assert missing_multi["stop_recall"] == 0.0
+    assert missing_multi["leg_continuity_success"] is False
+    assert summary["summary"]["multi_stop_sequence_success"] == 0.5
+    assert summary["summary"]["multi_stop_stop_recall"] == 0.5
+    assert summary["summary"]["multi_stop_leg_continuity_success"] == 0.5
+
+
+def test_missing_route_update_prediction_counts_as_explicit_zero() -> None:
+    """A missing route-update prediction remains in the task denominator."""
+
+    case = UrbanNavCase.from_dict(
+        {
+            "id": "update-1",
+            "category": "route_update",
+            "instruction": "Replace the destination with a convenience store.",
+            "origin": {"lat": 30.0005, "lng": 120.0005},
+            "gt_destination": {
+                "provider_poi_id": "water-a",
+                "lat": 30.0,
+                "lng": 120.001,
+            },
+            "acceptable_destinations": [
+                {
+                    "provider_poi_id": "water-a",
+                    "lat": 30.0,
+                    "lng": 120.001,
+                    "reference_route_distance_m": 80.0,
+                }
+            ],
+            "gt_route": [[120.0005, 30.0005], [120.001, 30.0]],
+            "gt_distance_m": 80.0,
+            "metadata": {
+                "route_update": {
+                    "update_type": "replace_destination",
+                    "current_origin": {"lat": 30.0005, "lng": 120.0005},
+                    "previous_destination": {
+                        "provider_poi_id": "coffee-old",
+                        "lat": 30.002,
+                        "lng": 120.0,
+                    },
+                }
+            },
+        }
+    )
+    prediction = UrbanNavPrediction.from_dict(
+        {
+            "id": "update-1",
+            "chosen_destination": {
+                "provider_poi_id": "water-a",
+                "lat": 30.0,
+                "lng": 120.001,
+            },
+            "candidate_destinations": [
+                {
+                    "provider_poi_id": "water-a",
+                    "lat": 30.0,
+                    "lng": 120.001,
+                }
+            ],
+            "route_polyline": [[120.0005, 30.0005], [120.001, 30.0]],
+            "route_summary": {"distance_m": 80.0},
+        }
+    )
+    missing_case_payload = dict(case.raw)
+    missing_case_payload["id"] = "update-missing"
+    missing_case = UrbanNavCase.from_dict(missing_case_payload)
+
+    rows, summary, _ = evaluate_predictions_v2([case, missing_case], [prediction])
+
+    missing_update = rows[1]["extended_metrics"]["route_update"]
+    assert missing_update["route_update_success"] is False
+    assert missing_update["updated_route_success"] is False
+    assert missing_update["current_origin_used"] is False
+    assert summary["summary"]["route_update_success"] == 0.5
+    assert summary["summary"]["task_spl"] == 0.5
 
 
 def test_artifact_writer_keeps_v2_outputs_separate(tmp_path) -> None:

@@ -522,6 +522,12 @@ def evaluate_multi_stop_case(
         pred_legs,
         tolerance_m=cfg.multi_stop_continuity_tolerance_m,
     )
+    # 连续性不仅要求相邻几何连接，还要求没有缺失或多余的 route leg。
+    leg_continuity_success = (
+        stop_count > 0
+        and len(pred_legs) == stop_count
+        and continuity["success"]
+    )
     for index, result in enumerate(stop_results[:-1]):
         result["continuity_to_next"] = continuity["transitions"][index] if index < len(continuity["transitions"]) else None
     if stop_results:
@@ -529,7 +535,7 @@ def evaluate_multi_stop_case(
     leg_route_success = (
         stop_count > 0
         and leg_route_success_count == stop_count
-        and continuity["success"]
+        and leg_continuity_success
     )
     pred_total = prediction.route_distance_m if prediction is not None else None
     if pred_total is None and prediction is not None:
@@ -547,7 +553,7 @@ def evaluate_multi_stop_case(
         "candidate_coverage": stop_candidate_count / stop_count if stop_count else 0.0,
         "leg_route_success": leg_route_success,
         "leg_route_success_rate": leg_route_success_count / stop_count if stop_count else 0.0,
-        "leg_continuity_success": continuity["success"],
+        "leg_continuity_success": leg_continuity_success,
         "max_leg_gap_m": continuity["max_gap_m"],
         "leg_transitions": continuity["transitions"],
         "multi_stop_spl": multi_stop_spl,

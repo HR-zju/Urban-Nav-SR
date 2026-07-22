@@ -309,6 +309,14 @@ def compact_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
 
 
+def format_meters(value: Any) -> str:
+    """Format an optional metric distance without producing ``Nonem``."""
+
+    if value is None:
+        return "n/a"
+    return f"{float(value):.1f}m"
+
+
 def multi_stop_status(evaluation: dict[str, Any]) -> str:
     """Return a presentation status without changing evaluator semantics."""
 
@@ -326,13 +334,19 @@ def visualization_route_distance_m(prediction: dict[str, Any]) -> float:
     """Return total displayed route length from the visualization prediction."""
 
     total = 0.0
-    for leg in prediction.get("pred_route_legs") or []:
+    legs = prediction.get("pred_route_legs") or []
+    for leg in legs:
         value = ((leg.get("route_summary") or {}).get("distance_m"))
         if value is not None:
             total += float(value)
         else:
             total += _route_distance_m([item for item in leg.get("route") or [] if point(item) is not None])
-    return total
+    if legs:
+        return total
+    summary_distance = (prediction.get("route_summary") or {}).get("distance_m")
+    if summary_distance is not None:
+        return float(summary_distance)
+    return _route_distance_m([item for item in prediction.get("route_polyline") or [] if point(item) is not None])
 
 
 def load_case(case_id: str, dataset_dir: Path, run_dir: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
@@ -678,6 +692,94 @@ def build_svg(
 
 
 def build_analysis(case: dict[str, Any], prediction: dict[str, Any], evaluation: dict[str, Any]) -> str:
+    category = str(case.get("category") or "")
+    if category != "multi_stop_route":
+        trace = prediction.get("trace") or {}
+        intent = trace.get("intent") or {}
+        route_source = visualization_route_source(prediction)
+        route_update = (evaluation.get("extended_metrics") or {}).get("route_update") or {}
+        is_update = category == "route_update_add_via"
+        success = bool(route_update.get("route_update_success")) if is_update else bool(evaluation.get("route_success"))
+        task_label = "Route-update" if is_update else "Single-destination"
+        diagnosis: list[str] = []
+        if is_update:
+            if success:
+                diagnosis.append(
+                    "The updated destination is acceptable, the route starts from the current pose, and the previous destination is correctly replaced."
+                )
+            else:
+                diagnosis.append(
+                    "The route-update contract fails because at least one of destination validity, current-origin use, previous-destination avoidance, or final-route validity is not satisfied."
+                )
+        elif success:
+            diagnosis.append(
+                "The selected Top-1 destination matches the acceptable set and its route reaches the matched POI."
+            )
+        elif evaluation.get("hit@5"):
+            diagnosis.append(
+                "An acceptable destination is present in the retrieved Top-5 set, but the selected Top-1 destination is incorrect; this isolates candidate reranking as the primary failure."
+            )
+        else:
+            diagnosis.append(
+                "No acceptable destination appears in the Top-5 set, so the failure originates in intent grounding or candidate retrieval before Top-1 selection."
+            )
+        evidence = [
+            f"- Parsed destination type: `{intent.get('destination_type')}`; mode: `{intent.get('mode')}`; radius: `{intent.get('radius_m')}m`.",
+            f"- Search keywords: `{intent.get('search_keywords')}`.",
+        ]
+        if is_update:
+            evidence.extend(
+                [
+                    f"- Update type: `{route_update.get('update_type')}`; update success: `{route_update.get('route_update_success')}`.",
+                    f"- Current origin used: `{route_update.get('current_origin_used')}`; previous destination avoided: `{route_update.get('previous_destination_avoided')}`.",
+                    f"- Updated route success: `{route_update.get('updated_route_success')}`; endpoint error: `{format_meters(route_update.get('endpoint_error_m'))}`.",
+                ]
+            )
+        else:
+            evidence.extend(
+                [
+                    f"- Destination success: `{evaluation.get('destination_success')}`; Hit@5: `{evaluation.get('hit@5')}`.",
+                    f"- Route success: `{evaluation.get('route_success')}`; SPL: `{evaluation.get('spl')}`.",
+                    f"- Matched rank: `{evaluation.get('matched_destination_rank')}`; endpoint error: `{format_meters(evaluation.get('endpoint_error_m'))}`.",
+                ]
+            )
+        evidence.append(
+            f"- Displayed predicted-route source: `{route_source}`; displayed distance: `{visualization_route_distance_m(prediction):.1f}m`."
+        )
+        lines = [
+            f"# UrbanNav Classic Case: {task_label} {'Success' if success else 'Failure'}",
+            "",
+            f"- Case: `{case.get('id')}`",
+            f"- Category: `{category}` / `{case.get('subcategory')}`",
+            f"- City: `{case.get('city')}`",
+            f"- Instruction: {case.get('instruction')}",
+            "",
+            "## Pipeline narrative",
+            "",
+            "1. **Instruction**: the runner receives a natural-language destination request or route-state update.",
+            "2. **Intent decomposition**: the model maps the request to a normalized destination type, search keywords, travel mode, radius, and constraints.",
+            "3. **Replay POI search**: the frozen cache returns deterministic candidate POIs for the parsed intent.",
+            "4. **Candidate reranking**: the model orders retrieved candidates by semantic fit and task constraints.",
+            "5. **Route lookup**: frozen pedestrian routes are used for scoring; the displayed red route may be replanned online for visualization only.",
+            "6. **Selected destination**: the Top-1 candidate becomes the predicted destination or replacement destination.",
+            "7. **Evaluator**: the evaluator checks destination identity and route validity" + (", including route-state update constraints." if is_update else "."),
+            "",
+            "## Evidence",
+            "",
+            *evidence,
+            "",
+            "## Success interpretation" if success else "## Failure diagnosis",
+            "",
+            *[f"- {item}" for item in diagnosis],
+            "",
+            "## Figure interpretation",
+            "",
+            "The dashed gray line is the frozen reference route, the red line is the route to the selected prediction, gray markers are replay candidates, black markers are acceptable GT destinations, and orange markers are selected destinations. Online OSRM geometry is visualization-only and does not alter the replay score.",
+            "",
+            "This is a controlled-replay Plan-and-Execute illustration. The POI and route stages are deterministic replay operations; the model-facing decisions are intent decomposition and candidate ordering.",
+        ]
+        return "\n".join(lines) + "\n"
+
     multi = (evaluation.get("extended_metrics") or {}).get("multi_stop") or {}
     goals = (prediction.get("trace") or {}).get("goal_decomposition") or {}
     status = multi_stop_status(evaluation)
@@ -747,7 +849,13 @@ def build_html(case: dict[str, Any], prediction: dict[str, Any], evaluation: dic
     trace = prediction.get("trace") or {}
     multi = (evaluation.get("extended_metrics") or {}).get("multi_stop") or {}
     is_multi_stop = case.get("category") == "multi_stop_route"
-    status = multi_stop_status(evaluation) if is_multi_stop else ("success" if evaluation.get("route_success") else "failure")
+    route_update = (evaluation.get("extended_metrics") or {}).get("route_update") or {}
+    is_route_update = case.get("category") == "route_update_add_via"
+    status = (
+        multi_stop_status(evaluation)
+        if is_multi_stop
+        else ("success" if (route_update.get("route_update_success") if is_route_update else evaluation.get("route_success")) else "failure")
+    )
     status_label = "SUCCESS" if status == "success" else "FAILURE"
     if is_multi_stop:
         metric_cards = f'''<div class="metric"><b>Stop recall</b><span>{esc(multi.get('stop_recall'))}</span></div>
@@ -758,6 +866,25 @@ def build_html(case: dict[str, Any], prediction: dict[str, Any], evaluation: dic
         evaluation_detail = multi.get("legs") or []
         decomposition_label = "Goal decomposition"
         evaluation_label = "Per-leg evaluation"
+    elif is_route_update:
+        metric_cards = f'''<div class="metric"><b>Update success</b><span>{esc(route_update.get('route_update_success'))}</span></div>
+<div class="metric"><b>Destination success</b><span>{esc(route_update.get('updated_destination_success'))}</span></div>
+<div class="metric"><b>Current origin used</b><span>{esc(route_update.get('current_origin_used'))}</span></div>
+<div class="metric"><b>Previous destination avoided</b><span>{esc(route_update.get('previous_destination_avoided'))}</span></div>'''
+        intent = dict(trace.get("intent") or {})
+        decomposition = {
+            "update_type": route_update.get("update_type"),
+            "destination_type": intent.get("destination_type"),
+            "destination_kind": intent.get("destination_kind"),
+            "search_keywords": intent.get("search_keywords"),
+            "mode": intent.get("mode"),
+            "radius_m": intent.get("radius_m"),
+            "optimize_for": intent.get("optimize_for"),
+            "source": "trace.intent + evaluator.route_update",
+        }
+        evaluation_detail = route_update
+        decomposition_label = "Route-update decomposition"
+        evaluation_label = "Route-update evaluation"
     else:
         metric_cards = f'''<div class="metric"><b>Destination success</b><span>{esc(evaluation.get('destination_success'))}</span></div>
 <div class="metric"><b>Hit@5</b><span>{esc(evaluation.get('hit@5'))}</span></div>

@@ -15,7 +15,12 @@ import math
 from pathlib import Path
 from typing import Any, Iterable
 
-from mcp_server.eval.urbannav_metrics import UrbanNavEvalConfig, evaluate_case, match_destination
+from mcp_server.eval.urbannav_metrics import (
+    UrbanNavEvalConfig,
+    evaluate_case,
+    evaluate_extended_case_metrics,
+    match_destination,
+)
 from mcp_server.eval.urbannav_schema import UrbanNavCase, UrbanNavDestination, UrbanNavPrediction
 
 
@@ -242,9 +247,16 @@ def _evaluate_case_v2(
             (1.0 / rank) if rank is not None and rank <= cutoff else 0.0 for rank in ranks
         ) / len(ranks)
 
-    task_success = _task_success(base_row.to_dict())
-    task_spl = _task_spl(base_row.to_dict(), task_success=task_success)
     row = base_row.to_dict()
+    if prediction is None or base_row.prediction_exception:
+        # 缺失或异常 prediction 仍保留任务类型，并生成显式的扩展失败指标。
+        row["extended_metrics"] = evaluate_extended_case_metrics(
+            case,
+            None,
+            config=config.base_config(),
+        )
+    task_success = _task_success(row)
+    task_spl = _task_spl(row, task_success=task_success)
     if base_row.prediction_exception:
         row.update(
             {
