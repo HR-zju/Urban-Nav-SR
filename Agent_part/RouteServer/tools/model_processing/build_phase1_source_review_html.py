@@ -93,7 +93,6 @@ def compact_row(row: dict[str, Any], index: int) -> dict[str, Any]:
         "bev": file_uri(row.get("bev_image_path")),
         "trajectory_label_path": str(row.get("trajectory_label_path") or ""),
         "bev_patch_meta_path": str(row.get("bev_patch_meta_path") or ""),
-        "qa_bundle_path": str(row.get("qa_bundle_path") or ""),
         "pixel_trajectory": row.get("pixel_trajectory") or [],
         "trajectory_fpv_t": row.get("trajectory_fpv_t") or [],
         "trajectory_ego_t": row.get("trajectory_ego_t") or [],
@@ -253,7 +252,7 @@ def render_html(samples: list[dict[str, Any]], source_jsonl: Path) -> str:
       const items = [
         ['id', s.id], ['intent', s.intent], ['clip', s.clip_id], ['frame', s.frame_name || s.frame_idx],
         ['theta_deg', s.route_theta_deg], ['anchor', s.anchor], ['speed_policy', s.speed_policy], ['trajectory_source', s.trajectory_source],
-        ['bev_frame_idx', s.bev_frame_idx], ['bev_delta_ms', s.bev_time_delta_ms], ['label', s.trajectory_label_path], ['qa', s.qa_bundle_path]
+        ['bev_frame_idx', s.bev_frame_idx], ['bev_delta_ms', s.bev_time_delta_ms], ['label', s.trajectory_label_path]
       ];
       meta.innerHTML = items.map(([k, v]) => `<div class="kv"><b>${{esc(k)}}</b><span>${{esc(v)}}</span></div>`).join('');
     }}

@@ -74,7 +74,6 @@ SUMMARY_JSON="${OUTPUT_ROOT}/manifests/phase1_eval_${SPLIT_NAME}.json"
 echo "[sidewalk-phase1] evaluating artifacts"
 python "${REPO_ROOT}/tools/model_processing/eval_sidewalk_phase1_artifacts.py" \
   --source-jsonl "${SOURCE_JSONL}" \
-  --qa-root "${OUTPUT_ROOT}/clips" \
   --summary-json "${SUMMARY_JSON}" \
   --expected-points "${NUM_POINTS}"
 

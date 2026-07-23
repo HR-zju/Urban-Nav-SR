@@ -35,7 +35,6 @@ def _make_source_row(root: Path) -> dict:
     trajectory = [[0.5, 0.9], [0.5, 0.7], [0.5, 0.55], [0.5, 0.45]]
     label_path = root / "trajectory_labels" / "000001.json"
     meta_path = root / "bev_patch_meta" / "000001.json"
-    qa_path = root / "qa" / "000001_qa.json"
     _write_json(
         label_path,
         {
@@ -59,7 +58,6 @@ def _make_source_row(root: Path) -> dict:
             "confidence_level_gt": "normal",
         },
     )
-    _write_json(qa_path, {"schema_version": "sidewalk_bev_fpv_qa_v1", "samples": []})
     return {
         "id": "clip_a_000001",
         "clip_id": "clip_a",
@@ -72,7 +70,6 @@ def _make_source_row(root: Path) -> dict:
         "instruction": "Navigate safely on the sidewalk.",
         "trajectory_label_path": str(label_path),
         "bev_patch_meta_path": str(meta_path),
-        "qa_bundle_path": str(qa_path),
         "route_context": {"route_theta_deg": 0.0, "intent_gt": "go_straight"},
         "sidewalk_meta": {"trajectory_source": "calibrated_pose_projection"},
     }

@@ -351,7 +351,6 @@ def _copy_sidecars(row: dict[str, Any], *, output_root: Path, manifest_dir: Path
     sidecar_map = {
         "trajectory_label_path": ("trajectory_labels", f"{frame_name}.json"),
         "bev_patch_meta_path": ("bev_patch_meta", f"{frame_name}.json"),
-        "qa_bundle_path": ("qa", f"{frame_name}_qa.json"),
     }
     out: dict[str, str] = {}
     for key, (subdir, filename) in sidecar_map.items():

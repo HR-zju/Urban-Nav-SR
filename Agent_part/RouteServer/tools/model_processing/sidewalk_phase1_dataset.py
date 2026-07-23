@@ -7,7 +7,6 @@ ms-swift training.  It intentionally writes a lightweight, stable contract:
 * source JSONL rows consumed by ``swift.sidewalk_nav.dataset_builder``
 * per-frame trajectory labels
 * per-frame BEV topology metadata
-* per-frame QA bundles using the ms-swift SideWalk QA schema
 
 Phase1 does not require SAM/SoM/segmentation outputs.  Production trajectory
 labels are generated from InternNav clip poses and calibrated camera
@@ -31,7 +30,6 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 
-QA_SCHEMA_VERSION = "sidewalk_bev_fpv_qa_v1"
 DEFAULT_SYSTEM_PROMPT = (
     "You are a sidewalk navigation assistant. Infer local navigation intent from "
     "FPV and BEV observations and output feasible FPV visual prompt trajectories."
@@ -333,7 +331,7 @@ def build_phase1_dataset(
     camera_params_path: str | None = None,
     write_overlays: bool = False,
 ) -> dict[str, Any]:
-    """Build source JSONL and offline QA artifacts for Phase1 training.
+    """Build source JSONL and geometry sidecars for Phase1 training.
 
     Args:
         sidewalk_root: Root containing prepared SideWalk clip directories.
@@ -364,10 +362,8 @@ def build_phase1_dataset(
     manifest_dir = output / "manifests"
     manifest_dir.mkdir(parents=True, exist_ok=True)
     source_jsonl = manifest_dir / f"phase1_source_{split_name}.jsonl"
-    qa_index_jsonl = manifest_dir / f"phase1_qa_index_{split_name}.jsonl"
 
     source_rows: list[dict[str, Any]] = []
-    qa_index_rows: list[dict[str, Any]] = []
     frame_subset = load_frame_subset(Path(frame_subset_json).expanduser()) if frame_subset_json else None
     report: dict[str, Any] = {
         "schema_version": "sidewalk_phase1_dataset_v1",
@@ -439,7 +435,7 @@ def build_phase1_dataset(
                 _inc(report["skip_reasons"], "no_future_frames")
                 continue
             try:
-                sample = build_phase1_sample(
+                source_row = build_phase1_sample(
                     record,
                     future,
                     output_root=output,
@@ -455,10 +451,9 @@ def build_phase1_dataset(
                 report["frames_skipped"] += 1
                 _inc(report["skip_reasons"], f"sample_error:{type(exc).__name__}")
                 continue
-            source_rows.append(sample["source_row"])
-            qa_index_rows.append(sample["qa_index_row"])
-            intent = sample["source_row"]["sidewalk_meta"].get("intent_gt")
-            trajectory_source = sample["source_row"]["sidewalk_meta"].get("trajectory_source")
+            source_rows.append(source_row)
+            intent = source_row["sidewalk_meta"].get("intent_gt")
+            trajectory_source = source_row["sidewalk_meta"].get("trajectory_source")
             _inc(report["intent_counts"], str(intent or "unknown"))
             _inc(report["trajectory_source_counts"], str(trajectory_source or "unknown"))
 
@@ -467,10 +462,8 @@ def build_phase1_dataset(
 
 
     _write_jsonl(source_jsonl, source_rows)
-    _write_jsonl(qa_index_jsonl, qa_index_rows)
     report["frames_written"] = len(source_rows)
     report["source_jsonl"] = str(source_jsonl)
-    report["qa_index_jsonl"] = str(qa_index_jsonl)
     report_path = manifest_dir / f"phase1_dataset_report_{split_name}.json"
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     report["report_path"] = str(report_path)
@@ -550,7 +543,7 @@ def build_phase1_sample(
     allow_heuristic_trajectory: bool = False,
     write_overlay: bool = False,
 ) -> dict[str, Any]:
-    """Build one ms-swift source row plus sidecar labels for one frame."""
+    """Build one ms-swift source row plus geometry sidecars for one frame."""
 
     record = materialize_fpv_image(record, output_root, frame_rate_hz=config.frame_rate_hz)
     with Image.open(record.image_path) as image:
@@ -583,15 +576,12 @@ def build_phase1_sample(
     clip_output = output_root / "clips" / record.clip_id
     label_dir = clip_output / "trajectory_labels"
     bev_meta_dir = clip_output / "bev_patch_meta"
-    qa_dir = clip_output / "qa"
     overlay_dir = clip_output / "overlays"
     label_dir.mkdir(parents=True, exist_ok=True)
     bev_meta_dir.mkdir(parents=True, exist_ok=True)
-    qa_dir.mkdir(parents=True, exist_ok=True)
 
     label_path = label_dir / f"{record.frame_name}.json"
     bev_meta_path = bev_meta_dir / f"{record.frame_name}.json"
-    qa_path = qa_dir / f"{record.frame_name}_qa.json"
     overlay_path = overlay_dir / f"{record.frame_name}_debug.jpg"
 
     label_payload = {
@@ -619,21 +609,6 @@ def build_phase1_sample(
     label_path.write_text(json.dumps(label_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     bev_meta_path.write_text(json.dumps(bev_meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    qa_bundle = build_qa_bundle(
-        record=record,
-        image_width=image_width,
-        image_height=image_height,
-        trajectory_norm=trajectory_norm,
-        trajectory_fpv_t=trajectory_fpv_t,
-        trajectory_ego_t=trajectory_ego_t,
-        trajectory_policy=trajectory_policy,
-        bev_meta=bev_meta,
-        label_path=label_path,
-        bev_meta_path=bev_meta_path,
-        trajectory_source=trajectory_source,
-    )
-    qa_path.write_text(json.dumps(qa_bundle, ensure_ascii=False, indent=2), encoding="utf-8")
-
     if write_overlay:
         overlay_dir.mkdir(parents=True, exist_ok=True)
         write_debug_overlay(record.image_path, trajectory_norm, overlay_path)
@@ -659,7 +634,6 @@ def build_phase1_sample(
         "projection": target_pack.get("projection", {}),
         "bev_patch_meta_path": str(bev_meta_path),
         "trajectory_label_path": str(label_path),
-        "qa_bundle_path": str(qa_path),
     }
     _drop_none_fields(sidewalk_meta)
 
@@ -681,7 +655,6 @@ def build_phase1_sample(
         "system_prompt": DEFAULT_SYSTEM_PROMPT,
         "trajectory_label_path": str(label_path),
         "bev_patch_meta_path": str(bev_meta_path),
-        "qa_bundle_path": str(qa_path),
         "route_context": {
             "route_theta_deg": round(float(route_theta_deg), 3),
             "intent_gt": intent,
@@ -692,15 +665,7 @@ def build_phase1_sample(
     if source_row["bev_image_path"] is None:
         source_row.pop("bev_image_path")
 
-    qa_index_row = {
-        "qa_bundle_path": str(qa_path),
-        "clip_id": record.clip_id,
-        "frame_idx": record.frame_idx,
-        "fpv_image_path": str(record.image_path),
-        "bev_image_path": str(record.bev_image_path) if record.bev_image_path else None,
-        "num_samples": len(qa_bundle["samples"]),
-    }
-    return {"source_row": source_row, "qa_index_row": qa_index_row}
+    return source_row
 
 
 def build_phase1_targets(
@@ -1378,7 +1343,7 @@ def build_bev_patch_meta(
     intent: str,
     anchor: str,
 ) -> dict[str, Any]:
-    """Build local BEV route metadata used by Stage1 topology QA.
+    """Build local BEV route metadata used by Phase1 topology supervision.
 
     Earlier versions also emitted coarse BEV grid cells.  Those cells were
     derived from arbitrary exporter extents rather than external annotation, so
@@ -1417,137 +1382,6 @@ def build_bev_patch_meta(
     }
     _drop_none_fields(meta["pose"])
     return meta
-
-
-def build_qa_bundle(
-    *,
-    record: FrameRecord,
-    image_width: int,
-    image_height: int,
-    trajectory_norm: np.ndarray,
-    trajectory_fpv_t: list[list[float]],
-    trajectory_ego_t: list[list[float]],
-    trajectory_policy: dict[str, Any],
-    bev_meta: dict[str, Any],
-    label_path: Path,
-    bev_meta_path: Path,
-    trajectory_source: str = "unknown",
-) -> dict[str, Any]:
-    route_theta = float(bev_meta["route_theta_deg"])
-    intent = str(bev_meta["intent_gt"])
-    anchor = str(bev_meta["target_direction"])
-    qa_base = f"{record.clip_id}_{record.frame_name}"
-    bev_context = build_cot_bev_context(
-        bev_meta=bev_meta,
-        route_theta=route_theta,
-        intent=intent,
-        anchor=anchor,
-    )
-    fpv_scene = build_cot_fpv_scene()
-    cross_view = build_cot_cross_view(intent=intent, anchor=anchor)
-    finish = build_cot_finish(trajectory_norm=trajectory_norm, intent=intent)
-    samples = [
-        {
-            "sample_id": f"{qa_base}_bev_route_direction",
-            "task_family": "A_bev",
-            "task_type": "bev_route_direction",
-            "answer_type": "direction_json",
-            "question": "Estimate the route lookahead direction from the top-down BEV route context.",
-            "teacher_answer": json_tag("BEVContext", bev_context),
-            "structured_target": bev_context,
-            "evidence": {"bev_patch_meta_path": str(bev_meta_path)},
-            "valid": True,
-            "confidence": 0.9,
-            "difficulty": "normal",
-        },
-        {
-            "sample_id": f"{qa_base}_bev_navigation_stage",
-            "task_family": "A_bev",
-            "task_type": "bev_navigation_stage",
-            "answer_type": "mcq",
-            "question": "Classify the local navigation stage from the BEV route context.",
-            "teacher_answer": json_tag("BEVContext", bev_context),
-            "structured_target": bev_context,
-            "evidence": {"bev_patch_meta_path": str(bev_meta_path)},
-            "valid": True,
-            "confidence": 0.86,
-            "difficulty": "normal",
-        },
-        {
-            "sample_id": f"{qa_base}_crossview_topology_grounding",
-            "task_family": "X_crossview",
-            "task_type": "crossview_topology_grounding",
-            "answer_type": "grounding_json",
-            "question": "Does the FPV trajectory endpoint agree with the BEV route intent?",
-            "teacher_answer": json_tag("CrossView", cross_view),
-            "structured_target": cross_view,
-            "evidence": {
-                "trajectory_label_path": str(label_path),
-                "bev_patch_meta_path": str(bev_meta_path),
-            },
-            "valid": True,
-            "confidence": 0.78,
-            "difficulty": "normal",
-        },
-        {
-            "sample_id": f"{qa_base}_point_prompt",
-            "task_family": "P_prompt",
-            "task_type": "point_prompt",
-            "answer_type": "point_with_theta_json",
-            "question": "What is the FPV target point implied by the GT trajectory?",
-            "teacher_answer": json_tag("finish", finish),
-            "structured_target": finish,
-            "evidence": {"trajectory_label_path": str(label_path)},
-            "valid": True,
-            "confidence": 0.9,
-            "difficulty": "normal",
-        },
-        {
-            "sample_id": f"{qa_base}_trajectory_intent_check",
-            "task_family": "P_prompt",
-            "task_type": "trajectory_intent_check",
-            "answer_type": "structured_text",
-            "question": "Check whether the FPV trajectory is consistent with the BEV route intent.",
-            "teacher_answer": json_tag("finish", finish),
-            "structured_target": finish,
-            "evidence": {"trajectory_label_path": str(label_path)},
-            "valid": True,
-            "confidence": 0.72,
-            "difficulty": "normal",
-        },
-    ]
-    return {
-        "schema_version": QA_SCHEMA_VERSION,
-        "clip_name": record.clip_id,
-        "fpv_frame_idx": record.frame_idx,
-        "bev_frame_idx": record.bev_frame_idx if record.bev_frame_idx is not None else record.frame_idx,
-        "bev_time_delta_ms": record.bev_time_delta_ms,
-        "time_sec": None,
-        "image_size": {"width": image_width, "height": image_height},
-        "fpv_image_path": str(record.image_path),
-        "bev_image_path": str(record.bev_image_path) if record.bev_image_path else None,
-        "route_context": {
-            "intent_gt": intent,
-            "route_theta_deg": round(route_theta, 3),
-            "anchor": anchor,
-        },
-        "local_bev_context": bev_meta,
-        "segmentation_context_ref": {},
-        "som_context": {},
-        "gt_pixel_trajectory": trajectory_norm.astype(float).tolist(),
-        "gt_trajectory_fpv_t": trajectory_fpv_t,
-        "gt_trajectory_ego_t": trajectory_ego_t,
-        "metadata": {
-            "source": "agent_phase1_dataset_builder",
-            "trajectory_source": trajectory_source,
-            "trajectory_policy": trajectory_policy,
-            "trajectory_label_path": str(label_path),
-            "bev_patch_meta_path": str(bev_meta_path),
-            "bev_mapping_source": record.bev_mapping_source,
-            "phase": "phase1_no_segmentation",
-        },
-        "samples": samples,
-    }
 
 
 def _iter_clip_frame_records(
@@ -2165,134 +1999,6 @@ def anchor_from_theta(theta_deg: float) -> str:
     return "front"
 
 
-def stage_from_intent(intent: str) -> str:
-    if intent == "stop":
-        return "stop_or_arrive"
-    if intent in {"turn_left", "turn_right"}:
-        return "approach_turn"
-    return "straight"
-
-
-def json_tag(tag: str, payload: dict[str, Any]) -> str:
-    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    return f"<{tag}>{body}</{tag}>"
-
-
-def build_cot_bev_context(
-    *,
-    bev_meta: dict[str, Any],
-    route_theta: float,
-    intent: str,
-    anchor: str,
-) -> dict[str, Any]:
-    return {
-        "scene_summary": "local BEV route context",
-        "route_summary": f"route continues from ego toward {anchor}",
-        "route_direction_bin": route_direction_bin(route_theta, intent, anchor),
-        "intent": intent,
-        "target_direction": anchor,
-        "bev_anchor": anchor
-    }
-
-
-def build_cot_fpv_scene() -> dict[str, Any]:
-    return {
-        "navigable_support": ["visible_sidewalk_or_pedestrian_support"],
-        "conditional_support": [],
-        "risk_objects": [],
-        "visibility": "uncertain",
-        "local_risk": "unknown",
-    }
-
-
-def build_cot_cross_view(*, intent: str, anchor: str) -> dict[str, Any]:
-    region = fpv_region_from_direction(anchor)
-    return {
-        "bev_anchor": anchor,
-        "fpv_anchor": f"{region}_visible_navigation_support",
-        "near_reference": "trajectory_endpoint",
-        "blind_area_context": {
-            "left": "unknown without dense region evidence",
-            "right": "unknown without dense region evidence",
-            "front": "trajectory endpoint indicates visible support",
-        },
-        "fpv_route_region": region,
-        "route_to_fpv_direction": route_to_fpv_direction(anchor),
-        "safe_corridor": safe_corridor_from_region(region),
-        "alignment": "aligned",
-        "confidence": "medium",
-    }
-
-
-def build_cot_finish(*, trajectory_norm: np.ndarray, intent: str) -> dict[str, Any]:
-    trajectory = np.asarray(trajectory_norm, dtype=np.float32).reshape(-1, 2).astype(float).tolist()
-    return {
-        "trajectory": trajectory,
-        "intent": intent,
-        "confidence_level": "normal",
-        "trajectory_type": trajectory_type(trajectory),
-        "trajectory_validity": "valid",
-    }
-
-
-def route_direction_bin(theta_deg: float, intent: str, target_direction: str) -> str:
-    if str(intent) == "stop" or str(target_direction) == "stop":
-        return "stop"
-    theta = float(theta_deg)
-    if theta <= -15.0:
-        return "left"
-    if theta < -5.0:
-        return "slight_left"
-    if theta <= 5.0:
-        return "front"
-    if theta <= 15.0:
-        return "slight_right"
-    return "right"
-
-
-
-def fpv_region_from_direction(direction: str) -> str:
-    if direction == "left_front":
-        return "left"
-    if direction == "right_front":
-        return "right"
-    if direction == "stop":
-        return "unknown"
-    return "center"
-
-
-def route_to_fpv_direction(direction: str) -> str:
-    return {
-        "left_front": "forward_left",
-        "right_front": "forward_right",
-        "front": "forward_center",
-        "stop": "stop",
-    }.get(direction, "unknown")
-
-
-def safe_corridor_from_region(region: str) -> str:
-    return {
-        "left": "left_corridor",
-        "right": "right_corridor",
-        "center": "center_corridor",
-        "unknown": "unknown",
-    }.get(region, "unknown")
-
-
-def trajectory_type(trajectory: list[list[float]]) -> str:
-    arr = np.asarray(trajectory or [], dtype=np.float32).reshape(-1, 2)
-    if arr.size == 0:
-        return "unknown"
-    if len(arr) > 1 and float(np.max(arr[:, 1]) - np.min(arr[:, 1])) < 0.08:
-        return "stop_hold"
-    delta_x = float(arr[-1, 0] - arr[0, 0]) if len(arr) > 1 else 0.0
-    if delta_x < -0.035:
-        return "slight_left_center"
-    if delta_x > 0.035:
-        return "slight_right_center"
-    return "straight_center"
-
-
 def _drop_none_fields(data: dict[str, Any]) -> dict[str, Any]:
     """Remove optional fields that are absent before persisting JSON artifacts."""
 
@@ -2393,7 +2099,7 @@ def _optional_float(value: Any) -> float | None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build SideWalk Phase1 source JSONL and QA artifacts")
+    parser = argparse.ArgumentParser(description="Build SideWalk Phase1 source JSONL and geometry artifacts")
     parser.add_argument("--sidewalk-root", required=True, help="Root containing prepared SideWalk clips")
     parser.add_argument("--output-root", required=True, help="Output root for Phase1 artifacts")
     parser.add_argument("--split-name", default="train", help="Manifest split name")

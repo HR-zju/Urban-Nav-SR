@@ -40,7 +40,6 @@ SUPERVISION_KEYS = (
 SIDECAR_PATH_KEYS = (
     "trajectory_label_path",
     "bev_patch_meta_path",
-    "qa_bundle_path",
     "cot_sections_path",
     "semantic_segmentation_path",
     "semantic_mask_path",

@@ -718,7 +718,7 @@ def validate_teacher_answer(answer: str, row: dict[str, Any], evidence: dict[str
         if str(finish.get("trajectory_validity") or "") != "valid":
             errors.append(f"trajectory_validity_not_valid:{finish.get('trajectory_validity')}")
 
-    if not has_segmentation_context(row, evidence):
+    if not has_segmentation_context(row):
         lower_answer = answer.lower()
         for pattern in NO_SEG_FORBIDDEN_PATTERNS:
             if re.search(pattern, lower_answer):
@@ -1145,17 +1145,10 @@ def optional_float(value: Any) -> float | None:
         return None
 
 
-def has_segmentation_context(row: dict[str, Any], evidence: dict[str, Any]) -> bool:
-    if row.get("semantic_segmentation_path") or row.get("semantic_mask_path"):
-        return True
-    qa_path = row.get("qa_bundle_path")
-    if qa_path and Path(str(qa_path)).is_file():
-        try:
-            qa = load_json(qa_path)
-            return bool(qa.get("segmentation_context_ref") or qa.get("som_context"))
-        except Exception:
-            return False
-    return False
+def has_segmentation_context(row: dict[str, Any]) -> bool:
+    """Return whether the source row explicitly provides segmentation."""
+
+    return bool(row.get("semantic_segmentation_path") or row.get("semantic_mask_path"))
 
 
 def _inc(counter: dict[str, int], key: str) -> None:

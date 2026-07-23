@@ -95,7 +95,6 @@ def path_values(row: dict[str, Any]) -> list[str]:
         "fpv_image_path",
         "bev_image_path",
         "bev_patch_meta_path",
-        "qa_bundle_path",
         "trajectory_label_path",
     ):
         value = row.get(key)
@@ -108,7 +107,7 @@ def path_values(row: dict[str, Any]) -> list[str]:
         elif value:
             values.append(str(value))
     meta = row.get("sidewalk_meta") if isinstance(row.get("sidewalk_meta"), dict) else {}
-    for key in ("source_dataset", "bev_patch_meta_path", "qa_bundle_path", "trajectory_label_path"):
+    for key in ("source_dataset", "bev_patch_meta_path", "trajectory_label_path"):
         value = meta.get(key)
         if value:
             values.append(str(value))

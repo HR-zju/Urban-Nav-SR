@@ -50,7 +50,6 @@ def _make_cot_row(root: Path) -> dict:
 
     label_path = root / "phase1" / "clips" / "clip_a" / "trajectory_labels" / "000001.json"
     meta_path = root / "phase1" / "clips" / "clip_a" / "bev_patch_meta" / "000001.json"
-    qa_path = root / "phase1" / "clips" / "clip_a" / "qa" / "000001_qa.json"
     _write_json(
         label_path,
         {
@@ -74,7 +73,6 @@ def _make_cot_row(root: Path) -> dict:
             "confidence_level_gt": "normal",
         },
     )
-    _write_json(qa_path, {"schema_version": "sidewalk_bev_fpv_qa_v1", "samples": []})
     row = {
         "id": "clip_a_000001",
         "clip_id": "clip_a",
@@ -99,7 +97,6 @@ def _make_cot_row(root: Path) -> dict:
         "prompt": "<image><image>\nTask: Sidewalk navigation structured reasoning and trajectory prediction",
         "trajectory_label_path": str(label_path),
         "bev_patch_meta_path": str(meta_path),
-        "qa_bundle_path": str(qa_path),
         "route_context": {"route_theta_deg": 0.0, "intent_gt": "go_straight"},
         "sidewalk_meta": {
             "clip_id": "clip_a",

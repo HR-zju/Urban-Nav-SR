@@ -77,7 +77,6 @@ HARD_TOP_LEVEL_FIELDS = {
     "image_width",
     "instruction",
     "pixel_trajectory",
-    "qa_bundle_path",
     "route_context",
     "sidewalk_meta",
     "system_prompt",

@@ -38,7 +38,7 @@ class SidewalkPhase1DatasetTest(unittest.TestCase):
         self.assertAlmostEqual(x_east, 0.0, delta=0.1)
         self.assertGreater(y_east, 9.0)
 
-    def test_build_phase1_dataset_writes_source_and_qa(self) -> None:
+    def test_build_phase1_dataset_writes_source_and_geometry_sidecars(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "sidewalk" / "chunk_0" / "clip_a"
             images = root / "images"
@@ -81,7 +81,7 @@ class SidewalkPhase1DatasetTest(unittest.TestCase):
             self.assertEqual(rows[0]["trajectory_fpv_t"][0][2], 0.0)
             self.assertEqual(rows[0]["trajectory_policy"]["dynamic_obstacle_audit"]["status"], "not_evaluated_no_dynamic_masks")
             self.assertEqual(rows[0]["sidewalk_meta"]["trajectory_source"], "heuristic_gnss_projection")
-            self.assertTrue(Path(rows[0]["qa_bundle_path"]).exists())
+            self.assertNotIn("qa_bundle_path", rows[0])
             label = json.loads(Path(rows[0]["trajectory_label_path"]).read_text(encoding="utf-8"))
             self.assertEqual(label["schema_version"], "sidewalk_phase1_trajectory_v2")
             self.assertIn("trajectory_fpv_t", label)
@@ -93,19 +93,8 @@ class SidewalkPhase1DatasetTest(unittest.TestCase):
             self.assertNotIn("ego_cell_gt", bev_meta)
             self.assertNotIn("target_cell_gt", bev_meta)
             self.assertNotIn("route_polyline_cells", bev_meta)
-            qa = json.loads(Path(rows[0]["qa_bundle_path"]).read_text(encoding="utf-8"))
-            self.assertEqual(qa["schema_version"], "sidewalk_bev_fpv_qa_v1")
-            self.assertIn("gt_trajectory_fpv_t", qa)
-            task_types = {item["task_type"] for item in qa["samples"]}
-            self.assertIn("bev_route_direction", task_types)
-            self.assertIn("trajectory_intent_check", task_types)
-            answers_by_type = {item["task_type"]: item["teacher_answer"] for item in qa["samples"]}
-            self.assertIn("<BEVContext>", answers_by_type["bev_route_direction"])
-            self.assertNotIn("route_theta_deg", answers_by_type["bev_route_direction"])
-            self.assertNotIn("route_theta_bin", answers_by_type["bev_route_direction"])
-            self.assertIn("<finish>", answers_by_type["trajectory_intent_check"])
-            self.assertNotIn("<BEVIntent>", answers_by_type["bev_route_direction"])
-            self.assertNotIn("<TrajectorySupport>", answers_by_type["trajectory_intent_check"])
+            self.assertFalse((out / "clips" / "clip_a" / "qa").exists())
+            self.assertFalse((out / "manifests" / "phase1_qa_index_train.jsonl").exists())
 
     def test_build_phase1_dataset_uses_calibrated_internnav_projection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

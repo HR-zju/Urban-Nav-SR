@@ -10,7 +10,7 @@ Agent 仓库负责离线生成可审计数据：
 raw/prepared SideWalk clip
   -> frame_positions.npy + frame_orientations.npy + camera_params.json + FPV/BEV images
   -> full-FPV trajectory.json + 2fps ego-aligned bev_images/bev_index.json
-  -> trajectory label + BEV topology meta + QA bundle
+  -> trajectory label + BEV topology meta
   -> phase1_source_*.jsonl
   -> LLM Teacher structured CoT + validator
   -> phase1_cot_*.jsonl
@@ -34,10 +34,10 @@ Phase1 分成四段，不能混用职责：
 | 脚本 | 职责 |
 | --- | --- |
 | `tools/dataset_processing/process_sidewalk_dataset.py` | 从 `front.mp4`、pose npy 生成全量 FPV `trajectory.json`，同时生成最简 2fps ego-aligned `bev_images/`、`bev_index.json`、`bev_sample_trajectory.json`；FPV JPG、north-up BEV、BEV mp4 均为显式 debug 选项。 |
-| `tools/model_processing/sidewalk_phase1_dataset.py` | 从 InternNav clip 或显式 fallback clip 生成 Phase1 source JSONL、trajectory label、BEV patch meta、QA bundle。 |
+| `tools/model_processing/sidewalk_phase1_dataset.py` | 从 InternNav clip 或显式 fallback clip 生成 Phase1 source JSONL、trajectory label 和 BEV patch meta。 |
 | `tools/model_processing/sidewalk_phase1_cot_teacher.py` | 调用 Agent VLM/LLM，为 Phase1 source JSONL 生成强制校验的 structured CoT 监督。 |
 | `tools/model_processing/sidewalk_phase1_archive.py` | 校验 CoT/几何一致性，归档 FPV/BEV/sidecar，并生成 ms-swift 直接训练 JSONL。 |
-| `tools/model_processing/eval_sidewalk_phase1_artifacts.py` | 检查 source JSONL、sidecar 文件、trajectory shape、越界率、QA bundle schema；可选评估预测 ADE/FDE。 |
+| `tools/model_processing/eval_sidewalk_phase1_artifacts.py` | 检查 source JSONL、sidecar 文件、trajectory shape 和越界率；可选评估预测 ADE/FDE。 |
 | `tools/model_processing/run_sidewalk_phase1_dataset.sh` | 一键运行 Phase1 数据构建和数据评估。 |
 | `tools/model_processing/run_sidewalk_phase1_cot_teacher.sh` | 一键运行 Phase1 CoT teacher 和 validator。 |
 | `tools/model_processing/run_sidewalk_phase1_archive.sh` | 一键运行 CoT 合理性判定和训练数据归档。 |
@@ -211,12 +211,10 @@ sidewalk_phase1/
     {clip_id}/
       trajectory_labels/{frame}.json
       bev_patch_meta/{frame}.json
-      qa/{frame}_qa.json
       overlays/{frame}_debug.jpg
   manifests/
     phase1_source_train.jsonl
     phase1_cot_train.jsonl
-    phase1_qa_index_train.jsonl
     phase1_dataset_report_train.json
     phase1_cot_report_train.json
     phase1_eval_train.json
@@ -230,7 +228,6 @@ sidewalk_phase1_archive/
     clips/{clip_id}/
       trajectory_labels/{frame}.json
       bev_patch_meta/{frame}.json
-      qa/{frame}_qa.json
       cot_sections/{frame}.json
   manifests/
     train.jsonl
@@ -267,7 +264,6 @@ sidewalk_phase1_archive/
   "instruction": "Navigate safely on the sidewalk and follow the visible route.",
   "trajectory_label_path": "/abs/trajectory_labels/000100.json",
   "bev_patch_meta_path": "/abs/bev_patch_meta/000100.json",
-  "qa_bundle_path": "/abs/qa/000100_qa.json",
   "sidewalk_meta": {
     "trajectory_source": "calibrated_pose_projection"
   }
@@ -309,7 +305,7 @@ FPV trajectory label 会在标定投影后执行一次近场修正：第一个�
 
 ### 4.2 BEV patch meta
 
-`bev_patch_meta/{frame}.json` 是 Stage1 拓扑 QA 和审计目标。这里不再输出
+`bev_patch_meta/{frame}.json` 是 BEV 拓扑与审计 sidecar。这里不再输出
 `ego_cell_gt`、`target_cell_gt` 或 `grid_size`：这些字段来自 exporter 的局部窗口配置，
 不是外部标注真值，不适合作为 CoT/SFT 监督目标。Phase1 保留连续局部米制路线和语义导航状态。
 
@@ -328,47 +324,6 @@ FPV trajectory label 会在标定投影后执行一次近场修正：第一个�
 
 `route_polyline_local_m` 和 `route_target_local_m` 只用于离线 teacher/validator 约束
 `route_theta_deg`、`intent_gt`、`target_direction` 和最终 FPV trajectory，不会作为学生 prompt 中的输入泄露。
-
-### 4.3 QA bundle
-
-`qa/{frame}_qa.json` 使用 ms-swift SideWalk QA schema。Phase1 QA 已和主线
-CoT v5 对齐：teacher answer 输出 `<BEVContext>/<FPVScene>/<CrossView>/<Plan>/<finish>`
-这些 CoT section tag，而不是旧的 `<BEVIntent>/<PointPrompt>/<TrajectorySupport>` 语法。
-
-```json
-{
-  "schema_version": "sidewalk_bev_fpv_qa_v1",
-  "clip_name": "clip_a",
-  "fpv_frame_idx": 100,
-  "fpv_image_path": "/abs/images/000100.jpg",
-  "bev_image_path": "/abs/bev_images/000100_bev.jpg",
-  "gt_pixel_trajectory": [[0.5, 0.9], [0.51, 0.72]],
-  "samples": [
-    {
-      "task_family": "A_bev",
-      "task_type": "bev_route_theta",
-      "teacher_answer": "<BEVContext>{...}</BEVContext>",
-      "structured_target": {
-        "route_theta_deg": 0.0,
-        "route_theta_bin": "[-5,5)",
-        "route_direction_bin": "front",
-        "intent": "go_straight",
-        "target_direction": "front"
-      }
-    }
-  ]
-}
-```
-
-Phase1 默认生成：
-
-- `bev_route_theta`
-- `bev_navigation_stage`
-- `crossview_topology_grounding`
-- `point_prompt`
-- `trajectory_intent_check`
-
-其中 `bev_route_theta`、`bev_navigation_stage`、`crossview_topology_grounding`、`point_prompt` 与在线 RouteServer QA 核心 task 对齐；`trajectory_intent_check` 是 Phase1 离线几何轨迹一致性审计项。没有 segmentation 时，不生成强 `fpv_region_affordance` 和 `mask_route_sequence` 监督。
 
 ## 5. 使用方式
 
@@ -436,7 +391,6 @@ python tools/model_processing/sidewalk_phase1_dataset.py \
 ```bash
 python tools/model_processing/eval_sidewalk_phase1_artifacts.py \
   --source-jsonl "/media/ubuntu/data1/SR-Nav Dataset/sidewalk_phase1/manifests/phase1_source_train.jsonl" \
-  --qa-root "/media/ubuntu/data1/SR-Nav Dataset/sidewalk_phase1/clips" \
   --summary-json "/media/ubuntu/data1/SR-Nav Dataset/sidewalk_phase1/manifests/phase1_eval_train.json"
 ```
 
@@ -546,17 +500,6 @@ swift sft \
 
 Archive manifest 已经是标准 ms-swift 多模态 JSONL，不需要再运行 `swift.sidewalk_nav.dataset_builder`。
 
-若只做 QA-only manifest，仍可在 ms-swift 仓库中执行：
-
-QA-only manifest：
-
-```bash
-python -m swift.sidewalk_nav.dataset_builder \
-  --input-format qa \
-  --qa-root "/media/ubuntu/data1/SR-Nav Dataset/sidewalk_phase1/clips" \
-  --output-jsonl "/media/ubuntu/data1/SR-Nav Dataset/sidewalk_phase1/manifests/ms_swift_phase1_qa_train.jsonl"
-```
-
 ### 5.6 Agent baseline CoT 推理
 
 Agent baseline 不应再使用旧的 visual-prompt JSON schema。为了与数据标注、ms-swift SFT 和后续评估统一，baseline 的输入输出必须采用同一套 Phase1 CoT v5 格式：
@@ -604,7 +547,6 @@ python tools/model_processing/run_sidewalk_phase1_cot_baseline.py \
 - `target_shape_ok`
 - `target_in_bounds`
 - `intent_counts`
-- `qa_bundle_summary.task_counts`
 
 模型预测阶段：
 

@@ -56,7 +56,6 @@ REQUIRED_COT_SECTIONS = ("Scene", "FPVScene", "BEVContext", "CrossView", "Plan")
 SIDECAR_KEYS = (
     ("trajectory_label_path", "trajectory_labels"),
     ("bev_patch_meta_path", "bev_patch_meta"),
-    ("qa_bundle_path", "qa"),
 )
 
 

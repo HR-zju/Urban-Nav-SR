@@ -166,7 +166,6 @@ WRITE_OVERLAYS=1 \
 phase1/manifests/phase1_source_clip_test.jsonl
 phase1/clips/<clip_id>/trajectory_labels/*.json
 phase1/clips/<clip_id>/bev_patch_meta/*.json
-phase1/clips/<clip_id>/qa/*_qa.json
 phase1/clips/<clip_id>/overlays/*.jpg
 ```
 
@@ -174,7 +173,6 @@ phase1/clips/<clip_id>/overlays/*.jpg
 
 - `trajectory_labels/*.json`：FPV normalized trajectory GT、intent、route theta。
 - `bev_patch_meta/*.json`：BEV grid、ego/target cell、route cells、intent。
-- `qa/*_qa.json`：离线 QA bundle。
 - FPV 高频样本会通过 `bev_index.json` 匹配最近的 2fps BEV，默认最大时间差 `300ms`。
 
 如需旧 GNSS/`trajectory.json` smoke fallback，必须显式允许：
@@ -240,7 +238,7 @@ phase1_archive/manifests/clip_test.review.csv     # 人工审计索引
 phase1_archive/manifests/clip_test.stats.json     # 接受率、intent、teacher 来源等统计
 phase1_archive/media/clips/<clip_id>/fpv/*.jpg    # hardlink/copy/symlink/reference
 phase1_archive/media/clips/<clip_id>/bev/*.jpg
-phase1_archive/sidecars/clips/<clip_id>/*         # label/meta/qa/cot_sections
+phase1_archive/sidecars/clips/<clip_id>/*         # label/meta/cot_sections
 phase1_archive/review/index.html                  # 可选人工检查页
 ```
 
@@ -331,13 +329,12 @@ Archive 校验内容包括：
 ```bash
 python tools/model_processing/eval_sidewalk_phase1_artifacts.py \
   --source-jsonl "${CLIP}/phase1/manifests/phase1_source_clip_test.jsonl" \
-  --qa-root "${CLIP}/phase1/clips" \
   --summary-json "${CLIP}/phase1/manifests/phase1_eval_clip_test.json" \
   --output-jsonl "${CLIP}/phase1/manifests/phase1_eval_rows_clip_test.jsonl" \
   --expected-points 16
 ```
 
-用途：检查几何 source JSONL、trajectory shape、归一化范围、QA schema；后续可接预测 JSON 计算 ADE/FDE。CoT 是否进入训练集由 archive 阶段最终决定。
+用途：检查几何 source JSONL、trajectory shape 与归一化范围；后续可接预测 JSON 计算 ADE/FDE。CoT 是否进入训练集由 archive 阶段最终决定。
 
 ### 8. 跑 Agent CoT baseline 并可视化预测轨迹
 
@@ -450,7 +447,7 @@ python tools/dataset_processing/process_chunks_26_29.py \
 | `model_processing/run_phase_all.sh` | 一键处理 sidewalk 下所有数据 |
 | `model_processing/run_sidewalk_images_visual_prompt_pipeline.py` | sidewalk Agent expert trajectory 推理与可视化流水线；默认输出 `rendered_prompt.path_uv`，不依赖 SAM/SoM corridor |
 | `model_processing/run_sidewalk_phase1_cot_baseline.py` | 使用 Phase1 CoT v5 输入/输出格式运行 Agent baseline；支持 exporter BEV 和在线 BEV 两种输入 |
-| `model_processing/sidewalk_phase1_dataset.py` | 生成 Phase1 ms-swift source JSONL、trajectory label、BEV topology meta 和 QA bundle；默认使用 InternNav pose/camera 标定投影 |
+| `model_processing/sidewalk_phase1_dataset.py` | 生成 Phase1 ms-swift source JSONL、trajectory label 和 BEV topology meta；默认使用 InternNav pose/camera 标定投影 |
 | `model_processing/sidewalk_phase1_cot_teacher.py` | 调用 Agent VLM/LLM，把 Phase1 source JSONL 升级为带 `<think>/<Scene>/<FPVScene>/<BEVContext>/<CrossView>/<Plan>/<finish>` 的 CoT SFT 数据 |
 | `model_processing/sidewalk_phase1_archive.py` | 先校验 CoT/几何一致性，再把通过样本归档成 ms-swift 可直接训练的 `messages/images` JSONL |
 | `model_processing/eval_sidewalk_phase1_artifacts.py` | 审计 Phase1 数据产物，并可选评估预测 ADE/FDE |
@@ -547,7 +544,7 @@ LIMIT=200 \
 
 ### Agent expert trajectory 推理与可视化
 
-数据标注链路里的 `trajectory_labels/*.json` 是几何真值；Agent baseline 链路需要让 VLM/LLM 基于同样的 FPV+BEV QA 语境真实推理出一条 `<finish>.trajectory`，再把该归一化轨迹转换成 `rendered_prompt.path_uv` 做可视化和指标评估。这里不使用手写 fallback 路径，也不要求模型输出 `path_corridor`、左右边界、coverage polygon、mask 或 SAM/SoM region id。
+数据标注链路里的 `trajectory_labels/*.json` 是几何真值；Agent baseline 链路需要让 VLM/LLM 基于同样的 FPV+BEV 导航语境真实推理出一条 `<finish>.trajectory`，再把该归一化轨迹转换成 `rendered_prompt.path_uv` 做可视化和指标评估。这里不使用手写 fallback 路径，也不要求模型输出 `path_corridor`、左右边界、coverage polygon、mask 或 SAM/SoM region id。
 
 推荐模式是直接读取 `phase1_source_*.jsonl`，这样 FPV、BEV、prompt、输出格式都与 ms-swift CoT 标注链路一致：
 
