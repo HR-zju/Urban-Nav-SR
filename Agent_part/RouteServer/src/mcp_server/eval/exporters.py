@@ -238,10 +238,8 @@ def trace_to_ms_swift_stage2_row(
         },
     }
     if case is not None and isinstance(case.metadata.get("reasoning_input_context"), dict):
-        # 仅显式声明为模型输入的上下文可以进入 QA prompt，监督字段不会从 ground_truth 回填。
+        # 仅显式声明为模型输入的上下文可以进入 reasoning prompt，监督字段不会从 ground_truth 回填。
         row["reasoning_input_context"] = dict(case.metadata["reasoning_input_context"])
-    if case is not None and isinstance(case.metadata.get("reasoning_qa_label_validity"), dict):
-        row["reasoning_qa_label_validity"] = dict(case.metadata["reasoning_qa_label_validity"])
     if system1_enabled and supervision.get("pixel_trajectory") is not None:
         # 顶层监督字段给 SideWalk trainer 的 trajectory loss 用，不写入 assistant target。
         row["pixel_trajectory"] = supervision["pixel_trajectory"]
@@ -484,7 +482,7 @@ def _available_modalities(
     *,
     messages: list[dict],
 ) -> list[str]:
-    """Return explicitly model-visible modality capabilities for QA gates.
+    """Return explicitly model-visible modality capabilities for reasoning gates.
 
     Args:
         case: Optional source Stage2 case.

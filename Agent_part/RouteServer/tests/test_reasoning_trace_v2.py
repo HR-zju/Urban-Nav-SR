@@ -26,7 +26,6 @@ from mcp_server.contracts.reasoning import (
 )
 from mcp_server.eval.exporters import trace_to_ms_swift_stage2_row
 from mcp_server.eval.stage2_validator import validate_ms_swift_stage2_row, validate_stage2_trace
-from mcp_server.qa.reasoning_views import build_reasoning_qa_views
 from mcp_server.teacher.agentic_stage2_trace_builder import AgenticStage2TraceBuilder
 
 
@@ -197,46 +196,6 @@ class ReasoningTraceV2ContractTest(unittest.TestCase):
         self.assertEqual(fpv_only.image_roles, ["fpv", "fpv"])
         self.assertNotIn("bev.current", stage2_evidence_catalog(fpv_only))
         self.assertIn("bev.current", stage2_evidence_catalog(fpv_bev))
-
-    def test_qa_views_require_strong_task_specific_label_sources(self) -> None:
-        validity = {
-            "route_to_fpv_grounding": {
-                "valid": True,
-                "confidence": 0.95,
-                "label_source": "calibrated_cross_view",
-                "evidence_refs": ["route.active", "corridor.left"],
-            },
-            "social_agent_path_relation": {
-                "valid": True,
-                "confidence": 0.9,
-                "label_source": "tracked_agents",
-                "evidence_refs": ["track.person_4", "corridor.left"],
-            },
-            "social_constraint_applicability": {
-                "valid": True,
-                "confidence": 0.99,
-                "label_source": "trajectory_endpoint_heuristic",
-            },
-            "map_route_state_reading": {
-                "valid": True,
-                "confidence": 0.99,
-                "label_source": "route_geometry",
-                "evidence_refs": ["route.missing"],
-            },
-        }
-
-        views = build_reasoning_qa_views(
-            _valid_target().reasoning,
-            source_group_id="frame-1",
-            available_modalities={"instruction", "route", "bev", "fpv", "track", "selected_path"},
-            label_validity=validity,
-        )
-
-        self.assertEqual([view.task_type for view in views], ["route_to_fpv_grounding", "social_agent_path_relation"])
-        self.assertEqual(views[0].section_name, "CrossModalAlignment")
-        self.assertIn("<EvidenceGrounding>", views[1].teacher_answer)
-        self.assertFalse(views[0].to_dict()["loss_mask"]["system1_action"])
-
 
 class Stage2ReasoningV2IntegrationTest(unittest.TestCase):
     def test_tool_and_no_tool_rows_are_v2_and_valid(self) -> None:

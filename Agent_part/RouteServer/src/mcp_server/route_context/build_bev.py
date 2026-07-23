@@ -1,7 +1,7 @@
 """Build route-aligned bird's-eye-view context for visual prompting.
 
 The BEV context is an intent prior, not a visual observation. It rotates route
-geometry into the rider/camera heading frame so downstream QA teachers and LVLM
+geometry into the rider/camera heading frame so downstream reasoning and LVLM
 prompt contracts can reason about "front", "left-front", and "right-front"
 without mixing geographic and image coordinates.
 
@@ -126,7 +126,7 @@ def build_local_bev_context(
     back_extent_m: float = 10.0,
     side_extent_m: float = 15.0,
 ) -> LocalBEVContext:
-    """Create the local BEV window consumed by cross-view QA and prompt priors.
+    """Create the local BEV window consumed by cross-view reasoning and prompt priors.
 
     The output deliberately keeps the geometric layers separate:
     ``route_polyline_local`` is the cropped provider route, ``local_segment_bev``

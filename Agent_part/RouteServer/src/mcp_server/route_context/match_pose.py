@@ -1,9 +1,10 @@
 """Match the live GPS pose to the provider route polyline.
 
 The matcher provides the route-confidence prior used by navigation semantics
-and QA teachers. It is deliberately conservative: cross-track distance is the
-primary signal, heading agreement is secondary, and a route-start grace window
-prevents false off-route decisions before the rider has merged into the route.
+and visual-prompt reasoning. It is deliberately conservative: cross-track
+distance is the primary signal, heading agreement is secondary, and a
+route-start grace window prevents false off-route decisions before the rider
+has merged into the route.
 
 Core score:
 

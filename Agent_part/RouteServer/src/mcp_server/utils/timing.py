@@ -82,7 +82,6 @@ def compact_visual_prompt_frame_timing(
         "generator_llm_ms": telemetry_stage_elapsed_ms(telemetry, "generator_llm"),
         "generator_constraint_ms": telemetry_stage_elapsed_ms(telemetry, "V_constraint_generator"),
         "verifier_llm_ms": telemetry_stage_elapsed_ms(telemetry, "verifier_llm"),
-        "qa_bundle_ms": telemetry_stage_elapsed_ms(telemetry, "qa_bundle"),
         "render_ms": telemetry_stage_elapsed_ms(telemetry, "render"),
     }
     generator_call = telemetry_llm_call(telemetry, "generator_llm")
@@ -143,7 +142,6 @@ def compact_visual_prompt_frame_timing(
             "generator_llm_ms",
             "generator_constraint_ms",
             "verifier_llm_ms",
-            "qa_bundle_ms",
             "render_ms",
         )
         if isinstance(timing.get(key), int)
@@ -176,7 +174,6 @@ def summarize_visual_prompt_manifest_timings(frames: list[dict[str, Any]]) -> di
         "generator_llm_ms",
         "generator_constraint_ms",
         "verifier_llm_ms",
-        "qa_bundle_ms",
         "render_ms",
         "artifact_write_ms",
         "generator_llm_roundtrip_ms",

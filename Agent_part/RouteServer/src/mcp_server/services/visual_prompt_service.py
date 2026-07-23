@@ -2,7 +2,7 @@
 
 The service combines route intent, FPV imagery, semantic segmentation, SoM
 regions, LVLM generation, deterministic mask constraints, optional LVLM
-verification, and debug/QA artifact export.
+verification, and debug artifact export.
 
 Pipeline:
 
@@ -71,11 +71,6 @@ from mcp_server.llm import (
     arbitrate_local_pov_candidates_with_llm,
     arbitrate_pov_candidates_with_llm,
     local_image_path_to_data_url,
-)
-from mcp_server.qa import (
-    build_pov_prompt_candidate_bundle,
-    build_visual_prompt_qa_bundle,
-    pov_candidate_bundle_to_dict,
 )
 from mcp_server.route_context import (
     build_route_state,
@@ -865,7 +860,7 @@ def _trajectory_only_rendered_prompt(rendered_prompt: Dict[str, Any] | None) -> 
 
     Internal segmentation validation may still use corridor samples.  The public
     baseline artifact keeps only the trajectory centerline so ms-swift labels,
-    RouteServer QA, and prediction overlays share the same contract.
+    RouteServer decisions, and prediction overlays share the same contract.
     """
     if not isinstance(rendered_prompt, dict):
         return None
@@ -1663,7 +1658,6 @@ async def run_zero_shot_visual_prompt_pipeline(
     bev_map_provider_session: Any | None = None,
     llm_primary_image_role: str = "primary_fpv",
     enforce_alignment: bool = True,
-    emit_qa_bundle: bool = False,
     emit_llm_input_images: bool = False,
     request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -1676,7 +1670,7 @@ async def run_zero_shot_visual_prompt_pipeline(
     4. Ask A(generator) to directly regress one prompt in LVLM coordinates.
     5. Map the prompt back to source pixels and enforce V(segmentation) checks.
     6. Optionally ask V(verifier) to repair/refine, then enforce V again.
-    7. Return the decision, overlays, debug context, and optional QA bundle.
+    7. Return the decision, overlays, and debug context.
     """
     del visual_top_k, candidate_top_k
     resolved_enable_som_overlay_input = (
@@ -1831,8 +1825,6 @@ async def run_zero_shot_visual_prompt_pipeline(
     llm_image_width, llm_image_height = [int(value) for value in llm_image_payload["llm_image_size"]]
     source_to_llm_scale = llm_image_payload["source_to_llm_scale"]
     llm_to_source_scale = llm_image_payload["llm_to_source_scale"]
-    qa_bundle: Dict[str, Any] | None = None
-    candidate_bundle = None
     segmentation_validation: Dict[str, Any] | None = None
     segmentation_context = None
     segmentation_summary = None
@@ -2450,38 +2442,6 @@ async def run_zero_shot_visual_prompt_pipeline(
         },
     }
 
-    qa_stage_started_at = perf_counter()
-    if emit_qa_bundle:
-        candidate_bundle = build_pov_prompt_candidate_bundle(
-            route_context=route_context_dict,
-            local_bev_context=local_bev_dict,
-            image_width=image_width,
-            image_height=image_height,
-            segmentation_context=segmentation_context,
-            rendered_prompt=decision.rendered_prompt,
-        )
-        qa_bundle = build_visual_prompt_qa_bundle(
-            route_context=route_context_dict,
-            local_bev_context=local_bev_dict,
-            image_width=image_width,
-            image_height=image_height,
-            fpv_segmentation_summary=segmentation_summary,
-            segmentation_validation=segmentation_validation,
-            rendered_prompt=export_decision.rendered_prompt,
-            arbiter_decision=decision_dict,
-            candidate_bundle=candidate_bundle,
-            som_summary=som_summary,
-            safe_corridor_prior=safe_corridor_prior,
-        )
-        decision_dict["debug"]["qa_bundle_summary"] = {
-            "schema_version": qa_bundle.get("schema_version"),
-            "task_counts": qa_bundle.get("task_counts", {}),
-            "family_counts": qa_bundle.get("family_counts", {}),
-        }
-        _mark_stage("qa_bundle", qa_stage_started_at, status="ok")
-    else:
-        _mark_stage("qa_bundle", qa_stage_started_at, status="skipped")
-
     render_stage_started_at = perf_counter()
     image_href = _image_href_for_overlay(image_path=image_path, image_url=image_url)
     overlay_svg = _render_prompt_overlay_svg(
@@ -2542,7 +2502,5 @@ async def run_zero_shot_visual_prompt_pipeline(
             if key != "image_data_url"
         },
         "llm_input_images": llm_input_images if emit_llm_input_images else None,
-        "qa_bundle": qa_bundle,
-        "pov_prompt_candidate_bundle": pov_candidate_bundle_to_dict(candidate_bundle) if emit_qa_bundle else None,
         "telemetry": telemetry,
     }

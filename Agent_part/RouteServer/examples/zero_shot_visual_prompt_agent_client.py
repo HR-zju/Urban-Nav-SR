@@ -110,7 +110,6 @@ async def run_demo(
     candidate_top_k: int,
     llm_detail: str,
     enable_segmentation_overlay_input: bool,
-    emit_qa_bundle: bool,
     save_overlay: str | None,
 ) -> None:
     server_params = StdioServerParameters(
@@ -163,7 +162,6 @@ async def run_demo(
                     "candidate_top_k": candidate_top_k,
                     "llm_detail": llm_detail,
                     "enable_segmentation_overlay_input": bool(enable_segmentation_overlay_input),
-                    "emit_qa_bundle": emit_qa_bundle,
                 },
             )
 
@@ -175,9 +173,6 @@ async def run_demo(
                         "chosen_destination": recommendation.get("chosen_destination", {}),
                         "arbiter_decision": payload.get("arbiter_decision", {}),
                         "fpv_segmentation_summary": payload.get("fpv_segmentation_summary"),
-                        "qa_bundle_summary": (
-                            ((payload.get("arbiter_decision", {}) or {}).get("debug", {}) or {}).get("qa_bundle_summary")
-                        ),
                         "route_context": {
                             "turn_semantics": ((payload.get("route_context", {}) or {}).get("local_semantics", {}) or {}).get("turn_semantics"),
                             "corridor_type": ((payload.get("route_context", {}) or {}).get("local_semantics", {}) or {}).get("corridor_type"),
@@ -235,7 +230,6 @@ if __name__ == "__main__":
         action="store_true",
         help="Enable multi-image arbiter input by appending segmentation visualization when available",
     )
-    parser.add_argument("--emit-qa-bundle", action="store_true", help="Include structured QA teacher samples in the result")
     parser.add_argument("--save-overlay", help="Optional output path for the rendered prompt SVG overlay")
 
     args = parser.parse_args()
@@ -275,7 +269,6 @@ if __name__ == "__main__":
             candidate_top_k=args.candidate_top_k,
             llm_detail=args.llm_detail,
             enable_segmentation_overlay_input=args.enable_segmentation_overlay_input,
-            emit_qa_bundle=args.emit_qa_bundle,
             save_overlay=args.save_overlay,
         )
     )

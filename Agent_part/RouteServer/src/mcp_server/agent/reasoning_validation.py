@@ -1,4 +1,4 @@
-"""Deterministic validators for grounded reasoning targets and QA projections."""
+"""Deterministic validators for grounded reasoning targets."""
 
 from __future__ import annotations
 
@@ -103,7 +103,7 @@ def validate_reasoning_section_refs(
     *,
     evidence_catalog: Iterable[Any],
 ) -> ReasoningValidationResult:
-    """Validate evidence references for a full trace or one projected QA source.
+    """Validate evidence references for a full reasoning trace.
 
     Args:
         trace: Canonical reasoning trace.

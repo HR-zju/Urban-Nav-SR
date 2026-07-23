@@ -1301,7 +1301,6 @@ async def run_zero_shot_visual_prompt_agent(
     enable_som_overlay_input: Optional[bool] = None,
     enable_sam_visualization_input: bool = False,
     enable_bev_map_provider: bool = False,
-    emit_qa_bundle: bool = False,
     request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
@@ -1313,8 +1312,8 @@ async def run_zero_shot_visual_prompt_agent(
     3. let the LVLM render one conservative image-plane prompt from image + RouteContext
     4. if the LVLM fails, return reject_all instead of switching to heuristic fallbacks
 
-    The public input/output schema is unchanged; candidate/debug fields remain for
-    backward compatibility but are empty in this path.
+    Core visual-prompt decision, route, overlay, segmentation, and SoM fields
+    remain available to MCP and app callers.
     """
     await ctx.info(
         "Running zero-shot visual prompt agent "
@@ -1360,7 +1359,6 @@ async def run_zero_shot_visual_prompt_agent(
         enable_sam_visualization_input=enable_sam_visualization_input,
         enable_bev_map_provider=enable_bev_map_provider,
         enforce_alignment=enforce_alignment,
-        emit_qa_bundle=emit_qa_bundle,
         request_id=resolved_request_id,
     )
 

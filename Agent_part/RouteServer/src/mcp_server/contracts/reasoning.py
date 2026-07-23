@@ -3,8 +3,7 @@
 ``ReasoningTraceV2`` describes one System2 decision at one observation tick.  It
 is deliberately smaller than an episode trace: runtime events remain in
 ``EpisodeTraceV2`` and continuous System1 targets remain top-level training
-fields.  The same five sections can be rendered as a full CoT target or
-projected into one-section QA targets.
+fields.  The same five sections are rendered as one canonical Full CoT target.
 """
 
 from __future__ import annotations

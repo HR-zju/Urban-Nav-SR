@@ -271,7 +271,6 @@ class RouteServerAgentTeacher:
                 heading_deg=observation.get("heading_deg"),
                 navigation_mode=str(observation.get("mode") or "foot"),
                 enable_verifier=False,
-                emit_qa_bundle=False,
             )
         except Exception as exc:
             return {"status": "visual_prompt_error", "error": str(exc)}

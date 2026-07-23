@@ -3,7 +3,7 @@
 RouteServer owns the auditable annotation artifacts.  A source row freezes
 everything visible to the teacher/model, an annotation row records one teacher
 attempt and its validation outcome, and a training view projects an accepted
-annotation into either full CoT/System1 supervision or one LM-only QA target.
+annotation into Full-CoT/System1 supervision.
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ class ReasoningSourceV2(BaseModel):
 
     Args:
         schema_version: Fixed source contract version.
-        source_group_id: Stable id shared by CoT, QA, and System1 views.
+        source_group_id: Stable id shared by Full-CoT and System1 views.
         dataset_source: Source dataset family.
         source_record_id: Original dataset record id.
         split_group_id: Leakage-safe clip/session grouping id.
@@ -66,7 +66,8 @@ class ReasoningSourceV2(BaseModel):
         trajectory_policy: Canonical System1 coordinate contract.
         action_mask: Optional per-step System1 supervision mask.
         system1_enabled: Whether the full view may train a continuous head.
-        reasoning_qa_label_validity: Explicit task-specific QA provenance gates.
+        reasoning_qa_label_validity: Frozen legacy QA audit metadata. It does
+            not trigger training-view generation.
         teacher_private_context: Audit-only fields excluded from teacher and
             model prompts by default.
         metadata: Non-target provenance and conversion diagnostics.
@@ -194,8 +195,8 @@ class ReasoningTrainingViewV2(BaseModel):
         schema_version: Fixed training-view contract version.
         sample_id: Unique row id.
         source_group_id: Parent source id for grouped splitting.
-        view_type: Full CoT/System1 or one-section QA.
-        task_family: Main reasoning, map QA, or social QA.
+        view_type: Full CoT/System1 view.
+        task_family: Main grounded-navigation reasoning family.
         task_type: Stable training task name.
         images: Ordered multimodal inputs.
         image_roles: Role for each image.
@@ -205,9 +206,7 @@ class ReasoningTrainingViewV2(BaseModel):
         model_visible_context: Context rendered into the user prompt.
         evidence_catalog: Input-visible reference catalog.
         assistant_text: Deterministic target text.
-        reasoning_target: Structured full target for validation, full views only.
-        section_name: Projected section name for QA views.
-        question: QA question for QA views.
+        reasoning_target: Structured full target for validation.
         goal_geometry: Optional goal encoder input.
         route_points_ego_t: Optional route condition input.
         trajectory_ego_t: Navigate-only System1 target.
@@ -222,8 +221,8 @@ class ReasoningTrainingViewV2(BaseModel):
     schema_version: Literal[REASONING_TRAINING_VIEW_V2_SCHEMA_VERSION] = REASONING_TRAINING_VIEW_V2_SCHEMA_VERSION
     sample_id: str = Field(min_length=1, max_length=320)
     source_group_id: str = Field(min_length=1, max_length=240)
-    view_type: Literal["full_cot", "qa"]
-    task_family: Literal["grounded_navigation", "map_navigation", "social_navigation"]
+    view_type: Literal["full_cot"]
+    task_family: Literal["grounded_navigation"]
     task_type: str = Field(min_length=1, max_length=128)
     images: list[str] = Field(min_length=1, max_length=16)
     image_roles: list[str] = Field(min_length=1, max_length=16)
@@ -234,8 +233,6 @@ class ReasoningTrainingViewV2(BaseModel):
     evidence_catalog: list[EvidenceCatalogEntryV2] = Field(min_length=1, max_length=96)
     assistant_text: str = Field(min_length=1)
     reasoning_target: ReasoningTargetV2 | None = None
-    section_name: str | None = None
-    question: str | None = None
     goal_geometry: dict[str, Any] | list[Any] | None = None
     route_points_ego_t: list[Any] | None = None
     trajectory_ego_t: list[list[float]] | None = None
@@ -246,38 +243,26 @@ class ReasoningTrainingViewV2(BaseModel):
 
     @model_validator(mode="after")
     def validate_view_partition(self) -> "ReasoningTrainingViewV2":
-        """Enforce QA and full-view target/loss partitions.
+        """Enforce the Full CoT target and loss partition.
 
         Returns:
             Validated view.
 
         Raises:
-            ValueError: If a QA view leaks continuous labels or a full view is
-                missing its structured target.
+            ValueError: If a full view is missing its structured target or its
+                System1 labels disagree with the finish decision.
         """
 
         if len(self.images) != len(self.image_roles):
             raise ValueError("images and image_roles must have equal length")
-        if self.view_type == "qa":
-            if self.section_name is None or self.question is None:
-                raise ValueError("QA view requires section_name and question")
-            if self.reasoning_target is not None:
-                raise ValueError("QA view must not copy the full reasoning target")
-            if any(value is not None for value in (self.trajectory_ego_t, self.trajectory_policy, self.action_mask)):
-                raise ValueError("QA view cannot carry System1 supervision")
-            if self.loss_mask.get("system1_action", False):
-                raise ValueError("QA view must disable System1 action loss")
-        else:
-            if self.reasoning_target is None:
-                raise ValueError("full_cot view requires reasoning_target")
-            if self.section_name is not None or self.question is not None:
-                raise ValueError("full_cot view cannot contain QA projection fields")
-            is_navigate = self.reasoning_target.finish.decision_type == "navigate"
-            has_system1 = self.trajectory_ego_t is not None
-            if has_system1 and not is_navigate:
-                raise ValueError("non-navigation full view cannot carry System1 supervision")
-            if self.loss_mask.get("system1_action", False) != has_system1:
-                raise ValueError("System1 loss mask must match trajectory target presence")
+        if self.reasoning_target is None:
+            raise ValueError("full_cot view requires reasoning_target")
+        is_navigate = self.reasoning_target.finish.decision_type == "navigate"
+        has_system1 = self.trajectory_ego_t is not None
+        if has_system1 and not is_navigate:
+            raise ValueError("non-navigation full view cannot carry System1 supervision")
+        if self.loss_mask.get("system1_action", False) != has_system1:
+            raise ValueError("System1 loss mask must match trajectory target presence")
         return self
 
 

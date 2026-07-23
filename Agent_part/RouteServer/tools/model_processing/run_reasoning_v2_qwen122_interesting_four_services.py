@@ -226,7 +226,7 @@ def run_worker(
     image_detail: str,
     env: dict[str, str],
 ) -> None:
-    """Label one source shard and deterministically export full-CoT plus VQA views."""
+    """Label one source shard and deterministically export Full CoT views."""
 
     shard = run_root / "shards" / f"shard_{shard_index}.jsonl"
     if not (run_root / ".prepared").is_file() or not shard.is_file():
@@ -279,8 +279,6 @@ def run_worker(
             run_root / "views" / f"shard_{shard_index}.jsonl",
             "--report-json",
             run_root / "reports" / f"views_shard_{shard_index}.json",
-            "--minimum-qa-confidence",
-            "0.7",
             "--skip-errors",
         ],
         cwd=data_root,

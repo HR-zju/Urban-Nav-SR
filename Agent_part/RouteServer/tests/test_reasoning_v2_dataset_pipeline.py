@@ -257,7 +257,7 @@ def test_teacher_repair_validates_refs_and_never_uses_private_context() -> None:
     assert "VALIDATION_ERRORS" in backend.questions[1]
 
 
-def test_full_and_qa_views_share_label_but_not_system1_sidecars() -> None:
+def test_full_view_preserves_system1_sidecars() -> None:
     source = _source(system1_enabled=True)
     annotation = ReasoningAnnotationV2(
         source_group_id=source.source_group_id,
@@ -271,22 +271,11 @@ def test_full_and_qa_views_share_label_but_not_system1_sidecars() -> None:
 
     views = build_reasoning_training_views(source, annotation)
     full = next(view for view in views if view.view_type == "full_cot")
-    qa = [view for view in views if view.view_type == "qa"]
-
+    assert len(views) == 1
     assert "<readout>[SYS1_0]" in full.assistant_text
     assert full.assistant_text.index("</finish>") < full.assistant_text.index("<readout>")
     assert full.trajectory_ego_t == source.trajectory_ego_t
     assert full.loss_mask["system1_action"] is True
-    assert {view.task_type for view in qa} >= {
-        "instruction_to_map_selection",
-        "map_route_state_reading",
-        "route_to_fpv_grounding",
-        "local_route_executability",
-        "social_traversability",
-    }
-    assert all(view.trajectory_ego_t is None for view in qa)
-    assert all("[SYS1_" not in view.assistant_text for view in qa)
-    assert all(view.loss_mask["system1_action"] is False for view in qa)
 
 
 def test_manifest_runner_is_append_only_and_resumable(tmp_path: Path) -> None:

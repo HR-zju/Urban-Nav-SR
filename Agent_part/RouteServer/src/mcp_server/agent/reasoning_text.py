@@ -118,32 +118,6 @@ def render_reasoning_target_v2(
     return text
 
 
-def render_reasoning_section_v2(trace: ReasoningTraceV2, section_name: str) -> str:
-    """Render one QA projection from a canonical reasoning trace.
-
-    Args:
-        trace: Canonical five-section trace.
-        section_name: One name from ``REASONING_SECTION_NAMES``.
-
-    Returns:
-        One XML-like section containing compact JSON.
-
-    Raises:
-        ValueError: If ``section_name`` is unknown.
-    """
-
-    mapping = {
-        "TaskGrounding": trace.task_grounding,
-        "EvidenceGrounding": trace.evidence_grounding,
-        "CrossModalAlignment": trace.cross_modal_alignment,
-        "ConstraintApplicability": trace.constraint_applicability,
-        "Decision": trace.decision,
-    }
-    if section_name not in mapping:
-        raise ValueError(f"Unknown reasoning section: {section_name}")
-    return _render_tag(section_name, mapping[section_name].model_dump(mode="json", exclude_none=True))
-
-
 def parse_reasoning_target_v2(text: str) -> ReasoningTextParseResult:
     """Parse strict V2 full CoT text.
 

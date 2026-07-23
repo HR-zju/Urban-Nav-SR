@@ -144,11 +144,7 @@ def build_reasoning_source_v2(
         catalog=catalog,
         independent_route=independent_route,
     )
-    qa_validity = _qa_label_validity(
-        row,
-        independent_route=independent_route,
-        catalog=catalog,
-    )
+    legacy_qa_audit = _legacy_qa_audit(row)
 
     trajectory, trajectory_policy, action_mask, system1_reason = _system1_sidecars(
         row,
@@ -188,7 +184,7 @@ def build_reasoning_source_v2(
         "trajectory_policy": trajectory_policy,
         "action_mask": action_mask,
         "system1_enabled": trajectory is not None,
-        "reasoning_qa_label_validity": qa_validity,
+        "reasoning_qa_label_validity": legacy_qa_audit,
         # 私有字段只用于离线审计；teacher prompt builder 默认完全忽略该字段。
         "teacher_private_context": _teacher_private_context(row),
         "metadata": metadata,
@@ -581,37 +577,11 @@ def _available_modalities(
     return sorted(modalities)
 
 
-def _qa_label_validity(
-    row: Mapping[str, Any],
-    *,
-    independent_route: bool,
-    catalog: list[EvidenceCatalogEntryV2],
-) -> dict[str, dict[str, Any]]:
-    """Preserve explicit QA labels and add only deterministic route labels."""
+def _legacy_qa_audit(row: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """Preserve frozen legacy QA metadata without deriving training labels."""
 
     value = row.get("reasoning_qa_label_validity") or {}
-    result = {str(key): dict(item) for key, item in value.items() if isinstance(item, Mapping)}
-    refs = {item.ref for item in catalog}
-    if independent_route and {"instruction.active", "route.active"}.issubset(refs):
-        result.setdefault(
-            "instruction_to_map_selection",
-            {
-                "valid": True,
-                "confidence": 1.0,
-                "label_source": "route_geometry",
-                "evidence_refs": ["instruction.active", "route.active"],
-            },
-        )
-        result.setdefault(
-            "map_route_state_reading",
-            {
-                "valid": True,
-                "confidence": 1.0,
-                "label_source": "route_geometry",
-                "evidence_refs": ["route.active"],
-            },
-        )
-    return result
+    return {str(key): dict(item) for key, item in value.items() if isinstance(item, Mapping)}
 
 
 def _system1_sidecars(

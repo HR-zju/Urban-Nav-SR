@@ -1,4 +1,4 @@
-"""Project accepted V2 annotations into cross-repository training views."""
+"""Project accepted V2 annotations into full-CoT training views."""
 
 from __future__ import annotations
 
@@ -16,26 +16,17 @@ from mcp_server.contracts.reasoning_dataset import (
     ReasoningTrainingViewV2,
 )
 from mcp_server.data.jsonl_io import iter_jsonl, write_jsonl_atomic
-from mcp_server.qa.reasoning_views import build_reasoning_qa_views
 
 
 @dataclass(frozen=True)
 class ReasoningViewBuildConfig:
-    """Configure deterministic full-CoT and QA projection.
+    """Configure deterministic full-CoT projection.
 
     Args:
         include_full_cot: Export one full reasoning view per accepted source.
-        include_qa: Export eligible one-section QA views.
-        minimum_qa_confidence: Minimum task-specific QA confidence.
-        derive_observational_teacher_qa: Add explicitly marked VLM-distilled
-            cross-view/social-observation QA gates. It never creates tracked
-            motion or constraint-applicability ground truth.
     """
 
     include_full_cot: bool = True
-    include_qa: bool = True
-    minimum_qa_confidence: float = 0.7
-    derive_observational_teacher_qa: bool = True
 
 
 def build_reasoning_training_views(
@@ -52,7 +43,7 @@ def build_reasoning_training_views(
         config: View projection policy.
 
     Returns:
-        Full CoT and sparse QA views sharing ``source_group_id``.
+        Zero or one Full CoT view for ``source_group_id``.
 
     Raises:
         ValueError: If annotation status/fingerprint/grounding is invalid.
@@ -123,41 +114,6 @@ def build_reasoning_training_views(
             )
         )
 
-    if cfg.include_qa:
-        validity = _effective_qa_validity(source, annotation, config=cfg)
-        qa_views = build_reasoning_qa_views(
-            target.reasoning,
-            source_group_id=source.source_group_id,
-            available_modalities=source.available_modalities,
-            label_validity=validity,
-            minimum_confidence=cfg.minimum_qa_confidence,
-        )
-        for qa in qa_views:
-            views.append(
-                ReasoningTrainingViewV2(
-                    sample_id=qa.sample_id,
-                    view_type="qa",
-                    task_family=qa.task_family,
-                    task_type=qa.task_type,
-                    assistant_text=qa.teacher_answer,
-                    section_name=qa.section_name,
-                    question=qa.question,
-                    loss_mask={
-                        "lm": True,
-                        "system1_action": False,
-                        "trajectory": False,
-                        "segmentation": False,
-                    },
-                    metadata={
-                        **qa.metadata,
-                        "label_source": qa.label_source,
-                        "label_confidence": qa.confidence,
-                        "label_evidence_refs": list(qa.evidence_refs),
-                        "source_fingerprint": source.source_fingerprint,
-                    },
-                    **common,
-                )
-            )
     return views
 
 
@@ -229,55 +185,6 @@ def export_reasoning_training_views(
         "counts": dict(counters),
         "errors": errors[:100],
     }
-
-
-def _effective_qa_validity(
-    source: ReasoningSourceV2,
-    annotation: ReasoningAnnotationV2,
-    *,
-    config: ReasoningViewBuildConfig,
-) -> dict[str, dict[str, Any]]:
-    """Merge source truth gates with bounded VLM observational projections."""
-
-    result = {key: dict(value) for key, value in source.reasoning_qa_label_validity.items()}
-    if not config.derive_observational_teacher_qa or annotation.target is None:
-        return result
-    trace = annotation.target.reasoning
-    confidence = _confidence_score(trace.decision.confidence)
-    alignment_refs = tuple(trace.cross_modal_alignment.evidence_refs)
-    if (
-        {"fpv", "bev"}.issubset(source.available_modalities)
-        and trace.cross_modal_alignment.available
-        and alignment_refs
-    ):
-        for task_type in ("route_to_fpv_grounding", "local_route_executability"):
-            result.setdefault(
-                task_type,
-                {
-                    "valid": True,
-                    "confidence": confidence,
-                    "label_source": "validated_vlm_teacher",
-                    "evidence_refs": list(alignment_refs),
-                },
-            )
-    fpv_refs = tuple(trace.evidence_grounding.fpv_evidence_refs)
-    if fpv_refs:
-        result.setdefault(
-            "social_traversability",
-            {
-                "valid": True,
-                "confidence": confidence,
-                "label_source": "validated_vlm_teacher",
-                "evidence_refs": list(fpv_refs),
-            },
-        )
-    return result
-
-
-def _confidence_score(value: str) -> float:
-    """Map controlled confidence to a conservative QA export score."""
-
-    return {"high": 0.9, "medium": 0.75, "low": 0.5, "unknown": 0.0}.get(str(value), 0.0)
 
 
 def _latest_annotations(path: str | Path) -> dict[str, ReasoningAnnotationV2]:

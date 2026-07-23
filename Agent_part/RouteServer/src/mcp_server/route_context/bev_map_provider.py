@@ -1,8 +1,8 @@
 """Build map-derived semantic BEV layers around the current GNSS pose.
 
 The route-derived BEV context tells the agent where the planned route goes.
-This provider adds nearby OpenStreetMap semantics so QA teachers can reason
-about what the route is passing through:
+This provider adds nearby OpenStreetMap semantics so navigation reasoning can
+determine what the route is passing through:
 
     GNSS + heading + local BEV bbox
         -> OSM/Overpass features
@@ -16,9 +16,9 @@ Projection uses the same tangent-plane approximation as ``build_bev``:
     y_bev = east_m * sin(theta) + north_m * cos(theta)
 
 The first implementation intentionally stores point anchors rather than dense
-rasters. They are enough for Stage-1/Stage-2 QA tasks such as "is there a
-crossing ahead?" and can later be upgraded to line/polygon masks when the map
-provider returns full geometry.
+rasters. They are enough for route-aware questions such as "is there a crossing
+ahead?" and can later be upgraded to line/polygon masks when the map provider
+returns full geometry.
 """
 
 from __future__ import annotations

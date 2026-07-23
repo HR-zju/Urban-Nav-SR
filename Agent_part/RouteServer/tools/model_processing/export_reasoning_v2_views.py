@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export accepted V2 annotations as full-CoT and sparse QA training views."""
+"""Export accepted V2 annotations as full-CoT training views."""
 
 from __future__ import annotations
 
@@ -28,9 +28,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--report-json", type=Path, default=None)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--no-full-cot", action="store_true")
-    parser.add_argument("--no-qa", action="store_true")
-    parser.add_argument("--no-vlm-observational-qa", action="store_true")
-    parser.add_argument("--minimum-qa-confidence", type=float, default=0.7)
     parser.add_argument("--skip-errors", action="store_true")
     return parser.parse_args(argv)
 
@@ -48,9 +45,6 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = parse_args(argv)
     config = ReasoningViewBuildConfig(
         include_full_cot=not args.no_full_cot,
-        include_qa=not args.no_qa,
-        minimum_qa_confidence=args.minimum_qa_confidence,
-        derive_observational_teacher_qa=not args.no_vlm_observational_qa,
     )
     report = export_reasoning_training_views(
         args.source_jsonl,

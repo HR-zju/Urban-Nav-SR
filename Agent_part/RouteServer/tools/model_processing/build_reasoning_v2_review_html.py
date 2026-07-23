@@ -97,7 +97,6 @@ def build_reasoning_v2_review_html(
         "errors": status_counts.get("error", 0),
         "missing_annotations": status_counts.get("missing", 0),
         "full_cot_views": sum(view.get("view_type") == "full_cot" for view in rendered_views),
-        "qa_views": sum(view.get("view_type") == "qa" for view in rendered_views),
         "system1_views": sum(view.get("trajectory_ego_t") is not None for view in rendered_views),
     }
     page = _render_page(
@@ -179,7 +178,6 @@ def _render_page(
             ("Sources", summary["sources"]),
             ("Accepted", summary["accepted"]),
             ("Full CoT", summary["full_cot_views"]),
-            ("QA", summary["qa_views"]),
             ("System1", summary["system1_views"]),
         )
     )
@@ -198,7 +196,7 @@ def _render_page(
 header{{position:sticky;top:0;z-index:10;background:rgba(255,255,255,.97);border-bottom:1px solid var(--line);padding:14px 24px}}
 .header-row{{max-width:1500px;margin:auto;display:flex;align-items:center;gap:18px;justify-content:space-between}} h1{{font-size:20px;margin:0}} .sub{{color:var(--muted);font-size:12px;overflow-wrap:anywhere}}
 .controls{{display:flex;gap:8px;min-width:360px}} input,select{{height:34px;border:1px solid #aeb8c2;background:#fff;padding:0 10px;font:inherit}} input{{flex:1}}
-main{{max-width:1500px;margin:20px auto;padding:0 20px 60px}} .metrics{{display:grid;grid-template-columns:repeat(5,minmax(110px,1fr));gap:8px;margin-bottom:14px}}
+main{{max-width:1500px;margin:20px auto;padding:0 20px 60px}} .metrics{{display:grid;grid-template-columns:repeat(4,minmax(110px,1fr));gap:8px;margin-bottom:14px}}
 .metric{{background:#fff;border:1px solid var(--line);padding:11px 13px;border-radius:6px}} .metric strong{{display:block;font-size:21px}} .metric span{{color:var(--muted);font-size:12px}}
 .sample{{background:var(--panel);border:1px solid #cbd3dc;border-radius:6px;margin:0 0 18px;overflow:hidden}} .sample-head{{display:flex;justify-content:space-between;gap:18px;padding:14px 18px;background:#f8fafb;border-bottom:1px solid var(--line)}}
 .sample h2{{font-size:16px;margin:0 0 3px}} .badges{{display:flex;gap:6px;align-items:flex-start;flex-wrap:wrap}} .badge{{border:1px solid;padding:2px 7px;font-size:11px;font-weight:650;background:#fff}}
@@ -208,7 +206,6 @@ main{{max-width:1500px;margin:20px auto;padding:0 20px 60px}} .metrics{{display:
 .two-col{{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(340px,.65fr);gap:16px}} .section{{border-top:1px solid var(--line);padding:13px 0}} .section:first-child{{border-top:0;padding-top:0}} h3{{font-size:13px;margin:0 0 7px;color:#34404b;text-transform:uppercase}}
 pre{{margin:0;padding:10px 12px;background:var(--soft);border:1px solid #e0e5ea;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace}}
 table{{width:100%;border-collapse:collapse;font-size:12px}} th,td{{text-align:left;vertical-align:top;border-bottom:1px solid var(--line);padding:7px 8px}} th{{background:var(--soft);color:#4d5965}}
-.qa-row{{border-top:1px solid var(--line);padding:10px 0}} .qa-row:first-child{{border-top:0}} .qa-meta{{display:flex;gap:8px;flex-wrap:wrap;color:var(--muted);font-size:12px;margin-bottom:5px}} .question{{font-weight:650;margin-bottom:5px}}
 .trajectory{{border:1px solid var(--line);background:#fbfcfd;padding:8px}} .trajectory svg{{display:block;width:100%;height:auto}} details{{margin-top:9px}} summary{{cursor:pointer;color:var(--blue);font-weight:650}} .notice{{padding:9px 11px;border-left:3px solid var(--amber);background:#fff8df;margin:8px 0}}
 .empty{{color:var(--muted);font-style:italic}} .hidden{{display:none!important}}
 @media(max-width:900px){{header{{position:static}}.header-row{{display:block}}.controls{{min-width:0;margin-top:10px}}.two-col{{grid-template-columns:1fr}}.metrics,.decision{{grid-template-columns:repeat(2,1fr)}}figure img{{height:auto;max-height:420px}}}}
@@ -240,7 +237,6 @@ def _render_sample(
     reasoning = target.get("reasoning") if isinstance(target.get("reasoning"), Mapping) else {}
     finish = target.get("finish") if isinstance(target.get("finish"), Mapping) else {}
     full_view = next((view for view in views if view.get("view_type") == "full_cot"), None)
-    qa_views = [view for view in views if view.get("view_type") == "qa"]
     images = _render_images(source, embed_images=embed_images)
     decision = _render_decision(finish=finish, reasoning=reasoning)
     reasoning_sections = "".join(
@@ -257,7 +253,6 @@ def _render_sample(
     if finish:
         reasoning_sections += _render_json_section("Finish", finish)
     evidence = _render_evidence_catalog(source.get("evidence_catalog"))
-    qa = _render_qa_views(qa_views)
     trajectory = _render_trajectory(full_view or {})
     validation = _render_validation(annotation)
     searchable = " ".join(
@@ -273,7 +268,7 @@ def _render_sample(
 <div class='sample-body'>
 <div class='section'><h3>Instruction</h3><div>{_e(source.get('instruction'))}</div><div class='sub'>travel_mode={_e(source.get('travel_mode'))} · modalities={_e(', '.join(source.get('available_modalities') or []))}</div></div>
 {images}{decision}
-<div class='two-col'><div><div class='section'><h3>ReasoningTraceV2</h3>{reasoning_sections or "<div class='empty'>No accepted target.</div>"}</div><div class='section'><h3>QA Projections ({len(qa_views)})</h3>{qa}</div></div><aside><div class='section'><h3>System1 Trajectory</h3>{trajectory}</div><div class='section'><h3>Evidence Catalog</h3>{evidence}</div><div class='section'><h3>Validation & Repair</h3>{validation}</div></aside></div>
+<div class='two-col'><div><div class='section'><h3>ReasoningTraceV2</h3>{reasoning_sections or "<div class='empty'>No accepted target.</div>"}</div></div><aside><div class='section'><h3>System1 Trajectory</h3>{trajectory}</div><div class='section'><h3>Evidence Catalog</h3>{evidence}</div><div class='section'><h3>Validation & Repair</h3>{validation}</div></aside></div>
 <details><summary>Raw joined artifacts</summary>{_json_pre(raw)}</details>
 </div></article>"""
 
@@ -327,22 +322,6 @@ def _render_evidence_catalog(value: Any) -> str:
         if isinstance(item, Mapping)
     )
     return f"<table><thead><tr><th>Ref</th><th>Modality</th><th>Summary</th></tr></thead><tbody>{rows}</tbody></table>"
-
-
-def _render_qa_views(views: list[dict[str, Any]]) -> str:
-    """Render QA questions, provenance, and projected targets."""
-
-    if not views:
-        return "<div class='empty'>No QA views passed the export gates.</div>"
-    chunks: list[str] = []
-    for view in views:
-        metadata = view.get("metadata") if isinstance(view.get("metadata"), Mapping) else {}
-        chunks.append(
-            "<div class='qa-row'>"
-            f"<div class='qa-meta'><strong>{_e(view.get('task_type'))}</strong><span>{_e(view.get('task_family'))}</span><span>{_e(metadata.get('label_source'))}</span><span>confidence {_e(metadata.get('label_confidence'))}</span></div>"
-            f"<div class='question'>{_e(view.get('question'))}</div>{_text_pre(view.get('assistant_text'))}</div>"
-        )
-    return "".join(chunks)
 
 
 def _render_validation(annotation: Mapping[str, Any] | None) -> str:

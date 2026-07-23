@@ -389,7 +389,6 @@ async def _run_frame(
     bev_map_provider_session: Any | None,
     llm_primary_image_role: str,
     enforce_alignment: bool,
-    emit_qa_bundle: bool,
     emit_llm_input_images: bool,
     fpv_segmentation: dict[str, Any] | None,
     navigation_path_gps: list[dict[str, float]] | None,
@@ -434,7 +433,6 @@ async def _run_frame(
         bev_map_provider_session=bev_map_provider_session,
         llm_primary_image_role=str(llm_primary_image_role),
         enforce_alignment=bool(enforce_alignment),
-        emit_qa_bundle=bool(emit_qa_bundle),
         emit_llm_input_images=bool(emit_llm_input_images),
     )
 
@@ -539,7 +537,6 @@ async def _process_frame_job(
     bev_map_provider_session: Any | None,
     llm_primary_image_role: str,
     enforce_alignment: bool,
-    emit_qa_bundle: bool,
     emit_llm_input_images: bool,
     navigation_path_gps: list[dict[str, float]] | None,
     seg_vis_dir: Path,
@@ -593,7 +590,6 @@ async def _process_frame_job(
             bev_map_provider_session=bev_map_provider_session,
             llm_primary_image_role=str(llm_primary_image_role),
             enforce_alignment=bool(enforce_alignment),
-            emit_qa_bundle=bool(emit_qa_bundle),
             emit_llm_input_images=bool(emit_llm_input_images),
             navigation_path_gps=navigation_path_gps,
             fpv_segmentation=job.fpv_segmentation,
@@ -813,7 +809,6 @@ def parse_args() -> argparse.Namespace:
         action="store_false",
         help="Allow proceeding when segmentation alignment validation fails",
     )
-    parser.add_argument("--emit-qa-bundle", action="store_true", help="Emit structured QA bundle in output json")
     parser.add_argument(
         "--emit-llm-input-images",
         action=argparse.BooleanOptionalAction,
@@ -1007,7 +1002,6 @@ async def main_async() -> None:
                 bev_map_provider_session=bev_map_provider_session,
                 llm_primary_image_role=str(resolved_llm_primary_image_role),
                 enforce_alignment=bool(args.enforce_alignment),
-                emit_qa_bundle=bool(args.emit_qa_bundle),
                 emit_llm_input_images=bool(args.emit_llm_input_images),
                 navigation_path_gps=navigation_path_gps,
                 seg_vis_dir=seg_vis_dir,
