@@ -1,4 +1,4 @@
-"""Executable prompt-profile registry for Reasoning V3.3 annotation."""
+"""Executable prompt-profile registry for minimal Reasoning V3.4 annotation."""
 
 from __future__ import annotations
 
@@ -140,7 +140,7 @@ def validate_rationale_with_runtime_v3(
     Args:
         runtime: Resolved executable rationale profile.
         rationale: Parsed hindsight rationale.
-        **kwargs: Frozen outcome, observations, evidence, and runtime facts.
+        **kwargs: Frozen direction outcome, observations, and visible evidence.
 
     Returns:
         Structured rationale validation result.

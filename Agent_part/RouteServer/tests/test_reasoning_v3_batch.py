@@ -4,17 +4,18 @@ import asyncio
 import json
 
 from mcp_server.contracts.reasoning_dataset_v3 import ReasoningAnnotationV3
-from mcp_server.data.reasoning_source import ReasoningSourceBuildConfig
-from mcp_server.data.reasoning_v3_source import build_reasoning_source_v3
 from mcp_server.teacher.reasoning_v2_teacher import TeacherGeneration
 from mcp_server.teacher.reasoning_v3_batch import (
-    REASONING_V3_TEACHER_PROMPT_VERSION,
     ReasoningV3BatchConfig,
     annotate_reasoning_source_v3,
     label_reasoning_source_manifest_v3,
 )
 from mcp_server.teacher.reasoning_v3_teacher import parse_reasoning_v3_teacher_observation
-from reasoning_v3_test_utils import decision_rationale_payload, observation_payload
+from reasoning_v3_test_utils import (
+    build_test_source,
+    decision_rationale_payload,
+    observation_payload,
+)
 
 
 class _SequenceBackend:
@@ -25,45 +26,58 @@ class _SequenceBackend:
     async def generate(self, source, **kwargs):
         answer = self.answers[min(self.calls, len(self.answers) - 1)]
         self.calls += 1
-        return TeacherGeneration(answer=answer, provider="fake", model="fake-vlm")
+        return TeacherGeneration(
+            answer=answer,
+            provider="fake",
+            model="fake-vlm",
+            telemetry={"call": self.calls},
+        )
 
 
-def _source():
-    return build_reasoning_source_v3(
-        {
-            "id": "batch-v3-2",
-            "dataset_source": "sidewalk",
-            "images": ["current.jpg", "bev.jpg"],
-            "image_roles": ["fpv.current", "bev.current"],
-            "instruction": "Turn right toward the entrance.",
-            "trajectory_ego_t": [[0.0, 0.0, 0.0], [2.0, -1.0, -0.2]],
-            "trajectory_fpv_t": [[0.5, 0.9], [0.8, 0.7]],
-            "trajectory_fpv_coord_frame": "normalized_0_1",
-        },
-        index=0,
-        config=ReasoningSourceBuildConfig(dataset_source="sidewalk"),
+def _observation_answer(source) -> str:
+    return json.dumps(observation_payload(source))
+
+
+def _rationale_answer(source, *, label_index_offset: int = 0) -> str:
+    observation = parse_reasoning_v3_teacher_observation(
+        _observation_answer(source)
+    ).observation
+    assert observation is not None
+    payload = decision_rationale_payload(source, observation)
+    payload["direction_label_index"] += label_index_offset
+    return json.dumps(payload)
+
+
+def test_v3_4_batch_accepted_row_uses_exactly_two_stages() -> None:
+    source = build_test_source(sample_id="batch-accepted")
+    backend = _SequenceBackend([
+        _observation_answer(source),
+        _rationale_answer(source),
+    ])
+
+    annotation = asyncio.run(
+        annotate_reasoning_source_v3(
+            source,
+            backend=backend,
+            config=ReasoningV3BatchConfig(max_retries=0),
+        )
     )
 
-
-def _answer(source) -> str:
-    payload = observation_payload(source, corridor="corridor.right", direction="right")
-    return json.dumps(payload)
-
-
-def _rationale_answer(source, *, wrong_outcome: bool = False) -> str:
-    parsed = parse_reasoning_v3_teacher_observation(_answer(source))
-    assert parsed.observation is not None, parsed.errors
-    payload = decision_rationale_payload(source, parsed.observation)
-    if wrong_outcome:
-        payload["outcome_motion"] = "go_straight"
-    return json.dumps(payload)
+    assert annotation.status == "accepted"
+    assert annotation.attempts == backend.calls == 2
+    assert annotation.observation is not None
+    assert annotation.decision_rationale is not None
+    assert annotation.target is not None
+    assert annotation.section_loss_mask is not None
+    assert annotation.metadata["annotation_mode"] == "full_cot"
+    assert annotation.target.reasoning.decision.label_index == 12
 
 
-def test_v3_batch_repairs_invalid_hindsight_outcome() -> None:
-    source = _source()
+def test_v3_4_batch_repairs_direction_identity_drift_without_changing_gt() -> None:
+    source = build_test_source(sample_id="batch-repair")
     backend = _SequenceBackend([
-        _answer(source),
-        _rationale_answer(source, wrong_outcome=True),
+        _observation_answer(source),
+        _rationale_answer(source, label_index_offset=1),
         _rationale_answer(source),
     ])
 
@@ -76,131 +90,173 @@ def test_v3_batch_repairs_invalid_hindsight_outcome() -> None:
     )
 
     assert annotation.status == "accepted"
-    assert annotation.attempts == 3
+    assert annotation.attempts == backend.calls == 3
     assert annotation.target is not None
-    assert annotation.target.reasoning.decision.motion == "turn_right"
-    assert annotation.observation is not None
-    assert annotation.label_provenance["demonstrated_direction"].strength == "strong"
+    assert annotation.target.reasoning.decision.label_index == 12
+    assert any(
+        "rationale_direction_identity_mismatch" in error
+        for attempt in annotation.metadata["repair_history"]
+        for error in attempt["errors"]
+    )
 
 
-def test_v3_batch_rejects_missing_context_source_reference() -> None:
-    source = _source()
-    payload = json.loads(_answer(source))
-    payload["navigation_context_grounding"]["source_groundings"][0]["evidence_refs"] = [
-        "fpv.current",
-        "corridor.right",
-    ]
+def test_v3_4_batch_missing_direction_is_observation_only_and_skips_pass2() -> None:
+    source = build_test_source(
+        sample_id="batch-missing-direction",
+        include_direction=False,
+    )
+    backend = _SequenceBackend([_observation_answer(source)])
+
     annotation = asyncio.run(
         annotate_reasoning_source_v3(
             source,
-            backend=_SequenceBackend([json.dumps(payload)]),
+            backend=backend,
             config=ReasoningV3BatchConfig(max_retries=0),
         )
     )
 
-    assert annotation.status == "rejected"
-    assert any("must cite source_ref" in error for error in annotation.errors)
+    assert annotation.status == "observation_only"
+    assert annotation.attempts == backend.calls == 1
+    assert annotation.observation is not None
+    assert annotation.decision_rationale is None
+    assert annotation.target is None
+    assert annotation.section_loss_mask is None
+    assert annotation.metadata["observation_only_reason"] == "canonical_direction_missing"
 
 
-def test_v3_manifest_cache_uses_source_fingerprint(tmp_path) -> None:
-    source = _source()
-    source_jsonl = tmp_path / "source.jsonl"
-    annotation_jsonl = tmp_path / "annotations.jsonl"
-    source_jsonl.write_text(json.dumps(source.model_dump(mode="json")) + "\n", encoding="utf-8")
-    backend = _SequenceBackend([_answer(source), _rationale_answer(source)])
+def test_v3_4_batch_frodobots_is_observation_only_and_skips_pass2() -> None:
+    source = build_test_source(
+        sample_id="batch-frodobots",
+        dataset_source="frodobots",
+        include_direction=True,
+        include_trajectory=True,
+    )
+    backend = _SequenceBackend([_observation_answer(source)])
 
-    def factory(worker_id, key):
-        return backend
+    annotation = asyncio.run(
+        annotate_reasoning_source_v3(
+            source,
+            backend=backend,
+            config=ReasoningV3BatchConfig(max_retries=0),
+        )
+    )
+
+    assert annotation.status == "observation_only"
+    assert annotation.attempts == backend.calls == 1
+    assert annotation.decision_rationale is None
+    assert annotation.target is None
+    assert annotation.section_loss_mask is None
+    assert (
+        annotation.metadata["observation_only_reason"]
+        == "direction_supervision_disabled_by_dataset_policy"
+    )
+
+
+def test_v3_4_manifest_cache_completes_accepted_and_observation_only_rows(
+    tmp_path,
+) -> None:
+    accepted_source = build_test_source(sample_id="cache-accepted")
+    observation_source = build_test_source(
+        sample_id="cache-observation",
+        include_direction=False,
+    )
+    source_path = tmp_path / "sources.jsonl"
+    annotation_path = tmp_path / "annotations.jsonl"
+    source_path.write_text(
+        "".join(
+            item.model_dump_json() + "\n"
+            for item in (accepted_source, observation_source)
+        ),
+        encoding="utf-8",
+    )
+    backend = _SequenceBackend(
+        [
+            _observation_answer(accepted_source),
+            _rationale_answer(accepted_source),
+            _observation_answer(observation_source),
+        ]
+    )
+    factory = lambda worker_id, key: backend
 
     first = asyncio.run(
         label_reasoning_source_manifest_v3(
-            source_jsonl,
-            annotation_jsonl,
-            config=ReasoningV3BatchConfig(concurrency=2, progress_interval=0),
+            source_path,
+            annotation_path,
+            config=ReasoningV3BatchConfig(
+                max_retries=0,
+                concurrency=1,
+                progress_interval=0,
+            ),
             backend_factory=factory,
         )
     )
     second = asyncio.run(
         label_reasoning_source_manifest_v3(
-            source_jsonl,
-            annotation_jsonl,
-            config=ReasoningV3BatchConfig(concurrency=2, progress_interval=0),
+            source_path,
+            annotation_path,
+            config=ReasoningV3BatchConfig(
+                max_retries=0,
+                concurrency=1,
+                progress_interval=0,
+            ),
             backend_factory=factory,
         )
     )
 
-    rows = [ReasoningAnnotationV3.model_validate_json(line) for line in annotation_jsonl.read_text().splitlines()]
     assert first["accepted_rows"] == 1
+    assert first["observation_only_rows"] == 1
     assert second["pending_rows"] == 0
-    assert second["resume_counts"]["cached_accepted"] == 1
-    assert backend.calls == 2
-    assert len(rows) == 1
+    assert second["resume_counts"] == {
+        "cached_accepted": 1,
+        "cached_observation_only": 1,
+    }
+    assert backend.calls == 3
+    rows = [
+        ReasoningAnnotationV3.model_validate_json(line)
+        for line in annotation_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [row.status for row in rows] == ["accepted", "observation_only"]
 
 
-def test_v3_manifest_cache_relabels_accepted_rows_from_old_prompt(tmp_path) -> None:
-    source = _source()
-    source_jsonl = tmp_path / "source.jsonl"
-    annotation_jsonl = tmp_path / "annotations.jsonl"
-    source_jsonl.write_text(json.dumps(source.model_dump(mode="json")) + "\n", encoding="utf-8")
-
-    stale = asyncio.run(
-        annotate_reasoning_source_v3(
-            source,
-            backend=_SequenceBackend([_answer(source), _rationale_answer(source)]),
-            config=ReasoningV3BatchConfig(max_retries=0),
-        )
+def test_v3_4_rejected_mirror_excludes_observation_only_rows(tmp_path) -> None:
+    observation_source = build_test_source(
+        sample_id="mirror-observation",
+        include_direction=False,
     )
-    stale_metadata = dict(stale.metadata)
-    stale_metadata["teacher_prompt_version"] = "urbannav_reasoning_v3_teacher_v1"
-    stale = stale.model_copy(update={"metadata": stale_metadata})
-    annotation_jsonl.write_text(stale.model_dump_json() + "\n", encoding="utf-8")
-
-    backend = _SequenceBackend([_answer(source), _rationale_answer(source)])
-    report = asyncio.run(
-        label_reasoning_source_manifest_v3(
-            source_jsonl,
-            annotation_jsonl,
-            config=ReasoningV3BatchConfig(concurrency=1, progress_interval=0),
-            backend_factory=lambda worker_id, key: backend,
-        )
-    )
-
-    rows = [ReasoningAnnotationV3.model_validate_json(line) for line in annotation_jsonl.read_text().splitlines()]
-    assert report["accepted_rows"] == 1
-    assert report["resume_counts"]["cache_stale_prompt_version"] == 1
-    assert rows[-1].metadata["teacher_prompt_version"] == REASONING_V3_TEACHER_PROMPT_VERSION
-    assert backend.calls == 2
-
-
-def test_v3_manifest_cache_relabels_changed_prompt_digest(tmp_path) -> None:
-    source = _source()
-    source_jsonl = tmp_path / "source.jsonl"
-    annotation_jsonl = tmp_path / "annotations.jsonl"
-    source_jsonl.write_text(json.dumps(source.model_dump(mode="json")) + "\n", encoding="utf-8")
-    stale = asyncio.run(
-        annotate_reasoning_source_v3(
-            source,
-            backend=_SequenceBackend([_answer(source), _rationale_answer(source)]),
-            config=ReasoningV3BatchConfig(max_retries=0),
-        )
-    )
-    stale_metadata = dict(stale.metadata)
-    stale_metadata["teacher_prompt_policy_digest"] = "0" * 64
-    annotation_jsonl.write_text(
-        stale.model_copy(update={"metadata": stale_metadata}).model_dump_json() + "\n",
+    rejected_source = build_test_source(sample_id="mirror-rejected")
+    source_path = tmp_path / "sources.jsonl"
+    annotation_path = tmp_path / "annotations.jsonl"
+    rejected_path = tmp_path / "rejected.jsonl"
+    source_path.write_text(
+        observation_source.model_dump_json()
+        + "\n"
+        + rejected_source.model_dump_json()
+        + "\n",
         encoding="utf-8",
     )
+    backend = _SequenceBackend([
+        _observation_answer(observation_source),
+        "not-json",
+    ])
 
-    backend = _SequenceBackend([_answer(source), _rationale_answer(source)])
     report = asyncio.run(
         label_reasoning_source_manifest_v3(
-            source_jsonl,
-            annotation_jsonl,
-            config=ReasoningV3BatchConfig(concurrency=1, progress_interval=0),
+            source_path,
+            annotation_path,
+            rejected_jsonl=rejected_path,
+            config=ReasoningV3BatchConfig(
+                max_retries=0,
+                concurrency=1,
+                progress_interval=0,
+            ),
             backend_factory=lambda worker_id, key: backend,
         )
     )
 
-    assert report["accepted_rows"] == 1
-    assert report["resume_counts"]["cache_stale_prompt_policy_digest"] == 1
-    assert backend.calls == 2
+    mirrored = [
+        ReasoningAnnotationV3.model_validate_json(line)
+        for line in rejected_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert report["observation_only_rows"] == 1
+    assert report["rejected_rows"] == 1
+    assert [row.status for row in mirrored] == ["rejected"]

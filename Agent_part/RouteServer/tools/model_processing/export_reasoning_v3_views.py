@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export accepted Reasoning V3.3 annotations into Full-CoT views."""
+"""Export accepted Reasoning V3.4 annotations into provenance-gated views."""
 
 from __future__ import annotations
 
@@ -8,11 +8,16 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from mcp_server.data.reasoning_v3_views import ReasoningViewBuildConfigV3, export_reasoning_training_views_v3
+from mcp_server.data.reasoning_v3_views import (
+    DEFAULT_REASONING_V3_TRAINING_PROFILE,
+    REASONING_V3_TRAINING_PROFILES,
+    ReasoningViewBuildConfigV3,
+    export_reasoning_training_views_v3,
+)
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    """Parse Full-CoT exporter CLI arguments.
+    """Parse minimal V3.4 view-exporter CLI arguments.
 
     Args:
         argv: Optional argument vector for tests or programmatic use.
@@ -27,13 +32,21 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-jsonl", required=True, type=Path)
     parser.add_argument("--report-json", type=Path)
     parser.add_argument("--limit", type=int)
-    parser.add_argument("--require-complete-full-cot-supervision", action="store_true")
+    parser.add_argument(
+        "--training-profile",
+        choices=REASONING_V3_TRAINING_PROFILES,
+        default=DEFAULT_REASONING_V3_TRAINING_PROFILE,
+        help=(
+            "V3.4 loss policy: audit_only keeps the trace with zero loss; "
+            "strong_action_only enables only independently supervised action sidecars."
+        ),
+    )
     parser.add_argument("--skip-errors", action="store_true")
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-    """Export Full-CoT views and an optional JSON report.
+    """Export provenance-gated V3.4 views and an optional JSON report.
 
     Args:
         argv: Optional argument vector for tests or programmatic use.
@@ -45,7 +58,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         args.annotation_jsonl,
         args.output_jsonl,
         config=ReasoningViewBuildConfigV3(
-            require_complete_full_cot_supervision=args.require_complete_full_cot_supervision,
+            training_profile=args.training_profile,
         ),
         limit=args.limit,
         skip_errors=args.skip_errors,

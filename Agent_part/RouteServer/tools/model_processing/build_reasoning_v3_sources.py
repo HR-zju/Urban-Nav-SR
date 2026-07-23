@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build frozen ReasoningSourceV3 rows from existing navigation manifests."""
+"""Build minimal Reasoning V3.4 source rows from existing navigation manifests."""
 
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-    """Build a frozen V3.3 source manifest and optional report.
+    """Build a frozen V3.4 source manifest and optional report.
 
     Args:
         argv: Optional argument vector for tests or programmatic use.

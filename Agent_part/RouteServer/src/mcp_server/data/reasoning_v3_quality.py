@@ -1,59 +1,73 @@
-"""Quality distributions and smoke gates for Reasoning V3.3 artifacts."""
+"""Availability and provenance quality report for minimal Reasoning V3.4."""
 
 from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from mcp_server.contracts.reasoning_dataset_v3 import ReasoningAnnotationV3, ReasoningSourceV3
+from mcp_server.contracts.reasoning_v3 import LabelProvenanceEntryV3
 from mcp_server.data.jsonl_io import iter_jsonl
 
 
-REASONING_V3_QUALITY_REPORT_VERSION = "urbannav_reasoning_v3_3_quality_report_v1"
+REASONING_V3_QUALITY_REPORT_VERSION = "urbannav_reasoning_v3_4_quality_report_v1"
+_REMOVED_THRESHOLD_NAMES = {
+    "max_conflict_fraction",
+    "max_unknown_fraction",
+    "max_insufficient_fraction",
+    "max_task_unknown_fraction",
+    "max_unsupported_rationale_fraction",
+    "min_projection_qc_coverage",
+    "min_context_accounting_fraction",
+}
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class ReasoningV3QualityThresholds:
-    """Configure provisional V3.3 smoke acceptance thresholds.
+    """Configure only artifact-completion gates.
 
-    Fractions use source rows for acceptance/rejection, accepted rows for
-    conflict/unknown/insufficient, optional-context rows for context accounting,
-    and projection candidates for projection QC.
-
-    Args:
-        min_acceptance_fraction: Minimum accepted/source fraction.
-        max_reject_fraction: Maximum failed/source fraction.
-        max_conflict_fraction: Maximum context-conflict/accepted fraction.
-        max_unknown_fraction: Maximum critical-unknown/accepted fraction.
-        max_insufficient_fraction: Maximum insufficient-context/accepted fraction.
-        max_task_unknown_fraction: Maximum unresolved active-task fraction.
-        max_unsupported_rationale_fraction: Maximum unsupported-decision fraction.
-        min_projection_qc_coverage: Minimum passed/candidate projection fraction.
-        min_context_accounting_fraction: Minimum explicit-accounted/context-row fraction.
+    ``min_acceptance_fraction`` is retained as the public compatibility name,
+    but V3.4 applies it to the union of accepted-target and observation-only
+    annotations. Removed V3.3 calibration, fusion, projection, and subjective
+    ontology thresholds are accepted as constructor keywords and ignored so
+    older runners do not silently reactivate those claims.
     """
 
-    min_acceptance_fraction: float = 0.75
-    max_reject_fraction: float = 0.20
-    max_conflict_fraction: float = 0.10
-    max_unknown_fraction: float = 0.10
-    max_insufficient_fraction: float = 0.10
-    max_task_unknown_fraction: float = 0.20
-    max_unsupported_rationale_fraction: float = 0.20
-    min_projection_qc_coverage: float = 0.95
-    min_context_accounting_fraction: float = 1.0
+    min_acceptance_fraction: float
+    max_reject_fraction: float
 
-    def __post_init__(self) -> None:
-        """Validate every configured fraction.
+    def __init__(
+        self,
+        min_acceptance_fraction: float = 0.75,
+        max_reject_fraction: float = 0.20,
+        **removed_thresholds: Any,
+    ) -> None:
+        """Validate active thresholds and explicitly absorb removed keywords."""
 
-        Raises:
-            ValueError: If any threshold lies outside ``[0, 1]``.
-        """
-
-        for name, value in self.__dict__.items():
+        unknown = sorted(set(removed_thresholds) - _REMOVED_THRESHOLD_NAMES)
+        if unknown:
+            raise TypeError(f"unexpected Reasoning V3.4 quality thresholds: {unknown}")
+        for name, value in {
+            "min_acceptance_fraction": min_acceptance_fraction,
+            "max_reject_fraction": max_reject_fraction,
+            **removed_thresholds,
+        }.items():
+            if value is None:
+                continue
             if not 0.0 <= float(value) <= 1.0:
                 raise ValueError(f"{name} must be in [0, 1]")
+        object.__setattr__(self, "min_acceptance_fraction", float(min_acceptance_fraction))
+        object.__setattr__(self, "max_reject_fraction", float(max_reject_fraction))
+
+    def report_thresholds(self) -> dict[str, float]:
+        """Return only thresholds that still affect V3.4 pass/fail."""
+
+        return {
+            "min_valid_annotation_fraction": self.min_acceptance_fraction,
+            "max_failed_annotation_fraction": self.max_reject_fraction,
+        }
 
 
 def evaluate_reasoning_v3_quality(
@@ -63,23 +77,11 @@ def evaluate_reasoning_v3_quality(
     thresholds: ReasoningV3QualityThresholds | None = None,
     required_dataset_families: Iterable[str] = (),
 ) -> dict[str, Any]:
-    """Measure latest V3.3 annotations and apply per-dataset smoke gates.
+    """Report schema, evidence, provenance, and supervision availability.
 
-    The latest append-only annotation is authoritative for each source id.
-    Accepted rows are sliced by traversability state, optional-context usage,
-    per-source navigation grounding, social interaction, and traffic rules.
-
-    Args:
-        source_jsonl: Frozen V3.3 source manifest.
-        annotation_jsonl: Append-only V3.3 annotation manifest.
-        thresholds: Optional smoke gate configuration.
-        required_dataset_families: Dataset families required in the source.
-
-    Returns:
-        Global and per-dataset counts, fractions, violations, and pass state.
-
-    Raises:
-        ValueError: If an artifact row violates its typed V3.3 schema.
+    This report measures artifact coverage rather than semantic correctness.
+    In particular, it makes no calibration, route-fusion, projection, tracking,
+    or geometric-accuracy claim.
     """
 
     limits = thresholds or ReasoningV3QualityThresholds()
@@ -87,48 +89,51 @@ def evaluate_reasoning_v3_quality(
     family_by_id: dict[str, str] = {}
     counters: dict[str, Counter[str]] = {}
     overall_counts: Counter[str] = Counter()
+    hard_violations: list[str] = []
+
     for row in iter_jsonl(source_jsonl):
         source = ReasoningSourceV3.model_validate(row)
         source_id = source.model_input.source_group_id
         family = _dataset_family(source.model_input.dataset_source)
         family_counts = counters.setdefault(family, Counter())
-        family_counts["source_rows"] += 1
-        overall_counts["source_rows"] += 1
         if source_id in sources:
             family_counts["duplicate_source_ids"] += 1
             overall_counts["duplicate_source_ids"] += 1
         sources[source_id] = source
         family_by_id[source_id] = family
         for counts in (family_counts, overall_counts):
-            _count_source_capabilities(source, counts)
-            _count_projection_qc(source, counts)
+            _count_source(source, counts)
+        if _weak_lm_fields(source.label_provenance):
+            hard_violations.append(f"source_weak_lm_provenance:{source_id}")
 
     latest: dict[str, ReasoningAnnotationV3] = {}
     for row in iter_jsonl(annotation_jsonl):
         annotation = ReasoningAnnotationV3.model_validate(row)
         latest[annotation.source_group_id] = annotation
         overall_counts["annotation_records"] += 1
+        overall_counts[f"annotation_schema:{annotation.schema_version}"] += 1
 
     for source_id, source in sources.items():
         family_counts = counters[family_by_id[source_id]]
         annotation = latest.get(source_id)
         if annotation is None:
-            family_counts["missing_annotation_rows"] += 1
-            overall_counts["missing_annotation_rows"] += 1
+            for counts in (family_counts, overall_counts):
+                counts["missing_annotation_rows"] += 1
             continue
         for counts in (family_counts, overall_counts):
-            counts[f"status:{annotation.status}"] += 1
-            if annotation.status != "accepted" or annotation.target is None:
-                _count_failed_annotation(annotation, counts)
-            else:
-                _count_accepted_annotation(source, annotation, counts)
+            _count_latest_annotation(source, annotation, counts)
+        if annotation.source_fingerprint != source.source_fingerprint:
+            hard_violations.append(f"annotation_source_fingerprint_mismatch:{source_id}")
+        if _weak_lm_fields(annotation.label_provenance):
+            hard_violations.append(f"annotation_weak_lm_provenance:{source_id}")
 
     orphan_ids = set(latest) - set(sources)
     overall_counts["orphan_latest_annotations"] = len(orphan_ids)
     required = {_dataset_family(value) for value in required_dataset_families}
     missing_families = sorted(required - set(counters))
+
     per_dataset: dict[str, Any] = {}
-    violations: list[str] = []
+    violations: list[str] = list(hard_violations)
     for family, counts in sorted(counters.items()):
         summary = _summarize_counts(counts, limits=limits, scope=family)
         per_dataset[family] = summary
@@ -140,11 +145,15 @@ def evaluate_reasoning_v3_quality(
         violations.append("overall:duplicate_source_ids")
     if overall_counts["orphan_latest_annotations"]:
         violations.append("overall:orphan_latest_annotations")
+
     return {
         "schema_version": REASONING_V3_QUALITY_REPORT_VERSION,
         "source_jsonl": str(source_jsonl),
         "annotation_jsonl": str(annotation_jsonl),
-        "thresholds": limits.__dict__,
+        "thresholds": limits.report_thresholds(),
+        "report_semantics": (
+            "availability_only:no_calibration_projection_fusion_tracking_or_geometry_claim"
+        ),
         "overall": overall,
         "per_dataset": per_dataset,
         "missing_required_datasets": missing_families,
@@ -154,160 +163,169 @@ def evaluate_reasoning_v3_quality(
     }
 
 
-def _count_source_capabilities(source: ReasoningSourceV3, counts: Counter[str]) -> None:
-    """Count source-side modality and trainable-section capabilities."""
+def _count_source(source: ReasoningSourceV3, counts: Counter[str]) -> None:
+    """Count typed source, evidence, provenance, and sidecar availability."""
 
-    modalities = set(source.model_input.available_modalities)
-    for modality in sorted(modalities):
+    model_input = source.model_input
+    counts["source_rows"] += 1
+    counts[f"source_schema:{source.schema_version}"] += 1
+    counts["evidence_catalog_items"] += len(model_input.evidence_catalog)
+    counts["rows_with_evidence_catalog"] += int(bool(model_input.evidence_catalog))
+    for entry in model_input.evidence_catalog:
+        counts[f"evidence_modality:{entry.modality}"] += 1
+    for modality in sorted(set(model_input.available_modalities)):
         counts[f"source_modality:{modality}"] += 1
-    optional_refs = [
-        entry.ref
-        for entry in source.model_input.evidence_catalog
-        if entry.modality in {"bev", "goal", "goal_image", "waypoint", "route", "tool", "tool_route"}
-    ]
-    counts["optional_context_source_items"] += len(optional_refs)
-    counts["rows_with_optional_context"] += int(bool(optional_refs))
-    for name, enabled in source.section_loss_mask.model_dump(mode="python").items():
-        counts[f"source_section_enabled:{name}"] += int(bool(enabled))
 
-
-def _count_projection_qc(source: ReasoningSourceV3, counts: Counter[str]) -> None:
-    """Count explicit FPV projection candidates and QC outcomes."""
-
-    provenance = source.label_provenance.get("demonstrated_corridor_ref")
-    warnings = tuple(source.warnings)
-    passed = provenance is not None and provenance.source == "validated_fpv_projection"
-    candidate = passed or any(
-        warning == "fpv_projection_ignored_without_explicit_qc"
-        or warning.startswith("fpv_projection_rejected:")
-        for warning in warnings
+    direction_available = _direction_available(source)
+    system1_available = _system1_available(source)
+    counts["direction_available_rows"] += int(direction_available)
+    counts["direction_unavailable_rows"] += int(not direction_available)
+    counts["system1_available_rows"] += int(system1_available)
+    counts["system1_unavailable_rows"] += int(not system1_available)
+    counts["direction_and_system1_available_rows"] += int(
+        direction_available and system1_available
     )
-    counts["projection_candidate_rows"] += int(candidate)
-    counts["projection_qc_passed_rows"] += int(passed)
-    counts["projection_qc_missing_rows"] += int("fpv_projection_ignored_without_explicit_qc" in warnings)
-    counts["projection_qc_rejected_rows"] += int(
-        any(warning.startswith("fpv_projection_rejected:") for warning in warnings)
-    )
+    _count_provenance(source.label_provenance, counts, prefix="source")
+    counts["source_warning_items"] += len(source.warnings)
+    counts["source_rows_with_warnings"] += int(bool(source.warnings))
 
 
-def _count_failed_annotation(annotation: ReasoningAnnotationV3, counts: Counter[str]) -> None:
-    """Classify conflict, unknown, and omission errors in a failed annotation."""
-
-    errors = " ".join(annotation.errors).lower()
-    if "conflict" in errors:
-        counts["conflict_rows"] += 1
-        counts["failed_conflict_rows"] += 1
-    if "unknown" in errors:
-        counts["unknown_rows"] += 1
-        counts["failed_unknown_rows"] += 1
-    if "omitted" in errors or "coverage_mismatch" in errors:
-        counts["context_accounting_failure_rows"] += 1
-
-
-def _count_accepted_annotation(
+def _count_latest_annotation(
     source: ReasoningSourceV3,
     annotation: ReasoningAnnotationV3,
     counts: Counter[str],
 ) -> None:
-    """Count six-section distributions for one accepted annotation."""
+    """Count latest status, weak observations, and typed annotation provenance."""
 
-    target = annotation.target
-    if target is None:
+    counts[f"status:{annotation.status}"] += 1
+    counts[f"latest_annotation_schema:{annotation.schema_version}"] += 1
+    counts["annotation_fingerprint_match_rows"] += int(
+        annotation.source_fingerprint == source.source_fingerprint
+    )
+    if annotation.status == "accepted":
+        counts["accepted_target_rows"] += 1
+        _count_provenance(annotation.label_provenance, counts, prefix="annotation")
+        if annotation.section_loss_mask is not None:
+            for name, available in annotation.section_loss_mask.model_dump(
+                mode="python"
+            ).items():
+                counts[f"weak_section_available:{name}"] += int(bool(available))
+    elif annotation.status == "observation_only":
+        counts["observation_only_rows"] += 1
+    elif annotation.status in {"rejected", "error"}:
+        counts["failed_annotation_rows"] += 1
+
+    if (
+        annotation.status in {"accepted", "observation_only"}
+        and annotation.observation is not None
+    ):
+        _count_weak_observation(annotation, counts)
+
+
+def _count_weak_observation(
+    annotation: ReasoningAnnotationV3,
+    counts: Counter[str],
+) -> None:
+    """Count weak-label availability without treating it as accuracy."""
+
+    observation = annotation.observation
+    if observation is None:
         return
-    trace = target.reasoning
-    scene = trace.scene_grounding
-    local = trace.local_traversability
-    context = trace.navigation_context_grounding
-    interaction = trace.interaction_and_rule_grounding
-    task = trace.task_grounding
-    decision = trace.decision
-    counts["accepted_rows"] += 1
-
-    counts[f"task_applicable:{str(task.applicable).lower()}"] += 1
-    counts[f"task_instruction_type:{task.instruction_type}"] += 1
-    counts[f"task_caption_role:{task.caption_role}"] += 1
-    counts[f"task_local_objective:{task.local_objective}"] += 1
+    counts["weak_observation_rows"] += 1
+    task = observation.task_semantic
+    scene = observation.scene_grounding
+    local = observation.local_traversability
+    context = observation.navigation_context_grounding
+    for name, applicable in {
+        "task_grounding": task.applicable,
+        "scene_grounding": scene.applicable,
+        "local_traversability": local.applicable,
+        "navigation_context_grounding": context.applicable,
+    }.items():
+        counts[f"weak_field_applicable:{name}"] += int(bool(applicable))
     counts["task_requirement_items"] += len(task.requirements)
     counts["task_referent_items"] += len(task.referents)
     counts["task_ambiguity_items"] += len(task.ambiguities)
-    counts["active_task_unknown_rows"] += int(
-        task.applicable
-        and (task.instruction_type == "unknown" or task.local_objective == "unknown")
+    counts["scene_entity_items"] += len(scene.entities)
+    counts["traffic_control_items"] += len(scene.traffic_controls)
+    counts["traversability_region_items"] += len(local.regions)
+    counts["navigation_source_grounding_items"] += len(context.source_groundings)
+
+    rationale = annotation.decision_rationale
+    if rationale is not None:
+        counts["weak_rationale_rows"] += 1
+        counts[f"weak_rationale_status:{rationale.rationale_status}"] += 1
+        counts["interaction_items"] += len(
+            rationale.interaction_and_rule_grounding.interactions
+        )
+        counts["traffic_rule_items"] += len(
+            rationale.interaction_and_rule_grounding.traffic_rules
+        )
+        counts["decision_support_items"] += len(rationale.supporting_reasons)
+
+
+def _count_provenance(
+    provenance: Mapping[str, LabelProvenanceEntryV3],
+    counts: Counter[str],
+    *,
+    prefix: str,
+) -> None:
+    """Count typed provenance categories and weak coverage."""
+
+    if provenance:
+        counts[f"{prefix}_rows_with_provenance"] += 1
+    weak_present = False
+    for field_path, entry in provenance.items():
+        counts[f"{prefix}_provenance_items"] += 1
+        counts[f"{prefix}_provenance_source_kind:{entry.source_kind}"] += 1
+        counts[f"{prefix}_provenance_supervision:{entry.supervision}"] += 1
+        counts[f"{prefix}_provenance_loss_channel:{entry.loss_channel}"] += 1
+        if entry.supervision == "weak":
+            weak_present = True
+            counts[f"weak_provenance_field:{field_path}"] += 1
+    counts[f"{prefix}_rows_with_weak_provenance"] += int(weak_present)
+
+
+def _direction_available(source: ReasoningSourceV3) -> bool:
+    """Return whether the source carries one strong canonical direction label."""
+
+    fixed = source.teacher_supervision_context.get("fixed_labels")
+    canonical = fixed.get("canonical_direction") if isinstance(fixed, Mapping) else None
+    provenance = source.label_provenance.get("decision.direction")
+    return bool(
+        isinstance(canonical, Mapping)
+        and provenance is not None
+        and provenance.source_kind == "deterministic_adapter"
+        and provenance.supervision == "strong"
+        and provenance.student_inferable
+        and provenance.loss_channel == "direction_choice"
     )
-    counts[f"decision_rationale_status:{decision.rationale_status}"] += 1
-    counts["unsupported_rationale_rows"] += int(decision.rationale_status == "unsupported")
-    counts["partial_rationale_rows"] += int(decision.rationale_status == "partial")
-    counts["supported_rationale_rows"] += int(decision.rationale_status == "supported")
-    counts["decision_support_items"] += len(decision.supporting_reasons)
 
-    region_states = Counter(item.state for item in local.regions)
-    for state in ("direct", "conditional", "blocked", "forbidden"):
-        counts[f"region_state:{state}:items"] += region_states[state]
-        counts[f"rows_with_region_state:{state}"] += int(region_states[state] > 0)
 
-    expected_context_refs = {
-        entry.ref
-        for entry in source.model_input.evidence_catalog
-        if entry.modality in {"bev", "goal", "goal_image", "waypoint", "route", "tool", "tool_route"}
-    }
-    observed_context = {item.source_ref: item for item in scene.context_observations}
-    if expected_context_refs:
-        counts["accepted_rows_with_optional_context"] += 1
-        accounted = set(observed_context) == expected_context_refs
-        counts["context_accounted_rows"] += int(accounted)
-    for item in scene.context_observations:
-        counts[f"context_usage:{item.usage}"] += 1
-        counts[f"context_role:{item.role}"] += 1
-        modality = _catalog_modality(source, item.source_ref)
-        counts[f"context_modality:{modality}:{item.usage}"] += 1
-    for item in scene.cross_modal_relations:
-        counts[f"cross_modal_status:{item.status}"] += 1
-        counts[f"cross_modal_relation:{item.relation}"] += 1
+def _system1_available(source: ReasoningSourceV3) -> bool:
+    """Return whether System1 has an eligible strong dataset sidecar."""
 
-    if context.source_consistency == "conflict" or context.fused_execution_status == "conflict":
-        counts["conflict_rows"] += 1
-        counts["accepted_conflict_rows"] += 1
-    if context.fused_execution_status == "insufficient_evidence":
-        counts["insufficient_evidence_rows"] += 1
-    for item in context.source_groundings:
-        counts[f"navigation_source_type:{item.source_type}"] += 1
-        counts[f"navigation_source_status:{item.source_type}:{item.status}"] += 1
-
-    critical_unknown = local.applicable and (
-        local.visibility == "unknown"
-        or local.local_risk == "unknown"
-        or local.confidence == "unknown"
+    provenance = source.label_provenance.get("system1.trajectory")
+    return bool(
+        source.model_input.system1_enabled
+        and provenance is not None
+        and provenance.source_kind == "dataset_gt"
+        and provenance.supervision == "strong"
+        and provenance.student_inferable
+        and provenance.loss_channel == "system1_action"
     )
-    if critical_unknown:
-        counts["unknown_rows"] += 1
-        counts["accepted_critical_unknown_rows"] += 1
-    if (
-        context.fused_target_corridor_ref is not None
-        and context.fused_target_corridor_ref != trace.decision.selected_corridor_ref
-    ):
-        counts["fallback_rows"] += 1
-    status = context.fused_execution_status if context.applicable else "not_applicable"
-    counts[f"navigation_context_status:{status}"] += 1
-
-    counts["interaction_items"] += len(interaction.interactions)
-    counts["traffic_rule_items"] += len(interaction.traffic_rules)
-    counts["rows_with_interaction"] += int(bool(interaction.interactions))
-    counts["rows_with_traffic_rule"] += int(bool(interaction.traffic_rules))
-    for item in interaction.interactions:
-        counts[f"interaction_relation:{item.relation}"] += 1
-        counts[f"required_behavior:{item.required_behavior}"] += 1
-    for item in interaction.traffic_rules:
-        counts[f"traffic_rule:{item.rule}"] += 1
-        counts[f"required_behavior:{item.required_behavior}"] += 1
 
 
-def _catalog_modality(source: ReasoningSourceV3, ref: str) -> str:
-    """Return the frozen input modality for one evidence reference."""
+def _weak_lm_fields(
+    provenance: Mapping[str, LabelProvenanceEntryV3],
+) -> list[str]:
+    """Return weak fields that still advertise removed language loss."""
 
-    for entry in source.model_input.evidence_catalog:
-        if entry.ref == ref:
-            return entry.modality
-    return "unknown"
+    return sorted(
+        field_path
+        for field_path, entry in provenance.items()
+        if entry.supervision == "weak" and entry.loss_channel != "none"
+    )
 
 
 def _summarize_counts(
@@ -316,63 +334,43 @@ def _summarize_counts(
     limits: ReasoningV3QualityThresholds,
     scope: str,
 ) -> dict[str, Any]:
-    """Compute configured fractions and threshold violations."""
+    """Compute availability fractions and the two completion gates."""
 
     source_rows = counts["source_rows"]
-    accepted = counts["accepted_rows"]
-    failed = counts["status:rejected"] + counts["status:error"] + counts["missing_annotation_rows"]
-    projection_candidates = counts["projection_candidate_rows"]
-    context_rows = counts["accepted_rows_with_optional_context"]
+    accepted = counts["accepted_target_rows"]
+    observation_only = counts["observation_only_rows"]
+    valid = accepted + observation_only
+    failed = counts["failed_annotation_rows"] + counts["missing_annotation_rows"]
     fractions = {
-        "acceptance_fraction": _fraction(accepted, source_rows),
-        "reject_fraction": _fraction(failed, source_rows),
-        "conflict_fraction_among_accepted": _fraction(counts["accepted_conflict_rows"], accepted),
-        "critical_unknown_fraction_among_accepted": _fraction(
-            counts["accepted_critical_unknown_rows"], accepted
+        "valid_annotation_fraction": _fraction(valid, source_rows),
+        "accepted_target_fraction": _fraction(accepted, source_rows),
+        "observation_only_fraction": _fraction(observation_only, source_rows),
+        "failed_annotation_fraction": _fraction(failed, source_rows),
+        "direction_available_fraction": _fraction(
+            counts["direction_available_rows"], source_rows
         ),
-        "insufficient_evidence_fraction_among_accepted": _fraction(
-            counts["insufficient_evidence_rows"], accepted
+        "system1_available_fraction": _fraction(
+            counts["system1_available_rows"], source_rows
         ),
-        "active_task_unknown_fraction_among_accepted": _fraction(
-            counts["active_task_unknown_rows"], accepted
+        "weak_observation_fraction_among_valid_annotations": _fraction(
+            counts["weak_observation_rows"], valid
         ),
-        "unsupported_rationale_fraction_among_accepted": _fraction(
-            counts["unsupported_rationale_rows"], accepted
-        ),
-        "optional_context_accounting_fraction": (
-            _fraction(counts["context_accounted_rows"], context_rows) if context_rows else None
-        ),
-        "projection_qc_coverage": (
-            _fraction(counts["projection_qc_passed_rows"], projection_candidates)
-            if projection_candidates
-            else None
+        "weak_provenance_fraction_among_accepted_targets": _fraction(
+            counts["annotation_rows_with_weak_provenance"], accepted
         ),
     }
-    checks = (
-        ("acceptance_fraction", fractions["acceptance_fraction"], limits.min_acceptance_fraction, "min"),
-        ("reject_fraction", fractions["reject_fraction"], limits.max_reject_fraction, "max"),
-        ("conflict_fraction", fractions["conflict_fraction_among_accepted"], limits.max_conflict_fraction, "max"),
-        ("critical_unknown_fraction", fractions["critical_unknown_fraction_among_accepted"], limits.max_unknown_fraction, "max"),
-        ("insufficient_evidence_fraction", fractions["insufficient_evidence_fraction_among_accepted"], limits.max_insufficient_fraction, "max"),
-        ("active_task_unknown_fraction", fractions["active_task_unknown_fraction_among_accepted"], limits.max_task_unknown_fraction, "max"),
-        ("unsupported_rationale_fraction", fractions["unsupported_rationale_fraction_among_accepted"], limits.max_unsupported_rationale_fraction, "max"),
-    )
-    violations = [
-        f"{scope}:{name}_{'below_min' if mode == 'min' else 'above_max'}:{value:.6f}:{limit:.6f}"
-        for name, value, limit, mode in checks
-        if (mode == "min" and value < limit) or (mode == "max" and value > limit)
-    ]
-    context_coverage = fractions["optional_context_accounting_fraction"]
-    if context_coverage is not None and context_coverage < limits.min_context_accounting_fraction:
+    violations: list[str] = []
+    if fractions["valid_annotation_fraction"] < limits.min_acceptance_fraction:
         violations.append(
-            f"{scope}:optional_context_accounting_below_min:"
-            f"{context_coverage:.6f}:{limits.min_context_accounting_fraction:.6f}"
+            f"{scope}:valid_annotation_fraction_below_min:"
+            f"{fractions['valid_annotation_fraction']:.6f}:"
+            f"{limits.min_acceptance_fraction:.6f}"
         )
-    projection_coverage = fractions["projection_qc_coverage"]
-    if projection_coverage is not None and projection_coverage < limits.min_projection_qc_coverage:
+    if fractions["failed_annotation_fraction"] > limits.max_reject_fraction:
         violations.append(
-            f"{scope}:projection_qc_coverage_below_min:"
-            f"{projection_coverage:.6f}:{limits.min_projection_qc_coverage:.6f}"
+            f"{scope}:failed_annotation_fraction_above_max:"
+            f"{fractions['failed_annotation_fraction']:.6f}:"
+            f"{limits.max_reject_fraction:.6f}"
         )
     return {
         "counts": dict(sorted(counts.items())),

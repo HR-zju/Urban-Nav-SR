@@ -29,7 +29,7 @@ def build_reasoning_v3_review_html(
     """Build a self-contained review of LVLM observations and composed targets.
 
     Args:
-        source_jsonl: Frozen Reasoning V3.3 source manifest.
+        source_jsonl: Frozen Reasoning V3.4 source manifest.
         annotation_jsonl: Append-only annotation manifest.
         output_html: Destination HTML file.
         per_stratum: Maximum samples selected per dataset/modality stratum.
@@ -40,7 +40,7 @@ def build_reasoning_v3_review_html(
         Review report with selection, stratum, and missing-image counts.
 
     Raises:
-        ValueError: If a source or annotation row violates the V3.3 schema.
+        ValueError: If a source or annotation row violates the V3.4 schema.
     """
 
     annotations: dict[str, ReasoningAnnotationV3] = {}
@@ -103,20 +103,18 @@ def build_reasoning_v3_review_html(
         optional_context_refs = [
             item.ref
             for item in source.model_input.evidence_catalog
-            if item.modality in {"bev", "goal", "goal_image", "waypoint", "route", "tool", "tool_route"}
+            if item.modality in {
+                "instruction",
+                "bev",
+                "goal",
+                "goal_image",
+                "route",
+                "tool",
+                "tool_route",
+            }
         ]
         modality_ledger = {
-            "expected_optional_context_refs": optional_context_refs,
-            "scene_context_observations": (
-                observation.get("scene_grounding", {}).get("context_observations", [])
-                if observation is not None
-                else []
-            ),
-            "cross_modal_relations": (
-                observation.get("scene_grounding", {}).get("cross_modal_relations", [])
-                if observation is not None
-                else []
-            ),
+            "expected_visible_context_refs": optional_context_refs,
             "navigation_source_groundings": (
                 observation.get("navigation_context_grounding", {}).get("source_groundings", [])
                 if observation is not None
@@ -135,7 +133,7 @@ def build_reasoning_v3_review_html(
             )
         else:
             target_details = (
-                '<details open><summary>Rejected / error audit</summary>'
+                '<details open><summary>Observation-only / failure audit</summary>'
                 f'<pre>{_pretty({"status": annotation.status, "errors": annotation.errors, "warnings": annotation.warnings, "attempts": annotation.attempts, "metadata": annotation.metadata, "telemetry": annotation.telemetry})}</pre></details>'
             )
         cards.append(
@@ -148,10 +146,10 @@ def build_reasoning_v3_review_html(
             '<div class="details">'
             f'<details open><summary>Modality accounting</summary><pre>{_pretty(modality_ledger)}</pre></details>'
             f'<details open><summary>LVLM observation</summary><pre>{_pretty(observation)}</pre></details>'
-            f'<details open><summary>GT-constrained decision rationale</summary><pre>{_pretty(rationale)}</pre></details>'
+            f'<details open><summary>Direction-conditioned LVLM weak rationale</summary><pre>{_pretty(rationale)}</pre></details>'
             f'{target_details}'
             f'<details><summary>Raw teacher answer</summary><pre>{_pretty(annotation.raw_answer)}</pre></details>'
-            f'<details><summary>Fixed supervision / provenance / mask</summary><pre>{_pretty({"fixed_labels": fixed, "provenance": provenance, "section_loss_mask": annotation.section_loss_mask.model_dump(mode="json") if annotation.section_loss_mask is not None else None, "metadata": annotation.metadata})}</pre></details>'
+            f'<details open><summary>Truth source / inferability / loss routing</summary><pre>{_pretty({"fixed_labels": fixed, "provenance": provenance, "candidate_section_mask": annotation.section_loss_mask.model_dump(mode="json") if annotation.section_loss_mask is not None else None, "source_section_mask": source.section_loss_mask.model_dump(mode="json"), "source_warnings": source.warnings, "metadata": annotation.metadata})}</pre></details>'
             '</div></article>'
         )
     datasets = sorted({key[0] for key in strata})
@@ -167,17 +165,17 @@ def build_reasoning_v3_review_html(
         for value in statuses
     )
     page = f'''<!doctype html>
-<html><head><meta charset="utf-8"><title>Reasoning V3.3 Review</title>
+<html><head><meta charset="utf-8"><title>Reasoning V3.4 Minimal Review</title>
 <style>
-body{{margin:0;background:#f3f5f7;color:#17202a;font:14px Arial,sans-serif}}header.toolbar{{position:sticky;top:0;z-index:2;background:#fff;border-bottom:1px solid #cbd3da;padding:12px 20px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}}main{{padding:18px;max-width:1600px;margin:auto}}.sample{{background:#fff;border:1px solid #cbd3da;border-radius:6px;margin:0 0 18px;overflow:hidden}}.sample>header{{display:flex;gap:12px;align-items:center;padding:10px 14px;border-bottom:1px solid #dce2e7;flex-wrap:wrap}}code{{background:#eef2f5;padding:3px 6px}}.quality,.status{{padding:3px 6px;border-radius:3px}}.quality,.status.accepted{{background:#dff3e4;color:#145c2e}}.status.rejected,.status.error{{background:#fbe2df;color:#8a231c}}.instruction{{padding:0 14px;font-size:16px}}.images{{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:8px;padding:0 14px}}figure{{margin:0}}figcaption{{font-weight:bold;margin:4px 0}}img,.missing{{width:100%;aspect-ratio:16/9;object-fit:contain;background:#111}}.missing{{display:grid;place-items:center;color:#fff;overflow-wrap:anywhere}}.details{{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:8px;padding:14px}}details{{border:1px solid #dce2e7;padding:8px;min-width:0}}summary{{font-weight:bold;cursor:pointer}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0 0;font-size:12px}}@media(max-width:600px){{.details{{grid-template-columns:1fr}}}}
+body{{margin:0;background:#f3f5f7;color:#17202a;font:14px Arial,sans-serif}}header.toolbar{{position:sticky;top:0;z-index:2;background:#fff;border-bottom:1px solid #cbd3da;padding:12px 20px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}}main{{padding:18px;max-width:1600px;margin:auto}}.sample{{background:#fff;border:1px solid #cbd3da;border-radius:6px;margin:0 0 18px;overflow:hidden}}.sample>header{{display:flex;gap:12px;align-items:center;padding:10px 14px;border-bottom:1px solid #dce2e7;flex-wrap:wrap}}code{{background:#eef2f5;padding:3px 6px}}.quality,.status{{padding:3px 6px;border-radius:3px}}.quality,.status.accepted{{background:#dff3e4;color:#145c2e}}.status.observation_only{{background:#fff0bf;color:#725400}}.status.rejected,.status.error{{background:#fbe2df;color:#8a231c}}.instruction{{padding:0 14px;font-size:16px}}.images{{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:8px;padding:0 14px}}figure{{margin:0}}figcaption{{font-weight:bold;margin:4px 0}}img,.missing{{width:100%;aspect-ratio:16/9;object-fit:contain;background:#111}}.missing{{display:grid;place-items:center;color:#fff;overflow-wrap:anywhere}}.details{{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:8px;padding:14px}}details{{border:1px solid #dce2e7;padding:8px;min-width:0}}summary{{font-weight:bold;cursor:pointer}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0 0;font-size:12px}}@media(max-width:600px){{.details{{grid-template-columns:1fr}}}}
 </style></head><body>
-<header class="toolbar"><b>UrbanNav Reasoning V3.3 Review</b><label>Dataset <select id="dataset"><option value="all">all</option>{options}</select></label><label>Status <select id="status"><option value="all">all</option>{status_options}</select></label><label>Quality <select id="quality"><option value="all">all</option>{quality_options}</select></label><span>{len(selected)} samples, {len(strata)} strata, missing images {missing_images}</span></header>
+<header class="toolbar"><b>UrbanNav Reasoning V3.4 Minimal Review</b><label>Dataset <select id="dataset"><option value="all">all</option>{options}</select></label><label>Status <select id="status"><option value="all">all</option>{status_options}</select></label><label>Review stratum <select id="quality"><option value="all">all</option>{quality_options}</select></label><span>{len(selected)} samples, {len(strata)} strata, missing images {missing_images}</span></header>
 <main>{''.join(cards)}</main>
 <script>const apply=()=>{{const d=document.getElementById('dataset').value,s=document.getElementById('status').value,q=document.getElementById('quality').value;document.querySelectorAll('.sample').forEach(x=>x.hidden=(d!=='all'&&x.dataset.dataset!==d)||(s!=='all'&&x.dataset.status!==s)||(q!=='all'&&x.dataset.quality!==q))}};document.getElementById('dataset').addEventListener('change',apply);document.getElementById('status').addEventListener('change',apply);document.getElementById('quality').addEventListener('change',apply);</script>
 </body></html>'''
     destination.write_text(page, encoding="utf-8")
     return {
-        "schema_version": "urbannav_reasoning_v3_3_review_report_v1",
+        "schema_version": "urbannav_reasoning_v3_4_review_report_v1",
         "output_html": str(destination),
         "selected_rows": len(selected),
         "strata": {"|".join(key): len(value) for key, value in sorted(strata.items())},
@@ -196,6 +194,8 @@ body{{margin:0;background:#f3f5f7;color:#17202a;font:14px Arial,sans-serif}}head
 def _quality_stratum(annotation: ReasoningAnnotationV3) -> str:
     """Return the highest-priority manual-review category for one target."""
 
+    if annotation.status == "observation_only":
+        return "observation_only_no_direction_gt"
     if annotation.status != "accepted":
         errors = " ".join(annotation.errors).lower()
         if annotation.status == "error":
@@ -210,20 +210,12 @@ def _quality_stratum(annotation: ReasoningAnnotationV3) -> str:
     trace = annotation.target.reasoning
     local = trace.local_traversability
     grounding = trace.navigation_context_grounding
-    selected = trace.decision.selected_corridor_ref
     if trace.decision.rationale_status == "unsupported":
         return "unsupported_decision_rationale"
     if trace.decision.rationale_status == "partial":
         return "partial_decision_rationale"
-    if grounding.source_consistency == "conflict" or grounding.fused_execution_status == "conflict":
-        return "context_conflict"
-    if grounding.fused_execution_status == "insufficient_evidence":
-        return "insufficient_evidence"
-    if grounding.fused_target_corridor_ref is not None and grounding.fused_target_corridor_ref != selected:
-        return "fallback"
-    # 优先抽取会改变可执行策略的区域类别，再补普通 clear 样本。
     states = {item.state for item in local.regions}
-    if grounding.fused_execution_status == "locally_blocked" or "blocked" in states:
+    if "blocked" in states or "forbidden" in states:
         return "blocked"
     if "conditional" in states:
         return "conditional"
@@ -231,14 +223,14 @@ def _quality_stratum(annotation: ReasoningAnnotationV3) -> str:
         return "social_interaction"
     if trace.interaction_and_rule_grounding.traffic_rules:
         return "traffic_rule"
-    if (
-        local.visibility == "unknown"
-        or local.local_risk == "unknown"
-        or local.confidence == "unknown"
+    if "unknown" in states:
+        return "weak_unknown"
+    if grounding.applicable and any(
+        item.usage == "used" for item in grounding.source_groundings
     ):
-        return "critical_unknown"
-    if grounding.applicable and grounding.fused_execution_status == "clear":
-        return "context_clear"
+        return "context_used"
+    if grounding.applicable:
+        return "context_ignored"
     return "direct_traversable"
 
 

@@ -1,4 +1,4 @@
-"""Resumable two-stage multimodal annotation runner for Reasoning V3.3."""
+"""Resumable multimodal annotation runner for the minimal Reasoning V3.4 contract."""
 
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ REASONING_V3_RATIONALE_PROMPT_VERSION = _RATIONALE_RUNTIME.profile.profile_id
 
 @dataclass(frozen=True)
 class ReasoningV3BatchConfig:
-    """Configure resumable V3.3 teacher annotation.
+    """Configure resumable V3.4 teacher annotation.
 
     Args:
         max_retries: Maximum repair calls after the initial request.
@@ -75,7 +75,7 @@ class ReasoningV3TeacherBackend(Protocol):
         system_prompt: str,
         image_detail: str,
     ) -> TeacherGeneration:
-        """Generate one raw V3.3 teacher response.
+        """Generate one raw V3.4 teacher response.
 
         Args:
             source: Frozen source whose images are sent to the backend.
@@ -111,7 +111,7 @@ class VisionReasoningV3TeacherBackend:
         """Generate a teacher response while exposing only normalized images.
 
         Args:
-            source: Frozen V3.3 source wrapper.
+            source: Frozen V3.4 source wrapper.
             question: Stage-specific user prompt.
             system_prompt: Versioned teacher policy.
             image_detail: Provider image-detail setting.
@@ -134,7 +134,7 @@ async def annotate_reasoning_source_v3(
     backend: ReasoningV3TeacherBackend,
     config: ReasoningV3BatchConfig | None = None,
 ) -> ReasoningAnnotationV3:
-    """Generate, repair, compose, and validate one frozen V3.3 source.
+    """Generate, repair, compose, and validate one frozen V3.4 source.
 
     Args:
         source: Fingerprinted source with isolated private supervision.
@@ -142,7 +142,7 @@ async def annotate_reasoning_source_v3(
         config: Retry, image, and audit limits.
 
     Returns:
-        Accepted composed annotation or a rejected/error audit record.
+        Full-CoT, observation-only, or rejected/error annotation record.
     """
 
     cfg = config or ReasoningV3BatchConfig()
@@ -155,7 +155,6 @@ async def annotate_reasoning_source_v3(
     provider_errors = 0
     total_calls = 0
     observation = None
-    outcome = None
 
     # Pass A+B: task semantics and visual facts see model-visible input only.
     for attempt in range(max_attempts):
@@ -196,20 +195,12 @@ async def annotate_reasoning_source_v3(
         )
         errors = list(checked.errors)
         warnings = list(checked.warnings)
-        if not errors:
-            try:
-                outcome = derive_decision_outcome_v3(source, observation)
-            except (TypeError, ValueError) as exc:
-                errors = [f"outcome_composition_failed:{exc}"]
-                history.append({"stage": "outcome_composer", "attempt": 1, "errors": list(errors)})
-                # 结果合成错误可能涉及隐藏 GT，禁止把它回传给观察 teacher。
-                break
         if errors:
             history.append({"stage": "semantic_observation", "attempt": attempt + 1, "errors": list(errors)})
             continue
         break
 
-    if observation is None or outcome is None or errors:
+    if observation is None or errors:
         return _failed_annotation_v3(
             source,
             status="error" if provider_errors == total_calls else "rejected",
@@ -217,6 +208,49 @@ async def annotate_reasoning_source_v3(
             decision_rationale=None,
             raw_answers=raw_answers,
             errors=errors or ["semantic_observation_validation_failed"],
+            warnings=warnings,
+            attempts=total_calls,
+            generations=generations,
+            history=history,
+            raw_answer_max_chars=cfg.raw_answer_max_chars,
+        )
+
+    observation_only_reason = _observation_only_reason_v3(source)
+    if observation_only_reason is not None:
+        latest = generations[-1]
+        return ReasoningAnnotationV3(
+            source_group_id=source.model_input.source_group_id,
+            source_fingerprint=source.source_fingerprint,
+            status="observation_only",
+            observation=observation,
+            raw_answer=_serialize_raw_answers(raw_answers, cfg.raw_answer_max_chars),
+            errors=[],
+            warnings=list(dict.fromkeys([*warnings, observation_only_reason])),
+            label_provenance=source.label_provenance,
+            attempts=total_calls,
+            teacher_provider=latest.provider,
+            teacher_model=latest.model,
+            telemetry=_aggregate_telemetry(generations),
+            metadata=_annotation_metadata_v3(
+                history=history,
+                annotation_mode="observation_only",
+                observation_only_reason=observation_only_reason,
+            ),
+        )
+
+    try:
+        outcome = derive_decision_outcome_v3(source, observation)
+    except (KeyError, TypeError, ValueError) as exc:
+        errors = [f"outcome_composition_failed:{exc}"]
+        history.append({"stage": "outcome_composer", "attempt": 1, "errors": list(errors)})
+        # Outcome errors may expose private GT, so never send them back to the observation teacher.
+        return _failed_annotation_v3(
+            source,
+            status="rejected",
+            observation=observation,
+            decision_rationale=None,
+            raw_answers=raw_answers,
+            errors=errors,
             warnings=warnings,
             attempts=total_calls,
             generations=generations,
@@ -310,7 +344,11 @@ async def annotate_reasoning_source_v3(
                 teacher_provider=latest.provider,
                 teacher_model=latest.model,
                 telemetry=_aggregate_telemetry(generations),
-                metadata=_annotation_metadata_v3(history=history, target=target),
+                metadata=_annotation_metadata_v3(
+                    history=history,
+                    target=target,
+                    annotation_mode="full_cot",
+                ),
             )
         history.append({"stage": "decision_rationale", "attempt": attempt + 1, "errors": list(errors)})
 
@@ -359,7 +397,7 @@ def _failed_annotation_v3(
         raw_answer_max_chars: Maximum serialized raw-answer length.
 
     Returns:
-        Valid V3.3 failed annotation without a trainable target.
+        Valid V3.4 failed annotation without a trainable target.
     """
 
     latest = generations[-1] if generations else None
@@ -397,7 +435,13 @@ def _aggregate_telemetry(generations: list[TeacherGeneration]) -> dict[str, Any]
     }
 
 
-def _annotation_metadata_v3(*, history: list[dict[str, Any]], target: Any = None) -> dict[str, Any]:
+def _annotation_metadata_v3(
+    *,
+    history: list[dict[str, Any]],
+    target: Any = None,
+    annotation_mode: str | None = None,
+    observation_only_reason: str | None = None,
+) -> dict[str, Any]:
     """Build version-complete metadata used for cache invalidation."""
 
     metadata: dict[str, Any] = {
@@ -407,16 +451,27 @@ def _annotation_metadata_v3(*, history: list[dict[str, Any]], target: Any = None
         "rationale_prompt_policy_digest": _RATIONALE_RUNTIME.profile.policy_digest,
         "fewshot_registry_version": REASONING_V3_FEWSHOT_VERSION,
         "composer_version": REASONING_V3_COMPOSER_VERSION,
-        "fallback_used": False,
         "repair_history": history,
     }
+    if annotation_mode is not None:
+        metadata["annotation_mode"] = annotation_mode
+    if observation_only_reason is not None:
+        metadata["observation_only_reason"] = observation_only_reason
     if target is not None:
-        metadata["context_hard_negative"] = (
-            target.reasoning.navigation_context_grounding.fused_execution_status
-            == "insufficient_evidence"
-        )
         metadata["decision_rationale_status"] = target.reasoning.decision.rationale_status
     return metadata
+
+
+def _observation_only_reason_v3(source: ReasoningSourceV3) -> str | None:
+    """Return why a valid Pass1 result cannot become a Full-CoT target."""
+
+    dataset_source = source.model_input.dataset_source.strip().lower()
+    if dataset_source.startswith("frodobots"):
+        return "direction_supervision_disabled_by_dataset_policy"
+    fixed_labels = source.teacher_supervision_context.get("fixed_labels") or {}
+    if not isinstance(fixed_labels.get("canonical_direction"), dict):
+        return "canonical_direction_missing"
+    return None
 
 
 async def label_reasoning_source_manifest_v3(
@@ -430,7 +485,7 @@ async def label_reasoning_source_manifest_v3(
     api_keys: Iterable[str] = (),
     backend_factory: Callable[[int, str | None], ReasoningV3TeacherBackend] | None = None,
 ) -> dict[str, Any]:
-    """Run bounded concurrent V3.3 labeling with append-only cache.
+    """Run bounded concurrent V3.4 labeling with append-only cache.
 
     Args:
         source_jsonl: Frozen source manifest.
@@ -446,7 +501,7 @@ async def label_reasoning_source_manifest_v3(
         Final labeling report with cache, status, error, and rate counts.
 
     Raises:
-        ValueError: If source or cached annotation rows violate V3.3 schemas.
+        ValueError: If source or cached annotation rows violate V3.4 schemas.
     """
 
     cfg = config or ReasoningV3BatchConfig()
@@ -468,15 +523,17 @@ async def label_reasoning_source_manifest_v3(
         elif cached.metadata.get("teacher_prompt_policy_digest") != _OBSERVATION_RUNTIME.profile.policy_digest:
             pending.append(source)
             resume_counts["cache_stale_prompt_policy_digest"] += 1
+        elif cached.metadata.get("fewshot_registry_version") != REASONING_V3_FEWSHOT_VERSION:
+            pending.append(source)
+            resume_counts["cache_stale_fewshot_registry"] += 1
+        elif cached.status == "observation_only":
+            resume_counts["cached_observation_only"] += 1
         elif cached.metadata.get("rationale_prompt_version") != REASONING_V3_RATIONALE_PROMPT_VERSION:
             pending.append(source)
             resume_counts["cache_stale_rationale_prompt_version"] += 1
         elif cached.metadata.get("rationale_prompt_policy_digest") != _RATIONALE_RUNTIME.profile.policy_digest:
             pending.append(source)
             resume_counts["cache_stale_rationale_prompt_policy_digest"] += 1
-        elif cached.metadata.get("fewshot_registry_version") != REASONING_V3_FEWSHOT_VERSION:
-            pending.append(source)
-            resume_counts["cache_stale_fewshot_registry"] += 1
         elif cached.metadata.get("composer_version") != REASONING_V3_COMPOSER_VERSION:
             pending.append(source)
             resume_counts["cache_stale_composer_version"] += 1
@@ -512,9 +569,9 @@ async def label_reasoning_source_manifest_v3(
         "pending_rows": len(pending),
         "processed_rows": 0,
         "accepted_rows": 0,
+        "observation_only_rows": 0,
         "rejected_rows": 0,
         "error_rows": 0,
-        "insufficient_evidence_rows": 0,
         "unsupported_rationale_rows": 0,
         "partial_rationale_rows": 0,
         "concurrency": worker_count,
@@ -575,18 +632,12 @@ async def label_reasoning_source_manifest_v3(
                 source, annotation = await results.get()
                 serialized = annotation.model_dump(mode="json", exclude_none=True)
                 append_jsonl_row(handle, serialized)
-                if annotation.status != "accepted" and reject_handle is not None:
+                if annotation.status in {"rejected", "error"} and reject_handle is not None:
                     append_jsonl_row(reject_handle, serialized)
                 report["processed_rows"] += 1
                 report[f"{annotation.status}_rows"] += 1
                 dataset = source.model_input.dataset_source
                 report["dataset_counts"][dataset] = int(report["dataset_counts"].get(dataset, 0)) + 1
-                if (
-                    annotation.target is not None
-                    and annotation.target.reasoning.navigation_context_grounding.fused_execution_status
-                    == "insufficient_evidence"
-                ):
-                    report["insufficient_evidence_rows"] += 1
                 if annotation.target is not None:
                     rationale_status = annotation.target.reasoning.decision.rationale_status
                     if rationale_status == "unsupported":
@@ -606,6 +657,7 @@ async def label_reasoning_source_manifest_v3(
                             {
                                 "reasoning_v3_progress": f"{report['processed_rows']}/{len(pending)}",
                                 "accepted": report["accepted_rows"],
+                                "observation_only": report["observation_only_rows"],
                                 "rejected": report["rejected_rows"],
                                 "error": report["error_rows"],
                                 "rate_rows_per_hour": round(report["rate_rows_per_hour"], 1),

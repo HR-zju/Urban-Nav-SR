@@ -1,4 +1,4 @@
-"""Deterministic renderer and parser for canonical Reasoning V3.3 text."""
+"""Deterministic renderer and parser for canonical Reasoning V3.4 text."""
 
 from __future__ import annotations
 
@@ -25,12 +25,13 @@ from mcp_server.contracts.reasoning_v3 import (
 
 _THINK_RE = re.compile(r"<think>\s*(?P<body>.*?)\s*</think>", re.DOTALL)
 _TAG_RE = re.compile(r"<(?P<tag>[A-Za-z][A-Za-z0-9]*)>\s*(?P<body>\{.*?\})\s*</(?P=tag)>", re.DOTALL)
+_FINISH_RE = re.compile(r"<finish>\s*(?P<body>\{.*?\})\s*</finish>", re.DOTALL)
 _READOUT_RE = re.compile(r"<readout>\s*(?P<body>.*?)\s*</readout>", re.DOTALL)
 
 
 @dataclass(frozen=True)
 class ReasoningTextParseResultV3:
-    """Structured result of parsing one V3.3 assistant target.
+    """Structured result of parsing one V3.4 assistant target.
 
     Args:
         target: Parsed typed Full-CoT target, if valid.
@@ -61,7 +62,7 @@ def render_reasoning_target_v3(
     readout_tokens: Iterable[str] = (),
     tool_result_use: dict[str, Any] | None = None,
 ) -> str:
-    """Render one V3.3 target using fixed section order and compact JSON.
+    """Render one V3.4 target using fixed section order and compact JSON.
 
     Args:
         target: Validated canonical Full-CoT target.
@@ -109,7 +110,7 @@ def render_reasoning_target_v3(
 
 
 def parse_reasoning_target_v3(text: str) -> ReasoningTextParseResultV3:
-    """Parse strict V3.3 Full-CoT text without accepting legacy sections.
+    """Parse strict V3.4 Full-CoT text without accepting legacy sections.
 
     Args:
         text: Raw assistant text containing six ordered sections and finish.
@@ -118,24 +119,41 @@ def parse_reasoning_target_v3(text: str) -> ReasoningTextParseResultV3:
         Typed parse result with bounded machine-readable errors.
     """
 
-    think_match = _THINK_RE.search(text)
-    if think_match is None:
-        return ReasoningTextParseResultV3(target=None, errors=["missing_think"])
-
+    value = str(text).strip()
     errors: list[str] = []
-    raw_sections = list(_TAG_RE.finditer(think_match.group("body")))
-    tag_names = [match.group("tag") for match in raw_sections]
-    names = [name for name in tag_names if name != "ToolResultUse"]
-    if names != list(REASONING_V3_SECTION_NAMES):
-        errors.append(f"reasoning_section_order:{names}")
-    tool_matches = [match for match in raw_sections if match.group("tag") == "ToolResultUse"]
-    if tool_matches:
-        errors.append("tool_result_use_not_supported_in_full_cot_v3_3")
-    if _TAG_RE.sub("", think_match.group("body")).strip():
-        errors.append("unexpected_text_inside_think")
+    think_matches = list(_THINK_RE.finditer(value))
+    finish_matches = list(_FINISH_RE.finditer(value))
+    readout_matches = list(_READOUT_RE.finditer(value))
+    if len(think_matches) != 1:
+        errors.append(f"think_section_count:{len(think_matches)}")
+    if len(finish_matches) != 1:
+        errors.append(f"finish_section_count:{len(finish_matches)}")
+    if len(readout_matches) > 1:
+        errors.append(f"readout_section_count:{len(readout_matches)}")
+    if "<ToolResultUse" in value or "</ToolResultUse>" in value:
+        errors.append("legacy_or_tool_section_not_supported_in_full_cot_v3_4")
+
+    raw_sections: list[re.Match[str]] = []
+    tool_result_use: dict[str, Any] | None = None
+    if len(think_matches) == 1:
+        raw_sections = list(_TAG_RE.finditer(think_matches[0].group("body")))
+        names = [match.group("tag") for match in raw_sections]
+        if names != list(REASONING_V3_SECTION_NAMES):
+            errors.append(f"invalid_reasoning_section_order:{names}")
+        if _TAG_RE.sub("", think_matches[0].group("body")).strip():
+            errors.append("unexpected_text_inside_think")
+        tool_matches = [match for match in raw_sections if match.group("tag") == "ToolResultUse"]
+        if tool_matches:
+            tool_result_use, _ = _parse_json_object(tool_matches[0].group("body"))
+
+    if len(think_matches) == 1 and len(finish_matches) == 1 and len(readout_matches) <= 1:
+        document_blocks = [think_matches[0], finish_matches[0], *readout_matches]
+        if document_blocks != sorted(document_blocks, key=lambda item: item.start()):
+            errors.append("invalid_document_order")
+        elif _has_unexpected_document_text(value, document_blocks):
+            errors.append("unexpected_text_outside_document")
 
     payloads: dict[str, dict[str, Any]] = {}
-    tool_result_use: dict[str, Any] | None = None
     for match in raw_sections:
         payload, payload_errors = _parse_json_object(match.group("body"))
         errors.extend(f"{match.group('tag')}:{item}" for item in payload_errors)
@@ -146,10 +164,9 @@ def parse_reasoning_target_v3(text: str) -> ReasoningTextParseResultV3:
         else:
             payloads[match.group("tag")] = payload
 
-    finish_payload, finish_errors = _tag_payload(text, "finish")
+    finish_payload, finish_errors = _tag_payload(value, "finish")
     errors.extend(f"finish:{item}" for item in finish_errors)
-    readout_match = _READOUT_RE.search(text)
-    if readout_match and finish_payload and finish_payload.get("decision_type") != "navigate":
+    if readout_matches and finish_payload and finish_payload.get("decision_type") != "navigate":
         errors.append("non_navigation_has_system1_readout")
     if errors:
         return ReasoningTextParseResultV3(target=None, errors=errors, tool_result_use=tool_result_use)
@@ -189,6 +206,17 @@ def _tag_payload(text: str, tag: str) -> tuple[dict[str, Any] | None, list[str]]
     if len(matches) > 1:
         return None, ["duplicate"]
     return _parse_json_object(matches[0].group("body"))
+
+
+def _has_unexpected_document_text(value: str, blocks: list[re.Match[str]]) -> bool:
+    """Return whether non-whitespace text exists outside canonical blocks."""
+
+    cursor = 0
+    for block in blocks:
+        if value[cursor:block.start()].strip():
+            return True
+        cursor = block.end()
+    return bool(value[cursor:].strip())
 
 
 def _parse_json_object(text: str) -> tuple[dict[str, Any] | None, list[str]]:

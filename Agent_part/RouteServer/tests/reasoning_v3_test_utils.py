@@ -1,221 +1,240 @@
-"""Focused test helpers for the two-stage V3.3 Full-CoT pipeline."""
+"""Shared fixtures for the minimal Reasoning V3.4 pipeline."""
 
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from mcp_server.agent.reasoning_v3_prompt_policy import (
     TEACHER_DECISION_RATIONALE_PROFILE_V3,
     TEACHER_OBSERVATION_PROFILE_V3,
 )
 from mcp_server.contracts.reasoning_dataset_v3 import ReasoningAnnotationV3, ReasoningSourceV3
+from mcp_server.contracts.reasoning_v3_observation import (
+    DECISION_RATIONALE_OBSERVATION_V3_SCHEMA_VERSION,
+    REASONING_OBSERVATION_V3_SCHEMA_VERSION,
+)
+from mcp_server.data.reasoning_source import ReasoningSourceBuildConfig
 from mcp_server.data.reasoning_v3_composer import (
     REASONING_V3_COMPOSER_VERSION,
     compose_reasoning_target_v3,
     derive_decision_outcome_v3,
 )
+from mcp_server.data.reasoning_v3_conditions import build_navigation_context_sources_v3
+from mcp_server.data.reasoning_v3_source import build_reasoning_source_v3
 from mcp_server.teacher.reasoning_v3_batch import (
     REASONING_V3_RATIONALE_PROMPT_VERSION,
     REASONING_V3_TEACHER_PROMPT_VERSION,
 )
 from mcp_server.teacher.reasoning_v3_fewshot import REASONING_V3_FEWSHOT_VERSION
 from mcp_server.teacher.reasoning_v3_teacher import (
-    build_reasoning_v3_teacher_question,
     parse_reasoning_v3_decision_rationale,
     parse_reasoning_v3_teacher_observation,
 )
 
 
-def observation_payload(
-    source: ReasoningSourceV3,
+def canonical_direction_record(
     *,
-    corridor: str,
-    direction: str,
-) -> dict:
-    """Build a valid positive observation payload from the teacher skeleton.
+    profile_id: str = "fpv_degree10_terminal_centroid_v2",
+    label_index: int = 12,
+    name: str = "right_30",
+    choice: str | None = "M",
+    angle_deg: float | None = 30.0,
+) -> dict[str, Any]:
+    """Return one complete record from an approved direction adapter."""
 
-    Args:
-        source: Frozen V3.3 source.
-        corridor: Directly traversable FPV corridor selected by the observation.
-        direction: Coarse directive assigned to every real navigation source.
-
-    Returns:
-        JSON-serializable teacher observation payload.
-    """
-
-    prompt = build_reasoning_v3_teacher_question(source)
-    prefix = "OUTPUT_OBSERVATION_SKELETON="
-    line = next(item for item in prompt.splitlines() if item.startswith(prefix))
-    payload = json.loads(line[len(prefix) :])
-    payload["task_semantic"] = {
-        "applicable": True,
-        "instruction_type": "directional",
-        "caption_role": "not_caption",
-        "inferred_objective": "follow_instruction",
-        "objective_evidence_refs": ["instruction.active"],
-        "requirements": [],
-        "referents": [],
-        "ambiguities": [],
-        "confidence": "high",
+    if profile_id == "fpv_degree10_terminal_centroid_v2":
+        profile_version = "2.0"
+        bin_mode = "degree10_with_stop"
+        derivation_version = "pixel_trajectory_terminal_centroid_rule_v2"
+    elif profile_id == "ego_degree10_12way_terminal_centroid_v2":
+        profile_version = "2.0"
+        bin_mode = "degree10_12way_with_stop"
+        derivation_version = "ego_x_right_y_front_terminal_centroid_rule_v2"
+    else:
+        raise ValueError(f"unsupported test direction profile: {profile_id}")
+    payload: dict[str, Any] = {
+        "profile_id": profile_id,
+        "profile_version": profile_version,
+        "label_index": label_index,
+        "name": name,
+        "bin_mode": bin_mode,
+        "derivation_version": derivation_version,
+        "source": "direction_choice_adapter",
     }
-    scene = payload["scene_grounding"]
-    scene["scene_facts"] = [
-        {
-            "fact_code": "direct_sidewalk_visible",
-            "evidence_refs": ["fpv.current", corridor],
-        }
-    ]
-    scene.update({"visibility": "clear", "confidence": "high"})
-
-    local = payload["local_traversability"]
-    local["regions"] = [
-        {
-            "region_ref": corridor,
-            "surface": "sidewalk",
-            "state": "direct",
-            "required_condition": None,
-            "blocker_refs": [],
-            "reason": None,
-            "severity": "unknown",
-            "evidence_refs": [corridor, "fpv.current"],
-        }
-    ]
-    local["preferred_clear_corridor_ref"] = corridor
-    local.update({"visibility": "clear", "local_risk": "low", "confidence": "high"})
-
-    context_by_ref = {item["source_ref"]: item for item in scene["context_observations"]}
-    relations: list[dict] = []
-    navigation = payload["navigation_context_grounding"]
-    for grounding in navigation["source_groundings"]:
-        source_ref = grounding["source_ref"]
-        grounding.update(
-            {
-                "directive": direction,
-                "target_corridor_ref": None if direction == "stop" else corridor,
-                "status": "aligned",
-                "reliability": "high",
-                "ignored_reason": None,
-                "evidence_refs": [
-                    source_ref,
-                    "fpv.current",
-                    *([] if direction == "stop" else [corridor]),
-                ],
-            }
-        )
-        if source_ref in context_by_ref:
-            context_by_ref[source_ref].update(
-                {
-                    "usage": "used",
-                    "facts": ["route_topology_visible"],
-                    "ignored_reason": None,
-                    "evidence_refs": [source_ref],
-                }
-            )
-            relations.append(
-                {
-                    "source_ref": source_ref,
-                    "relation": _relation_for_source(grounding["source_type"]),
-                    "target_ref": None if direction == "stop" else corridor,
-                    "status": "aligned" if direction != "stop" else "context_only",
-                    "evidence_refs": [
-                        source_ref,
-                        "fpv.current",
-                        *([] if direction == "stop" else [corridor]),
-                    ],
-                    "confidence": "high",
-                }
-            )
-    scene["cross_modal_relations"] = relations
+    if choice is not None:
+        payload["choice"] = choice
+    if angle_deg is not None:
+        payload["angle_deg"] = angle_deg
     return payload
 
 
-def decision_rationale_payload(source: ReasoningSourceV3, observation: object) -> dict:
-    """Build a valid rationale for the deterministic test outcome.
+def build_test_source(
+    *,
+    sample_id: str = "reasoning-v3-test",
+    dataset_source: str = "sidewalk",
+    include_direction: bool = True,
+    include_trajectory: bool = True,
+    include_bev: bool = True,
+    extra_row: dict[str, Any] | None = None,
+) -> ReasoningSourceV3:
+    """Build one frozen V3.4 source with explicit supervision sidecars."""
 
-    Args:
-        source: Frozen V3.3 source.
-        observation: Parsed first-stage observation.
+    images = ["current.jpg"]
+    image_roles = ["fpv.current"]
+    if include_bev:
+        images.append("bev.jpg")
+        image_roles.append("bev.current")
+    row: dict[str, Any] = {
+        "id": sample_id,
+        "dataset_source": dataset_source,
+        "images": images,
+        "image_roles": image_roles,
+        "instruction": "Turn right toward the entrance.",
+    }
+    if include_trajectory:
+        row["trajectory_ego_t"] = [[0.0, 0.0, 0.0], [2.0, -1.0, -0.2]]
+    if include_direction:
+        row["canonical_direction"] = canonical_direction_record()
+    if extra_row:
+        row.update(extra_row)
+    return build_reasoning_source_v3(
+        row,
+        index=0,
+        config=ReasoningSourceBuildConfig(dataset_source=dataset_source),
+    )
 
-    Returns:
-        JSON-serializable decision-rationale payload.
-    """
+
+def observation_payload(
+    source: ReasoningSourceV3,
+    *,
+    corridor: str = "corridor.right",
+) -> dict[str, Any]:
+    """Build one schema-valid Pass1 response from model-visible references."""
+
+    fpv_refs = [
+        entry.ref for entry in source.model_input.evidence_catalog if entry.modality == "fpv"
+    ]
+    current_fpv = "fpv.current" if "fpv.current" in fpv_refs else fpv_refs[-1]
+    context_sources = build_navigation_context_sources_v3(source)
+    return {
+        "schema_version": REASONING_OBSERVATION_V3_SCHEMA_VERSION,
+        "task_semantic": {
+            "applicable": True,
+            "requirements": [],
+            "referents": [],
+            "ambiguities": [],
+        },
+        "scene_grounding": {
+            "applicable": True,
+            "entities": [],
+            "traffic_controls": [],
+        },
+        "local_traversability": {
+            "applicable": True,
+            "regions": [
+                {
+                    "region_ref": corridor,
+                    "surface": "sidewalk",
+                    "state": "direct",
+                    "blocker_refs": [],
+                    "evidence_refs": [corridor, current_fpv],
+                }
+            ],
+        },
+        "navigation_context_grounding": {
+            "applicable": bool(context_sources),
+            "source_groundings": [
+                {
+                    "source_type": item.source_type,
+                    "source_ref": item.source_ref,
+                    "usage": "used",
+                    "relation": "visible_navigation_context",
+                    "evidence_refs": [item.source_ref],
+                }
+                for item in context_sources
+            ],
+        },
+    }
+
+
+def decision_rationale_payload(
+    source: ReasoningSourceV3,
+    observation: object,
+    *,
+    corridor: str = "corridor.right",
+) -> dict[str, Any]:
+    """Build a Pass2 response that copies the complete direction identity."""
 
     outcome = derive_decision_outcome_v3(source, observation)  # type: ignore[arg-type]
-    if outcome.motion != "stop" and outcome.selected_corridor_ref:
-        status = "supported"
-        reasons = [
-            {
-                "reason": "direct_corridor_available",
-                "evidence_refs": ["fpv.current", outcome.selected_corridor_ref],
-            }
-        ]
-        confidence = "high"
-    else:
-        status = "unsupported"
-        reasons = []
-        confidence = "low"
     return {
-        "schema_version": "urbannav_decision_rationale_observation_v3_3",
-        "outcome_motion": outcome.motion,
-        "status": status,
-        "supporting_reasons": reasons,
-        "rejected_alternatives": [],
-        "confidence": confidence,
+        "schema_version": DECISION_RATIONALE_OBSERVATION_V3_SCHEMA_VERSION,
+        "interaction_and_rule_grounding": {
+            "applicable": False,
+            "interactions": [],
+            "traffic_rules": [],
+        },
+        "direction_profile_id": outcome.profile_id,
+        "direction_profile_version": outcome.profile_version,
+        "direction_label_index": outcome.label_index,
+        "direction_label_name": outcome.label_name,
+        "direction_choice": outcome.choice,
+        "direction_angle_deg": outcome.angle_deg,
+        "direction_source": outcome.source,
+        "rationale_status": "supported",
+        "supporting_reasons": [
+            {
+                "reason": "visible_path_supports_direction",
+                "evidence_refs": ["fpv.current", corridor],
+            }
+        ],
     }
 
 
 def accepted_annotation(
     source: ReasoningSourceV3,
     *,
-    corridor: str,
-    direction: str,
+    corridor: str = "corridor.right",
 ) -> ReasoningAnnotationV3:
-    """Compose one accepted annotation from a valid test observation.
+    """Compose one accepted V3.4 annotation from both validated passes."""
 
-    Args:
-        source: Frozen V3.3 source.
-        corridor: Directly traversable FPV corridor.
-        direction: Coarse navigation directive.
-
-    Returns:
-        Accepted annotation bound to ``source``.
-    """
-
-    parsed = parse_reasoning_v3_teacher_observation(
-        json.dumps(observation_payload(source, corridor=corridor, direction=direction))
+    observation_result = parse_reasoning_v3_teacher_observation(
+        json.dumps(observation_payload(source, corridor=corridor))
     )
-    assert parsed.observation is not None, parsed.errors
-    rationale_parsed = parse_reasoning_v3_decision_rationale(
-        json.dumps(decision_rationale_payload(source, parsed.observation))
+    assert observation_result.observation is not None, observation_result.errors
+    rationale_result = parse_reasoning_v3_decision_rationale(
+        json.dumps(
+            decision_rationale_payload(
+                source,
+                observation_result.observation,
+                corridor=corridor,
+            )
+        )
     )
-    assert rationale_parsed.rationale is not None, rationale_parsed.errors
-    composition = compose_reasoning_target_v3(source, parsed.observation, rationale_parsed.rationale)
+    assert rationale_result.rationale is not None, rationale_result.errors
+    composition = compose_reasoning_target_v3(
+        source,
+        observation_result.observation,
+        rationale_result.rationale,
+    )
     return ReasoningAnnotationV3(
         source_group_id=source.model_input.source_group_id,
         source_fingerprint=source.source_fingerprint,
         status="accepted",
-        observation=parsed.observation,
-        decision_rationale=rationale_parsed.rationale,
+        observation=observation_result.observation,
+        decision_rationale=rationale_result.rationale,
         target=composition.target,
         section_loss_mask=composition.section_loss_mask,
-        attempts=1,
+        attempts=2,
         label_provenance=composition.label_provenance,
         metadata={
             "teacher_prompt_version": REASONING_V3_TEACHER_PROMPT_VERSION,
             "teacher_prompt_policy_digest": TEACHER_OBSERVATION_PROFILE_V3.policy_digest,
             "rationale_prompt_version": REASONING_V3_RATIONALE_PROMPT_VERSION,
-            "rationale_prompt_policy_digest": TEACHER_DECISION_RATIONALE_PROFILE_V3.policy_digest,
+            "rationale_prompt_policy_digest":
+                TEACHER_DECISION_RATIONALE_PROFILE_V3.policy_digest,
             "fewshot_registry_version": REASONING_V3_FEWSHOT_VERSION,
             "composer_version": REASONING_V3_COMPOSER_VERSION,
+            "annotation_mode": "full_cot",
         },
     )
-
-
-def _relation_for_source(source_type: str) -> str:
-    """Map a navigation source type to its cross-modal relation enum."""
-
-    return {
-        "goal": "goal_to_corridor",
-        "waypoint": "waypoint_to_corridor",
-        "tool": "tool_route_to_corridor",
-    }.get(source_type, "route_to_corridor")

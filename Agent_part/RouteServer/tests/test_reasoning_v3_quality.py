@@ -3,129 +3,143 @@ from __future__ import annotations
 import json
 
 from mcp_server.contracts.reasoning_dataset_v3 import ReasoningAnnotationV3
-from mcp_server.data.reasoning_source import ReasoningSourceBuildConfig
 from mcp_server.data.reasoning_v3_quality import (
     ReasoningV3QualityThresholds,
     evaluate_reasoning_v3_quality,
 )
-from mcp_server.data.reasoning_v3_source import build_reasoning_source_v3
-from reasoning_v3_test_utils import accepted_annotation
+from mcp_server.teacher.reasoning_v3_teacher import parse_reasoning_v3_teacher_observation
+from reasoning_v3_test_utils import (
+    accepted_annotation,
+    build_test_source,
+    observation_payload,
+)
 
 
-def test_v3_quality_report_uses_latest_status_and_denominators(tmp_path) -> None:
-    accepted_source = _source("quality-accepted", projection_qc=True)
-    rejected_source = _source("quality-rejected", projection_qc=False)
-    accepted = accepted_annotation(accepted_source, corridor="corridor.right", direction="right")
-    rejected = ReasoningAnnotationV3(
-        source_group_id=rejected_source.model_input.source_group_id,
-        source_fingerprint=rejected_source.source_fingerprint,
-        status="rejected",
-        errors=["demonstrated_direction_conflicts_with_visual_observation"],
-        attempts=2,
+def test_v3_4_quality_counts_accepted_and_observation_only_as_valid_artifacts(
+    tmp_path,
+) -> None:
+    accepted_source = build_test_source(sample_id="quality-accepted")
+    observation_source = build_test_source(
+        sample_id="quality-observation-only",
+        include_direction=False,
     )
-    source_path = tmp_path / "sources.jsonl"
-    annotation_path = tmp_path / "annotations.jsonl"
-    source_path.write_text(
-        "".join(json.dumps(item.model_dump(mode="json")) + "\n" for item in (accepted_source, rejected_source)),
-        encoding="utf-8",
+    accepted = accepted_annotation(accepted_source)
+    observation_only = _observation_only_annotation(observation_source)
+    source_path, annotation_path = _write_artifacts(
+        tmp_path,
+        (accepted_source, observation_source),
+        (accepted, observation_only),
     )
-    annotation_path.write_text(
-        "".join(json.dumps(item.model_dump(mode="json")) + "\n" for item in (accepted, rejected)),
-        encoding="utf-8",
-    )
-    permissive = ReasoningV3QualityThresholds(
-        min_acceptance_fraction=0.50,
-        max_reject_fraction=0.50,
-        max_conflict_fraction=1.0,
-        max_unknown_fraction=1.0,
-        max_insufficient_fraction=1.0,
-        min_projection_qc_coverage=0.50,
-    )
+
     report = evaluate_reasoning_v3_quality(
         source_path,
         annotation_path,
-        thresholds=permissive,
         required_dataset_families=("sidewalk",),
     )
-    sidewalk = report["per_dataset"]["sidewalk"]
+
     assert report["passed"] is True
-    assert sidewalk["fractions"]["acceptance_fraction"] == 0.5
-    assert sidewalk["fractions"]["reject_fraction"] == 0.5
-    assert sidewalk["fractions"]["projection_qc_coverage"] == 0.5
-    assert sidewalk["counts"]["failed_conflict_rows"] == 1
+    assert report["report_semantics"].startswith("availability_only")
+    overall = report["overall"]
+    assert overall["fractions"]["valid_annotation_fraction"] == 1.0
+    assert overall["fractions"]["accepted_target_fraction"] == 0.5
+    assert overall["fractions"]["observation_only_fraction"] == 0.5
+    assert overall["fractions"]["failed_annotation_fraction"] == 0.0
+    assert overall["counts"]["direction_available_rows"] == 1
+    assert overall["counts"]["system1_available_rows"] == 2
 
-    strict = evaluate_reasoning_v3_quality(source_path, annotation_path)
-    assert strict["passed"] is False
-    assert any("acceptance_fraction_below_min" in item for item in strict["violations"])
-    assert any("reject_fraction_above_max" in item for item in strict["violations"])
+
+def test_v3_4_quality_gates_only_completion_and_failure_fractions(tmp_path) -> None:
+    accepted_source = build_test_source(sample_id="quality-gate-accepted")
+    failed_source = build_test_source(sample_id="quality-gate-failed")
+    accepted = accepted_annotation(accepted_source)
+    rejected = ReasoningAnnotationV3(
+        source_group_id=failed_source.model_input.source_group_id,
+        source_fingerprint=failed_source.source_fingerprint,
+        status="rejected",
+        errors=["teacher_schema"],
+        attempts=1,
+    )
+    source_path, annotation_path = _write_artifacts(
+        tmp_path,
+        (accepted_source, failed_source),
+        (accepted, rejected),
+    )
+
+    report = evaluate_reasoning_v3_quality(
+        source_path,
+        annotation_path,
+        thresholds=ReasoningV3QualityThresholds(
+            min_acceptance_fraction=0.75,
+            max_reject_fraction=0.20,
+            max_conflict_fraction=0.0,
+            max_unknown_fraction=0.0,
+            max_insufficient_fraction=0.0,
+            min_projection_qc_coverage=1.0,
+        ),
+    )
+
+    assert report["thresholds"] == {
+        "min_valid_annotation_fraction": 0.75,
+        "max_failed_annotation_fraction": 0.20,
+    }
+    assert any("valid_annotation_fraction_below_min" in item for item in report["violations"])
+    assert any("failed_annotation_fraction_above_max" in item for item in report["violations"])
+    assert not any("projection" in item or "conflict" in item for item in report["violations"])
 
 
-def test_v3_quality_report_counts_unknown_and_insufficient(tmp_path) -> None:
-    source = _source("quality-unknown", projection_qc=True)
-    annotation = accepted_annotation(source, corridor="corridor.right", direction="right")
-    assert annotation.target is not None
-    trace = annotation.target.reasoning
-    reasoning = trace.model_copy(
-        update={
-            "local_traversability": trace.local_traversability.model_copy(
-                update={"visibility": "unknown"}
-            ),
-            "navigation_context_grounding": trace.navigation_context_grounding.model_copy(
-                update={
-                    "source_groundings": [
-                        item.model_copy(
-                            update={
-                                "directive": "unknown",
-                                "target_corridor_ref": None,
-                                "status": "insufficient_evidence",
-                            }
-                        )
-                        for item in trace.navigation_context_grounding.source_groundings
-                    ],
-                    "fused_direction": "unknown",
-                    "fused_target_corridor_ref": None,
-                    "source_consistency": "unknown",
-                    "fused_execution_status": "insufficient_evidence",
-                }
-            ),
-        }
+def test_v3_4_quality_rejects_weak_language_loss_provenance(tmp_path) -> None:
+    source = build_test_source(sample_id="quality-weak-lm")
+    annotation = accepted_annotation(source)
+    weak = annotation.label_provenance["task_grounding"].model_copy(
+        update={"loss_channel": "weak_lm"}
     )
     annotation = annotation.model_copy(
-        update={"target": annotation.target.model_copy(update={"reasoning": reasoning})}
+        update={
+            "label_provenance": {
+                **annotation.label_provenance,
+                "task_grounding": weak,
+            }
+        }
     )
+    source_path, annotation_path = _write_artifacts(
+        tmp_path,
+        (source,),
+        (annotation,),
+    )
+
+    report = evaluate_reasoning_v3_quality(source_path, annotation_path)
+
+    assert report["passed"] is False
+    assert any(
+        item.startswith("annotation_weak_lm_provenance:")
+        for item in report["violations"]
+    )
+
+
+def _observation_only_annotation(source) -> ReasoningAnnotationV3:
+    observation = parse_reasoning_v3_teacher_observation(
+        json.dumps(observation_payload(source))
+    ).observation
+    assert observation is not None
+    return ReasoningAnnotationV3(
+        source_group_id=source.model_input.source_group_id,
+        source_fingerprint=source.source_fingerprint,
+        status="observation_only",
+        observation=observation,
+        attempts=1,
+        metadata={"annotation_mode": "observation_only"},
+    )
+
+
+def _write_artifacts(tmp_path, sources, annotations):
     source_path = tmp_path / "sources.jsonl"
     annotation_path = tmp_path / "annotations.jsonl"
-    source_path.write_text(json.dumps(source.model_dump(mode="json")) + "\n", encoding="utf-8")
-    annotation_path.write_text(json.dumps(annotation.model_dump(mode="json")) + "\n", encoding="utf-8")
-    permissive = ReasoningV3QualityThresholds(
-        min_acceptance_fraction=1.0,
-        max_reject_fraction=0.0,
-        max_conflict_fraction=1.0,
-        max_unknown_fraction=1.0,
-        max_insufficient_fraction=1.0,
-        min_projection_qc_coverage=1.0,
+    source_path.write_text(
+        "".join(item.model_dump_json() + "\n" for item in sources),
+        encoding="utf-8",
     )
-    report = evaluate_reasoning_v3_quality(source_path, annotation_path, thresholds=permissive)
-    fractions = report["per_dataset"]["sidewalk"]["fractions"]
-    assert fractions["critical_unknown_fraction_among_accepted"] == 1.0
-    assert fractions["insufficient_evidence_fraction_among_accepted"] == 1.0
-
-
-def _source(sample_id: str, *, projection_qc: bool):
-    row = {
-        "id": sample_id,
-        "dataset_source": "sidewalk",
-        "images": [f"{sample_id}.jpg"],
-        "image_roles": ["fpv.current"],
-        "instruction": "Turn right toward the entrance.",
-        "trajectory_ego_t": [[0.0, 0.0, 0.0], [2.0, -1.0, -0.2]],
-        "trajectory_fpv_t": [[0.5, 0.9], [0.8, 0.7]],
-        "trajectory_fpv_coord_frame": "normalized_0_1",
-    }
-    if projection_qc:
-        row["fpv_projection_qc_passed"] = True
-    return build_reasoning_source_v3(
-        row,
-        index=0,
-        config=ReasoningSourceBuildConfig(dataset_source="sidewalk"),
+    annotation_path.write_text(
+        "".join(item.model_dump_json() + "\n" for item in annotations),
+        encoding="utf-8",
     )
+    return source_path, annotation_path

@@ -1,4 +1,4 @@
-"""Versioned dataset wrappers for Reasoning V3.3 annotation and export."""
+"""Versioned dataset wrappers for the minimal Reasoning V3.4 contract."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from mcp_server.contracts.reasoning import ReasonCode
 from mcp_server.contracts.reasoning_dataset import ReasoningSourceV2, reasoning_source_fingerprint
 from mcp_server.contracts.reasoning_v3 import (
     LabelProvenanceEntryV3,
@@ -18,13 +19,13 @@ from mcp_server.contracts.reasoning_v3_observation import (
 )
 
 
-REASONING_SOURCE_V3_SCHEMA_VERSION = "urbannav_reasoning_source_v3_3"
-REASONING_ANNOTATION_V3_SCHEMA_VERSION = "urbannav_reasoning_annotation_v3_3"
-REASONING_TRAINING_VIEW_V3_SCHEMA_VERSION = "urbannav_reasoning_training_view_v3_3"
+REASONING_SOURCE_V3_SCHEMA_VERSION = "urbannav_reasoning_source_v3_4"
+REASONING_ANNOTATION_V3_SCHEMA_VERSION = "urbannav_reasoning_annotation_v3_4"
+REASONING_TRAINING_VIEW_V3_SCHEMA_VERSION = "urbannav_reasoning_training_view_v3_4"
 
 
 class ReasoningSourceV3(BaseModel):
-    """Wrap one frozen visible input with isolated V3.3 teacher-only labels."""
+    """Wrap one frozen visible input with isolated teacher-only metadata."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -38,15 +39,6 @@ class ReasoningSourceV3(BaseModel):
 
     @model_validator(mode="after")
     def validate_source_partition(self) -> "ReasoningSourceV3":
-        """Validate dataset trust boundaries and source fingerprint.
-
-        Returns:
-            Validated frozen source.
-
-        Raises:
-            ValueError: If FrodoBots enables System1 or the fingerprint drifts.
-        """
-
         dataset_source = self.model_input.dataset_source.strip().lower()
         if dataset_source.startswith("frodobots") and self.model_input.system1_enabled:
             raise ValueError("FrodoBots V3 source cannot enable continuous System1 supervision")
@@ -58,14 +50,16 @@ class ReasoningSourceV3(BaseModel):
 
 
 class ReasoningAnnotationV3(BaseModel):
-    """Record one V3.3 semantic and rationale attempt bound to a frozen source."""
+    """Record one two-pass V3.4 annotation attempt."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[REASONING_ANNOTATION_V3_SCHEMA_VERSION] = REASONING_ANNOTATION_V3_SCHEMA_VERSION
+    schema_version: Literal[REASONING_ANNOTATION_V3_SCHEMA_VERSION] = (
+        REASONING_ANNOTATION_V3_SCHEMA_VERSION
+    )
     source_group_id: str = Field(min_length=1, max_length=240)
     source_fingerprint: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
-    status: Literal["accepted", "rejected", "error"]
+    status: Literal["accepted", "observation_only", "rejected", "error"]
     observation: ReasoningObservationV3 | None = None
     decision_rationale: DecisionRationaleObservationV3 | None = None
     target: ReasoningTargetV3 | None = None
@@ -82,15 +76,6 @@ class ReasoningAnnotationV3(BaseModel):
 
     @model_validator(mode="after")
     def validate_status(self) -> "ReasoningAnnotationV3":
-        """Validate status-specific annotation payload ownership.
-
-        Returns:
-            Validated annotation record.
-
-        Raises:
-            ValueError: If accepted or failed records carry illegal payloads.
-        """
-
         if self.status == "accepted":
             if (
                 self.observation is None
@@ -99,7 +84,19 @@ class ReasoningAnnotationV3(BaseModel):
                 or self.section_loss_mask is None
             ):
                 raise ValueError(
-                    "accepted V3 annotation requires observation, decision rationale, target, and section loss mask"
+                    "accepted V3 annotation requires observation, decision rationale, "
+                    "target, and section loss mask"
+                )
+        elif self.status == "observation_only":
+            if self.observation is None:
+                raise ValueError("observation_only annotation requires observation")
+            if (
+                self.decision_rationale is not None
+                or self.target is not None
+                or self.section_loss_mask is not None
+            ):
+                raise ValueError(
+                    "observation_only annotation cannot carry rationale, target, or section loss mask"
                 )
         elif self.target is not None or self.section_loss_mask is not None:
             raise ValueError("rejected/error V3 annotation cannot carry target or section loss mask")
@@ -107,11 +104,13 @@ class ReasoningAnnotationV3(BaseModel):
 
 
 class ReasoningTrainingViewV3(BaseModel):
-    """Cross-repository V3.3 view consumed by ms-swift."""
+    """Cross-repository V3.4 Full-CoT view consumed by ms-swift."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[REASONING_TRAINING_VIEW_V3_SCHEMA_VERSION] = REASONING_TRAINING_VIEW_V3_SCHEMA_VERSION
+    schema_version: Literal[REASONING_TRAINING_VIEW_V3_SCHEMA_VERSION] = (
+        REASONING_TRAINING_VIEW_V3_SCHEMA_VERSION
+    )
     sample_id: str = Field(min_length=1, max_length=320)
     source_group_id: str = Field(min_length=1, max_length=240)
     dataset_source: str = Field(min_length=1, max_length=128)
@@ -129,6 +128,13 @@ class ReasoningTrainingViewV3(BaseModel):
     prompt_profile_id: str = Field(min_length=1, max_length=128)
     prompt_policy_digest: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
     reasoning_target: ReasoningTargetV3 | None = None
+    direction_profile_id: str | None = Field(default=None, min_length=1, max_length=128)
+    direction_profile_version: str | None = Field(default=None, min_length=1, max_length=64)
+    direction_label_index: int | None = Field(default=None, ge=0)
+    direction_label_name: ReasonCode | None = None
+    direction_choice: str | None = Field(default=None, min_length=1, max_length=32)
+    direction_angle_deg: float | None = Field(default=None, ge=-180.0, le=180.0)
+    direction_source: ReasonCode | None = None
     trajectory_ego_t: list[list[float]] | None = None
     trajectory_policy: dict[str, Any] | None = None
     action_mask: list[bool] | list[int] | None = None
@@ -139,19 +145,52 @@ class ReasoningTrainingViewV3(BaseModel):
 
     @model_validator(mode="after")
     def validate_view_partition(self) -> "ReasoningTrainingViewV3":
-        """Validate the Full-CoT-only cross-repository view contract.
-
-        Returns:
-            Validated training view.
-
-        Raises:
-            ValueError: If image roles or the composed target are missing.
-        """
-
         if len(self.images) != len(self.image_roles):
             raise ValueError("images and image_roles must have equal length")
         if self.reasoning_target is None:
             raise ValueError("V3 full CoT view requires reasoning_target")
+
+        core_direction = (
+            self.direction_profile_id,
+            self.direction_profile_version,
+            self.direction_label_index,
+            self.direction_label_name,
+            self.direction_source,
+        )
+        sidecar_present = any(
+            value is not None
+            for value in (
+                *core_direction,
+                self.direction_choice,
+                self.direction_angle_deg,
+            )
+        )
+        if sidecar_present and any(value is None for value in core_direction):
+            raise ValueError(
+                "direction sidecar requires profile id/version, label index/name, and source"
+            )
+        if sidecar_present:
+            decision = self.reasoning_target.reasoning.decision
+            sidecar_identity = (
+                self.direction_profile_id,
+                self.direction_profile_version,
+                self.direction_label_index,
+                self.direction_label_name,
+                self.direction_choice,
+                self.direction_angle_deg,
+                self.direction_source,
+            )
+            decision_identity = (
+                decision.profile_id,
+                decision.profile_version,
+                decision.label_index,
+                decision.label_name,
+                decision.choice,
+                decision.angle_deg,
+                decision.source,
+            )
+            if sidecar_identity != decision_identity:
+                raise ValueError("direction sidecar must match the canonical Decision identity")
         return self
 
 

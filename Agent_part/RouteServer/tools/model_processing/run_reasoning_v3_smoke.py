@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Run a four-dataset Reasoning V3 source/teacher/export/review smoke."""
+"""Run the canonical four-dataset Reasoning V3.4 minimal smoke pipeline.
+
+The default path first uses ``prepare_reasoning_v3_smoke_inputs.py`` to select
+three deterministic samples from each real dataset, then freezes V3.4 sources,
+runs the two bounded LVLM passes, exports both safe view profiles, audits both
+profiles, and builds one self-contained review page.  The resulting ``passed``
+flag means structural/provenance/availability checks passed; human semantic
+review is always a separate pending step.
+"""
 
 from __future__ import annotations
 
@@ -7,12 +15,22 @@ import argparse
 import asyncio
 import json
 import os
+import statistics
 import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
+# Keep direct ``python tools/...py`` execution equivalent to ``python -m``.
+_ROUTE_SERVER_ROOT = Path(__file__).resolve().parents[2]
+if str(_ROUTE_SERVER_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROUTE_SERVER_ROOT))
+
+from mcp_server.contracts.reasoning_dataset_v3 import (
+    ReasoningAnnotationV3,
+    ReasoningSourceV3,
+)
 from mcp_server.data.jsonl_io import iter_jsonl, write_jsonl_atomic
 from mcp_server.data.reasoning_source import ReasoningSourceBuildConfig
 from mcp_server.data.reasoning_v3_audit import audit_reasoning_v3_artifacts
@@ -21,322 +39,798 @@ from mcp_server.data.reasoning_v3_quality import (
     evaluate_reasoning_v3_quality,
 )
 from mcp_server.data.reasoning_v3_source import build_reasoning_source_manifest_v3
-from mcp_server.data.reasoning_v3_views import export_reasoning_training_views_v3
-from mcp_server.teacher.reasoning_v3_batch import ReasoningV3BatchConfig, label_reasoning_source_manifest_v3
-from tools.model_processing.build_reasoning_v3_review_html import build_reasoning_v3_review_html
+from mcp_server.data.reasoning_v3_views import (
+    ReasoningViewBuildConfigV3,
+    export_reasoning_training_views_v3,
+)
+from mcp_server.teacher.reasoning_v3_batch import (
+    ReasoningV3BatchConfig,
+    label_reasoning_source_manifest_v3,
+)
+from tools.model_processing.build_reasoning_v3_review_html import (
+    build_reasoning_v3_review_html,
+)
+from tools.model_processing.prepare_reasoning_v3_smoke_inputs import (
+    SELECTION_RULE_VERSION,
+    main as prepare_reasoning_v3_smoke_inputs,
+)
+
+
+_CANONICAL_FAMILIES = ("sidewalk", "foxglove", "frodobots", "egowalk")
+_CLAIMS_BOUNDARY = (
+    "structural/provenance/availability smoke only; no semantic accuracy, "
+    "calibration, projection, tracking, mask, bbox, TTC, or geometry claim"
+)
+_DEFAULT_MS_SWIFT_ROOT = Path(__file__).resolve().parents[5] / "ms-swift"
+_PROVIDER_DEFAULT_BASES = {
+    "ark": "https://ark.cn-beijing.volces.com/api/v3",
+    "openai": "https://api.openai.com/v1",
+}
+_PROVIDER_SECRET_ENV_NAMES = {
+    "ARK_API_KEY",
+    "ARK_API_KEYS",
+    "LLM_API_KEY",
+    "LLM_API_KEYS",
+    "OPENAI_API_KEY",
+    "OPENAI_API_KEYS",
+}
 
 
 def _dataset_arg(value: str) -> tuple[str, Path]:
     name, separator, path = value.partition("=")
     if not separator or not name.strip() or not path.strip():
-        raise argparse.ArgumentTypeError("dataset must be NAME=JSONL")
-    return name.strip(), Path(path).expanduser()
+        raise argparse.ArgumentTypeError(
+            "dataset must be sidewalk|foxglove|frodobots|egowalk=JSONL"
+        )
+    try:
+        family = _dataset_family(name)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+    return family, Path(path).expanduser()
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    """Parse end-to-end smoke CLI arguments.
-
-    Args:
-        argv: Optional argument vector for tests or programmatic use.
-
-    Returns:
-        Parsed CLI namespace.
-    """
+    """Parse the V3.4 smoke CLI."""
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dataset", action="append", type=_dataset_arg, required=True)
+    parser.add_argument(
+        "--dataset",
+        action="append",
+        type=_dataset_arg,
+        required=True,
+        help=(
+            "One real source manifest per canonical family, formatted as "
+            "FAMILY=JSONL. Repeat exactly four times."
+        ),
+    )
     parser.add_argument("--run-root", required=True, type=Path)
-    parser.add_argument("--limit-per-dataset", type=int, default=16)
+    parser.add_argument(
+        "--ms-swift-root",
+        type=Path,
+        default=_DEFAULT_MS_SWIFT_ROOT,
+        help="ms-swift checkout used by the direction adapter and final converter.",
+    )
+    parser.add_argument(
+        "--prepared-inputs",
+        action="store_true",
+        help=(
+            "Treat --dataset paths as already curated manifests. By default the "
+            "canonical deterministic three-sample selector runs first."
+        ),
+    )
+    parser.add_argument("--limit-per-dataset", type=int, default=3)
     parser.add_argument("--required-fpv-frames", type=int, default=5)
     parser.add_argument("--media-root", type=Path)
     parser.add_argument("--skip-source-errors", action="store_true")
+    parser.add_argument(
+        "--source-only",
+        action="store_true",
+        help="Stop after deterministic selection and frozen-source validation.",
+    )
+    parser.add_argument("--provider", choices=("ark", "openai"))
     parser.add_argument("--api-base")
     parser.add_argument("--model")
-    parser.add_argument("--concurrency", type=int, default=8)
+    parser.add_argument(
+        "--api-keys-file",
+        type=Path,
+        help="Optional newline/assignment key file; values stay in memory only.",
+    )
+    parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument("--max-retries", type=int, default=1)
     parser.add_argument("--image-detail", choices=("auto", "low", "high"), default="low")
-    parser.add_argument("--min-acceptance-fraction", type=float, default=0.75)
-    parser.add_argument("--max-reject-fraction", type=float, default=0.20)
-    parser.add_argument("--max-conflict-fraction", type=float, default=0.10)
-    parser.add_argument("--max-unknown-fraction", type=float, default=0.10)
-    parser.add_argument("--max-insufficient-fraction", type=float, default=0.10)
-    parser.add_argument("--max-task-unknown-fraction", type=float, default=0.20)
-    parser.add_argument("--max-unsupported-rationale-fraction", type=float, default=0.20)
-    parser.add_argument("--min-projection-qc-coverage", type=float, default=0.95)
-    parser.add_argument("--allow-partial-datasets", action="store_true")
+    parser.add_argument("--min-valid-annotation-fraction", type=float, default=1.0)
+    parser.add_argument("--max-failed-annotation-fraction", type=float, default=0.0)
     parser.add_argument("--review-per-stratum", type=int, default=3)
-    parser.add_argument("--ms-swift-root", type=Path)
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-    """Run source, annotation, export, audit, and review smoke stages.
-
-    Args:
-        argv: Optional argument vector for tests or programmatic use.
-    """
+    """Run deterministic selection, annotation, dual export, audit, and review."""
 
     args = parse_args(argv)
-    if bool(args.api_base) != bool(args.model):
-        raise SystemExit("--api-base and --model must be provided together")
+    if args.limit_per_dataset < 1:
+        raise SystemExit("--limit-per-dataset must be positive")
+    if args.required_fpv_frames < 1:
+        raise SystemExit("--required-fpv-frames must be positive")
+    if not args.prepared_inputs and args.limit_per_dataset != 3:
+        raise SystemExit(
+            f"the canonical {SELECTION_RULE_VERSION} selector emits exactly three "
+            "samples per dataset; use --limit-per-dataset 3"
+        )
+    dataset_paths = _canonical_dataset_paths(args.dataset)
+    ms_swift_root = args.ms_swift_root.expanduser().resolve()
+    if not ms_swift_root.is_dir():
+        raise SystemExit(f"ms-swift checkout is missing: {ms_swift_root}")
+
     run_root = args.run_root.expanduser().resolve()
-    for name in ("sources", "annotations", "views", "reports", "review", "ms_swift"):
+    for name in (
+        "annotations",
+        "ms_swift",
+        "reports",
+        "review",
+        "sources",
+        "views",
+    ):
         (run_root / name).mkdir(parents=True, exist_ok=True)
-    source_paths_by_family: dict[str, list[Path]] = {}
-    source_reports: list[dict] = []
-    required_families: set[str] = set()
-    occurrence: Counter[str] = Counter()
-    for dataset_name, input_path in args.dataset:
-        family = _dataset_family(dataset_name)
-        required_families.add(family)
-        occurrence[family] += 1
-        suffix = "" if occurrence[family] == 1 else f"_{occurrence[family]}"
-        output = run_root / "sources" / f"{family}{suffix}.jsonl"
-        report_path = run_root / "reports" / f"source_{family}{suffix}.json"
+
+    selected_inputs = _select_or_reuse_inputs(
+        dataset_paths,
+        run_root=run_root,
+        ms_swift_root=ms_swift_root,
+        prepared_inputs=args.prepared_inputs,
+    )
+    source_paths: dict[str, Path] = {}
+    source_reports: dict[str, dict[str, Any]] = {}
+    for family in _CANONICAL_FAMILIES:
+        output = run_root / "sources" / f"{family}.jsonl"
         report = build_reasoning_source_manifest_v3(
-            input_path,
+            selected_inputs[family],
             output,
             config=ReasoningSourceBuildConfig(
                 dataset_source=family,
-                max_fpv_frames=max(1, args.required_fpv_frames),
+                max_fpv_frames=args.required_fpv_frames,
                 media_root=args.media_root,
             ),
-            limit=max(1, args.limit_per_dataset),
+            limit=args.limit_per_dataset,
             skip_errors=args.skip_source_errors,
         )
-        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        _assert_fpv_count(output, expected=max(1, args.required_fpv_frames))
-        source_paths_by_family.setdefault(family, []).append(output)
-        source_reports.append(report)
-    canonical_families = {"sidewalk", "foxglove", "frodobots", "egowalk"}
-    if not args.allow_partial_datasets and required_families != canonical_families:
-        raise SystemExit(
-            "V3.3 smoke requires SideWalk, Foxglove, FrodoBots, and EgoWalk; "
-            f"got {sorted(required_families)}"
-        )
+        _write_json_report(run_root / "reports" / f"source_{family}.json", report)
+        _assert_fpv_count(output, expected=args.required_fpv_frames)
+        source_paths[family] = output
+        source_reports[family] = report
 
-    # 每个 family 保留独立 source，保证四份 HTML 和 QC 报告使用同一批样本。
-    family_source_paths: dict[str, Path] = {}
-    for family, paths in sorted(source_paths_by_family.items()):
-        family_source = run_root / "sources" / f"{family}_smoke_all.jsonl"
-        write_jsonl_atomic(family_source, (row for path in paths for row in iter_jsonl(path)))
-        family_source_paths[family] = family_source
-    merged_source = run_root / "sources" / "reasoning_v3_smoke_all.jsonl"
+    merged_source = run_root / "sources" / "reasoning_v3_4_smoke_all.jsonl"
     write_jsonl_atomic(
         merged_source,
-        (row for path in family_source_paths.values() for row in iter_jsonl(path)),
+        (
+            row
+            for family in _CANONICAL_FAMILIES
+            for row in iter_jsonl(source_paths[family])
+        ),
     )
-    source_summary = _source_summary(merged_source)
+    expected_rows = args.limit_per_dataset * len(_CANONICAL_FAMILIES)
+    source_summary = _source_summary(
+        merged_source,
+        expected_per_family=args.limit_per_dataset,
+    )
     source_summary.update(
         {
-            "schema_version": "urbannav_reasoning_v3_3_source_smoke_report_v1",
-            "datasets": [{"name": name, "path": str(path)} for name, path in args.dataset],
+            "schema_version": "urbannav_reasoning_v3_4_source_smoke_report_v1",
+            "selection_mode": (
+                "caller_prepared_inputs"
+                if args.prepared_inputs
+                else SELECTION_RULE_VERSION
+            ),
+            "original_datasets": {
+                family: str(dataset_paths[family])
+                for family in _CANONICAL_FAMILIES
+            },
+            "selected_inputs": {
+                family: str(selected_inputs[family])
+                for family in _CANONICAL_FAMILIES
+            },
             "source_reports": source_reports,
         }
     )
-    (run_root / "reports/source_smoke_summary.json").write_text(
-        json.dumps(source_summary, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    _write_json_report(run_root / "reports/source_smoke_summary.json", source_summary)
     print(json.dumps(source_summary, ensure_ascii=False, indent=2), flush=True)
-    if not args.api_base:
+
+    if args.source_only:
+        final = {
+            "schema_version": "urbannav_reasoning_v3_4_smoke_source_only_report_v1",
+            "run_root": str(run_root),
+            "source_summary": source_summary,
+            "expected_rows": expected_rows,
+            "stage": "source_only",
+            "claims_boundary": _CLAIMS_BOUNDARY,
+            "human_review_status": "not_started",
+            "passed": source_summary["rows"] == expected_rows,
+        }
+        _write_json_report(run_root / "reports/final.json", final)
+        print(json.dumps(final, ensure_ascii=False, indent=2), flush=True)
+        if not final["passed"]:
+            raise SystemExit(2)
         return
 
-    _configure_openai_endpoint(args.api_base, args.model)
-    annotations = run_root / "annotations/reasoning_v3_smoke.jsonl"
+    provider, model, runtime_keys, secret_values = _configure_teacher(args)
+    annotations = run_root / "annotations/reasoning_v3_4_smoke.jsonl"
     annotation_report = asyncio.run(
         label_reasoning_source_manifest_v3(
             merged_source,
             annotations,
-            rejected_jsonl=run_root / "annotations/reasoning_v3_smoke.rejected.jsonl",
+            rejected_jsonl=run_root
+            / "annotations/reasoning_v3_4_smoke.rejected.jsonl",
             report_json=run_root / "reports/annotation.json",
             config=ReasoningV3BatchConfig(
                 max_retries=max(0, args.max_retries),
                 image_detail=args.image_detail,
                 concurrency=max(1, args.concurrency),
                 retry_failed_on_resume=True,
-                progress_interval=10,
+                progress_interval=1,
             ),
+            api_keys=runtime_keys,
         )
     )
-    quality_thresholds = ReasoningV3QualityThresholds(
-        min_acceptance_fraction=args.min_acceptance_fraction,
-        max_reject_fraction=args.max_reject_fraction,
-        max_conflict_fraction=args.max_conflict_fraction,
-        max_unknown_fraction=args.max_unknown_fraction,
-        max_insufficient_fraction=args.max_insufficient_fraction,
-        max_task_unknown_fraction=args.max_task_unknown_fraction,
-        max_unsupported_rationale_fraction=args.max_unsupported_rationale_fraction,
-        min_projection_qc_coverage=args.min_projection_qc_coverage,
+    latest_annotations = (
+        run_root / "annotations/reasoning_v3_4_smoke.latest.jsonl"
     )
-    quality_report = evaluate_reasoning_v3_quality(
+    _write_latest_annotations(
         merged_source,
         annotations,
-        thresholds=quality_thresholds,
-        required_dataset_families=required_families,
-    )
-    (run_root / "reports/quality.json").write_text(
-        json.dumps(quality_report, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
+        latest_annotations,
     )
 
-    views = run_root / "views/reasoning_v3_smoke.jsonl"
-    export_report = export_reasoning_training_views_v3(
+    required_families = set(_CANONICAL_FAMILIES)
+    quality_report = evaluate_reasoning_v3_quality(
         merged_source,
-        annotations,
-        views,
-        skip_errors=True,
-    )
-    (run_root / "reports/views.json").write_text(
-        json.dumps(export_report, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    audit = audit_reasoning_v3_artifacts(
-        merged_source,
-        annotations,
-        views,
-        max_insufficient_fraction=args.max_insufficient_fraction,
-        max_unsupported_rationale_fraction=args.max_unsupported_rationale_fraction,
+        latest_annotations,
+        thresholds=ReasoningV3QualityThresholds(
+            min_acceptance_fraction=args.min_valid_annotation_fraction,
+            max_reject_fraction=args.max_failed_annotation_fraction,
+        ),
         required_dataset_families=required_families,
     )
-    (run_root / "reports/acceptance_audit.json").write_text(
-        json.dumps(audit, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    review_reports: dict[str, dict] = {}
-    for family, family_source in sorted(family_source_paths.items()):
-        review = build_reasoning_v3_review_html(
-            family_source,
-            annotations,
-            run_root / "review" / f"{family}_reasoning_v3_3_smoke_review.html",
-            per_stratum=max(1, args.review_per_stratum),
+    _write_json_report(run_root / "reports/quality.json", quality_report)
+
+    view_paths: dict[str, Path] = {}
+    view_reports: dict[str, dict[str, Any]] = {}
+    audit_reports: dict[str, dict[str, Any]] = {}
+    for profile in ("audit_only", "strong_action_only"):
+        view_path = run_root / "views" / f"reasoning_v3_4_{profile}.jsonl"
+        view_report = export_reasoning_training_views_v3(
+            merged_source,
+            latest_annotations,
+            view_path,
+            config=ReasoningViewBuildConfigV3(training_profile=profile),
+            skip_errors=False,
         )
-        review_reports[family] = review
-        (run_root / "reports" / f"review_{family}.json").write_text(
-            json.dumps(review, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
+        audit_report = audit_reasoning_v3_artifacts(
+            merged_source,
+            latest_annotations,
+            view_path,
+            required_dataset_families=required_families,
         )
-    combined_review = build_reasoning_v3_review_html(
+        _write_json_report(
+            run_root / "reports" / f"views_{profile}.json",
+            view_report,
+        )
+        _write_json_report(
+            run_root / "reports" / f"acceptance_audit_{profile}.json",
+            audit_report,
+        )
+        view_paths[profile] = view_path
+        view_reports[profile] = view_report
+        audit_reports[profile] = audit_report
+
+    review_report = build_reasoning_v3_review_html(
         merged_source,
-        annotations,
-        run_root / "review" / "reasoning_v3_3_smoke_review_all.html",
+        latest_annotations,
+        run_root
+        / "review"
+        / "reasoning_v3_4_smoke_review_all.complete.html",
         per_stratum=max(1, args.review_per_stratum),
+        media_root=args.media_root,
     )
-    review_reports["all"] = combined_review
-    (run_root / "reports/review_all.json").write_text(
-        json.dumps(combined_review, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
+    _write_json_report(run_root / "reports/review_all.json", review_report)
+
+    ms_swift_output = (
+        run_root / "ms_swift/reasoning_v3_4_strong_action_only.jsonl"
     )
-    if args.ms_swift_root is not None:
-        env = os.environ.copy()
-        env["PYTHONPATH"] = str(args.ms_swift_root.resolve()) + (
-            f":{env['PYTHONPATH']}" if env.get("PYTHONPATH") else ""
-        )
-        subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "swift.sidewalk_nav.data.versioned_reasoning_manifest",
-                "--input-jsonl",
-                str(views),
-                "--output-jsonl",
-                str(run_root / "ms_swift/reasoning_v3_smoke.jsonl"),
-                "--report-json",
-                str(run_root / "reports/ms_swift_manifest.json"),
-                "--expected-version",
-                "v3",
-            ],
-            env=env,
-            check=True,
-        )
+    ms_swift_report_path = run_root / "reports/ms_swift_manifest.json"
+    _convert_ms_swift(
+        ms_swift_root=ms_swift_root,
+        input_jsonl=view_paths["strong_action_only"],
+        output_jsonl=ms_swift_output,
+        report_json=ms_swift_report_path,
+    )
+    ms_swift_report = _read_json_object(ms_swift_report_path)
+
+    latest_rows = [
+        ReasoningAnnotationV3.model_validate(row)
+        for row in iter_jsonl(latest_annotations)
+    ]
+    status_counts = Counter(item.status for item in latest_rows)
+    dataset_counts = _annotation_dataset_counts(merged_source, latest_annotations)
+    audit_view_rows = _count_jsonl_rows(view_paths["audit_only"])
+    strong_view_rows = _count_jsonl_rows(view_paths["strong_action_only"])
+    ms_swift_rows = _count_jsonl_rows(ms_swift_output)
+    valid_rows = status_counts["accepted"] + status_counts["observation_only"]
+    checks = {
+        "source_rows_complete": source_summary["rows"] == expected_rows,
+        "all_latest_annotations_valid": valid_rows == expected_rows,
+        "quality_passed": bool(quality_report["passed"]),
+        "audit_only_passed": bool(audit_reports["audit_only"]["passed"]),
+        "strong_action_only_passed": bool(
+            audit_reports["strong_action_only"]["passed"]
+        ),
+        "review_contains_every_sample": (
+            review_report["selected_rows"] == expected_rows
+        ),
+        "review_has_no_missing_images": review_report["missing_images"] == 0,
+        "ms_swift_matches_strong_view": ms_swift_rows == strong_view_rows,
+    }
+    _assert_no_key_material(run_root, secret_values)
+    checks["api_key_material_not_serialized"] = True
+    structural_provenance_passed = all(checks.values())
     final = {
-        "schema_version": "urbannav_reasoning_v3_3_smoke_pipeline_report_v1",
+        "schema_version": "urbannav_reasoning_v3_4_smoke_pipeline_report_v1",
         "run_root": str(run_root),
+        "provider": provider,
+        "model": model,
         "source_summary": source_summary,
         "annotation_report": annotation_report,
-        "view_report": export_report,
+        "status_counts": dict(sorted(status_counts.items())),
+        "dataset_counts": dataset_counts,
+        "provider_telemetry": _provider_telemetry(latest_rows),
+        "weak_label_availability": _weak_label_availability(latest_rows),
+        "view_reports": view_reports,
+        "view_rows": {
+            "audit_only": audit_view_rows,
+            "strong_action_only": strong_view_rows,
+        },
         "quality_report": quality_report,
-        "acceptance_audit": audit,
-        "review_reports": review_reports,
-        "passed": bool(quality_report["passed"] and audit["passed"]),
+        "audit_reports": audit_reports,
+        "review_report": review_report,
+        "ms_swift_report": ms_swift_report,
+        "ms_swift_conversion_rows": ms_swift_rows,
+        "checks": checks,
+        "review_html": review_report["output_html"],
+        "claims_boundary": _CLAIMS_BOUNDARY,
+        "human_review_status": "pending",
+        "map_provider_used": False,
+        "api_key_material_serialized": False,
+        "structural_provenance_passed": structural_provenance_passed,
+        "passed": structural_provenance_passed,
     }
-    (run_root / "reports/final.json").write_text(
-        json.dumps(final, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    _write_json_report(run_root / "reports/final.json", final)
     print(json.dumps(final, ensure_ascii=False, indent=2), flush=True)
-    if not final["passed"]:
+    if not structural_provenance_passed:
         raise SystemExit(2)
 
 
+def _canonical_dataset_paths(
+    values: Iterable[tuple[str, Path]],
+) -> dict[str, Path]:
+    """Require exactly one manifest for each canonical dataset family."""
+
+    result: dict[str, Path] = {}
+    duplicates: list[str] = []
+    for family, path in values:
+        if family in result:
+            duplicates.append(family)
+        result[family] = path.expanduser().resolve()
+    missing = sorted(set(_CANONICAL_FAMILIES) - set(result))
+    extra = sorted(set(result) - set(_CANONICAL_FAMILIES))
+    if missing or extra or duplicates:
+        raise SystemExit(
+            "Reasoning V3.4 smoke requires exactly one manifest per family; "
+            f"missing={missing}, extra={extra}, duplicates={sorted(set(duplicates))}"
+        )
+    for family, path in result.items():
+        if not path.is_file():
+            raise SystemExit(f"{family} manifest is missing: {path}")
+    return result
+
+
+def _select_or_reuse_inputs(
+    dataset_paths: Mapping[str, Path],
+    *,
+    run_root: Path,
+    ms_swift_root: Path,
+    prepared_inputs: bool,
+) -> dict[str, Path]:
+    """Run the canonical selector unless the caller supplied curated inputs."""
+
+    if prepared_inputs:
+        return dict(dataset_paths)
+    argv: list[str] = []
+    for family in _CANONICAL_FAMILIES:
+        argv.extend(("--dataset", f"{family}={dataset_paths[family]}"))
+    argv.extend(("--output-root", str(run_root), "--ms-swift-root", str(ms_swift_root)))
+    prepare_reasoning_v3_smoke_inputs(argv)
+    selected = {
+        family: run_root / "curated_inputs" / f"{family}.jsonl"
+        for family in _CANONICAL_FAMILIES
+    }
+    for family, path in selected.items():
+        if not path.is_file():
+            raise RuntimeError(f"canonical selector did not write {family}: {path}")
+    return selected
+
+
 def _assert_fpv_count(path: Path, *, expected: int) -> None:
-    invalid = []
+    """Require an exact, non-padded FPV frame count for every frozen source."""
+
+    invalid: list[tuple[str, int]] = []
     for row in iter_jsonl(path):
-        roles = row["model_input"].get("image_roles") or []
+        source = ReasoningSourceV3.model_validate(row)
+        roles = source.model_input.image_roles
         count = sum(str(role).startswith("fpv.") for role in roles)
         if count != expected:
-            invalid.append((row["model_input"].get("source_group_id"), count))
+            invalid.append((source.model_input.source_group_id, count))
             if len(invalid) >= 20:
                 break
     if invalid:
-        raise RuntimeError(f"V3 smoke requires exactly {expected} FPV frames: {invalid}")
+        raise RuntimeError(
+            f"V3.4 smoke requires exactly {expected} FPV frames: {invalid}"
+        )
 
 
-def _source_summary(path: Path) -> dict:
+def _source_summary(
+    path: Path,
+    *,
+    expected_per_family: int,
+) -> dict[str, Any]:
+    """Summarize source availability without making geometry claims."""
+
     counts: Counter[str] = Counter()
     for row in iter_jsonl(path):
-        model_input = row["model_input"]
-        family = _dataset_family(model_input.get("dataset_source") or "")
+        source = ReasoningSourceV3.model_validate(row)
+        family = _dataset_family(source.model_input.dataset_source)
         counts["rows"] += 1
         counts[f"dataset:{family}"] += 1
-        system1 = bool(model_input.get("system1_enabled"))
-        counts[f"dataset:{family}:system1_rows"] += int(system1)
-        provenance = row.get("label_provenance", {}).get("demonstrated_direction", {})
-        if provenance.get("strength") == "strong":
-            counts[f"dataset:{family}:strong_direction_rows"] += 1
-            if system1 and family in {"sidewalk", "foxglove", "egowalk"}:
-                counts["trajectory_qc_strong_direction_rows"] += 1
-        if system1 and family in {"sidewalk", "foxglove", "egowalk"}:
-            counts["trajectory_qc_eligible_rows"] += 1
-    eligible = counts["trajectory_qc_eligible_rows"]
-    coverage = counts["trajectory_qc_strong_direction_rows"] / eligible if eligible else 1.0
-    frodo_system1 = counts["dataset:frodobots:system1_rows"]
-    if coverage != 1.0:
-        raise RuntimeError(f"strong direction coverage is not 100%: {coverage:.6f}")
-    if frodo_system1 != 0:
-        raise RuntimeError(f"FrodoBots System1 rows must be zero, got {frodo_system1}")
+        counts[f"dataset:{family}:direction_available"] += int(
+            _direction_available(source)
+        )
+        counts[f"dataset:{family}:system1_available"] += int(
+            _system1_available(source)
+        )
+        flags = source.teacher_supervision_context.get("p0_supervision_flags")
+        counts[f"dataset:{family}:p0_flagged"] += int(bool(flags))
+    for family in _CANONICAL_FAMILIES:
+        actual = counts[f"dataset:{family}"]
+        if actual != expected_per_family:
+            raise RuntimeError(
+                f"{family} smoke source count mismatch: "
+                f"expected={expected_per_family}, actual={actual}"
+            )
     return {
+        "rows": counts["rows"],
+        "expected_rows": expected_per_family * len(_CANONICAL_FAMILIES),
         "counts": dict(sorted(counts.items())),
-        "trajectory_qc_strong_direction_coverage": coverage,
-        "frodobots_system1_rows": frodo_system1,
+        "report_semantics": (
+            "availability_only:no_calibration_projection_fusion_tracking_or_geometry_claim"
+        ),
     }
 
 
-def _configure_openai_endpoint(api_base: str, model: str) -> None:
+def _direction_available(source: ReasoningSourceV3) -> bool:
+    fixed = source.teacher_supervision_context.get("fixed_labels")
+    direction = fixed.get("canonical_direction") if isinstance(fixed, Mapping) else None
+    provenance = source.label_provenance.get("decision.direction")
+    return bool(
+        isinstance(direction, Mapping)
+        and provenance is not None
+        and provenance.source_kind == "deterministic_adapter"
+        and provenance.supervision == "strong"
+        and provenance.student_inferable
+        and provenance.loss_channel == "direction_choice"
+    )
+
+
+def _system1_available(source: ReasoningSourceV3) -> bool:
+    provenance = source.label_provenance.get("system1.trajectory")
+    return bool(
+        source.model_input.system1_enabled
+        and provenance is not None
+        and provenance.source_kind == "dataset_gt"
+        and provenance.supervision == "strong"
+        and provenance.student_inferable
+        and provenance.loss_channel == "system1_action"
+    )
+
+
+def _configure_teacher(
+    args: argparse.Namespace,
+) -> tuple[str, str, tuple[str, ...], tuple[str, ...]]:
+    """Configure a provider without putting key-file values into reports."""
+
+    provider = (
+        str(args.provider or os.getenv("LLM_PROVIDER") or "").strip().lower()
+    )
+    if not provider:
+        provider = "ark" if os.getenv("ARK_API_KEY", "").strip() else "openai"
+    if provider not in _PROVIDER_DEFAULT_BASES:
+        raise SystemExit(f"unsupported teacher provider: {provider}")
+    model = str(
+        args.model
+        or os.getenv("LLM_MODEL")
+        or os.getenv("VLM_MODEL")
+        or os.getenv("ARK_MODEL")
+        or ""
+    ).strip()
+    if not model:
+        raise SystemExit(
+            "teacher model is required via --model/LLM_MODEL; use --source-only "
+            "to stop before paid annotation"
+        )
+    api_base = str(
+        args.api_base
+        or os.getenv("LLM_API_BASE_URL")
+        or os.getenv("ARK_BASE_URL")
+        or os.getenv("ARK_API_BASE")
+        or os.getenv("OPENAI_BASE_URL")
+        or _PROVIDER_DEFAULT_BASES[provider]
+    ).strip()
+    file_keys = _read_api_keys(args.api_keys_file)
+    environment_keys = tuple(
+        value
+        for value in (
+            os.getenv("LLM_API_KEY", "").strip(),
+            os.getenv("ARK_API_KEY", "").strip(),
+            os.getenv("OPENAI_API_KEY", "").strip(),
+        )
+        if value
+    )
+    runtime_keys = file_keys or environment_keys[:1]
+    if not runtime_keys:
+        raise SystemExit(
+            "teacher API key is required via --api-keys-file, LLM_API_KEY, "
+            "ARK_API_KEY, or OPENAI_API_KEY"
+        )
     os.environ.update(
         {
-            "LLM_PROVIDER": "openai",
+            "LLM_PROVIDER": provider,
             "LLM_MODEL": model,
             "LLM_API_BASE_URL": api_base,
             "LLM_API_STYLE": "chat_completions",
-            "LLM_API_KEY": os.environ.get("LLM_API_KEY") or "dummy",
             "LLM_TEMPERATURE": "0",
             "LLM_TIMEOUT_S": "120",
             "LLM_VISION_TIMEOUT_S": "300",
             "LLM_MAX_RETRIES": "1",
             "LLM_CHAT_TEMPLATE_ENABLE_THINKING": "0",
-            "NO_PROXY": "127.0.0.1,localhost," + os.environ.get("NO_PROXY", ""),
-            "no_proxy": "127.0.0.1,localhost," + os.environ.get("no_proxy", ""),
         }
     )
+    secret_values = tuple(dict.fromkeys((*file_keys, *environment_keys)))
+    return provider, model, runtime_keys, secret_values
+
+
+def _read_api_keys(path: Path | None) -> tuple[str, ...]:
+    """Read raw or ``NAME=value`` keys without logging their contents."""
+
+    if path is None:
+        return ()
+    value = path.expanduser().resolve()
+    if not value.is_file():
+        raise SystemExit(f"API key file is missing: {value}")
+    keys: list[str] = []
+    accepted_names = {"ARK_API_KEY", "LLM_API_KEY", "OPENAI_API_KEY"}
+    for raw_line in value.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        if "=" in line:
+            name, candidate = line.split("=", 1)
+            if name.strip() not in accepted_names:
+                continue
+            line = candidate.strip()
+        line = line.strip().strip("\"'")
+        if line:
+            keys.append(line)
+    if not keys:
+        raise SystemExit(f"API key file has no usable key entries: {value}")
+    return tuple(dict.fromkeys(keys))
+
+
+def _write_latest_annotations(
+    source_jsonl: Path,
+    annotation_jsonl: Path,
+    output_jsonl: Path,
+) -> None:
+    """Compact append-only annotations to one latest row in source order."""
+
+    latest: dict[str, dict[str, Any]] = {}
+    for row in iter_jsonl(annotation_jsonl):
+        annotation = ReasoningAnnotationV3.model_validate(row)
+        latest[annotation.source_group_id] = annotation.model_dump(
+            mode="json",
+            exclude_none=True,
+        )
+    ordered: list[dict[str, Any]] = []
+    for row in iter_jsonl(source_jsonl):
+        source = ReasoningSourceV3.model_validate(row)
+        source_id = source.model_input.source_group_id
+        if source_id in latest:
+            ordered.append(latest[source_id])
+    write_jsonl_atomic(output_jsonl, ordered)
+
+
+def _convert_ms_swift(
+    *,
+    ms_swift_root: Path,
+    input_jsonl: Path,
+    output_jsonl: Path,
+    report_json: Path,
+) -> None:
+    """Convert the strong-sidecar view through ms-swift's versioned adapter."""
+
+    env = os.environ.copy()
+    for name in _PROVIDER_SECRET_ENV_NAMES:
+        env.pop(name, None)
+    env["PYTHONPATH"] = str(ms_swift_root) + (
+        f":{env['PYTHONPATH']}" if env.get("PYTHONPATH") else ""
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "swift.sidewalk_nav.data.versioned_reasoning_manifest",
+            "--input-jsonl",
+            str(input_jsonl),
+            "--output-jsonl",
+            str(output_jsonl),
+            "--report-json",
+            str(report_json),
+            "--expected-version",
+            "v3",
+            "--v3-training-profile",
+            "strong_action_only",
+        ],
+        env=env,
+        check=True,
+    )
+
+
+def _annotation_dataset_counts(
+    source_jsonl: Path,
+    annotation_jsonl: Path,
+) -> dict[str, int]:
+    """Count latest annotations by their frozen source family."""
+
+    source_family: dict[str, str] = {}
+    for row in iter_jsonl(source_jsonl):
+        source = ReasoningSourceV3.model_validate(row)
+        source_family[source.model_input.source_group_id] = _dataset_family(
+            source.model_input.dataset_source
+        )
+    counts: Counter[str] = Counter()
+    for row in iter_jsonl(annotation_jsonl):
+        annotation = ReasoningAnnotationV3.model_validate(row)
+        counts[source_family.get(annotation.source_group_id, "unknown")] += 1
+    return dict(sorted(counts.items()))
+
+
+def _provider_telemetry(
+    annotations: Sequence[ReasoningAnnotationV3],
+) -> dict[str, Any]:
+    """Aggregate sanitized provider usage from latest annotations."""
+
+    counts: Counter[str] = Counter()
+    roundtrips: list[float] = []
+    for annotation in annotations:
+        calls = annotation.telemetry.get("calls")
+        if not isinstance(calls, list):
+            continue
+        for call in calls:
+            if not isinstance(call, Mapping):
+                continue
+            counts["successful_calls"] += 1
+            roundtrip = call.get("roundtrip_ms")
+            if isinstance(roundtrip, (int, float)):
+                roundtrips.append(float(roundtrip))
+            response = call.get("response")
+            usage = response.get("usage") if isinstance(response, Mapping) else None
+            if isinstance(usage, Mapping):
+                for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                    value = usage.get(key)
+                    if isinstance(value, (int, float)):
+                        counts[key] += int(value)
+    result: dict[str, Any] = dict(sorted(counts.items()))
+    if roundtrips:
+        ordered = sorted(roundtrips)
+        result.update(
+            {
+                "roundtrip_ms_sum": round(sum(ordered), 3),
+                "roundtrip_ms_median": round(statistics.median(ordered), 3),
+                "roundtrip_ms_p95": round(_percentile(ordered, 0.95), 3),
+            }
+        )
+    return result
+
+
+def _weak_label_availability(
+    annotations: Sequence[ReasoningAnnotationV3],
+) -> dict[str, int]:
+    """Count weak outputs without presenting them as semantic accuracy."""
+
+    counts: Counter[str] = Counter()
+    for annotation in annotations:
+        if annotation.observation is not None:
+            counts["observation_rows"] += 1
+        rationale = annotation.decision_rationale
+        if rationale is None:
+            continue
+        counts["decision_rationale_rows"] += 1
+        counts[f"rationale_status:{rationale.rationale_status}"] += 1
+        counts["interaction_items"] += len(
+            rationale.interaction_and_rule_grounding.interactions
+        )
+        counts["traffic_rule_items"] += len(
+            rationale.interaction_and_rule_grounding.traffic_rules
+        )
+    return dict(sorted(counts.items()))
+
+
+def _percentile(ordered: Sequence[float], fraction: float) -> float:
+    """Return a linear-interpolated percentile for an already sorted sequence."""
+
+    if len(ordered) == 1:
+        return ordered[0]
+    position = (len(ordered) - 1) * float(fraction)
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = position - lower
+    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
+
+
+def _assert_no_key_material(run_root: Path, secrets: Iterable[str]) -> None:
+    """Fail if any supplied API key leaked into a text artifact."""
+
+    values = tuple(
+        dict.fromkeys(str(value) for value in secrets if len(str(value)) >= 8)
+    )
+    if not values:
+        return
+    text_suffixes = {".html", ".json", ".jsonl", ".md", ".txt"}
+    for path in run_root.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in text_suffixes:
+            continue
+        content = path.read_text(encoding="utf-8", errors="ignore")
+        if any(secret in content for secret in values):
+            raise RuntimeError(
+                "API key material was found in a smoke artifact; refusing completion"
+            )
+
+
+def _count_jsonl_rows(path: Path) -> int:
+    return sum(1 for _ in iter_jsonl(path))
+
+
+def _write_json_report(path: Path, report: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
+def _read_json_object(path: Path) -> dict[str, Any]:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"expected JSON object: {path}")
+    return value
 
 
 def _dataset_family(value: str) -> str:
     normalized = str(value).strip().lower().replace("_", "-")
-    for family in ("sidewalk", "foxglove", "frodobots", "egowalk"):
+    for family in _CANONICAL_FAMILIES:
         if normalized.startswith(family):
             return family
-    raise ValueError(f"unsupported V3 smoke dataset: {value}")
+    raise ValueError(f"unsupported Reasoning V3.4 smoke dataset: {value}")
 
 
 if __name__ == "__main__":
