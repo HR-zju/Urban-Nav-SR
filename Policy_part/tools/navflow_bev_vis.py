@@ -87,8 +87,13 @@ def project_waypoints_to_bev_image_enu(
     dpi=100,
     view_range_x=(-10, 10),
     view_range_y=(-10, 10),
+    return_image=False,
 ):
-    """Draw full ENU history, target states, prediction, and reset window."""
+    """Draw full ENU history, target states, prediction, and reset window.
+
+    When ``return_image`` is true, return the rendered frame as a BGR uint8
+    array so callers can compose it directly into a video without PNG I/O.
+    """
     fig = None
     try:
         fig = plt.figure(figsize=figsize, dpi=dpi)
@@ -371,11 +376,18 @@ def project_waypoints_to_bev_image_enu(
         local_ax.tick_params(axis="both", labelsize=5)
         local_ax.grid(True, linestyle="--", alpha=0.4)
 
+        rendered_bgr = None
+        if return_image:
+            fig.canvas.draw()
+            rgba = np.asarray(fig.canvas.buffer_rgba())
+            rendered_bgr = rgba[:, :, :3][:, :, ::-1].copy()
+
         if save_path is not None:
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
             plt.savefig(save_path, dpi=dpi, bbox_inches=None, pad_inches=0)
-            return save_path
-        return None
+        if return_image:
+            return rendered_bgr
+        return save_path
     except Exception as exc:  # noqa: BLE001
         print(f"BEV plot failed: {exc}")
         return None

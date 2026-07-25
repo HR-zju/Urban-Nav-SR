@@ -12,8 +12,8 @@ Key features:
   predicted waypoints onto each incoming RGB frame.
 - Caches the last successful waypoint prediction (`last_wp_np`) and reuses
   it for frames between inferences.
-- When `--save_vis` is enabled, pushes rendered BGR frames into an
-  `AsyncVideoWriter` for non-blocking MP4 recording.
+- When `--save_vis` is enabled, records a side-by-side MP4 with the
+  first-person inference overlay on the left and global ENU BEV on the right.
 
 This runner is designed to avoid blocking the control loop while still
 producing a high-quality overlay video for later inspection.
@@ -194,12 +194,10 @@ def create_onnx_session(model_path: str) -> ort.InferenceSession:
 
 
 class AsyncVideoWriter:
-    """Background VideoWriter with dynamic size check and bounded queue.
+    """Background writer for a first-person + ENU BEV comparison video.
 
-    This keeps disk I/O and heavy overlay work off the main loop. The
-    main ROS callback should push raw BGR frames plus an optional
-    waypoint array, and this worker thread will handle resizing to the
-    target resolution and drawing trajectories before writing to disk.
+    The left panel is the trajectory overlay on the camera image. The right
+    panel repeats the latest inference-aligned BEV until a newer one arrives.
     """
 
     def __init__(
@@ -207,7 +205,7 @@ class AsyncVideoWriter:
         out_path: str,
         fps: float,
         fourcc: int,
-        max_queue: int = 128,
+        max_queue: int = 32,
         overlay_camera_pitch_deg: float = 8.0,
     ):
         self.out_path = out_path
@@ -216,8 +214,7 @@ class AsyncVideoWriter:
         self.max_queue = max_queue
         self.overlay_camera_pitch_deg = float(overlay_camera_pitch_deg)
 
-        # Queue of (frame_bgr, wp_np, frame_time) tuples, where wp_np is an
-        # optional (N, 2) array of waypoints in robot frame.
+        # Queue entries contain camera frame, waypoints, latest BEV, and time.
         self._queue = mp.Queue(maxsize=max_queue)
         self._stop_event = mp.Event()
         self._process = mp.Process(
@@ -237,8 +234,14 @@ class AsyncVideoWriter:
     def start(self):
         self._process.start()
 
-    def write(self, frame_bgr: np.ndarray, wp_np: Optional[np.ndarray], frame_time: Optional[float] = None):
-        """Queue a frame and optional waypoints for writing.
+    def write(
+        self,
+        frame_bgr: np.ndarray,
+        wp_np: Optional[np.ndarray],
+        bev_bgr: Optional[np.ndarray],
+        frame_time: Optional[float] = None,
+    ):
+        """Queue one camera frame and the latest inference visualization.
 
         This call is designed to be non-blocking from the main ROS
         callback. If the internal queue is full, the frame is dropped
@@ -252,8 +255,11 @@ class AsyncVideoWriter:
             wp_copy = None
             if wp_np is not None:
                 wp_copy = np.array(wp_np, copy=True)
+            bev_copy = None
+            if bev_bgr is not None:
+                bev_copy = np.array(bev_bgr, copy=True)
             t_copy = float(frame_time) if frame_time is not None else time.time()
-            self._queue.put_nowait((frame_copy, wp_copy, t_copy))
+            self._queue.put_nowait((frame_copy, wp_copy, bev_copy, t_copy))
         except queue.Full:
             if not self._queue_full_logged:
                 print("[overlay] queue full, dropping frames to keep callback non-blocking")
@@ -319,16 +325,14 @@ class AsyncVideoWriter:
             if item is None:
                 continue
 
-            frame_bgr, wp_np, frame_time = item
+            frame_bgr, wp_np, bev_bgr, frame_time = item
             pending_times.append(frame_time)
             if len(pending_times) > 240:
                 pending_times = pending_times[-240:]
 
             try:
-                # Resize to the target resolution and apply trajectory
-                # overlay if waypoints are available.
+                # Render trajectory at its calibrated resolution first.
                 try:
-                    # First bring frame to the canonical 1920x1080 size.
                     frame_resized = cv2.resize(
                         frame_bgr,
                         (1920, 1080),
@@ -353,11 +357,42 @@ class AsyncVideoWriter:
                     print(f"[overlay] resize/overlay pipeline error: {e}")
                     frame_resized = frame_bgr
 
-                pending_items.append(frame_resized)
+                first_person = cv2.resize(
+                    frame_resized,
+                    (1280, 720),
+                    interpolation=cv2.INTER_AREA,
+                )
+                if bev_bgr is None:
+                    bev_panel = np.zeros((720, 540, 3), dtype=np.uint8)
+                    cv2.putText(
+                        bev_panel,
+                        "Waiting for first BEV inference...",
+                        (36, 360),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (220, 220, 220),
+                        2,
+                        cv2.LINE_AA,
+                    )
+                else:
+                    if bev_bgr.ndim == 2:
+                        bev_bgr = cv2.cvtColor(bev_bgr, cv2.COLOR_GRAY2BGR)
+                    elif bev_bgr.shape[2] == 4:
+                        bev_bgr = cv2.cvtColor(bev_bgr, cv2.COLOR_BGRA2BGR)
+                    bev_panel = cv2.resize(
+                        bev_bgr,
+                        (540, 720),
+                        interpolation=cv2.INTER_AREA,
+                    )
+                frame_combined = np.concatenate(
+                    [first_person, bev_panel],
+                    axis=1,
+                )
+                pending_items.append(frame_combined)
 
                 # Delay writer initialization briefly to estimate real input FPS.
                 should_init = (writer is None) and (len(pending_items) >= 12 or (stop_event.is_set() and len(pending_items) > 0))
-                if should_init and not ensure_writer(frame_resized):
+                if should_init and not ensure_writer(frame_combined):
                     continue
 
                 if writer is None:
@@ -378,7 +413,7 @@ class AsyncVideoWriter:
                     writer.write(frame_out)
                     frames_written += 1
                     if frames_written % 30 == 0:
-                        print(f"[overlay] frames written (async): {frames_written}")
+                        print(f"[combined] frames written (async): {frames_written}")
             except Exception as e:  # noqa: BLE001
                 # Avoid spamming FFmpeg warnings; log once per failure type
                 print(f"[overlay] write error: {e}")
@@ -395,7 +430,7 @@ class AsyncVideoWriter:
             pass
 
         if self._process.is_alive():
-            self._process.join(timeout=3.0)
+            self._process.join(timeout=30.0)
         if self._process.is_alive():
             self._process.terminate()
             self._process.join(timeout=1.0)
@@ -590,6 +625,7 @@ class RealSenseNavflowNode(Node):
 
         # Latest waypoint prediction in robot frame (N,2)
         self.last_wp_np: Optional[np.ndarray] = None
+        self.latest_bev_bgr: Optional[np.ndarray] = None
 
         # Intrinsic params for projection: f, cx, cy, k
         self.intrinsic_params = [790.0, 1920.0 / 2.0, 1080.0 / 2.0, 0.0]
@@ -597,8 +633,6 @@ class RealSenseNavflowNode(Node):
         # Metrics and logging
         self.timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         self.image_count = 0
-        self.save_vis_interval_sec = 3.0
-        self.last_save_vis_time = 0.0
         self.bev_history_enu = []
         self.bev_history_spacing_m = 0.3
         self.bev_window_size_m = 20.0
@@ -1029,7 +1063,15 @@ class RealSenseNavflowNode(Node):
             if self.enable_visualization and self.video_writer is not None:
                 if image_bgr is None:
                     image_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
-                self.video_writer.write(image_bgr, self.last_wp_np, frame_time=current_time)
+                with self.lock:
+                    video_wp = self.last_wp_np
+                    video_bev = self.latest_bev_bgr
+                self.video_writer.write(
+                    image_bgr,
+                    video_wp,
+                    video_bev,
+                    frame_time=current_time,
+                )
 
             # Only every ~6 Hz frame is preprocessed for the ONNX model; all
             # intermediate frames skip the heavy PIL/torch pipeline.
@@ -1357,12 +1399,15 @@ class RealSenseNavflowNode(Node):
             )
             wp_pred[..., 0] = wp_pred[..., 0].clamp(0.1, 20.0)
 
-        # Cache last waypoint prediction (robot frame, Nx2)
-        self.last_wp_np = (
+        # Publish the new waypoint and BEV to the recorder as one visual state.
+        latest_wp_np = (
             wp_pred.detach()[0, :, :2]
             .cpu()
             .numpy()
         )
+        if not self.save_vis:
+            with self.lock:
+                self.last_wp_np = latest_wp_np
 
         wp_pred_cam = torch.cat(
             [
@@ -1375,17 +1420,7 @@ class RealSenseNavflowNode(Node):
         waypoint_msg = Float32MultiArray()
         wp_pred_np = wp_pred_cam.detach().cpu().numpy()
 
-        save_vis_time = time.monotonic()
-        if (
-            self.save_vis
-            and (
-                self.image_count == 0
-                or save_vis_time - self.last_save_vis_time >= self.save_vis_interval_sec
-            )
-        ):
-            self.last_save_vis_time = save_vis_time
-            folder_path = os.path.join(_REPO_ROOT, "Policy_part", "vis", f"navflow{self.timestamp}")
-            os.makedirs(folder_path, exist_ok=True)
+        if self.save_vis:
             with self.lock:
                 full_history_enu = np.asarray(
                     self.bev_history_enu,
@@ -1413,30 +1448,25 @@ class RealSenseNavflowNode(Node):
                     f"{self.bev_view_range[1][1]:.1f}]"
                 )
 
-            bev_path = os.path.join(
-                folder_path,
-                f"photo{self.image_count}_bev.png",
-            )
-            saved_path = project_waypoints_to_bev_image_enu(
-                self.last_wp_np,
+            bev_bgr = project_waypoints_to_bev_image_enu(
+                latest_wp_np,
                 post_odom=full_history_enu,
                 targets_enu=targets_enu,
                 target_states=target_states,
                 target_indices=target_indices,
                 current_pose=current_pose,
-                save_path=bev_path,
                 title=(
                     f"ENU frame {self.image_count}: full history "
                     f"| local window {self.bev_window_index}"
                 ),
                 view_range_x=self.bev_view_range[0],
                 view_range_y=self.bev_view_range[1],
+                return_image=True,
             )
-            if saved_path is not None:
-                self.info_throttled(
-                    "save_vis_bev",
-                    f"Saved go2-style ENU BEV: {saved_path}",
-                )
+            with self.lock:
+                self.last_wp_np = latest_wp_np
+                if bev_bgr is not None:
+                    self.latest_bev_bgr = bev_bgr
 
             self.image_count += 1
 
@@ -1563,19 +1593,19 @@ def parse_args():
     )
     parser.add_argument(
         "--save_vis",
+        "--record_video",
+        dest="save_vis",
         action="store_true",
-        help="Enable saving offline PNG/NPY samples for analysis (vis/ directory)",
+        help=(
+            "Record a side-by-side MP4: first-person inference on the left "
+            "and global ENU BEV on the right. --record_video is an alias."
+        ),
     )
     parser.add_argument(
         "--output_fps",
         type=float,
         default=30.0,
         help="Nominal FPS for the saved overlay video (default: 30Hz)",
-    )
-    parser.add_argument(
-        "--record_video",
-        action="store_true",
-        help="Enable MP4 video recording (disabled by default)",
     )
     parser.add_argument(
         "--no_show_window",
@@ -1659,16 +1689,19 @@ def main():
     target_xy, target_used_default, target_warning = load_target_positions_from_file(args.targets)
     print(f"[target] loaded {len(target_xy)} target positions: {target_xy}")
 
-    # Async video writer: record overlay MP4 unless explicitly disabled.
+    # --save_vis owns both BEV rendering and side-by-side MP4 recording.
     async_writer = None
-    if getattr(args, "record_video", False):
+    if args.save_vis:
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        out_dir = os.path.join(_REPO_ROOT, "Policy_part", "vis", "overlay")
+        out_dir = os.path.join(_REPO_ROOT, "Policy_part", "vis", "combined")
         os.makedirs(out_dir, exist_ok=True)
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        out_path = os.path.join(out_dir, f"realsense_navflow_overlay_{ts}.mp4")
+        out_path = os.path.join(
+            out_dir,
+            f"navflow_firstperson_bev_{ts}.mp4",
+        )
         print(
-            f"[overlay] enabling AsyncVideoWriter at {out_path} "
+            f"[combined] enabling side-by-side writer at {out_path} "
             f"(fps estimate from input, fallback={args.output_fps})"
         )
         async_writer = AsyncVideoWriter(
