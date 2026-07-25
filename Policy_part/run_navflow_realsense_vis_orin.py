@@ -40,6 +40,11 @@ from scipy.spatial.transform import Rotation as R
 from sensor_msgs.msg import CompressedImage, Image
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool, Float32MultiArray
+from tools.navflow_bev_vis import (
+    project_waypoints_to_bev_image_enu,
+    select_targets_for_bev,
+    update_bev_window,
+)
 
 import ast
 
@@ -535,6 +540,7 @@ class RealSenseNavflowNode(Node):
         self.model_input_names = [inp.name for inp in self.session.get_inputs()]
         self.model_image_h, self.model_image_w = self.resolve_model_image_shape()
         self.target_xy = target_xy
+        self.all_target_xy = [list(target) for target in target_xy]
         self.target_warning = target_warning
         self.distance_threshold = distance_threshold
         self.frames = frames
@@ -584,6 +590,12 @@ class RealSenseNavflowNode(Node):
         # Metrics and logging
         self.timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         self.image_count = 0
+        self.bev_history_enu = []
+        self.bev_history_spacing_m = 0.3
+        self.bev_window_size_m = 20.0
+        self.bev_view_range = None
+        self.bev_window_index = 0
+        self.target_display_range_m = 80.0
         self.status_log_interval_sec = float(os.environ.get("NAVFLOW_STATUS_LOG_INTERVAL_SEC", "1.0"))
         self.warn_log_interval_sec = float(os.environ.get("NAVFLOW_WARN_LOG_INTERVAL_SEC", "2.0"))
         self._last_log_times = {}
@@ -685,6 +697,17 @@ class RealSenseNavflowNode(Node):
         try:
             with self.lock:
                 self.pose_buffer.append((msg.header.stamp, msg.pose))
+                if self.save_vis:
+                    point = np.array(
+                        [msg.pose.pose.position.x, msg.pose.pose.position.y],
+                        dtype=float,
+                    )
+                    if (
+                        not self.bev_history_enu
+                        or np.linalg.norm(point - self.bev_history_enu[-1])
+                        >= self.bev_history_spacing_m
+                    ):
+                        self.bev_history_enu.append(point)
         except Exception as e:  # noqa: BLE001
             self.get_logger().error(f"Error in odom callback: {e}")
 
@@ -1212,73 +1235,135 @@ class RealSenseNavflowNode(Node):
         wp_pred_np = wp_pred_cam.detach().cpu().numpy()
 
         if self.save_vis:
-            
-            # Save snapshot image + metadata for offline analysis.
-            img_np = np.transpose(snap_image_chw, (1, 2, 0))
-            if img_np.dtype in (np.float32, np.float64):
-                img_np = (img_np * 255).astype(np.uint8)
-
-            # plotting
-            wp_to_plot = self.last_wp_np
-
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
-            plt.subplots_adjust(wspace=0.3)
-            
-            self.info_throttled("save_vis_robot_pos", f"DEBUG -> Global Robot Pos: {current_pose[:2]}")
-            self.info_throttled("save_vis_relative_target", f"DEBUG -> Relative Target (Local): {target_diff_temp[0]}")
-
-            ax1.imshow(img_np)  # original RGB image
-            ax1.axis('off')
-            ax1.set_title("Current View")
-            ax2.axis('equal')
-            ax2.plot(wp_to_plot[:, 0], wp_to_plot[:, 1],
-                        's-', label='Predicted Waypoints', color='#DB6057')
-            ax2.axhline(0, color='black', lw=1, ls='--') 
-            ax2.axvline(0, color='black', lw=1, ls='--') 
-            ax2.plot(target_diff_temp[0][0], target_diff_temp[0][1],
-                        marker='*', markersize=15, label='Target Coordinate', color='#A157DB')
-            ax2.legend()
-            ax2.set_title('Coordinates BEV Trajectory (m) ', fontsize=20)
-            ax2.set_xlabel('X (m)', fontsize=20)
-            ax2.set_ylabel('Y (m)', fontsize=20)
-            ax2.tick_params(axis='both', labelsize=18)
-            ax2.grid(True)
-            ax2.legend()
-
             folder_path = os.path.join(_REPO_ROOT, "Policy_part", "vis", f"navflow{self.timestamp}")
             os.makedirs(folder_path, exist_ok=True)
-            plt.savefig(os.path.join(folder_path, f"vis_{self.image_count}.png"))
-            plt.close(fig)
-            # output_path = os.path.join(folder_path, f"sample_{self.image_count}.png")
-            # cv2.imwrite(output_path, img_np[..., ::-1])  # RGB->BGR
-
-            pose_snapshot_np = np.array(
-                [
-                    snap_pose.pose.position.x,
-                    snap_pose.pose.position.y,
-                    snap_pose.pose.position.z,
-                    snap_pose.pose.orientation.w,
-                    snap_pose.pose.orientation.x,
-                    snap_pose.pose.orientation.y,
-                    snap_pose.pose.orientation.z,
-                ]
+            with self.lock:
+                full_history_enu = np.asarray(
+                    self.bev_history_enu,
+                    dtype=float,
+                ).reshape(-1, 2)
+            targets_enu, target_states, target_indices = select_targets_for_bev(
+                self.all_target_xy,
+                len(target_snapshot),
+                current_pose,
+                self.target_display_range_m,
             )
-
-            np.save(os.path.join(folder_path, f"sample_{self.image_count}_traj.npy"), traj_raw)
-            np.save(os.path.join(folder_path, f"sample_{self.image_count}_score.npy"), score_raw)
-            np.save(os.path.join(folder_path, f"sample_{self.image_count}_pose.npy"), pose_snapshot_np)
-            np.save(
-                os.path.join(folder_path, f"sample_{self.image_count}_pose_aligned.npy"),
-                np.array(last_localpose_snapshot),
+            self.bev_view_range, window_reset = update_bev_window(
+                current_pose,
+                self.bev_view_range,
+                self.bev_window_size_m,
             )
+            if window_reset:
+                self.bev_window_index += 1
+                self.get_logger().info(
+                    "BEV ENU window reset "
+                    f"#{self.bev_window_index}: "
+                    f"E=[{self.bev_view_range[0][0]:.1f}, "
+                    f"{self.bev_view_range[0][1]:.1f}], "
+                    f"N=[{self.bev_view_range[1][0]:.1f}, "
+                    f"{self.bev_view_range[1][1]:.1f}]"
+                )
 
-            # Also save the final waypoint prediction explicitly for convenience
-            np.save(
-                os.path.join(folder_path, f"sample_{self.image_count}_wp.npy"),
+            bev_path = os.path.join(
+                folder_path,
+                f"photo{self.image_count}_bev.png",
+            )
+            saved_path = project_waypoints_to_bev_image_enu(
                 self.last_wp_np,
+                post_odom=full_history_enu,
+                targets_enu=targets_enu,
+                target_states=target_states,
+                target_indices=target_indices,
+                current_pose=current_pose,
+                save_path=bev_path,
+                title=(
+                    f"ENU frame {self.image_count}: full history "
+                    f"| local window {self.bev_window_index}"
+                ),
+                view_range_x=self.bev_view_range[0],
+                view_range_y=self.bev_view_range[1],
             )
+            if saved_path is not None:
+                self.info_throttled(
+                    "save_vis_bev",
+                    f"Saved go2-style ENU BEV: {saved_path}",
+                )
 
             self.image_count += 1
+
+            # Original --save_vis implementation is intentionally disabled
+            # for rollback. It saved a current-view/local-BEV panel and NPY
+            # metadata instead of the global ENU BEV above.
+            #
+            # img_np = np.transpose(snap_image_chw, (1, 2, 0))
+            # if img_np.dtype in (np.float32, np.float64):
+            #     img_np = (img_np * 255).astype(np.uint8)
+            # wp_to_plot = self.last_wp_np
+            # fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
+            # plt.subplots_adjust(wspace=0.3)
+            # ax1.imshow(img_np)
+            # ax1.axis("off")
+            # ax1.set_title("Current View")
+            # ax2.axis("equal")
+            # ax2.plot(
+            #     wp_to_plot[:, 0],
+            #     wp_to_plot[:, 1],
+            #     "s-",
+            #     label="Predicted Waypoints",
+            #     color="#DB6057",
+            # )
+            # ax2.axhline(0, color="black", lw=1, ls="--")
+            # ax2.axvline(0, color="black", lw=1, ls="--")
+            # ax2.plot(
+            #     target_diff_temp[0][0],
+            #     target_diff_temp[0][1],
+            #     marker="*",
+            #     markersize=15,
+            #     label="Target Coordinate",
+            #     color="#A157DB",
+            # )
+            # ax2.set_title("Coordinates BEV Trajectory (m)", fontsize=20)
+            # ax2.set_xlabel("X (m)", fontsize=20)
+            # ax2.set_ylabel("Y (m)", fontsize=20)
+            # ax2.tick_params(axis="both", labelsize=18)
+            # ax2.grid(True)
+            # ax2.legend()
+            # plt.savefig(os.path.join(folder_path, f"vis_{self.image_count}.png"))
+            # plt.close(fig)
+            # pose_snapshot_np = np.array(
+            #     [
+            #         snap_pose.pose.position.x,
+            #         snap_pose.pose.position.y,
+            #         snap_pose.pose.position.z,
+            #         snap_pose.pose.orientation.w,
+            #         snap_pose.pose.orientation.x,
+            #         snap_pose.pose.orientation.y,
+            #         snap_pose.pose.orientation.z,
+            #     ]
+            # )
+            # np.save(
+            #     os.path.join(folder_path, f"sample_{self.image_count}_traj.npy"),
+            #     traj_raw,
+            # )
+            # np.save(
+            #     os.path.join(folder_path, f"sample_{self.image_count}_score.npy"),
+            #     score_raw,
+            # )
+            # np.save(
+            #     os.path.join(folder_path, f"sample_{self.image_count}_pose.npy"),
+            #     pose_snapshot_np,
+            # )
+            # np.save(
+            #     os.path.join(
+            #         folder_path,
+            #         f"sample_{self.image_count}_pose_aligned.npy",
+            #     ),
+            #     np.array(last_localpose_snapshot),
+            # )
+            # np.save(
+            #     os.path.join(folder_path, f"sample_{self.image_count}_wp.npy"),
+            #     self.last_wp_np,
+            # )
 
         # Publish waypoint message (same format as original script)
         wp_list = wp_pred_np.tolist()
