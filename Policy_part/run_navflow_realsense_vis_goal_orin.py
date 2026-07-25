@@ -572,8 +572,7 @@ class RealSenseNavflowNode(Node):
 
         self.pose_buffer = deque(maxlen=300)
         self.localpose_buffer = deque(maxlen=300)
-        self.base_pose_buffer = deque(maxlen=600)
-        self.global_pose_sync_tolerance_sec = 0.3
+        self.global_pose_sync_tolerance_sec = 2.0
 
         self.lock = threading.Lock()
         self.last_image_time = 0.0
@@ -642,12 +641,6 @@ class RealSenseNavflowNode(Node):
             self.odom_callback,
             100,
         )
-        self.base_odom_sub = self.create_subscription(
-            Odometry,
-            "/base_odom",
-            self.base_odom_callback,
-            200,
-        )
 
         # RealSense image subscription. Raw is the Orin default to avoid JPEG decode.
         image_msg_type = CompressedImage if self.image_transport == "compressed" else Image
@@ -715,18 +708,6 @@ class RealSenseNavflowNode(Node):
                 self.pose_buffer.append((msg.header.stamp, msg.pose))
         except Exception as e:  # noqa: BLE001
             self.get_logger().error(f"Error in odom callback: {e}")
-
-    def base_odom_callback(self, msg: Odometry):
-        try:
-            with self.lock:
-                self.base_pose_buffer.append((msg.header.stamp, msg.pose))
-                self.update_goal_progress_locked(msg.pose)
-
-            reached_goal_msg = Bool()
-            reached_goal_msg.data = bool(self.goal_reached)
-            self.goal_pub.publish(reached_goal_msg)
-        except Exception as e:  # noqa: BLE001
-            self.get_logger().error(f"Error in base odom callback: {e}")
 
     def should_log_throttled(self, key: str, interval_sec: float) -> bool:
         interval = self.status_log_interval_sec if interval_sec is None else float(interval_sec)
@@ -804,14 +785,8 @@ class RealSenseNavflowNode(Node):
             ):
                 return global_pose, "global", global_dt
 
-            base_pose, base_dt = self.find_closest_buffer_pose(
-                list(self.base_pose_buffer),
-                image_stamp,
-            )
-            if base_pose is not None:
-                return base_pose, "base_fallback", base_dt
-
-            return global_pose, "global_stale", global_dt
+            pose_source = "global_missing" if global_pose is None else "global_stale"
+            return None, pose_source, global_dt
 
     @staticmethod
     def pose_to_xyzw_array(pose):
@@ -1041,14 +1016,19 @@ class RealSenseNavflowNode(Node):
             # Pose sync (only needed when we actually feed the model).
             pose, pose_source, pose_dt = self.find_header_aligned_nav_pose(image_stamp)
             localpose = self.find_closest_localpose(image_stamp)
-            if pose is None or localpose is None:
-                self.warning_throttled("no_pose_for_image", "No pose yet for current image")
-                return
-            if pose_source != "global":
+            if pose is None:
+                pose_dt_text = "n/a" if pose_dt is None else f"{pose_dt:.3f}s"
                 self.warning_throttled(
-                    f"pose_fallback_{pose_source}",
-                    f"Using {pose_source} pose for image stamp; dt={pose_dt:.3f}s"
+                    "no_global_pose_for_image",
+                    f"No synchronized global odom ({pose_source}, dt={pose_dt_text}); skip inference",
                 )
+                return
+            if localpose is None:
+                self.warning_throttled(
+                    "no_local_global_pose_for_image",
+                    "No global odom yet in local pose buffer; skip inference",
+                )
+                return
 
             img_chw = self.preprocess_model_frame_rgb(image_rgb)
 
@@ -1242,7 +1222,7 @@ class RealSenseNavflowNode(Node):
         `batch_snapshot` is a list of
         (image_chw_float32, nav_pose, localpose, image_stamp, pose_source,
         pose_dt) tuples. `nav_pose` is selected by message header time from
-        global odom, with base odom as fallback when global is stale/missing.
+        global odom. Frames without synchronized global odom are not enqueued.
         """
 
         self.info_throttled("processing_batch", f"Processing batch of {len(batch_snapshot)} frames")

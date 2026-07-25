@@ -20,6 +20,8 @@ from sensor_msgs.msg import NavSatFix
 
 WGS84_A = 6378137.0
 WGS84_E2 = 6.69437999014e-3
+GCJ02_A = 6378245.0
+GCJ02_EE = 0.00669342162296594323
 POLICY_PART_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -128,6 +130,40 @@ def ecef_to_enu(ecef, origin_ecef, origin_latitude, origin_longitude):
     ], dtype=float)
 
 
+def is_in_china_for_gcj02(longitude, latitude):
+    return 73.66 < longitude < 135.05 and 3.86 < latitude < 53.55
+
+
+def transform_gcj02_lat(x, y):
+    ret = -100.0 + 2.0*x + 3.0*y + 0.2*y*y + 0.1*x*y + 0.2*math.sqrt(abs(x))
+    ret += (20.0*math.sin(6.0*x*math.pi) + 20.0*math.sin(2.0*x*math.pi)) * 2.0 / 3.0
+    ret += (20.0*math.sin(y*math.pi) + 40.0*math.sin(y/3.0*math.pi)) * 2.0 / 3.0
+    ret += (160.0*math.sin(y/12.0*math.pi) + 320.0*math.sin(y*math.pi/30.0)) * 2.0 / 3.0
+    return ret
+
+
+def transform_gcj02_lon(x, y):
+    ret = 300.0 + x + 2.0*y + 0.1*x*x + 0.1*x*y + 0.1*math.sqrt(abs(x))
+    ret += (20.0*math.sin(6.0*x*math.pi) + 20.0*math.sin(2.0*x*math.pi)) * 2.0 / 3.0
+    ret += (20.0*math.sin(x*math.pi) + 40.0*math.sin(x/3.0*math.pi)) * 2.0 / 3.0
+    ret += (150.0*math.sin(x/12.0*math.pi) + 300.0*math.sin(x/30.0*math.pi)) * 2.0 / 3.0
+    return ret
+
+
+def wgs84_to_gcj02(longitude, latitude):
+    if not is_in_china_for_gcj02(longitude, latitude):
+        return longitude, latitude
+
+    dlat = transform_gcj02_lat(longitude - 105.0, latitude - 35.0)
+    dlon = transform_gcj02_lon(longitude - 105.0, latitude - 35.0)
+    radlat = math.radians(latitude)
+    magic = math.sin(radlat)
+    magic = 1.0 - GCJ02_EE * magic * magic
+    sqrtmagic = math.sqrt(magic)
+    dlat = (dlat * 180.0) / ((GCJ02_A * (1.0 - GCJ02_EE)) / (magic * sqrtmagic) * math.pi)
+    dlon = (dlon * 180.0) / (GCJ02_A / sqrtmagic * math.cos(radlat) * math.pi)
+    return longitude + dlon, latitude + dlat
+
 def find_key_recursive(value, target_key):
     if isinstance(value, dict):
         if target_key in value:
@@ -189,14 +225,72 @@ class Ros1GlobalFusionEstimator:
         max_optimization_poses=0,
         optimization_mode='alignment',
         alignment_min_gps_constraints=10,
-        alignment_min_baseline_m=5.0,
+        alignment_min_baseline_m=50.0,
         freeze_alignment_after_init=True,
+        alignment_min_odom_baseline_m=50.0,
+        alignment_min_odom_sample_separation_m=0.5,
+        alignment_min_baseline_ratio=0.5,
+        alignment_max_baseline_ratio=2.0,
+        alignment_inlier_threshold_m=2.5,
+        alignment_min_inlier_ratio=0.75,
+        alignment_max_xy_rmse_m=1.5,
+        alignment_required_stable_yaw_estimates=4,
+        alignment_stable_yaw_min_path_increment_m=2.0,
+        alignment_max_stable_yaw_delta_deg=2.0,
+        alignment_observation_distance_m=10.0,
+        alignment_observation_min_gps_constraints=5,
+        alignment_observation_min_inlier_ratio=0.75,
+        alignment_observation_max_xy_rmse_m=2.0,
+        alignment_max_initial_to_observed_yaw_delta_deg=2.0,
+        alignment_candidate_start_timeout_m=15.0,
+        alignment_restart_on_observation_failure=True,
     ):
         self.lock = Lock()
         self.max_optimization_poses = int(max_optimization_poses)
         self.optimization_mode = str(optimization_mode).lower()
         self.alignment_min_gps_constraints = int(alignment_min_gps_constraints)
         self.alignment_min_baseline_m = float(alignment_min_baseline_m)
+        self.alignment_min_odom_baseline_m = float(alignment_min_odom_baseline_m)
+        self.alignment_min_odom_sample_separation_m = max(
+            0.0, float(alignment_min_odom_sample_separation_m)
+        )
+        self.alignment_min_baseline_ratio = float(alignment_min_baseline_ratio)
+        self.alignment_max_baseline_ratio = float(alignment_max_baseline_ratio)
+        self.alignment_inlier_threshold_m = max(1e-6, float(alignment_inlier_threshold_m))
+        self.alignment_min_inlier_ratio = min(
+            1.0, max(0.0, float(alignment_min_inlier_ratio))
+        )
+        self.alignment_max_xy_rmse_m = max(1e-6, float(alignment_max_xy_rmse_m))
+        self.alignment_required_stable_yaw_estimates = max(
+            1, int(alignment_required_stable_yaw_estimates)
+        )
+        self.alignment_stable_yaw_min_path_increment_m = max(
+            0.0, float(alignment_stable_yaw_min_path_increment_m)
+        )
+        self.alignment_max_stable_yaw_delta_deg = max(
+            0.0, float(alignment_max_stable_yaw_delta_deg)
+        )
+        self.alignment_observation_distance_m = max(
+            0.0, float(alignment_observation_distance_m)
+        )
+        self.alignment_observation_min_gps_constraints = max(
+            2, int(alignment_observation_min_gps_constraints)
+        )
+        self.alignment_observation_min_inlier_ratio = min(
+            1.0, max(0.0, float(alignment_observation_min_inlier_ratio))
+        )
+        self.alignment_observation_max_xy_rmse_m = max(
+            1e-6, float(alignment_observation_max_xy_rmse_m)
+        )
+        self.alignment_max_initial_to_observed_yaw_delta_deg = max(
+            0.0, float(alignment_max_initial_to_observed_yaw_delta_deg)
+        )
+        self.alignment_candidate_start_timeout_m = max(
+            0.0, float(alignment_candidate_start_timeout_m)
+        )
+        self.alignment_restart_on_observation_failure = bool(
+            alignment_restart_on_observation_failure
+        )
         self.freeze_alignment_after_init = bool(freeze_alignment_after_init)
         self.local_pose_map = {}
         self.global_pose_map = {}
@@ -210,6 +304,17 @@ class Ros1GlobalFusionEstimator:
         self.new_gps = False
         self.has_alignment = False
         self.alignment_status = 'waiting for matched GPS/VIO constraints'
+        self.alignment_yaw_candidates = deque(
+            maxlen=self.alignment_required_stable_yaw_estimates
+        )
+        self.last_alignment_candidate_path_m = None
+        self.alignment_gate_reached_path_m = None
+        self.alignment_observation_transform = None
+        self.alignment_observation_yaw = None
+        self.alignment_observation_start_path_m = None
+        self.alignment_observation_start_time = None
+        self.alignment_reset_count = 0
+        self.pending_alignment_reset_messages = deque()
         self.path_msg = Path()
 
     def gps_to_xyz(self, latitude, longitude, altitude):
@@ -282,6 +387,210 @@ class Ros1GlobalFusionEstimator:
         transform[:3, 3] = translation
         return transform
 
+    def _select_motion_diverse_times(self, times):
+        """Keep one recent GPS constraint per meaningful odom displacement."""
+        if not times:
+            return []
+        min_separation = self.alignment_min_odom_sample_separation_m
+        if min_separation <= 0.0:
+            return list(times)
+
+        selected_reversed = [times[-1]]
+        last_xy = self.local_pose_map[times[-1]][:2]
+        for t in reversed(times[:-1]):
+            xy = self.local_pose_map[t][:2]
+            if np.linalg.norm(xy - last_xy) >= min_separation:
+                selected_reversed.append(t)
+                last_xy = xy
+        selected_reversed.reverse()
+        return selected_reversed
+
+    def _estimate_robust_planar_alignment(self, local_points, gps_points, weights):
+        """Fit yaw + translation with Huber-style iterative reweighting."""
+        base_weights = np.maximum(np.asarray(weights, dtype=float), 1e-12)
+        robust_weights = np.ones_like(base_weights)
+        threshold = self.alignment_inlier_threshold_m
+        transform = np.eye(4, dtype=float)
+        residuals = np.full(len(local_points), np.inf, dtype=float)
+
+        for _ in range(5):
+            transform = self._estimate_planar_alignment(
+                local_points,
+                gps_points,
+                base_weights * robust_weights,
+            )
+            predicted = (
+                (transform[:3, :3] @ local_points.T).T + transform[:3, 3]
+            )
+            residuals = np.linalg.norm(predicted[:, :2] - gps_points[:, :2], axis=1)
+            robust_weights = np.ones_like(residuals)
+            large = residuals > threshold
+            robust_weights[large] = threshold / np.maximum(residuals[large], 1e-12)
+
+        inliers = residuals <= threshold
+        if np.count_nonzero(inliers) >= 2:
+            transform = self._estimate_planar_alignment(
+                local_points[inliers],
+                gps_points[inliers],
+                base_weights[inliers],
+            )
+            predicted = (
+                (transform[:3, :3] @ local_points.T).T + transform[:3, 3]
+            )
+            residuals = np.linalg.norm(predicted[:, :2] - gps_points[:, :2], axis=1)
+            inliers = residuals <= threshold
+        return transform, residuals, inliers
+
+    @staticmethod
+    def _angle_difference(a, b):
+        return math.atan2(math.sin(a - b), math.cos(a - b))
+
+    def _yaw_is_stable(self, candidate_yaw, odom_path_m):
+        min_increment = self.alignment_stable_yaw_min_path_increment_m
+        if (
+            self.last_alignment_candidate_path_m is None
+            or odom_path_m - self.last_alignment_candidate_path_m >= min_increment
+        ):
+            self.alignment_yaw_candidates.append((odom_path_m, candidate_yaw))
+            self.last_alignment_candidate_path_m = odom_path_m
+
+        required = self.alignment_required_stable_yaw_estimates
+        if len(self.alignment_yaw_candidates) < required:
+            return False, 0.0
+
+        stored_yaws = [item[1] for item in self.alignment_yaw_candidates]
+        mean_yaw = math.atan2(
+            sum(math.sin(yaw) for yaw in stored_yaws),
+            sum(math.cos(yaw) for yaw in stored_yaws),
+        )
+        yaws_to_check = stored_yaws + [candidate_yaw]
+        max_delta_deg = max(
+            abs(math.degrees(self._angle_difference(yaw, mean_yaw)))
+            for yaw in yaws_to_check
+        )
+        return max_delta_deg <= self.alignment_max_stable_yaw_delta_deg, max_delta_deg
+
+    def _clear_alignment_trial_state_locked(self):
+        self.alignment_yaw_candidates.clear()
+        self.last_alignment_candidate_path_m = None
+        self.alignment_gate_reached_path_m = None
+        self.alignment_observation_transform = None
+        self.alignment_observation_yaw = None
+        self.alignment_observation_start_path_m = None
+        self.alignment_observation_start_time = None
+
+    def _reset_alignment_cycle_locked(self, reason):
+        """Discard this failed trial and start a fresh 30 m-style alignment cycle."""
+        self.alignment_reset_count += 1
+        message = (
+            'fusion已重置: 第%d次; 原因=%s; 重新开始累计%.1fm对齐'
+            % (self.alignment_reset_count, reason, self.alignment_min_baseline_m)
+        )
+        self.local_pose_map.clear()
+        self.global_pose_map.clear()
+        self.gps_position_map.clear()
+        self.wgps_t_wvio = np.eye(4, dtype=float)
+        self.last_p = np.zeros(3, dtype=float)
+        self.last_q = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
+        self.new_gps = False
+        self.has_alignment = False
+        self.path_msg = Path()
+        self._clear_alignment_trial_state_locked()
+        self.alignment_status = message
+        self.pending_alignment_reset_messages.append(message)
+
+    def _alignment_failure_or_wait_locked(self, reason, odom_path_m):
+        """Wait inside the trial, or reset once its candidate/observation budget expires."""
+        if self.alignment_observation_transform is not None:
+            phase = 'observation'
+            start_path_m = self.alignment_observation_start_path_m
+            limit_m = self.alignment_observation_distance_m
+        else:
+            phase = 'candidate'
+            start_path_m = self.alignment_gate_reached_path_m
+            limit_m = self.alignment_candidate_start_timeout_m
+
+        if start_path_m is None:
+            self.alignment_status = reason
+            return False
+
+        progress_m = max(0.0, odom_path_m - start_path_m)
+        if (
+            self.alignment_restart_on_observation_failure
+            and progress_m >= limit_m
+        ):
+            self._reset_alignment_cycle_locked(
+                '%s; %s_progress=%.2fm/%.2fm'
+                % (reason, phase, progress_m, limit_m)
+            )
+            return False
+
+        self.alignment_status = (
+            '%s; %s_progress=%.2fm/%.2fm'
+            % (reason, phase, progress_m, limit_m)
+        )
+        return False
+
+    def _evaluate_observation_locked(self, times, local_points, gps_points):
+        holdout_indices = [
+            index
+            for index, timestamp in enumerate(times)
+            if timestamp > self.alignment_observation_start_time
+        ]
+        if len(holdout_indices) < self.alignment_observation_min_gps_constraints:
+            return {
+                'passed': False,
+                'reason': (
+                    'insufficient observation constraints: holdout=%d/%d'
+                    % (
+                        len(holdout_indices),
+                        self.alignment_observation_min_gps_constraints,
+                    )
+                ),
+                'count': len(holdout_indices),
+                'rmse': float('inf'),
+                'inlier_ratio': 0.0,
+            }
+
+        indices = np.asarray(holdout_indices, dtype=int)
+        holdout_local = local_points[indices]
+        holdout_gps = gps_points[indices]
+        transform = self.alignment_observation_transform
+        predicted = (
+            (transform[:3, :3] @ holdout_local.T).T + transform[:3, 3]
+        )
+        residuals = np.linalg.norm(predicted[:, :2] - holdout_gps[:, :2], axis=1)
+        inliers = residuals <= self.alignment_inlier_threshold_m
+        inlier_count = int(np.count_nonzero(inliers))
+        inlier_ratio = inlier_count / float(len(residuals))
+        rmse = (
+            float(np.sqrt(np.mean(np.square(residuals[inliers]))))
+            if inlier_count > 0
+            else float('inf')
+        )
+        passed = (
+            inlier_ratio >= self.alignment_observation_min_inlier_ratio
+            and rmse <= self.alignment_observation_max_xy_rmse_m
+        )
+        reason = (
+            'observation quality: holdout=%d rmse=%.2fm/%.2fm '
+            'inliers=%.0f%%/%.0f%%'
+            % (
+                len(residuals),
+                rmse,
+                self.alignment_observation_max_xy_rmse_m,
+                100.0 * inlier_ratio,
+                100.0 * self.alignment_observation_min_inlier_ratio,
+            )
+        )
+        return {
+            'passed': passed,
+            'reason': reason,
+            'count': len(residuals),
+            'rmse': rmse,
+            'inlier_ratio': inlier_ratio,
+        }
+
     def _optimize_alignment(self):
         with self.lock:
             if not self.new_gps:
@@ -290,29 +599,183 @@ class Ros1GlobalFusionEstimator:
             if self.has_alignment and self.freeze_alignment_after_init:
                 return False
 
-            times = sorted(t for t in self.gps_position_map.keys() if t in self.local_pose_map)
-            if len(times) < self.alignment_min_gps_constraints:
+            matched_times = sorted(
+                t for t in self.gps_position_map.keys() if t in self.local_pose_map
+            )
+            if len(matched_times) < self.alignment_min_gps_constraints:
                 self.alignment_status = (
                     'waiting for alignment: matched_gps=%d/%d'
-                    % (len(times), self.alignment_min_gps_constraints)
+                    % (len(matched_times), self.alignment_min_gps_constraints)
+                )
+                return False
+
+            # Do not let many stationary GPS fixes dominate the alignment. Starting
+            # from the latest fix also retains the GPS bias closest to motion onset.
+            times = self._select_motion_diverse_times(matched_times)
+            if len(times) < self.alignment_min_gps_constraints:
+                self.alignment_status = (
+                    'waiting for motion-diverse constraints: matched_gps=%d motion_samples=%d/%d'
+                    % (
+                        len(matched_times),
+                        len(times),
+                        self.alignment_min_gps_constraints,
+                    )
                 )
                 return False
 
             local_points = np.array([self.local_pose_map[t][:3] for t in times], dtype=float)
             gps_points = np.array([self.gps_position_map[t][:3] for t in times], dtype=float)
             accuracies = np.array([self.gps_position_map[t][3] for t in times], dtype=float)
+            odom_steps = np.linalg.norm(np.diff(local_points[:, :2], axis=0), axis=1)
+            odom_path_m = float(np.sum(odom_steps))
+            odom_xy_span = np.linalg.norm(
+                np.max(local_points[:, :2], axis=0) - np.min(local_points[:, :2], axis=0)
+            )
+            if odom_xy_span < self.alignment_min_odom_baseline_m:
+                self.alignment_status = (
+                    'waiting for odom movement: motion_samples=%d odom_baseline=%.2fm/%.2fm'
+                    % (len(times), odom_xy_span, self.alignment_min_odom_baseline_m)
+                )
+                return False
+
+            if self.alignment_gate_reached_path_m is None:
+                self.alignment_gate_reached_path_m = odom_path_m
+
             gps_xy_span = np.linalg.norm(
                 np.max(gps_points[:, :2], axis=0) - np.min(gps_points[:, :2], axis=0)
             )
             if gps_xy_span < self.alignment_min_baseline_m:
-                self.alignment_status = (
+                return self._alignment_failure_or_wait_locked(
                     'waiting for alignment baseline: matched_gps=%d baseline=%.2fm/%.2fm'
-                    % (len(times), gps_xy_span, self.alignment_min_baseline_m)
+                    % (len(times), gps_xy_span, self.alignment_min_baseline_m),
+                    odom_path_m,
+                )
+
+            baseline_ratio = gps_xy_span / max(odom_xy_span, 1e-6)
+            if not (
+                self.alignment_min_baseline_ratio
+                <= baseline_ratio
+                <= self.alignment_max_baseline_ratio
+            ):
+                return self._alignment_failure_or_wait_locked(
+                    'rejecting alignment motion mismatch: gps_baseline=%.2fm '
+                    'odom_baseline=%.2fm ratio=%.2f allowed=[%.2f,%.2f]'
+                    % (
+                        gps_xy_span,
+                        odom_xy_span,
+                        baseline_ratio,
+                        self.alignment_min_baseline_ratio,
+                        self.alignment_max_baseline_ratio,
+                    ),
+                    odom_path_m,
+                )
+
+            weights = 1.0 / np.maximum(accuracies, 1e-6)
+            candidate_transform, xy_residuals, inliers = (
+                self._estimate_robust_planar_alignment(local_points, gps_points, weights)
+            )
+            inlier_count = int(np.count_nonzero(inliers))
+            inlier_ratio = inlier_count / float(len(times))
+            required_inliers = max(
+                2, int(math.ceil(self.alignment_min_inlier_ratio * len(times)))
+            )
+            if inlier_count < required_inliers:
+                return self._alignment_failure_or_wait_locked(
+                    'rejecting alignment outliers: inliers=%d/%d(%.0f%%) required=%.0f%%'
+                    % (
+                        inlier_count,
+                        len(times),
+                        100.0 * inlier_ratio,
+                        100.0 * self.alignment_min_inlier_ratio,
+                    ),
+                    odom_path_m,
+                )
+
+            xy_rmse = float(np.sqrt(np.mean(np.square(xy_residuals[inliers]))))
+            if xy_rmse > self.alignment_max_xy_rmse_m:
+                return self._alignment_failure_or_wait_locked(
+                    'rejecting alignment residual: xy_rmse=%.2fm/%.2fm inliers=%d/%d'
+                    % (xy_rmse, self.alignment_max_xy_rmse_m, inlier_count, len(times)),
+                    odom_path_m,
+                )
+
+            candidate_yaw = math.atan2(
+                candidate_transform[1, 0], candidate_transform[0, 0]
+            )
+            if self.alignment_observation_transform is None:
+                self.alignment_observation_transform = candidate_transform.copy()
+                self.alignment_observation_yaw = candidate_yaw
+                self.alignment_observation_start_path_m = odom_path_m
+                self.alignment_observation_start_time = times[-1]
+                self.alignment_yaw_candidates.clear()
+                self.last_alignment_candidate_path_m = None
+
+            yaw_stable, yaw_max_delta_deg = self._yaw_is_stable(
+                candidate_yaw, odom_path_m
+            )
+            observation_progress_m = max(
+                0.0, odom_path_m - self.alignment_observation_start_path_m
+            )
+            if observation_progress_m < self.alignment_observation_distance_m:
+                candidate_count = len(self.alignment_yaw_candidates)
+                self.alignment_status = (
+                    'observing alignment: progress=%.2fm/%.2fm candidates=%d/%d '
+                    'yaw=%.2fdeg yaw_delta=%.2fdeg/%.2fdeg '
+                    'xy_rmse=%.2fm inliers=%.0f%%'
+                    % (
+                        observation_progress_m,
+                        self.alignment_observation_distance_m,
+                        candidate_count,
+                        self.alignment_required_stable_yaw_estimates,
+                        math.degrees(candidate_yaw),
+                        yaw_max_delta_deg,
+                        self.alignment_max_stable_yaw_delta_deg,
+                        xy_rmse,
+                        100.0 * inlier_ratio,
+                    )
                 )
                 return False
 
-            weights = 1.0 / np.maximum(accuracies, 1e-6)
-            self.wgps_t_wvio = self._estimate_planar_alignment(local_points, gps_points, weights)
+            if not yaw_stable:
+                return self._alignment_failure_or_wait_locked(
+                    'rejecting unstable yaw after observation: candidates=%d/%d '
+                    'max_delta=%.2fdeg/%.2fdeg yaw=%.2fdeg'
+                    % (
+                        len(self.alignment_yaw_candidates),
+                        self.alignment_required_stable_yaw_estimates,
+                        yaw_max_delta_deg,
+                        self.alignment_max_stable_yaw_delta_deg,
+                        math.degrees(candidate_yaw),
+                    ),
+                    odom_path_m,
+                )
+
+            initial_to_observed_yaw_delta_deg = abs(math.degrees(
+                self._angle_difference(candidate_yaw, self.alignment_observation_yaw)
+            ))
+            if (
+                initial_to_observed_yaw_delta_deg
+                > self.alignment_max_initial_to_observed_yaw_delta_deg
+            ):
+                return self._alignment_failure_or_wait_locked(
+                    'rejecting inaccurate heading after observation: yaw_change=%.2fdeg/%.2fdeg'
+                    % (
+                        initial_to_observed_yaw_delta_deg,
+                        self.alignment_max_initial_to_observed_yaw_delta_deg,
+                    ),
+                    odom_path_m,
+                )
+
+            observation = self._evaluate_observation_locked(
+                times, local_points, gps_points
+            )
+            if not observation['passed']:
+                return self._alignment_failure_or_wait_locked(
+                    'rejecting failed holdout validation: %s' % observation['reason'],
+                    odom_path_m,
+                )
+
+            self.wgps_t_wvio = candidate_transform
 
             for t, local_pose in self.local_pose_map.items():
                 local_t = pose_to_matrix(local_pose[:3], local_pose[3:7])
@@ -326,8 +789,24 @@ class Ros1GlobalFusionEstimator:
             self.last_q = latest[3:7].copy()
             self.has_alignment = True
             self.alignment_status = (
-                'aligned: matched_gps=%d baseline=%.2fm'
-                % (len(times), gps_xy_span)
+                'aligned: yaw=%.2fdeg samples=%d gps_baseline=%.2fm '
+                'odom_baseline=%.2fm xy_rmse=%.2fm inliers=%.0f%% yaw_delta=%.2fdeg '
+                'observation=%.2fm holdout_rmse=%.2fm holdout_inliers=%.0f%% '
+                'observed_yaw_change=%.2fdeg resets=%d'
+                % (
+                    math.degrees(candidate_yaw),
+                    len(times),
+                    gps_xy_span,
+                    odom_xy_span,
+                    xy_rmse,
+                    100.0 * inlier_ratio,
+                    yaw_max_delta_deg,
+                    observation_progress_m,
+                    observation['rmse'],
+                    100.0 * observation['inlier_ratio'],
+                    initial_to_observed_yaw_delta_deg,
+                    self.alignment_reset_count,
+                )
             )
             self._update_path_locked()
         return True
@@ -440,6 +919,12 @@ class Ros1GlobalFusionEstimator:
         with self.lock:
             return self.alignment_status
 
+    def consume_alignment_reset_messages(self):
+        with self.lock:
+            messages = list(self.pending_alignment_reset_messages)
+            self.pending_alignment_reset_messages.clear()
+            return messages
+
     def _make_path_pose(self, t, p, q):
         pose = PoseStamped()
         pose.header.stamp = sec_to_msg_time(t)
@@ -479,9 +964,31 @@ class CppLogicFusionNode(Node):
         self.declare_parameter('max_optimization_poses', 50)
         self.declare_parameter('optimization_mode', 'alignment')
         self.declare_parameter('alignment_min_gps_constraints', 10)
-        self.declare_parameter('alignment_min_baseline_m', 5.0)
+        self.declare_parameter('alignment_min_baseline_m', 50.0)
+        self.declare_parameter('alignment_min_odom_baseline_m', 50.0)
+        self.declare_parameter('alignment_min_odom_sample_separation_m', 0.5)
+        self.declare_parameter('alignment_min_baseline_ratio', 0.5)
+        self.declare_parameter('alignment_max_baseline_ratio', 2.0)
+        self.declare_parameter('alignment_inlier_threshold_m', 2.5)
+        self.declare_parameter('alignment_min_inlier_ratio', 0.75)
+        self.declare_parameter('alignment_max_xy_rmse_m', 1.5)
+        self.declare_parameter('alignment_required_stable_yaw_estimates', 4)
+        self.declare_parameter('alignment_stable_yaw_min_path_increment_m', 2.0)
+        self.declare_parameter('alignment_max_stable_yaw_delta_deg', 2.0)
+        self.declare_parameter('alignment_observation_distance_m', 10.0)
+        self.declare_parameter('alignment_observation_min_gps_constraints', 5)
+        self.declare_parameter('alignment_observation_min_inlier_ratio', 0.75)
+        self.declare_parameter('alignment_observation_max_xy_rmse_m', 2.0)
+        self.declare_parameter(
+            'alignment_max_initial_to_observed_yaw_delta_deg', 2.0
+        )
+        self.declare_parameter('alignment_candidate_start_timeout_m', 15.0)
+        self.declare_parameter('alignment_restart_on_observation_failure', True)
         self.declare_parameter('freeze_alignment_after_init', True)
         self.declare_parameter('record_vio_global_csv', True)
+        self.declare_parameter('convert_gps_topic_wgs84_to_gcj02', True)
+
+        #融合节点（fusion_node）自己生成vio_global.csv，记录了融合后的全局位姿。每一行代表一个时间点机器人在哪里、朝向哪里。
         self.declare_parameter(
             'vio_global_csv_path',
             os.path.join(
@@ -493,15 +1000,37 @@ class CppLogicFusionNode(Node):
                 'vio_global.csv',
             ),
         )
+
         self.declare_parameter('enable_route_json_conversion', True)
+
+        #接收高层导航指令。
+        #route_waypoints.json是上层输出的文件。它包含了机器人需要前往的目标点（Waypoints），通常包含经纬度（Lat/Lon）或地理围栏信息。
+        #fusion_node 会定时（route_poll_sec）读取这个文件。
+        #解析 JSON 数据，将其转换为机器人能理解的坐标（ENU，东北天坐标系）。
         self.declare_parameter(
             'route_json_path',
-            '/home/orin26/code/Urban-Nav-SR/Policy_part/topomaps/LLM_Policy/route_waypoints.json',
+            os.path.join(
+                POLICY_PART_DIR,
+                'topomaps',
+                'LLM_Policy',
+                'route_waypoints.json',
+            ),
         )
+
+        #读取 route_json_path 中的人类可读坐标（经纬度）。
+        #结合当前的 GPS 位置，计算出相对于机器人的坐标（ENU）。
+        #将计算好的坐标写入 route_output_path.txt，供推理节点（model_inference.py Node）。
         self.declare_parameter(
             'route_output_path',
-            '/home/orin26/code/Urban-Nav-SR/Policy_part/topomaps/LLM_Policy/LLM_UTM_odom_poses.txt',
+            os.path.join(
+                POLICY_PART_DIR,
+                'topomaps',
+                'LLM_Policy',
+                'LLM_UTM_odom_poses.txt',
+            ),
         )
+
+
         self.declare_parameter('route_default_altitude', 33.0)
         self.declare_parameter('route_poll_sec', 1.0)
         self.estimator = Ros1GlobalFusionEstimator(
@@ -509,6 +1038,61 @@ class CppLogicFusionNode(Node):
             optimization_mode=str(self.get_parameter('optimization_mode').value),
             alignment_min_gps_constraints=int(self.get_parameter('alignment_min_gps_constraints').value),
             alignment_min_baseline_m=float(self.get_parameter('alignment_min_baseline_m').value),
+            alignment_min_odom_baseline_m=float(
+                self.get_parameter('alignment_min_odom_baseline_m').value
+            ),
+            alignment_min_odom_sample_separation_m=float(
+                self.get_parameter('alignment_min_odom_sample_separation_m').value
+            ),
+            alignment_min_baseline_ratio=float(
+                self.get_parameter('alignment_min_baseline_ratio').value
+            ),
+            alignment_max_baseline_ratio=float(
+                self.get_parameter('alignment_max_baseline_ratio').value
+            ),
+            alignment_inlier_threshold_m=float(
+                self.get_parameter('alignment_inlier_threshold_m').value
+            ),
+            alignment_min_inlier_ratio=float(
+                self.get_parameter('alignment_min_inlier_ratio').value
+            ),
+            alignment_max_xy_rmse_m=float(
+                self.get_parameter('alignment_max_xy_rmse_m').value
+            ),
+            alignment_required_stable_yaw_estimates=int(
+                self.get_parameter('alignment_required_stable_yaw_estimates').value
+            ),
+            alignment_stable_yaw_min_path_increment_m=float(
+                self.get_parameter('alignment_stable_yaw_min_path_increment_m').value
+            ),
+            alignment_max_stable_yaw_delta_deg=float(
+                self.get_parameter('alignment_max_stable_yaw_delta_deg').value
+            ),
+            alignment_observation_distance_m=float(
+                self.get_parameter('alignment_observation_distance_m').value
+            ),
+            alignment_observation_min_gps_constraints=int(
+                self.get_parameter('alignment_observation_min_gps_constraints').value
+            ),
+            alignment_observation_min_inlier_ratio=float(
+                self.get_parameter('alignment_observation_min_inlier_ratio').value
+            ),
+            alignment_observation_max_xy_rmse_m=float(
+                self.get_parameter('alignment_observation_max_xy_rmse_m').value
+            ),
+            alignment_max_initial_to_observed_yaw_delta_deg=float(
+                self.get_parameter(
+                    'alignment_max_initial_to_observed_yaw_delta_deg'
+                ).value
+            ),
+            alignment_candidate_start_timeout_m=float(
+                self.get_parameter('alignment_candidate_start_timeout_m').value
+            ),
+            alignment_restart_on_observation_failure=bool(
+                self.get_parameter(
+                    'alignment_restart_on_observation_failure'
+                ).value
+            ),
             freeze_alignment_after_init=bool(self.get_parameter('freeze_alignment_after_init').value),
         )
         self.gps_queue = deque()
@@ -557,10 +1141,57 @@ class CppLogicFusionNode(Node):
         )
         if str(self.get_parameter('optimization_mode').value).lower() == 'alignment':
             self.get_logger().info(
-                'alignment gate: min_gps_constraints=%d min_baseline=%.2f freeze_after_init=%s'
+                'alignment gate: min_gps_constraints=%d min_gps_baseline=%.2f '
+                'min_odom_baseline=%.2f sample_separation=%.2f baseline_ratio=[%.2f,%.2f] '
+                'inlier_threshold=%.2f min_inlier_ratio=%.2f max_xy_rmse=%.2f '
+                'stable_yaws=%d path_increment=%.2f max_yaw_delta=%.2fdeg '
+                'observation=%.2fm observation_constraints=%d observation_inliers=%.2f '
+                'observation_rmse=%.2f observed_yaw_delta=%.2fdeg '
+                'candidate_timeout=%.2fm auto_restart=%s freeze_after_init=%s'
                 % (
                     int(self.get_parameter('alignment_min_gps_constraints').value),
                     float(self.get_parameter('alignment_min_baseline_m').value),
+                    float(self.get_parameter('alignment_min_odom_baseline_m').value),
+                    float(self.get_parameter('alignment_min_odom_sample_separation_m').value),
+                    float(self.get_parameter('alignment_min_baseline_ratio').value),
+                    float(self.get_parameter('alignment_max_baseline_ratio').value),
+                    float(self.get_parameter('alignment_inlier_threshold_m').value),
+                    float(self.get_parameter('alignment_min_inlier_ratio').value),
+                    float(self.get_parameter('alignment_max_xy_rmse_m').value),
+                    int(self.get_parameter('alignment_required_stable_yaw_estimates').value),
+                    float(
+                        self.get_parameter('alignment_stable_yaw_min_path_increment_m').value
+                    ),
+                    float(self.get_parameter('alignment_max_stable_yaw_delta_deg').value),
+                    float(self.get_parameter('alignment_observation_distance_m').value),
+                    int(
+                        self.get_parameter(
+                            'alignment_observation_min_gps_constraints'
+                        ).value
+                    ),
+                    float(
+                        self.get_parameter(
+                            'alignment_observation_min_inlier_ratio'
+                        ).value
+                    ),
+                    float(
+                        self.get_parameter(
+                            'alignment_observation_max_xy_rmse_m'
+                        ).value
+                    ),
+                    float(
+                        self.get_parameter(
+                            'alignment_max_initial_to_observed_yaw_delta_deg'
+                        ).value
+                    ),
+                    float(
+                        self.get_parameter('alignment_candidate_start_timeout_m').value
+                    ),
+                    bool(
+                        self.get_parameter(
+                            'alignment_restart_on_observation_failure'
+                        ).value
+                    ),
                     bool(self.get_parameter('freeze_alignment_after_init').value),
                 )
             )
@@ -579,7 +1210,13 @@ class CppLogicFusionNode(Node):
     def optimization_loop(self):
         period = float(self.get_parameter('optimization_period_sec').value)
         while rclpy.ok() and not self.stop_event.wait(max(0.0, period)):
-            if self.estimator.optimize():
+            aligned = self.estimator.optimize()
+            reset_messages = self.estimator.consume_alignment_reset_messages()
+            for message in reset_messages:
+                self.get_logger().warning(message)
+                self.last_alignment_wait_log = message
+
+            if aligned:
                 self.get_logger().info(
                     'global optimization (ros1 python logic): %s'
                     % self.estimator.get_alignment_status()
@@ -643,10 +1280,14 @@ class CppLogicFusionNode(Node):
                 acc = float(gps_msg.position_covariance[0])
                 if acc <= 0.0 or not math.isfinite(acc):
                     acc = 1.0
+                gps_latitude = float(gps_msg.latitude)
+                gps_longitude = float(gps_msg.longitude)
+                if bool(self.get_parameter('convert_gps_topic_wgs84_to_gcj02').value):
+                    gps_longitude, gps_latitude = wgs84_to_gcj02(gps_longitude, gps_latitude)
                 self.estimator.input_gps(
                     vio_t,
-                    gps_msg.latitude,
-                    gps_msg.longitude,
+                    gps_latitude,
+                    gps_longitude,
                     gps_msg.altitude,
                     acc,
                 )
@@ -678,7 +1319,7 @@ class CppLogicFusionNode(Node):
         if not self.estimator.has_gps_origin():
             if not self.route_waiting_origin_warned:
                 self.get_logger().warn(
-                    'Route JSON conversion is waiting for the first GPS fix, so the output uses the fusion GPS origin.'
+                    'Route JSON conversion is waiting for the first GPS fix; hardware WGS-84 GPS will be converted to GCJ-02 before building the ENU origin.'
                 )
                 self.route_waiting_origin_warned = True
             return
@@ -694,7 +1335,10 @@ class CppLogicFusionNode(Node):
         self.last_route_signature = signature
 
     def convert_json_waypoints_to_enu_txt(self, waypoints, route_output_path):
-        self.get_logger().info(f'Converting route with {len(waypoints)} waypoints')
+        self.get_logger().info(
+            'Converting route with %d GCJ-02 waypoints using the GCJ-02 hardware GPS origin'
+            % len(waypoints)
+        )
         output_dir = os.path.dirname(route_output_path)
         if output_dir:
             os.makedirs(output_dir, exist_ok=True)
@@ -718,7 +1362,7 @@ class CppLogicFusionNode(Node):
                     f'{waypoint.qz:.15f}',
                 ])
                 self.get_logger().info(
-                    'Waypoint %d: Lat=%.6f, Lon=%.6f, Alt=%.2f -> ENU(%.2f, %.2f, %.2f)'
+                    'Waypoint %d: GCJ02 Lat=%.6f, Lon=%.6f, Alt=%.2f -> ENU(%.2f, %.2f, %.2f)'
                     % (
                         index,
                         waypoint.latitude,
