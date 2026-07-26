@@ -7,6 +7,10 @@ V3 代码的重命名。它只覆盖当前数据真实具备的输入和监督�
 response、ContextAsset、GPS、pose、calibration、route matching、route theta、arrival
 state、tracker、TTC、mask、bbox 或 calibrated confidence。
 
+本 Markdown 是可编辑的 source of truth；同目录
+`UrbanNav Reasoning V4 Canonical Contract.pdf` 只是由本文生成的审阅快照，内容必须随
+本文同步，不能独立定义另一套合同。
+
 ## 1. 当前实现结论
 
 当前 V4 的职责边界是：
@@ -225,10 +229,10 @@ blocked/forbidden region，以保留“任务要求向前但前方被阻挡，De
 
 | 字段 | 定义 | 来源 | Student 可推断 | Loss |
 | --- | --- | --- | --- | --- |
-| `decision_type` | navigate/stop/request_user/request_replan；`finish` 只保留 runtime 协议值，Stage-A 无 arrival 证据时 validator 拒绝 | LVLM + runtime protocol | 是 | LM |
+| `decision_type` | Stage-A 只允许 navigate/stop；navigate 选择可执行局部区域，stop 保守保持当前位置且不宣称任务完成 | LVLM + Stage-A 协议 | 是 | LM |
 | `motion` | go_straight/turn_left/turn_right/stop | LVLM + 协议 | 是 | LM |
 | `speed` | normal/slow/stop | LVLM + 协议 | 是 | LM |
-| `social_action` | none/yield/wait/follow/pass/detour/unknown | LVLM + 协议 | 是 | LM |
+| `social_action` | none/yield/wait/follow/pass_left/pass_right/detour/unknown | LVLM + 协议 | 是 | LM |
 | `selected_region_ref` | navigate 时唯一可执行候选 region | LVLM | 是 | LM |
 | `fallback` | 证据恶化时的保守行为 | LVLM + 协议 | 是 | LM |
 | `support_refs[]` | 真正影响决策的 semantic refs | LVLM | 是 | LM |
@@ -237,6 +241,11 @@ blocked/forbidden region，以保留“任务要求向前但前方被阻挡，De
 Decision 不能携带 direction profile、label index、trajectory 或 confidence。若 strong
 direction 与 Decision 的 coarse motion 不一致，整条 full view fail closed；composer
 不会用 GT 回写或修复 LVLM Decision。
+
+代码中的 `DecisionTypeV4` 仍保留 `finish/request_user/request_replan`，只用于未来
+runtime/agentic 合同的类型兼容；它们不会出现在当前 teacher JSON Schema 或 student
+prompt 的 enum 中，section validator、full target validator、training-view validator 和
+ms-swift adapter 也都会拒绝它们。因此 Stage-A 数据不能借底层类型的兼容值扩张任务。
 
 ## 5. Wire、Finish 和 System1
 
@@ -327,7 +336,7 @@ navigate selected region 不可解析、非 candidate 或不可执行
 Decision support ref 不可解析
 Decision 采用的 constraint 不作用于 selected region
 Decision 与 applicable constraint 冲突
-Stage-A 生成 finish decision
+Stage-A 生成 navigate/stop 之外的 decision_type
 strong direction stamp 不完整、profile 不允许或与 Decision 不兼容
 private field 出现在 assistant text
 ```
@@ -401,7 +410,56 @@ validator、codec 或 prompt 文本时，必须重新生成 artifacts/Python mir
 policy ID，并同时通过 freshness、byte parity、generated-mirror check、valid/invalid
 parser parity test。
 
-## 9. Smoke 与大规模标注前门禁
+## 9. Prompt 合同与优化原则
+
+Prompt 是合同的可执行说明，不是字段真值的第二来源。当前 policy 版本为：
+
+```text
+section_definition = urbannav_reasoning_v4_section_definitions_v2
+evidence_policy = urbannav_reasoning_v4_evidence_policy_v2
+validator = validate_reasoning_target_v4_v2
+student profiles = reasoning_v4_student_*_v2
+teacher profiles = reasoning_v4_teacher_*_v2
+```
+
+共同 system policy 先说明任务本身：为盲人、低视力用户和行动不便用户提供安全、
+可预测、无障碍且符合社会规范的短时步行导航。随后用正向规则规定模型应该如何形成决策：
+
+1. 完整读取当前 prompt 中真实提供的 instruction、按序 FPV、可选 BEV/goal/pixel-goal/
+   waypoint 和 evidence catalog。
+2. FPV 决定即时局部安全；任务/地图类 source 提供方向，但不能证明不可见或已阻塞区域
+   可通行。
+3. `evidence_refs` 必须逐字复制 catalog 中的 raw ref；semantic ref 只组织推理对象，
+   自身不能创造证据。
+4. 五个 grounding section 各自读取完整输入并只回答自己的科研问题；它们不是一条
+   “上一段答案成为下一段唯一输入”的串行链。
+5. 单帧可以支持占用、邻近、静态阻挡和粗 clearance；crossing/approaching 等动态关系
+   必须有不同历史 FPV，证据不足时改用静态关系或 `uncertain`。
+6. Interaction 必须形成 `source -> candidate region -> relation -> effect`，不能因为
+   看见实体或交通设施就机械生成规则。
+7. Decision 联合原始输入与五段结果，只输出 `navigate` 或 `stop`；前者必须选择可解析且
+   可执行的 region，后者不表示完成、重规划或发起人机交互。
+
+禁止项压缩为一条边界：只使用 prompt-visible evidence，连续轨迹、未来 pose、方向标签
+metadata、segmentation 等 private sidecar 不得进入 reasoning text。具体私有 key 的
+fail-closed 列表仍由 source/view validator 维护，不在 prompt 中重复罗列，以免禁止项
+挤占核心导航策略。
+
+三类输出 profile 分工如下：
+
+| Profile | 输入 | 唯一合法输出 |
+| --- | --- | --- |
+| full | 完整 observation | 六个固定 tag、`finish`、满足显式请求且 navigate/System1 eligible 时的唯一 readout |
+| grounding | 完整 observation | 一个指定 grounding tag |
+| Decision | 完整 observation + 五段已验证 grounding | 一个 `Decision` tag |
+
+student prompt 的字段骨架、required 标记和 enum 由 canonical Pydantic schema 自动展开；
+Stage-A 对 `DecisionV4.decision_type` 和 `FinishV4.decision_type` 显式投影为
+`navigate | stop`。teacher 的 Decision response schema 使用同一投影，避免出现“文字说
+不能生成、JSON Schema 却允许生成”的冲突。任何 prompt 或投影变化都进入 policy digest，
+并通过生成镜像同步到 ms-swift。
+
+## 10. Smoke 与大规模标注前门禁
 
 先冻结 20–32 条 source coverage set，联合覆盖 SideWalk、Foxglove、FrodoBots、EgoWalk、
 instruction/FPV/history/optional BEV、两个允许的 direction profile，并执行：
