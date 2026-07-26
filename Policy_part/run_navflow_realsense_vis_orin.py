@@ -212,9 +212,12 @@ class AsyncVideoWriter:
         self.overlay_camera_pitch_deg = float(overlay_camera_pitch_deg)
 
         # Queue entries contain camera frame, waypoints, latest BEV, and time.
-        self._queue = mp.Queue(maxsize=max_queue)
-        self._stop_event = mp.Event()
-        self._process = mp.Process(
+        # TensorRT/CUDA is initialized before this writer. Use spawn so the
+        # encoder process never inherits CUDA worker threads via fork.
+        mp_context = mp.get_context("spawn")
+        self._queue = mp_context.Queue(maxsize=max_queue)
+        self._stop_event = mp_context.Event()
+        self._process = mp_context.Process(
             target=self._worker,
             args=(
                 self._queue,
