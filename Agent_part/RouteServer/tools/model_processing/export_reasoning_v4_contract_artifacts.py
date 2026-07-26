@@ -138,6 +138,7 @@ def _canonical_source_hashes() -> dict[str, str]:
 
     route_root = Path(__file__).resolve().parents[2]
     relative_paths = (
+        "src/mcp_server/contracts/direction_profile.py",
         "src/mcp_server/contracts/reasoning_v4.py",
         "src/mcp_server/contracts/reasoning_dataset_v4.py",
         "src/mcp_server/agent/reasoning_v4_prompt_policy.py",

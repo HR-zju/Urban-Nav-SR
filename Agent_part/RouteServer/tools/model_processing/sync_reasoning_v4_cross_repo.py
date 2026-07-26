@@ -14,6 +14,24 @@ _GENERATED_HEADER = (
     "# Generated from RouteServer canonical Reasoning V4. "
     "Do not edit by hand.\n"
 )
+_DIRECTION_GENERATED_HEADER = (
+    "# Generated from RouteServer canonical Stage-A direction profiles. "
+    "Do not edit by hand.\n"
+)
+
+
+def render_direction_profile_mirror(source_text: str) -> str:
+    """Rewrite the package-local ReasonCode import for ms-swift."""
+
+    expected = "from mcp_server.contracts.reasoning import ReasonCode"
+    if source_text.count(expected) != 1:
+        raise ValueError(
+            "canonical direction ReasonCode import is missing or ambiguous"
+        )
+    return _DIRECTION_GENERATED_HEADER + source_text.replace(
+        expected,
+        "from .reasoning import ReasonCode",
+    )
 
 
 def render_reasoning_v4_contract_mirror(source_text: str) -> str:
@@ -36,6 +54,9 @@ def render_reasoning_v4_dataset_contract_mirror(
     """Rewrite dataset-contract imports for the ms-swift package."""
 
     replacements = {
+        "from mcp_server.contracts.direction_profile import (": (
+            "from ._generated_direction_profile import ("
+        ),
         "from mcp_server.contracts.reasoning import ReasonCode": (
             "from .reasoning import ReasonCode"
         ),
@@ -78,6 +99,13 @@ def sync_reasoning_v4_cross_repo(
     route_root = Path(__file__).resolve().parents[2]
     ms_root = Path(ms_swift_root).expanduser().resolve()
     pairs = (
+        (
+            route_root
+            / "src/mcp_server/contracts/direction_profile.py",
+            ms_root
+            / "swift/sidewalk_nav/_generated_direction_profile.py",
+            render_direction_profile_mirror,
+        ),
         (
             route_root
             / "src/mcp_server/contracts/reasoning_v4.py",

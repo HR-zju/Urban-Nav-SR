@@ -9,6 +9,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from mcp_server.contracts.direction_profile import (
+    DirectionLabelStamp,
+    approved_stage_a_direction_profiles,
+    canonical_direction_derivation_version,
+)
 from mcp_server.contracts.reasoning import ReasonCode
 from mcp_server.contracts.reasoning_v4 import (
     DecisionV4,
@@ -83,64 +88,6 @@ TrainingViewTypeV4 = Literal[
     "grounding_section_sft",
     "decision_section_sft",
 ]
-
-_APPROVED_DIRECTION_PROFILES_V4: dict[str, dict[str, Any]] = {
-    "fpv_degree10_terminal_centroid_v2": {
-        "profile_version": "2.0",
-        "bin_mode": "degree10_with_stop",
-        "derivation_version": "pixel_trajectory_terminal_centroid_rule_v2",
-        "labels": tuple(
-            [
-                (
-                    f"left_{abs(angle)}"
-                    if angle < 0
-                    else f"right_{angle}"
-                    if angle > 0
-                    else "straight"
-                )
-                for angle in range(-90, 91, 10)
-            ]
-            + ["stop"]
-        ),
-        "choices": tuple(chr(ord("A") + index) for index in range(19)) + ("T",),
-        "angles": tuple(float(angle) for angle in range(-90, 91, 10)) + (None,),
-    },
-    "ego_degree10_12way_terminal_centroid_v2": {
-        "profile_version": "2.0",
-        "bin_mode": "degree10_12way_with_stop",
-        "derivation_version": "ego_x_right_y_front_terminal_centroid_rule_v2",
-        "labels": (
-            "stop",
-            "straight",
-            "left_10",
-            "right_10",
-            "left_20",
-            "right_20",
-            "left_30",
-            "right_30",
-            "left_40",
-            "right_40",
-            "left_50plus",
-            "right_50plus",
-        ),
-        "choices": tuple(chr(ord("A") + index) for index in range(12)),
-        "angles": (
-            None,
-            0.0,
-            -10.0,
-            10.0,
-            -20.0,
-            20.0,
-            -30.0,
-            30.0,
-            -40.0,
-            40.0,
-            -50.0,
-            50.0,
-        ),
-    },
-}
-
 
 class EvidenceCatalogEntryV4(BaseModel):
     """Describe one raw prompt-visible evidence item."""
@@ -250,51 +197,18 @@ class NavObservationV4(BaseModel):
         return self
 
 
-class DirectionSupervisionV4(BaseModel):
+class DirectionSupervisionV4(DirectionLabelStamp):
     """Carry one complete, profile-stamped deterministic direction label."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    profile_id: str = Field(min_length=1, max_length=128)
-    profile_version: str = Field(min_length=1, max_length=64)
-    label_index: int = Field(ge=0)
-    label_name: ReasonCode
-    choice: str = Field(min_length=1, max_length=32)
-    angle_deg: float | None = Field(default=None, ge=-180.0, le=180.0)
-    source: ReasonCode
-    bin_mode: str = Field(min_length=1, max_length=64)
-    derivation_version: str = Field(min_length=1, max_length=128)
 
     @model_validator(mode="after")
     def validate_profile_stamp(self) -> "DirectionSupervisionV4":
-        """Fail closed on unapproved, partial, or internally inconsistent stamps."""
+        """Require the profile's canonical trajectory derivation."""
 
-        try:
-            profile = _APPROVED_DIRECTION_PROFILES_V4[self.profile_id]
-        except KeyError as exc:
-            raise ValueError(
-                f"unapproved Reasoning V4 direction profile: {self.profile_id}"
-            ) from exc
-        if self.profile_version != profile["profile_version"]:
-            raise ValueError("direction profile_version mismatch")
-        if self.bin_mode != profile["bin_mode"]:
-            raise ValueError("direction bin_mode mismatch")
-        if self.derivation_version != profile["derivation_version"]:
-            raise ValueError("direction derivation_version mismatch")
-        if "route_theta" in self.source:
-            raise ValueError("route_theta direction supervision is forbidden")
-        if self.label_index >= len(profile["labels"]):
-            raise ValueError("direction label_index is outside approved profile")
-        expected = (
-            profile["labels"][self.label_index],
-            profile["choices"][self.label_index],
-            profile["angles"][self.label_index],
+        expected_derivation = canonical_direction_derivation_version(
+            self.profile_id
         )
-        actual = (self.label_name, self.choice, self.angle_deg)
-        if actual != expected:
-            raise ValueError(
-                f"direction label identity mismatch: expected={expected}, actual={actual}"
-            )
+        if self.derivation_version != expected_derivation:
+            raise ValueError("direction derivation_version mismatch")
         coarse_motion_for_direction_label_v4(self.label_name)
         return self
 
@@ -519,7 +433,7 @@ def reasoning_source_fingerprint_v4(payload: dict[str, Any]) -> str:
 def approved_direction_profiles_v4() -> dict[str, dict[str, Any]]:
     """Return a JSON-compatible snapshot of the V4 direction allowlist."""
 
-    return json.loads(json.dumps(_APPROVED_DIRECTION_PROFILES_V4))
+    return approved_stage_a_direction_profiles()
 
 
 def _validate_xyt(value: list[list[float]]) -> None:
