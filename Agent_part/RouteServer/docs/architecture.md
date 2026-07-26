@@ -1058,7 +1058,77 @@ travel mode applicable
 缺少任何一项时必须写 `unknown` 或空 `applicable`；不能为了填满 CoT 而生成
 yield、pass、TTC 或 right-of-way 伪真值。
 
-### 5.4 Legacy V2 导出边界
+### 5.4 Navigation VQA V2 原子监督链
+
+VQA V2 是与 Reasoning V4 并列的 answer-only LM contract，不是 Full CoT 的 section
+projection，也不是在线 Agent node。完整 27-task 定义、来源与 capability 状态见
+`docs/VQA_V2_DATA_ANNOTATION_DESIGN.md`。
+
+架构上的核心 partition 是：
+
+```text
+VQASourceV2
+  observation             student-visible NavObservationV4
+  direction_supervision   private existing-trajectory derived label
+  interfaces              private future external-GT bindings
+  source_fingerprint      complete source identity
+
+VQAAnnotationV2
+  question                answer-independent typed question
+  answer                  one task-discriminated minimal payload
+  provenance              source/producer/prompt/evidence digests
+
+VQATrainingViewV2
+  visible observation + question + minimal assistant_text
+  no direction_supervision/interfaces/trajectory/Full-CoT/dense target
+```
+
+`VQAQuestionV2` 的字段职责为：
+
+| 字段 | 作用 |
+| --- | --- |
+| `task_id/template_id/question_text` | 冻结原子科研问题及模板版本 |
+| `direction_profile_id` | 标识本题使用哪套方向合同 |
+| `conditioned_direction_label` | B/D 判断题明确要求检查的方向；禁止复制到 answer |
+| `candidate_direction_labels` | selection/comparison 题的唯一合法方向集合 |
+| `target_refs/evidence_refs` | 限定 prompt-visible target 与 raw evidence 闭包 |
+| `candidate_set_id/visible_candidates/target_candidate_id` | 未来 E1–E3 的 candidate ID、student-visible 表示和指定 target；当前任务关闭 |
+
+student prompt 只渲染 `question.evidence_refs` 命中的 evidence catalog 项，并显式列出
+`target_refs`。这与 weak teacher 的可见 evidence 闭包一致；C4 将来启用时，
+`bev.*`/`fpv.*` 两个 cross-view ID 也必须先成为真实 prompt-visible evidence。
+
+`VQAAnnotationV2` 的 `label_source` 严格区分 `derived_gt/lvlm_weak/external_gt`。
+`source_field_refs` 对 derived GT 必填；weak label 必须携带 teacher model、prompt profile 和
+policy digest。只保存 accepted annotation，unavailable/rejected/error 只进入 audit report，
+不能生成空 target。
+
+当前 capability profile 打开 18 个 task：
+
+- A1–A3、B1–B6、C1、D1–D6、E4：仅用 student-visible 输入的 LVLM weak label；
+- E0：按共享 direction profile 从数据集中已有的 trajectory GT 确定性派生；
+- C2 pixel/waypoint、C3–C6、E1–E3：contract/source interface ready，但 producer、
+  question generation、training export 和 evaluation 全部关闭。
+
+关闭任务的 interface 只存在于 private source schema；不进入 training view 或 ms-swift
+manifest。C3 禁止 GPS、route matching 和 route theta；C4 当前不假定 cross-view entity
+ID，未来接口只接受已经 prompt-visible 的 `bev.*`/`fpv.*` ID；C5 不把
+current/future direction 混成一个 label；E1–E3 必须等待真正
+prompt-visible candidate set 和对应 GT。
+
+ms-swift 最终构造：
+
+```text
+system: canonical positive VQA policy
+user: actual multimodal input + one atomic question
+assistant: <VQAAnswer>{minimal payload}</VQAAnswer>
+```
+
+整个 assistant target 使用普通 LM loss。E0 direction 不走独立 head；VQA row 的
+System1、trajectory、segmentation loss 均关闭。SegHead、SAM/SoM 与 mIoU 只保留显式
+unavailable 状态，不能包装成当前能力。
+
+### 5.5 Legacy V2 导出边界
 
 V2 exporter 只保留 canonical Full CoT/System1 view。旧的 Map/Social section-QA
 registry、投影器和弱 teacher gate 已删除；后续 VQA 使用独立 typed
@@ -3068,6 +3138,21 @@ src/mcp_server/data/reasoning_v4_composer.py
 src/mcp_server/agent/reasoning_v4_validation.py
   V4 raw-evidence closure, cross-section findings and executability
 
+src/mcp_server/contracts/vqa_v2.py
+  27-task answer-independent question and minimal typed answer contract
+
+src/mcp_server/contracts/vqa_dataset_v2.py
+  visible/private source partition, provenance annotation, capability and training view
+
+src/mcp_server/data/vqa_v2_*.py
+  source conversion, eligibility, questions, producer routing, view export and audit
+
+src/mcp_server/teacher/vqa_v2_*.py
+  visible-only task profiles, strict LVLM response parser and resumable batch
+
+src/mcp_server/eval/vqa_v2.py
+  stable-id offline parse/exact/field/direction evaluation
+
 src/mcp_server/contracts/reasoning.py
   Legacy ReasoningTraceV2 / FinishV2 / five strongly typed sections
 
@@ -3171,6 +3256,12 @@ swift/sidewalk_nav/adapters/action_runtime_adapter.py
 swift/sidewalk_nav/data/agentic_episode_manifest.py
   EpisodeTraceV2 -> session SFT/DAgger rows
 
+swift/sidewalk_nav/data/vqa_v2_manifest.py
+  generated VQA view -> fresh full-target LM-only messages row
+
+swift/sidewalk_nav/data/vqa_v2_generation_smoke.py
+  strict model-response parse, exact and per-task audit
+
 swift/sidewalk_nav/rollout/urbannav_env.py
   strict reset/step/event RouteServer client
 ```
@@ -3196,6 +3287,9 @@ swift/sidewalk_nav/rollout/urbannav_env.py
 | v2 assistant-suffix readout | 已实现 | `[SYS1_i]` 位于 finish 后且 LM mask |
 | Reasoning V4 六段 Full CoT | 已实现本地合同与单测，待真实 LVLM smoke | 五段独立 teacher、联合 Decision、composer、两仓 schema/profile parity |
 | Reasoning V4 真实 LVLM/训练/生成 smoke | 待完成 | 人工 review、短训练与 checkpoint 生成回读通过后才能全量标注 |
+| Navigation VQA V2 contract/pipeline | 已实现本地合同与 focused tests | 27 task、18 active/9 dormant、E0 derived GT、17 visible weak tasks、两仓 artifact/parser parity |
+| Navigation VQA V2 真实 LVLM/训练/生成 smoke | 待完成 | 尚未调用真实 teacher；人工 review、实际产量、短训练和 checkpoint 生成回读未验证 |
+| Navigation VQA V1 | 已删除 | 被 V2.0 取代；不保留 parser、manifest、test、设计文档或双写 |
 | Legacy ReasoningTraceV2 五段 CoT | 已实现 | 仅供既有 V2 数据和旧 agentic 实验 |
 | Legacy V2 section QA | 已删除 | schema、投影器、teacher gate、artifact 和训练消费入口均已下线 |
 | V1 CoT/finish 读取兼容 | 已实现 | adapter 双读；新 Stage2 exporter 只写 V2 |
