@@ -1,0 +1,303 @@
+{
+  "schema_version": "urbannav_navigation_vqa_capabilities_v2_0",
+  "profile_id": "urbannav_navigation_vqa_stage_a_v2_0",
+  "tasks": [
+    {
+      "task_id": "a1_goal_understanding",
+      "contract_ready": true,
+      "source_interface_ready": true,
+      "label_producer_ready": true,
+      "training_export_enabled": true,
+      "evaluation_enabled": true,
+      "producer_ids": ["lvlm_visible_vqa_teacher"],
+      "depends_on": [],
+      "disabled_reason": null
+    },
+    {
+      "task_id": "a2_explicit_requirement",
+      "contract_ready": true,
+      "source_interface_ready": true,
+      "label_producer_ready": true,
+      "training_export_enabled": true,
+      "evaluation_enabled": true,
+      "producer_ids": ["lvlm_visible_vqa_teacher"],
+      "depends_on": [],
+      "disabled_reason": null
+    },
+    {
+      "task_id": "a3_task_ambiguity",
+      "contract_ready": true,
+      "source_interface_ready": true,
+      "label_producer_ready": true,
+      "training_export_enabled": true,
+      "evaluation_enabled": true,
+      "producer_ids": ["lvlm_visible_vqa_teacher"],
+      "depends_on": [],
+      "disabled_reason": null
+    },
+    {
+      "task_id": "b1_direction_affordance",
+      "contract_ready": true,
+      "source_interface_ready": true,
+      "label_producer_ready": true,
+      "training_export_enabled": true,
+      "evaluation_enabled": true,
+      "producer_ids": ["lvlm_visible_vqa_teacher"],
+      "depends_on": [],
+      "disabled_reason": null
+    },
+    {
+      "task_id": "b2_direction_clearance",
+      "contract_ready": true,
+      "source_interface_ready": true,
+      "label_producer_ready": true,
+      "training_export_enabled": true,
+      "evaluation_enabled": true,
+      "producer_ids": ["lvlm_visible_vqa_teacher"],
+      "depends_on": [],
+      "disabled_reason": null
+    },
+    {
+      "task_id": "b3_direction_surface_effect",
+      "contract_ready": true,
+      "source_interface_ready": true,
+      "label_producer_ready": true,
+      "training_export_enabled": true,
+      "evaluation_enabled": true,
+      "producer_ids": ["lvlm_visible_vqa_teacher"],
+      "depends_on": [],
+      "disabled_reason": null
+    },
+    {
+      "task_id": "b4_conditional_affordance",
+      "contract_ready": true,
+      "source_interface_ready": true,
+      "label_producer_ready": true,
+      "training_export_enabled": true,
+      "evaluation_enabled": true,
+      "producer_ids": ["lvlm_visible_vqa_teacher"],
+      "depends_on": [],
+      "disabled_reason": null
+    },
+    {
+      "task_id": "b5_direction_comparison",
+      "contract_ready": true,
+      "source_interface_ready": true,
+      "label_producer_ready": true,
+      "training_export_enabled": true,
+      "evaluation_enabled": true,
+      "producer_ids": ["lvlm_visible_vqa_teacher"],
+      "depends_on": [],
+      "disabled_reason": null
+    },
+    {
+      "task_id": "b6_unavailable_directions",
+      "contract_ready": true,
+      "source_interface_ready": true,
+      "label_producer_ready": true,
+      "training_export_enabled": true,
+      "evaluation_enabled": true,
+      "producer_ids": ["lvlm_visible_vqa_teacher"],
+      "depends_on": [],
+      "disabled_reason": null
+    },
+    {
+      "task_id": "c1_goal_to_direction",
+      "contract_ready": true,
+      "source_interface_ready": true,
+      "label_producer_ready": true,
+      "training_export_enabled": true,
+      "evaluation_enabled": true,
+      "producer_ids": ["lvlm_visible_vqa_teacher"],
+      "depends_on": [],
+      "disabled_reason": null
+    },
+    {
+      "task_id": "c2_pixel_goal_to_direction",
+      "contract_ready": true,
+      "source_interface_ready": true,
+      "label_producer_ready": false,
+      "training_export_enabled": false,
+      "evaluation_enabled": false,
+      "producer_ids": [],
+      "depends_on": [],
+      "disabled_reason": "pixel_goal_direction_gt_unavailable"
+    },
+    {
+      "task_id": "c2_waypoint_to_direction",
+      "contract_ready": true,
+      "source_interface_ready": true,
+      "label_producer_ready": false,
+      "training_export_enabled": false,
+      "evaluation_enabled": false,
+      "producer_ids": [],
+      "depends_on": [],
+      "disabled_reason": "waypoint_direction_gt_unavailable"
+    },
+    {
+      "task_id": "c3_bev_route_alignment",
+      "contract_ready": true,
+      "source_interface_ready": true,
+      "label_producer_ready": false,
+      "training_export_enabled": false,
+      "evaluation_enabled": false,
+      "producer_ids": [],
+      "depends_on": [],
+      "disabled_reason": "independent_bev_route_gt_unavailable"
+    },
+    {
+      "task_id": "c4_bev_object_anchoring",
+      "contract_ready": true,
+      "source_interface_ready": true,
+      "label_producer_ready": false,
+      "training_export_enabled": false,
+      "evaluation_enabled": false,
+      "producer_ids": [],
+      "depends_on": [],
+      "disabled_reason": "cross_view_entity_binding_unavailable"
+    },
+    {
+      "task_id": "c5_outside_view_direction",
+      "contract_ready": true,
+      "source_interface_ready": true,
+      "label_producer_ready": false,
+      "training_export_enabled": false,
+      "evaluation_enabled": false,
+      "producer_ids": [],
+      "depends_on": [],
+      "disabled_reason": "future_direction_gt_unavailable"
+    },
+    {
+      "task_id": "c6_bev_fpv_executability",
+      "contract_ready": true,
+      "source_interface_ready": true,
+      "label_producer_ready": false,
+      "training_export_enabled": false,
+      "evaluation_enabled": false,
+      "producer_ids": [],
+      "depends_on": ["c3_bev_route_alignment"],
+      "disabled_reason": "bev_fpv_executability_gt_unavailable"
+    },
+    {
+      "task_id": "d1_agent_relevance",
+      "contract_ready": true,
+      "source_interface_ready": true,
+      "label_producer_ready": true,
+      "training_export_enabled": true,
+      "evaluation_enabled": true,
+      "producer_ids": ["lvlm_visible_vqa_teacher"],
+      "depends_on": [],
+      "disabled_reason": null
+    },
+    {
+      "task_id": "d2_static_interaction_relation",
+      "contract_ready": true,
+      "source_interface_ready": true,
+      "label_producer_ready": true,
+      "training_export_enabled": true,
+      "evaluation_enabled": true,
+      "producer_ids": ["lvlm_visible_vqa_teacher"],
+      "depends_on": [],
+      "disabled_reason": null
+    },
+    {
+      "task_id": "d3_temporal_interaction_relation",
+      "contract_ready": true,
+      "source_interface_ready": true,
+      "label_producer_ready": true,
+      "training_export_enabled": true,
+      "evaluation_enabled": true,
+      "producer_ids": ["lvlm_visible_vqa_teacher"],
+      "depends_on": [],
+      "disabled_reason": null
+    },
+    {
+      "task_id": "d4_applicable_constraint",
+      "contract_ready": true,
+      "source_interface_ready": true,
+      "label_producer_ready": true,
+      "training_export_enabled": true,
+      "evaluation_enabled": true,
+      "producer_ids": ["lvlm_visible_vqa_teacher"],
+      "depends_on": [],
+      "disabled_reason": null
+    },
+    {
+      "task_id": "d5_appropriate_response",
+      "contract_ready": true,
+      "source_interface_ready": true,
+      "label_producer_ready": true,
+      "training_export_enabled": true,
+      "evaluation_enabled": true,
+      "producer_ids": ["lvlm_visible_vqa_teacher"],
+      "depends_on": [],
+      "disabled_reason": null
+    },
+    {
+      "task_id": "d6_traffic_control_applicability",
+      "contract_ready": true,
+      "source_interface_ready": true,
+      "label_producer_ready": true,
+      "training_export_enabled": true,
+      "evaluation_enabled": true,
+      "producer_ids": ["lvlm_visible_vqa_teacher"],
+      "depends_on": [],
+      "disabled_reason": null
+    },
+    {
+      "task_id": "e0_demonstrated_direction_selection",
+      "contract_ready": true,
+      "source_interface_ready": true,
+      "label_producer_ready": true,
+      "training_export_enabled": true,
+      "evaluation_enabled": true,
+      "producer_ids": ["canonical_demonstrated_direction"],
+      "depends_on": [],
+      "disabled_reason": null
+    },
+    {
+      "task_id": "e1_candidate_trajectory_preference",
+      "contract_ready": true,
+      "source_interface_ready": true,
+      "label_producer_ready": false,
+      "training_export_enabled": false,
+      "evaluation_enabled": false,
+      "producer_ids": [],
+      "depends_on": [],
+      "disabled_reason": "prompt_visible_candidate_preference_gt_unavailable"
+    },
+    {
+      "task_id": "e2_candidate_direction_classification",
+      "contract_ready": true,
+      "source_interface_ready": true,
+      "label_producer_ready": false,
+      "training_export_enabled": false,
+      "evaluation_enabled": false,
+      "producer_ids": [],
+      "depends_on": [],
+      "disabled_reason": "prompt_visible_candidate_direction_gt_unavailable"
+    },
+    {
+      "task_id": "e3_trajectory_compatibility",
+      "contract_ready": true,
+      "source_interface_ready": true,
+      "label_producer_ready": false,
+      "training_export_enabled": false,
+      "evaluation_enabled": false,
+      "producer_ids": [],
+      "depends_on": [],
+      "disabled_reason": "prompt_visible_trajectory_compatibility_gt_unavailable"
+    },
+    {
+      "task_id": "e4_alternative_direction",
+      "contract_ready": true,
+      "source_interface_ready": true,
+      "label_producer_ready": true,
+      "training_export_enabled": true,
+      "evaluation_enabled": true,
+      "producer_ids": ["lvlm_visible_vqa_teacher"],
+      "depends_on": [],
+      "disabled_reason": null
+    }
+  ]
+}

@@ -1,0 +1,81 @@
+{
+  "additionalProperties": false,
+  "description": "Carry a complete direction-label identity and its derivation source.",
+  "properties": {
+    "angle_deg": {
+      "anyOf": [
+        {
+          "maximum": 180.0,
+          "minimum": -180.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Angle Deg"
+    },
+    "bin_mode": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Bin Mode",
+      "type": "string"
+    },
+    "choice": {
+      "maxLength": 32,
+      "minLength": 1,
+      "title": "Choice",
+      "type": "string"
+    },
+    "derivation_version": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Derivation Version",
+      "type": "string"
+    },
+    "label_index": {
+      "minimum": 0,
+      "title": "Label Index",
+      "type": "integer"
+    },
+    "label_name": {
+      "maxLength": 96,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "title": "Label Name",
+      "type": "string"
+    },
+    "profile_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Profile Id",
+      "type": "string"
+    },
+    "profile_version": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Profile Version",
+      "type": "string"
+    },
+    "source": {
+      "maxLength": 96,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "title": "Source",
+      "type": "string"
+    }
+  },
+  "required": [
+    "profile_id",
+    "profile_version",
+    "label_index",
+    "label_name",
+    "choice",
+    "source",
+    "bin_mode",
+    "derivation_version"
+  ],
+  "title": "DirectionLabelStamp",
+  "type": "object"
+}

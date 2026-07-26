@@ -1,0 +1,725 @@
+{
+  "cases": [
+    {
+      "case_id": "a1_goal_understanding_extra_field",
+      "entrypoint": "assistant_text",
+      "expected_error_contains": "extra_forbidden",
+      "question": {
+        "candidate_direction_labels": [],
+        "candidate_set_id": null,
+        "conditioned_direction_label": null,
+        "direction_profile_id": null,
+        "evidence_refs": [
+          "fpv.current"
+        ],
+        "question_text": "Synthetic contract question for a1_goal_understanding?",
+        "target_candidate_id": null,
+        "target_refs": [],
+        "task_id": "a1_goal_understanding",
+        "template_id": "a1_goal_understanding_golden_v1",
+        "visible_candidates": []
+      },
+      "task_id": "a1_goal_understanding",
+      "value": "<VQAAnswer>{\"goal\":\"reach the visible entrance\",\"status\":\"resolved\",\"unexpected_field\":\"must_be_rejected\"}</VQAAnswer>"
+    },
+    {
+      "case_id": "a2_explicit_requirement_extra_field",
+      "entrypoint": "assistant_text",
+      "expected_error_contains": "extra_forbidden",
+      "question": {
+        "candidate_direction_labels": [],
+        "candidate_set_id": null,
+        "conditioned_direction_label": null,
+        "direction_profile_id": null,
+        "evidence_refs": [
+          "fpv.current"
+        ],
+        "question_text": "Synthetic contract question for a2_explicit_requirement?",
+        "target_candidate_id": null,
+        "target_refs": [],
+        "task_id": "a2_explicit_requirement",
+        "template_id": "a2_explicit_requirement_golden_v1",
+        "visible_candidates": []
+      },
+      "task_id": "a2_explicit_requirement",
+      "value": "<VQAAnswer>{\"requirements\":[\"avoid_stairs\"],\"status\":\"resolved\",\"unexpected_field\":\"must_be_rejected\"}</VQAAnswer>"
+    },
+    {
+      "case_id": "a3_task_ambiguity_extra_field",
+      "entrypoint": "assistant_text",
+      "expected_error_contains": "extra_forbidden",
+      "question": {
+        "candidate_direction_labels": [],
+        "candidate_set_id": null,
+        "conditioned_direction_label": null,
+        "direction_profile_id": null,
+        "evidence_refs": [
+          "fpv.current"
+        ],
+        "question_text": "Synthetic contract question for a3_task_ambiguity?",
+        "target_candidate_id": null,
+        "target_refs": [],
+        "task_id": "a3_task_ambiguity",
+        "template_id": "a3_task_ambiguity_golden_v1",
+        "visible_candidates": []
+      },
+      "task_id": "a3_task_ambiguity",
+      "value": "<VQAAnswer>{\"ambiguities\":[],\"status\":\"clear\",\"unexpected_field\":\"must_be_rejected\"}</VQAAnswer>"
+    },
+    {
+      "case_id": "b1_direction_affordance_extra_field",
+      "entrypoint": "assistant_text",
+      "expected_error_contains": "extra_forbidden",
+      "question": {
+        "candidate_direction_labels": [],
+        "candidate_set_id": null,
+        "conditioned_direction_label": "straight",
+        "direction_profile_id": "fpv_degree10_terminal_centroid_v2",
+        "evidence_refs": [
+          "fpv.current"
+        ],
+        "question_text": "Synthetic contract question for b1_direction_affordance?",
+        "target_candidate_id": null,
+        "target_refs": [],
+        "task_id": "b1_direction_affordance",
+        "template_id": "b1_direction_affordance_golden_v1",
+        "visible_candidates": []
+      },
+      "task_id": "b1_direction_affordance",
+      "value": "<VQAAnswer>{\"affordance\":\"direct\",\"unexpected_field\":\"must_be_rejected\"}</VQAAnswer>"
+    },
+    {
+      "case_id": "b2_direction_clearance_extra_field",
+      "entrypoint": "assistant_text",
+      "expected_error_contains": "extra_forbidden",
+      "question": {
+        "candidate_direction_labels": [],
+        "candidate_set_id": null,
+        "conditioned_direction_label": "straight",
+        "direction_profile_id": "fpv_degree10_terminal_centroid_v2",
+        "evidence_refs": [
+          "fpv.current"
+        ],
+        "question_text": "Synthetic contract question for b2_direction_clearance?",
+        "target_candidate_id": null,
+        "target_refs": [],
+        "task_id": "b2_direction_clearance",
+        "template_id": "b2_direction_clearance_golden_v1",
+        "visible_candidates": []
+      },
+      "task_id": "b2_direction_clearance",
+      "value": "<VQAAnswer>{\"clearance\":\"sufficient\",\"unexpected_field\":\"must_be_rejected\"}</VQAAnswer>"
+    },
+    {
+      "case_id": "b3_direction_surface_effect_extra_field",
+      "entrypoint": "assistant_text",
+      "expected_error_contains": "extra_forbidden",
+      "question": {
+        "candidate_direction_labels": [],
+        "candidate_set_id": null,
+        "conditioned_direction_label": "straight",
+        "direction_profile_id": "fpv_degree10_terminal_centroid_v2",
+        "evidence_refs": [
+          "fpv.current"
+        ],
+        "question_text": "Synthetic contract question for b3_direction_surface_effect?",
+        "target_candidate_id": null,
+        "target_refs": [],
+        "task_id": "b3_direction_surface_effect",
+        "template_id": "b3_direction_surface_effect_golden_v1",
+        "visible_candidates": []
+      },
+      "task_id": "b3_direction_surface_effect",
+      "value": "<VQAAnswer>{\"surface\":\"sidewalk\",\"effect\":\"proceed\",\"unexpected_field\":\"must_be_rejected\"}</VQAAnswer>"
+    },
+    {
+      "case_id": "b4_conditional_affordance_extra_field",
+      "entrypoint": "assistant_text",
+      "expected_error_contains": "extra_forbidden",
+      "question": {
+        "candidate_direction_labels": [],
+        "candidate_set_id": null,
+        "conditioned_direction_label": "straight",
+        "direction_profile_id": "fpv_degree10_terminal_centroid_v2",
+        "evidence_refs": [
+          "fpv.current"
+        ],
+        "question_text": "Synthetic contract question for b4_conditional_affordance?",
+        "target_candidate_id": null,
+        "target_refs": [],
+        "task_id": "b4_conditional_affordance",
+        "template_id": "b4_conditional_affordance_golden_v1",
+        "visible_candidates": []
+      },
+      "task_id": "b4_conditional_affordance",
+      "value": "<VQAAnswer>{\"usability\":\"immediate\",\"condition_code\":null,\"effect\":\"proceed\",\"unexpected_field\":\"must_be_rejected\"}</VQAAnswer>"
+    },
+    {
+      "case_id": "b5_direction_comparison_extra_field",
+      "entrypoint": "assistant_text",
+      "expected_error_contains": "extra_forbidden",
+      "question": {
+        "candidate_direction_labels": [
+          "left_10",
+          "straight"
+        ],
+        "candidate_set_id": null,
+        "conditioned_direction_label": null,
+        "direction_profile_id": "fpv_degree10_terminal_centroid_v2",
+        "evidence_refs": [
+          "fpv.current"
+        ],
+        "question_text": "Synthetic contract question for b5_direction_comparison?",
+        "target_candidate_id": null,
+        "target_refs": [],
+        "task_id": "b5_direction_comparison",
+        "template_id": "b5_direction_comparison_golden_v1",
+        "visible_candidates": []
+      },
+      "task_id": "b5_direction_comparison",
+      "value": "<VQAAnswer>{\"preferred_direction_label\":\"straight\",\"reason_codes\":[\"better_clearance\"],\"unexpected_field\":\"must_be_rejected\"}</VQAAnswer>"
+    },
+    {
+      "case_id": "b6_unavailable_directions_extra_field",
+      "entrypoint": "assistant_text",
+      "expected_error_contains": "extra_forbidden",
+      "question": {
+        "candidate_direction_labels": [
+          "left_10",
+          "straight",
+          "right_10"
+        ],
+        "candidate_set_id": null,
+        "conditioned_direction_label": null,
+        "direction_profile_id": "fpv_degree10_terminal_centroid_v2",
+        "evidence_refs": [
+          "fpv.current"
+        ],
+        "question_text": "Synthetic contract question for b6_unavailable_directions?",
+        "target_candidate_id": null,
+        "target_refs": [],
+        "task_id": "b6_unavailable_directions",
+        "template_id": "b6_unavailable_directions_golden_v1",
+        "visible_candidates": []
+      },
+      "task_id": "b6_unavailable_directions",
+      "value": "<VQAAnswer>{\"direction_labels\":[\"left_10\"],\"reason_codes\":[\"visible_obstruction\"],\"unexpected_field\":\"must_be_rejected\"}</VQAAnswer>"
+    },
+    {
+      "case_id": "c1_goal_to_direction_extra_field",
+      "entrypoint": "assistant_text",
+      "expected_error_contains": "extra_forbidden",
+      "question": {
+        "candidate_direction_labels": [
+          "left_10",
+          "straight"
+        ],
+        "candidate_set_id": null,
+        "conditioned_direction_label": null,
+        "direction_profile_id": "fpv_degree10_terminal_centroid_v2",
+        "evidence_refs": [
+          "fpv.current",
+          "goal.image_1"
+        ],
+        "question_text": "Synthetic contract question for c1_goal_to_direction?",
+        "target_candidate_id": null,
+        "target_refs": [
+          "goal.image_1"
+        ],
+        "task_id": "c1_goal_to_direction",
+        "template_id": "c1_goal_to_direction_golden_v1",
+        "visible_candidates": []
+      },
+      "task_id": "c1_goal_to_direction",
+      "value": "<VQAAnswer>{\"direction_label\":\"straight\",\"candidate_direction_labels\":[],\"status\":\"resolved\",\"unexpected_field\":\"must_be_rejected\"}</VQAAnswer>"
+    },
+    {
+      "case_id": "c2_pixel_goal_to_direction_extra_field",
+      "entrypoint": "assistant_text",
+      "expected_error_contains": "extra_forbidden",
+      "question": {
+        "candidate_direction_labels": [
+          "left_10"
+        ],
+        "candidate_set_id": null,
+        "conditioned_direction_label": null,
+        "direction_profile_id": "fpv_degree10_terminal_centroid_v2",
+        "evidence_refs": [
+          "fpv.current",
+          "goal.pixel_1"
+        ],
+        "question_text": "Synthetic contract question for c2_pixel_goal_to_direction?",
+        "target_candidate_id": null,
+        "target_refs": [
+          "goal.pixel_1"
+        ],
+        "task_id": "c2_pixel_goal_to_direction",
+        "template_id": "c2_pixel_goal_to_direction_golden_v1",
+        "visible_candidates": []
+      },
+      "task_id": "c2_pixel_goal_to_direction",
+      "value": "<VQAAnswer>{\"direction_label\":\"left_10\",\"status\":\"aligned\",\"unexpected_field\":\"must_be_rejected\"}</VQAAnswer>"
+    },
+    {
+      "case_id": "c2_waypoint_to_direction_extra_field",
+      "entrypoint": "assistant_text",
+      "expected_error_contains": "extra_forbidden",
+      "question": {
+        "candidate_direction_labels": [
+          "right_10"
+        ],
+        "candidate_set_id": null,
+        "conditioned_direction_label": null,
+        "direction_profile_id": "fpv_degree10_terminal_centroid_v2",
+        "evidence_refs": [
+          "fpv.current",
+          "waypoint.active"
+        ],
+        "question_text": "Synthetic contract question for c2_waypoint_to_direction?",
+        "target_candidate_id": null,
+        "target_refs": [
+          "waypoint.active"
+        ],
+        "task_id": "c2_waypoint_to_direction",
+        "template_id": "c2_waypoint_to_direction_golden_v1",
+        "visible_candidates": []
+      },
+      "task_id": "c2_waypoint_to_direction",
+      "value": "<VQAAnswer>{\"direction_label\":\"right_10\",\"status\":\"aligned\",\"unexpected_field\":\"must_be_rejected\"}</VQAAnswer>"
+    },
+    {
+      "case_id": "c3_bev_route_alignment_extra_field",
+      "entrypoint": "assistant_text",
+      "expected_error_contains": "extra_forbidden",
+      "question": {
+        "candidate_direction_labels": [
+          "right_20"
+        ],
+        "candidate_set_id": null,
+        "conditioned_direction_label": null,
+        "direction_profile_id": "fpv_degree10_terminal_centroid_v2",
+        "evidence_refs": [
+          "fpv.current",
+          "bev.current"
+        ],
+        "question_text": "Synthetic contract question for c3_bev_route_alignment?",
+        "target_candidate_id": null,
+        "target_refs": [
+          "bev.current"
+        ],
+        "task_id": "c3_bev_route_alignment",
+        "template_id": "c3_bev_route_alignment_golden_v1",
+        "visible_candidates": []
+      },
+      "task_id": "c3_bev_route_alignment",
+      "value": "<VQAAnswer>{\"direction_label\":\"right_20\",\"alignment_status\":\"aligned\",\"unexpected_field\":\"must_be_rejected\"}</VQAAnswer>"
+    },
+    {
+      "case_id": "c4_bev_object_anchoring_extra_field",
+      "entrypoint": "assistant_text",
+      "expected_error_contains": "extra_forbidden",
+      "question": {
+        "candidate_direction_labels": [
+          "right_30"
+        ],
+        "candidate_set_id": null,
+        "conditioned_direction_label": null,
+        "direction_profile_id": "fpv_degree10_terminal_centroid_v2",
+        "evidence_refs": [
+          "fpv.current",
+          "bev.current"
+        ],
+        "question_text": "Synthetic contract question for c4_bev_object_anchoring?",
+        "target_candidate_id": null,
+        "target_refs": [
+          "bev.current"
+        ],
+        "task_id": "c4_bev_object_anchoring",
+        "template_id": "c4_bev_object_anchoring_golden_v1",
+        "visible_candidates": []
+      },
+      "task_id": "c4_bev_object_anchoring",
+      "value": "<VQAAnswer>{\"bev_ref\":\"bev.building_a\",\"fpv_entity_ref\":\"fpv.entity_e2\",\"direction_label\":\"right_30\",\"status\":\"matched\",\"unexpected_field\":\"must_be_rejected\"}</VQAAnswer>"
+    },
+    {
+      "case_id": "c5_outside_view_direction_extra_field",
+      "entrypoint": "assistant_text",
+      "expected_error_contains": "extra_forbidden",
+      "question": {
+        "candidate_direction_labels": [
+          "straight",
+          "left_40"
+        ],
+        "candidate_set_id": null,
+        "conditioned_direction_label": null,
+        "direction_profile_id": "fpv_degree10_terminal_centroid_v2",
+        "evidence_refs": [
+          "fpv.current",
+          "bev.current"
+        ],
+        "question_text": "Synthetic contract question for c5_outside_view_direction?",
+        "target_candidate_id": null,
+        "target_refs": [
+          "bev.current"
+        ],
+        "task_id": "c5_outside_view_direction",
+        "template_id": "c5_outside_view_direction_golden_v1",
+        "visible_candidates": []
+      },
+      "task_id": "c5_outside_view_direction",
+      "value": "<VQAAnswer>{\"outside_view_information\":[\"upcoming_turn\"],\"current_direction_label\":\"straight\",\"future_direction_label\":\"left_40\",\"unexpected_field\":\"must_be_rejected\"}</VQAAnswer>"
+    },
+    {
+      "case_id": "c6_bev_fpv_executability_extra_field",
+      "entrypoint": "assistant_text",
+      "expected_error_contains": "extra_forbidden",
+      "question": {
+        "candidate_direction_labels": [
+          "right_20"
+        ],
+        "candidate_set_id": null,
+        "conditioned_direction_label": null,
+        "direction_profile_id": "fpv_degree10_terminal_centroid_v2",
+        "evidence_refs": [
+          "fpv.current",
+          "bev.current"
+        ],
+        "question_text": "Synthetic contract question for c6_bev_fpv_executability?",
+        "target_candidate_id": null,
+        "target_refs": [
+          "bev.current"
+        ],
+        "task_id": "c6_bev_fpv_executability",
+        "template_id": "c6_bev_fpv_executability_golden_v1",
+        "visible_candidates": []
+      },
+      "task_id": "c6_bev_fpv_executability",
+      "value": "<VQAAnswer>{\"direction_label\":\"right_20\",\"status\":\"executable\",\"unexpected_field\":\"must_be_rejected\"}</VQAAnswer>"
+    },
+    {
+      "case_id": "d1_agent_relevance_extra_field",
+      "entrypoint": "assistant_text",
+      "expected_error_contains": "extra_forbidden",
+      "question": {
+        "candidate_direction_labels": [],
+        "candidate_set_id": null,
+        "conditioned_direction_label": "straight",
+        "direction_profile_id": "fpv_degree10_terminal_centroid_v2",
+        "evidence_refs": [
+          "fpv.current"
+        ],
+        "question_text": "Synthetic contract question for d1_agent_relevance?",
+        "target_candidate_id": null,
+        "target_refs": [],
+        "task_id": "d1_agent_relevance",
+        "template_id": "d1_agent_relevance_golden_v1",
+        "visible_candidates": []
+      },
+      "task_id": "d1_agent_relevance",
+      "value": "<VQAAnswer>{\"relevance\":\"near_candidate_path\",\"unexpected_field\":\"must_be_rejected\"}</VQAAnswer>"
+    },
+    {
+      "case_id": "d2_static_interaction_relation_extra_field",
+      "entrypoint": "assistant_text",
+      "expected_error_contains": "extra_forbidden",
+      "question": {
+        "candidate_direction_labels": [],
+        "candidate_set_id": null,
+        "conditioned_direction_label": "straight",
+        "direction_profile_id": "fpv_degree10_terminal_centroid_v2",
+        "evidence_refs": [
+          "fpv.current"
+        ],
+        "question_text": "Synthetic contract question for d2_static_interaction_relation?",
+        "target_candidate_id": null,
+        "target_refs": [],
+        "task_id": "d2_static_interaction_relation",
+        "template_id": "d2_static_interaction_relation_golden_v1",
+        "visible_candidates": []
+      },
+      "task_id": "d2_static_interaction_relation",
+      "value": "<VQAAnswer>{\"relation\":\"near_candidate_path\",\"unexpected_field\":\"must_be_rejected\"}</VQAAnswer>"
+    },
+    {
+      "case_id": "d3_temporal_interaction_relation_extra_field",
+      "entrypoint": "assistant_text",
+      "expected_error_contains": "extra_forbidden",
+      "question": {
+        "candidate_direction_labels": [],
+        "candidate_set_id": null,
+        "conditioned_direction_label": "straight",
+        "direction_profile_id": "fpv_degree10_terminal_centroid_v2",
+        "evidence_refs": [
+          "fpv.current"
+        ],
+        "question_text": "Synthetic contract question for d3_temporal_interaction_relation?",
+        "target_candidate_id": null,
+        "target_refs": [],
+        "task_id": "d3_temporal_interaction_relation",
+        "template_id": "d3_temporal_interaction_relation_golden_v1",
+        "visible_candidates": []
+      },
+      "task_id": "d3_temporal_interaction_relation",
+      "value": "<VQAAnswer>{\"relation\":\"approaches_candidate_path\",\"unexpected_field\":\"must_be_rejected\"}</VQAAnswer>"
+    },
+    {
+      "case_id": "d4_applicable_constraint_extra_field",
+      "entrypoint": "assistant_text",
+      "expected_error_contains": "extra_forbidden",
+      "question": {
+        "candidate_direction_labels": [],
+        "candidate_set_id": null,
+        "conditioned_direction_label": "straight",
+        "direction_profile_id": "fpv_degree10_terminal_centroid_v2",
+        "evidence_refs": [
+          "fpv.current"
+        ],
+        "question_text": "Synthetic contract question for d4_applicable_constraint?",
+        "target_candidate_id": null,
+        "target_refs": [],
+        "task_id": "d4_applicable_constraint",
+        "template_id": "d4_applicable_constraint_golden_v1",
+        "visible_candidates": []
+      },
+      "task_id": "d4_applicable_constraint",
+      "value": "<VQAAnswer>{\"constraint_code\":\"yield_to_pedestrian\",\"kind\":\"social\",\"effect\":\"yield\",\"affected_direction_labels\":[],\"unexpected_field\":\"must_be_rejected\"}</VQAAnswer>"
+    },
+    {
+      "case_id": "d5_appropriate_response_extra_field",
+      "entrypoint": "assistant_text",
+      "expected_error_contains": "extra_forbidden",
+      "question": {
+        "candidate_direction_labels": [],
+        "candidate_set_id": null,
+        "conditioned_direction_label": "straight",
+        "direction_profile_id": "fpv_degree10_terminal_centroid_v2",
+        "evidence_refs": [
+          "fpv.current"
+        ],
+        "question_text": "Synthetic contract question for d5_appropriate_response?",
+        "target_candidate_id": null,
+        "target_refs": [],
+        "task_id": "d5_appropriate_response",
+        "template_id": "d5_appropriate_response_golden_v1",
+        "visible_candidates": []
+      },
+      "task_id": "d5_appropriate_response",
+      "value": "<VQAAnswer>{\"effect\":\"slow\",\"unexpected_field\":\"must_be_rejected\"}</VQAAnswer>"
+    },
+    {
+      "case_id": "d6_traffic_control_applicability_extra_field",
+      "entrypoint": "assistant_text",
+      "expected_error_contains": "extra_forbidden",
+      "question": {
+        "candidate_direction_labels": [],
+        "candidate_set_id": null,
+        "conditioned_direction_label": "straight",
+        "direction_profile_id": "fpv_degree10_terminal_centroid_v2",
+        "evidence_refs": [
+          "fpv.current"
+        ],
+        "question_text": "Synthetic contract question for d6_traffic_control_applicability?",
+        "target_candidate_id": null,
+        "target_refs": [],
+        "task_id": "d6_traffic_control_applicability",
+        "template_id": "d6_traffic_control_applicability_golden_v1",
+        "visible_candidates": []
+      },
+      "task_id": "d6_traffic_control_applicability",
+      "value": "<VQAAnswer>{\"applicability\":\"applies\",\"effect\":\"wait\",\"controlled_direction_labels\":[],\"unexpected_field\":\"must_be_rejected\"}</VQAAnswer>"
+    },
+    {
+      "case_id": "e0_demonstrated_direction_selection_extra_field",
+      "entrypoint": "assistant_text",
+      "expected_error_contains": "extra_forbidden",
+      "question": {
+        "candidate_direction_labels": [
+          "straight"
+        ],
+        "candidate_set_id": null,
+        "conditioned_direction_label": null,
+        "direction_profile_id": "fpv_degree10_terminal_centroid_v2",
+        "evidence_refs": [
+          "fpv.current"
+        ],
+        "question_text": "Synthetic contract question for e0_demonstrated_direction_selection?",
+        "target_candidate_id": null,
+        "target_refs": [],
+        "task_id": "e0_demonstrated_direction_selection",
+        "template_id": "e0_demonstrated_direction_selection_golden_v1",
+        "visible_candidates": []
+      },
+      "task_id": "e0_demonstrated_direction_selection",
+      "value": "<VQAAnswer>{\"direction_label\":\"straight\",\"unexpected_field\":\"must_be_rejected\"}</VQAAnswer>"
+    },
+    {
+      "case_id": "e1_candidate_trajectory_preference_extra_field",
+      "entrypoint": "assistant_text",
+      "expected_error_contains": "extra_forbidden",
+      "question": {
+        "candidate_direction_labels": [],
+        "candidate_set_id": "candidate-set-1",
+        "conditioned_direction_label": null,
+        "direction_profile_id": null,
+        "evidence_refs": [
+          "fpv.current",
+          "fpv.candidate_a",
+          "fpv.candidate_b"
+        ],
+        "question_text": "Synthetic contract question for e1_candidate_trajectory_preference?",
+        "target_candidate_id": null,
+        "target_refs": [],
+        "task_id": "e1_candidate_trajectory_preference",
+        "template_id": "e1_candidate_trajectory_preference_golden_v1",
+        "visible_candidates": [
+          {
+            "candidate_id": "candidate_a",
+            "prompt_visible_representation_ref": "fpv.candidate_a"
+          },
+          {
+            "candidate_id": "candidate_b",
+            "prompt_visible_representation_ref": "fpv.candidate_b"
+          }
+        ]
+      },
+      "task_id": "e1_candidate_trajectory_preference",
+      "value": "<VQAAnswer>{\"preferred_candidate\":\"candidate_b\",\"reason_codes\":[\"better_clearance\"],\"unexpected_field\":\"must_be_rejected\"}</VQAAnswer>"
+    },
+    {
+      "case_id": "e2_candidate_direction_classification_extra_field",
+      "entrypoint": "assistant_text",
+      "expected_error_contains": "extra_forbidden",
+      "question": {
+        "candidate_direction_labels": [
+          "right_20"
+        ],
+        "candidate_set_id": "candidate-set-1",
+        "conditioned_direction_label": null,
+        "direction_profile_id": "fpv_degree10_terminal_centroid_v2",
+        "evidence_refs": [
+          "fpv.current",
+          "fpv.candidate_a",
+          "fpv.candidate_b"
+        ],
+        "question_text": "Synthetic contract question for e2_candidate_direction_classification?",
+        "target_candidate_id": "candidate_b",
+        "target_refs": [],
+        "task_id": "e2_candidate_direction_classification",
+        "template_id": "e2_candidate_direction_classification_golden_v1",
+        "visible_candidates": [
+          {
+            "candidate_id": "candidate_a",
+            "prompt_visible_representation_ref": "fpv.candidate_a"
+          },
+          {
+            "candidate_id": "candidate_b",
+            "prompt_visible_representation_ref": "fpv.candidate_b"
+          }
+        ]
+      },
+      "task_id": "e2_candidate_direction_classification",
+      "value": "<VQAAnswer>{\"direction_label\":\"right_20\",\"unexpected_field\":\"must_be_rejected\"}</VQAAnswer>"
+    },
+    {
+      "case_id": "e3_trajectory_compatibility_extra_field",
+      "entrypoint": "assistant_text",
+      "expected_error_contains": "extra_forbidden",
+      "question": {
+        "candidate_direction_labels": [],
+        "candidate_set_id": "candidate-set-1",
+        "conditioned_direction_label": null,
+        "direction_profile_id": null,
+        "evidence_refs": [
+          "fpv.current",
+          "fpv.candidate_a",
+          "fpv.candidate_b"
+        ],
+        "question_text": "Synthetic contract question for e3_trajectory_compatibility?",
+        "target_candidate_id": "candidate_a",
+        "target_refs": [],
+        "task_id": "e3_trajectory_compatibility",
+        "template_id": "e3_trajectory_compatibility_golden_v1",
+        "visible_candidates": [
+          {
+            "candidate_id": "candidate_a",
+            "prompt_visible_representation_ref": "fpv.candidate_a"
+          },
+          {
+            "candidate_id": "candidate_b",
+            "prompt_visible_representation_ref": "fpv.candidate_b"
+          }
+        ]
+      },
+      "task_id": "e3_trajectory_compatibility",
+      "value": "<VQAAnswer>{\"status\":\"incompatible\",\"reason_codes\":[\"blocked_direction\"],\"unexpected_field\":\"must_be_rejected\"}</VQAAnswer>"
+    },
+    {
+      "case_id": "e4_alternative_direction_extra_field",
+      "entrypoint": "assistant_text",
+      "expected_error_contains": "extra_forbidden",
+      "question": {
+        "candidate_direction_labels": [
+          "left_10",
+          "right_10"
+        ],
+        "candidate_set_id": null,
+        "conditioned_direction_label": null,
+        "direction_profile_id": "fpv_degree10_terminal_centroid_v2",
+        "evidence_refs": [
+          "fpv.current"
+        ],
+        "question_text": "Synthetic contract question for e4_alternative_direction?",
+        "target_candidate_id": null,
+        "target_refs": [],
+        "task_id": "e4_alternative_direction",
+        "template_id": "e4_alternative_direction_golden_v1",
+        "visible_candidates": []
+      },
+      "task_id": "e4_alternative_direction",
+      "value": "<VQAAnswer>{\"alternative_direction_label\":\"left_10\",\"reason_codes\":[\"visible_obstruction\"],\"status\":\"resolved\",\"unexpected_field\":\"must_be_rejected\"}</VQAAnswer>"
+    },
+    {
+      "case_id": "outside_text",
+      "entrypoint": "assistant_text",
+      "expected_error_contains": "unexpected_text_outside_vqa_answer",
+      "question": {
+        "candidate_direction_labels": [],
+        "candidate_set_id": null,
+        "conditioned_direction_label": "straight",
+        "direction_profile_id": "fpv_degree10_terminal_centroid_v2",
+        "evidence_refs": [
+          "fpv.current"
+        ],
+        "question_text": "Synthetic contract question for b1_direction_affordance?",
+        "target_candidate_id": null,
+        "target_refs": [],
+        "task_id": "b1_direction_affordance",
+        "template_id": "b1_direction_affordance_golden_v1",
+        "visible_candidates": []
+      },
+      "task_id": "b1_direction_affordance",
+      "value": "<VQAAnswer>{\"affordance\":\"direct\"}</VQAAnswer>\nextra"
+    },
+    {
+      "case_id": "region_question_rejected",
+      "entrypoint": "question",
+      "expected_error_contains": "must not use region terminology",
+      "value": {
+        "candidate_direction_labels": [],
+        "candidate_set_id": null,
+        "conditioned_direction_label": "straight",
+        "direction_profile_id": "fpv_degree10_terminal_centroid_v2",
+        "evidence_refs": [
+          "fpv.current"
+        ],
+        "question_text": "Is region_r1 traversable along straight?",
+        "target_candidate_id": null,
+        "target_refs": [],
+        "task_id": "b1_direction_affordance",
+        "template_id": "b1_direction_affordance_golden_v1",
+        "visible_candidates": []
+      }
+    }
+  ],
+  "schema_version": "urbannav_navigation_vqa_contract_artifacts_v2"
+}

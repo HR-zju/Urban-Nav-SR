@@ -1,0 +1,511 @@
+{
+  "$defs": {
+    "EvidenceCatalogEntryV4": {
+      "additionalProperties": false,
+      "description": "Describe one raw prompt-visible evidence item.",
+      "properties": {
+        "attributes": {
+          "additionalProperties": true,
+          "title": "Attributes",
+          "type": "object"
+        },
+        "modality": {
+          "enum": [
+            "instruction",
+            "fpv",
+            "bev",
+            "goal",
+            "goal_image",
+            "pixel_goal",
+            "waypoint"
+          ],
+          "title": "Modality",
+          "type": "string"
+        },
+        "ref": {
+          "maxLength": 160,
+          "minLength": 5,
+          "pattern": "^(instruction|fpv|bev|goal|waypoint)\\.[a-z0-9_]+$",
+          "title": "Ref",
+          "type": "string"
+        },
+        "summary": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Summary"
+        }
+      },
+      "required": [
+        "ref",
+        "modality"
+      ],
+      "title": "EvidenceCatalogEntryV4",
+      "type": "object"
+    },
+    "InputModalitiesV4": {
+      "additionalProperties": false,
+      "description": "Record which Stage-A inputs are actually present for one sample.",
+      "properties": {
+        "bev": {
+          "default": false,
+          "title": "Bev",
+          "type": "boolean"
+        },
+        "fpv": {
+          "const": true,
+          "default": true,
+          "title": "Fpv",
+          "type": "boolean"
+        },
+        "goal_image": {
+          "default": false,
+          "title": "Goal Image",
+          "type": "boolean"
+        },
+        "history_fpv": {
+          "default": false,
+          "title": "History Fpv",
+          "type": "boolean"
+        },
+        "instruction": {
+          "default": false,
+          "title": "Instruction",
+          "type": "boolean"
+        },
+        "pixel_goal": {
+          "default": false,
+          "title": "Pixel Goal",
+          "type": "boolean"
+        },
+        "waypoint": {
+          "default": false,
+          "title": "Waypoint",
+          "type": "boolean"
+        }
+      },
+      "title": "InputModalitiesV4",
+      "type": "object"
+    },
+    "VQAOptionalMetricsV2": {
+      "additionalProperties": false,
+      "description": "Keep dense metrics explicitly unavailable in the current stage.",
+      "properties": {
+        "dense_metrics_available": {
+          "const": false,
+          "default": false,
+          "title": "Dense Metrics Available",
+          "type": "boolean"
+        },
+        "forbidden_hit_rate": {
+          "default": null,
+          "title": "Forbidden Hit Rate",
+          "type": "null"
+        },
+        "harmful_recall": {
+          "default": null,
+          "title": "Harmful Recall",
+          "type": "null"
+        },
+        "miou": {
+          "default": null,
+          "title": "Miou",
+          "type": "null"
+        }
+      },
+      "title": "VQAOptionalMetricsV2",
+      "type": "object"
+    },
+    "VQAOptionalVisualInterfacesV2": {
+      "additionalProperties": false,
+      "description": "Reserve unavailable dense visual interfaces without claiming labels.",
+      "properties": {
+        "sam_ref": {
+          "default": null,
+          "title": "Sam Ref",
+          "type": "null"
+        },
+        "sam_som_weak_adapter_available": {
+          "const": false,
+          "default": false,
+          "title": "Sam Som Weak Adapter Available",
+          "type": "boolean"
+        },
+        "seghead_available": {
+          "const": false,
+          "default": false,
+          "title": "Seghead Available",
+          "type": "boolean"
+        },
+        "seghead_ref": {
+          "default": null,
+          "title": "Seghead Ref",
+          "type": "null"
+        },
+        "som_ref": {
+          "default": null,
+          "title": "Som Ref",
+          "type": "null"
+        }
+      },
+      "title": "VQAOptionalVisualInterfacesV2",
+      "type": "object"
+    },
+    "VQAQuestionV2": {
+      "additionalProperties": false,
+      "description": "Represent one answer-independent atomic navigation question.",
+      "properties": {
+        "candidate_direction_labels": {
+          "items": {
+            "maxLength": 96,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Candidate Direction Labels",
+          "type": "array"
+        },
+        "candidate_set_id": {
+          "anyOf": [
+            {
+              "maxLength": 160,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Set Id"
+        },
+        "conditioned_direction_label": {
+          "anyOf": [
+            {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Conditioned Direction Label"
+        },
+        "direction_profile_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Direction Profile Id"
+        },
+        "evidence_refs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "question_text": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Question Text",
+          "type": "string"
+        },
+        "target_candidate_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Candidate Id"
+        },
+        "target_refs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Target Refs",
+          "type": "array"
+        },
+        "task_id": {
+          "enum": [
+            "a1_goal_understanding",
+            "a2_explicit_requirement",
+            "a3_task_ambiguity",
+            "b1_direction_affordance",
+            "b2_direction_clearance",
+            "b3_direction_surface_effect",
+            "b4_conditional_affordance",
+            "b5_direction_comparison",
+            "b6_unavailable_directions",
+            "c1_goal_to_direction",
+            "c2_pixel_goal_to_direction",
+            "c2_waypoint_to_direction",
+            "c3_bev_route_alignment",
+            "c4_bev_object_anchoring",
+            "c5_outside_view_direction",
+            "c6_bev_fpv_executability",
+            "d1_agent_relevance",
+            "d2_static_interaction_relation",
+            "d3_temporal_interaction_relation",
+            "d4_applicable_constraint",
+            "d5_appropriate_response",
+            "d6_traffic_control_applicability",
+            "e0_demonstrated_direction_selection",
+            "e1_candidate_trajectory_preference",
+            "e2_candidate_direction_classification",
+            "e3_trajectory_compatibility",
+            "e4_alternative_direction"
+          ],
+          "title": "Task Id",
+          "type": "string"
+        },
+        "template_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Template Id",
+          "type": "string"
+        },
+        "visible_candidates": {
+          "items": {
+            "$ref": "#/$defs/VQAVisibleCandidateV2"
+          },
+          "maxItems": 16,
+          "title": "Visible Candidates",
+          "type": "array"
+        }
+      },
+      "required": [
+        "task_id",
+        "template_id",
+        "question_text"
+      ],
+      "title": "VQAQuestionV2",
+      "type": "object"
+    },
+    "VQAVisibleCandidateV2": {
+      "additionalProperties": false,
+      "description": "Bind a candidate ID to its prompt-visible representation.",
+      "properties": {
+        "candidate_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "prompt_visible_representation_ref": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Prompt Visible Representation Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "prompt_visible_representation_ref"
+      ],
+      "title": "VQAVisibleCandidateV2",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Cross-repository LM-only VQA training view.",
+  "properties": {
+    "annotation_id": {
+      "maxLength": 400,
+      "minLength": 1,
+      "title": "Annotation Id",
+      "type": "string"
+    },
+    "assistant_text": {
+      "maxLength": 4000,
+      "minLength": 1,
+      "title": "Assistant Text",
+      "type": "string"
+    },
+    "capability_config_digest": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Capability Config Digest",
+      "type": "string"
+    },
+    "dataset_source": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Dataset Source",
+      "type": "string"
+    },
+    "evidence_catalog": {
+      "items": {
+        "$ref": "#/$defs/EvidenceCatalogEntryV4"
+      },
+      "maxItems": 64,
+      "minItems": 1,
+      "title": "Evidence Catalog",
+      "type": "array"
+    },
+    "image_roles": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 16,
+      "minItems": 1,
+      "title": "Image Roles",
+      "type": "array"
+    },
+    "images": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 16,
+      "minItems": 1,
+      "title": "Images",
+      "type": "array"
+    },
+    "input_modalities": {
+      "$ref": "#/$defs/InputModalitiesV4"
+    },
+    "instruction": {
+      "anyOf": [
+        {
+          "maxLength": 4096,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Instruction"
+    },
+    "label_source": {
+      "enum": [
+        "derived_gt",
+        "lvlm_weak",
+        "external_gt"
+      ],
+      "title": "Label Source",
+      "type": "string"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "title": "Metadata",
+      "type": "object"
+    },
+    "model_visible_context": {
+      "additionalProperties": true,
+      "title": "Model Visible Context",
+      "type": "object"
+    },
+    "optional_metrics": {
+      "$ref": "#/$defs/VQAOptionalMetricsV2"
+    },
+    "optional_visual_interfaces": {
+      "$ref": "#/$defs/VQAOptionalVisualInterfacesV2"
+    },
+    "producer_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Producer Id",
+      "type": "string"
+    },
+    "producer_version": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Producer Version",
+      "type": "string"
+    },
+    "prompt_policy_digest": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Prompt Policy Digest",
+      "type": "string"
+    },
+    "prompt_profile_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Prompt Profile Id",
+      "type": "string"
+    },
+    "question": {
+      "$ref": "#/$defs/VQAQuestionV2"
+    },
+    "sample_id": {
+      "maxLength": 400,
+      "minLength": 1,
+      "title": "Sample Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "urbannav_navigation_vqa_training_view_v2_0",
+      "default": "urbannav_navigation_vqa_training_view_v2_0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_group_id": {
+      "maxLength": 240,
+      "minLength": 1,
+      "title": "Source Group Id",
+      "type": "string"
+    },
+    "source_kind": {
+      "maxLength": 96,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "title": "Source Kind",
+      "type": "string"
+    },
+    "split_group_id": {
+      "maxLength": 240,
+      "minLength": 1,
+      "title": "Split Group Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "sample_id",
+    "source_group_id",
+    "split_group_id",
+    "dataset_source",
+    "images",
+    "image_roles",
+    "evidence_catalog",
+    "input_modalities",
+    "question",
+    "assistant_text",
+    "annotation_id",
+    "label_source",
+    "source_kind",
+    "producer_id",
+    "producer_version",
+    "prompt_profile_id",
+    "prompt_policy_digest",
+    "capability_config_digest"
+  ],
+  "title": "VQATrainingViewV2",
+  "type": "object"
+}

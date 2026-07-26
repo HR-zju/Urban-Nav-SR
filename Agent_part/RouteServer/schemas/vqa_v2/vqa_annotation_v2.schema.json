@@ -1,0 +1,1884 @@
+{
+  "$defs": {
+    "A1AnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for A1 goal-understanding answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/GoalUnderstandingPayloadV2"
+        },
+        "task_id": {
+          "const": "a1_goal_understanding",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "A1AnswerV2",
+      "type": "object"
+    },
+    "A2AnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for A2 explicit-requirement answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/ExplicitRequirementPayloadV2"
+        },
+        "task_id": {
+          "const": "a2_explicit_requirement",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "A2AnswerV2",
+      "type": "object"
+    },
+    "A3AnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for A3 task-ambiguity answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/TaskAmbiguityPayloadV2"
+        },
+        "task_id": {
+          "const": "a3_task_ambiguity",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "A3AnswerV2",
+      "type": "object"
+    },
+    "AgentRelevancePayloadV2": {
+      "additionalProperties": false,
+      "description": "Classify visible-agent relevance to a candidate direction.",
+      "properties": {
+        "relevance": {
+          "enum": [
+            "not_relevant",
+            "near_candidate_path",
+            "occupies_candidate_path",
+            "blocks_candidate_path",
+            "uncertain"
+          ],
+          "title": "Relevance",
+          "type": "string"
+        }
+      },
+      "required": [
+        "relevance"
+      ],
+      "title": "AgentRelevancePayloadV2",
+      "type": "object"
+    },
+    "AlternativeDirectionPayloadV2": {
+      "additionalProperties": false,
+      "description": "Select an alternative from question-supplied directions.",
+      "properties": {
+        "alternative_direction_label": {
+          "anyOf": [
+            {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Alternative Direction Label"
+        },
+        "reason_codes": {
+          "items": {
+            "maxLength": 96,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "maxItems": 8,
+          "title": "Reason Codes",
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "resolved",
+            "no_safe_alternative",
+            "insufficient_evidence"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "AlternativeDirectionPayloadV2",
+      "type": "object"
+    },
+    "ApplicableConstraintPayloadV2": {
+      "additionalProperties": false,
+      "description": "Describe one constraint and its affected supplied directions.",
+      "properties": {
+        "affected_direction_labels": {
+          "items": {
+            "maxLength": 96,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Affected Direction Labels",
+          "type": "array"
+        },
+        "constraint_code": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Constraint Code",
+          "type": "string"
+        },
+        "effect": {
+          "enum": [
+            "proceed",
+            "slow",
+            "yield",
+            "wait",
+            "stop",
+            "detour",
+            "avoid",
+            "unknown"
+          ],
+          "title": "Effect",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "task",
+            "traffic",
+            "social",
+            "accessibility",
+            "local_safety"
+          ],
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "constraint_code",
+        "kind",
+        "effect"
+      ],
+      "title": "ApplicableConstraintPayloadV2",
+      "type": "object"
+    },
+    "AppropriateResponsePayloadV2": {
+      "additionalProperties": false,
+      "description": "Select the appropriate behavior before taking a direction.",
+      "properties": {
+        "effect": {
+          "enum": [
+            "proceed",
+            "slow",
+            "yield",
+            "wait",
+            "stop",
+            "detour",
+            "avoid",
+            "unknown"
+          ],
+          "title": "Effect",
+          "type": "string"
+        }
+      },
+      "required": [
+        "effect"
+      ],
+      "title": "AppropriateResponsePayloadV2",
+      "type": "object"
+    },
+    "B1AnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for B1 direction-affordance answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/DirectionAffordancePayloadV2"
+        },
+        "task_id": {
+          "const": "b1_direction_affordance",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "B1AnswerV2",
+      "type": "object"
+    },
+    "B2AnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for B2 direction-clearance answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/DirectionClearancePayloadV2"
+        },
+        "task_id": {
+          "const": "b2_direction_clearance",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "B2AnswerV2",
+      "type": "object"
+    },
+    "B3AnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for B3 direction-surface-effect answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/DirectionSurfaceEffectPayloadV2"
+        },
+        "task_id": {
+          "const": "b3_direction_surface_effect",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "B3AnswerV2",
+      "type": "object"
+    },
+    "B4AnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for B4 conditional-affordance answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/ConditionalAffordancePayloadV2"
+        },
+        "task_id": {
+          "const": "b4_conditional_affordance",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "B4AnswerV2",
+      "type": "object"
+    },
+    "B5AnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for B5 direction-comparison answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/DirectionComparisonPayloadV2"
+        },
+        "task_id": {
+          "const": "b5_direction_comparison",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "B5AnswerV2",
+      "type": "object"
+    },
+    "B6AnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for B6 unavailable-direction answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/UnavailableDirectionsPayloadV2"
+        },
+        "task_id": {
+          "const": "b6_unavailable_directions",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "B6AnswerV2",
+      "type": "object"
+    },
+    "BEVFPVExecutabilityPayloadV2": {
+      "additionalProperties": false,
+      "description": "Judge current FPV executability of a validated BEV direction.",
+      "properties": {
+        "direction_label": {
+          "anyOf": [
+            {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Direction Label"
+        },
+        "status": {
+          "enum": [
+            "executable",
+            "conditional",
+            "locally_blocked",
+            "conflict",
+            "insufficient_evidence"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "BEVFPVExecutabilityPayloadV2",
+      "type": "object"
+    },
+    "BEVObjectAnchoringPayloadV2": {
+      "additionalProperties": false,
+      "description": "Bind validated prompt-visible BEV and FPV entity references.",
+      "properties": {
+        "bev_ref": {
+          "anyOf": [
+            {
+              "maxLength": 160,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bev Ref"
+        },
+        "direction_label": {
+          "anyOf": [
+            {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Direction Label"
+        },
+        "fpv_entity_ref": {
+          "anyOf": [
+            {
+              "maxLength": 160,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fpv Entity Ref"
+        },
+        "status": {
+          "enum": [
+            "matched",
+            "ambiguous",
+            "not_visible",
+            "insufficient_evidence"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "BEVObjectAnchoringPayloadV2",
+      "type": "object"
+    },
+    "BEVRouteAlignmentPayloadV2": {
+      "additionalProperties": false,
+      "description": "Align an independently validated BEV route to FPV direction.",
+      "properties": {
+        "alignment_status": {
+          "enum": [
+            "aligned",
+            "locally_blocked",
+            "not_visible",
+            "conflict",
+            "insufficient_evidence"
+          ],
+          "title": "Alignment Status",
+          "type": "string"
+        },
+        "direction_label": {
+          "anyOf": [
+            {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Direction Label"
+        }
+      },
+      "required": [
+        "alignment_status"
+      ],
+      "title": "BEVRouteAlignmentPayloadV2",
+      "type": "object"
+    },
+    "C1AnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for C1 goal-to-direction answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/GoalToDirectionPayloadV2"
+        },
+        "task_id": {
+          "const": "c1_goal_to_direction",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "C1AnswerV2",
+      "type": "object"
+    },
+    "C2PixelAnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for dormant C2 pixel-goal answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/SuppliedTargetDirectionPayloadV2"
+        },
+        "task_id": {
+          "const": "c2_pixel_goal_to_direction",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "C2PixelAnswerV2",
+      "type": "object"
+    },
+    "C2WaypointAnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for dormant C2 waypoint answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/SuppliedTargetDirectionPayloadV2"
+        },
+        "task_id": {
+          "const": "c2_waypoint_to_direction",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "C2WaypointAnswerV2",
+      "type": "object"
+    },
+    "C3AnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for dormant C3 BEV-route-alignment answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/BEVRouteAlignmentPayloadV2"
+        },
+        "task_id": {
+          "const": "c3_bev_route_alignment",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "C3AnswerV2",
+      "type": "object"
+    },
+    "C4AnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for dormant C4 cross-view anchoring answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/BEVObjectAnchoringPayloadV2"
+        },
+        "task_id": {
+          "const": "c4_bev_object_anchoring",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "C4AnswerV2",
+      "type": "object"
+    },
+    "C5AnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for dormant C5 outside-view-direction answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/OutsideViewDirectionPayloadV2"
+        },
+        "task_id": {
+          "const": "c5_outside_view_direction",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "C5AnswerV2",
+      "type": "object"
+    },
+    "C6AnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for dormant C6 BEV-FPV-executability answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/BEVFPVExecutabilityPayloadV2"
+        },
+        "task_id": {
+          "const": "c6_bev_fpv_executability",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "C6AnswerV2",
+      "type": "object"
+    },
+    "CandidateDirectionClassificationPayloadV2": {
+      "additionalProperties": false,
+      "description": "Classify one prompt-visible candidate under a direction profile.",
+      "properties": {
+        "direction_label": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Direction Label",
+          "type": "string"
+        }
+      },
+      "required": [
+        "direction_label"
+      ],
+      "title": "CandidateDirectionClassificationPayloadV2",
+      "type": "object"
+    },
+    "CandidateTrajectoryPreferencePayloadV2": {
+      "additionalProperties": false,
+      "description": "Select one prompt-visible candidate trajectory.",
+      "properties": {
+        "preferred_candidate": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Preferred Candidate",
+          "type": "string"
+        },
+        "reason_codes": {
+          "items": {
+            "maxLength": 96,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "maxItems": 8,
+          "title": "Reason Codes",
+          "type": "array"
+        }
+      },
+      "required": [
+        "preferred_candidate"
+      ],
+      "title": "CandidateTrajectoryPreferencePayloadV2",
+      "type": "object"
+    },
+    "ConditionalAffordancePayloadV2": {
+      "additionalProperties": false,
+      "description": "Describe immediate usability and any required behavior.",
+      "properties": {
+        "condition_code": {
+          "anyOf": [
+            {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Condition Code"
+        },
+        "effect": {
+          "enum": [
+            "proceed",
+            "slow",
+            "yield",
+            "wait",
+            "stop",
+            "detour",
+            "avoid",
+            "unknown"
+          ],
+          "title": "Effect",
+          "type": "string"
+        },
+        "usability": {
+          "enum": [
+            "immediate",
+            "not_immediately",
+            "unavailable",
+            "unknown"
+          ],
+          "title": "Usability",
+          "type": "string"
+        }
+      },
+      "required": [
+        "usability",
+        "effect"
+      ],
+      "title": "ConditionalAffordancePayloadV2",
+      "type": "object"
+    },
+    "D1AnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for D1 visible-agent-relevance answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/AgentRelevancePayloadV2"
+        },
+        "task_id": {
+          "const": "d1_agent_relevance",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "D1AnswerV2",
+      "type": "object"
+    },
+    "D2AnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for D2 static-interaction answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/StaticInteractionRelationPayloadV2"
+        },
+        "task_id": {
+          "const": "d2_static_interaction_relation",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "D2AnswerV2",
+      "type": "object"
+    },
+    "D3AnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for D3 temporal-interaction answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/TemporalInteractionRelationPayloadV2"
+        },
+        "task_id": {
+          "const": "d3_temporal_interaction_relation",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "D3AnswerV2",
+      "type": "object"
+    },
+    "D4AnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for D4 applicable-constraint answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/ApplicableConstraintPayloadV2"
+        },
+        "task_id": {
+          "const": "d4_applicable_constraint",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "D4AnswerV2",
+      "type": "object"
+    },
+    "D5AnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for D5 appropriate-response answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/AppropriateResponsePayloadV2"
+        },
+        "task_id": {
+          "const": "d5_appropriate_response",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "D5AnswerV2",
+      "type": "object"
+    },
+    "D6AnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for D6 traffic-control-applicability answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/TrafficControlApplicabilityPayloadV2"
+        },
+        "task_id": {
+          "const": "d6_traffic_control_applicability",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "D6AnswerV2",
+      "type": "object"
+    },
+    "DemonstratedDirectionPayloadV2": {
+      "additionalProperties": false,
+      "description": "Predict the demonstrated short-horizon policy direction.",
+      "properties": {
+        "direction_label": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Direction Label",
+          "type": "string"
+        }
+      },
+      "required": [
+        "direction_label"
+      ],
+      "title": "DemonstratedDirectionPayloadV2",
+      "type": "object"
+    },
+    "DirectionAffordancePayloadV2": {
+      "additionalProperties": false,
+      "description": "Classify local affordance along a question-specified direction.",
+      "properties": {
+        "affordance": {
+          "enum": [
+            "direct",
+            "conditional",
+            "blocked",
+            "forbidden",
+            "unknown"
+          ],
+          "title": "Affordance",
+          "type": "string"
+        }
+      },
+      "required": [
+        "affordance"
+      ],
+      "title": "DirectionAffordancePayloadV2",
+      "type": "object"
+    },
+    "DirectionClearancePayloadV2": {
+      "additionalProperties": false,
+      "description": "Classify coarse visible clearance along one direction.",
+      "properties": {
+        "clearance": {
+          "enum": [
+            "sufficient",
+            "narrow",
+            "insufficient",
+            "unknown"
+          ],
+          "title": "Clearance",
+          "type": "string"
+        }
+      },
+      "required": [
+        "clearance"
+      ],
+      "title": "DirectionClearancePayloadV2",
+      "type": "object"
+    },
+    "DirectionComparisonPayloadV2": {
+      "additionalProperties": false,
+      "description": "Select the more suitable direction from supplied candidates.",
+      "properties": {
+        "preferred_direction_label": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Preferred Direction Label",
+          "type": "string"
+        },
+        "reason_codes": {
+          "items": {
+            "maxLength": 96,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "maxItems": 8,
+          "title": "Reason Codes",
+          "type": "array"
+        }
+      },
+      "required": [
+        "preferred_direction_label"
+      ],
+      "title": "DirectionComparisonPayloadV2",
+      "type": "object"
+    },
+    "DirectionSurfaceEffectPayloadV2": {
+      "additionalProperties": false,
+      "description": "Describe visible support and its navigation effect.",
+      "properties": {
+        "effect": {
+          "enum": [
+            "proceed",
+            "slow",
+            "avoid",
+            "unknown"
+          ],
+          "title": "Effect",
+          "type": "string"
+        },
+        "surface": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Surface",
+          "type": "string"
+        }
+      },
+      "required": [
+        "surface",
+        "effect"
+      ],
+      "title": "DirectionSurfaceEffectPayloadV2",
+      "type": "object"
+    },
+    "E0AnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for E0 demonstrated-direction answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/DemonstratedDirectionPayloadV2"
+        },
+        "task_id": {
+          "const": "e0_demonstrated_direction_selection",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "E0AnswerV2",
+      "type": "object"
+    },
+    "E1AnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for dormant E1 candidate-preference answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/CandidateTrajectoryPreferencePayloadV2"
+        },
+        "task_id": {
+          "const": "e1_candidate_trajectory_preference",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "E1AnswerV2",
+      "type": "object"
+    },
+    "E2AnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for dormant E2 candidate-direction answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/CandidateDirectionClassificationPayloadV2"
+        },
+        "task_id": {
+          "const": "e2_candidate_direction_classification",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "E2AnswerV2",
+      "type": "object"
+    },
+    "E3AnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for dormant E3 trajectory-compatibility answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/TrajectoryCompatibilityPayloadV2"
+        },
+        "task_id": {
+          "const": "e3_trajectory_compatibility",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "E3AnswerV2",
+      "type": "object"
+    },
+    "E4AnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for E4 alternative-direction answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/AlternativeDirectionPayloadV2"
+        },
+        "task_id": {
+          "const": "e4_alternative_direction",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "E4AnswerV2",
+      "type": "object"
+    },
+    "ExplicitRequirementPayloadV2": {
+      "additionalProperties": false,
+      "description": "Answer which explicit task requirements are present.",
+      "properties": {
+        "requirements": {
+          "items": {
+            "maxLength": 96,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Requirements",
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "resolved",
+            "none_stated",
+            "ambiguous",
+            "insufficient_evidence"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "ExplicitRequirementPayloadV2",
+      "type": "object"
+    },
+    "GoalToDirectionPayloadV2": {
+      "additionalProperties": false,
+      "description": "Ground a visible goal to one or more profile directions.",
+      "properties": {
+        "candidate_direction_labels": {
+          "items": {
+            "maxLength": 96,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "maxItems": 8,
+          "title": "Candidate Direction Labels",
+          "type": "array"
+        },
+        "direction_label": {
+          "anyOf": [
+            {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Direction Label"
+        },
+        "status": {
+          "enum": [
+            "resolved",
+            "ambiguous",
+            "not_visible",
+            "insufficient_evidence"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "GoalToDirectionPayloadV2",
+      "type": "object"
+    },
+    "GoalUnderstandingPayloadV2": {
+      "additionalProperties": false,
+      "description": "Answer one explicit task-goal understanding question.",
+      "properties": {
+        "goal": {
+          "anyOf": [
+            {
+              "maxLength": 320,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Goal"
+        },
+        "status": {
+          "enum": [
+            "resolved",
+            "absent",
+            "ambiguous",
+            "insufficient_evidence"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "GoalUnderstandingPayloadV2",
+      "type": "object"
+    },
+    "OutsideViewDirectionPayloadV2": {
+      "additionalProperties": false,
+      "description": "Separate present motion from validated future BEV information.",
+      "properties": {
+        "current_direction_label": {
+          "anyOf": [
+            {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Current Direction Label"
+        },
+        "future_direction_label": {
+          "anyOf": [
+            {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Future Direction Label"
+        },
+        "outside_view_information": {
+          "items": {
+            "maxLength": 96,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Outside View Information",
+          "type": "array"
+        }
+      },
+      "title": "OutsideViewDirectionPayloadV2",
+      "type": "object"
+    },
+    "StaticInteractionRelationPayloadV2": {
+      "additionalProperties": false,
+      "description": "Classify a static visible relation to a candidate direction.",
+      "properties": {
+        "relation": {
+          "enum": [
+            "outside_candidate_path",
+            "near_candidate_path",
+            "occupies_candidate_path",
+            "narrows_candidate_path",
+            "blocks_candidate_path",
+            "unknown"
+          ],
+          "title": "Relation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "relation"
+      ],
+      "title": "StaticInteractionRelationPayloadV2",
+      "type": "object"
+    },
+    "SuppliedTargetDirectionPayloadV2": {
+      "additionalProperties": false,
+      "description": "Align a supplied pixel goal or waypoint to a direction.",
+      "properties": {
+        "direction_label": {
+          "anyOf": [
+            {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Direction Label"
+        },
+        "status": {
+          "enum": [
+            "aligned",
+            "conflict",
+            "not_visible",
+            "insufficient_evidence"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "SuppliedTargetDirectionPayloadV2",
+      "type": "object"
+    },
+    "TaskAmbiguityPayloadV2": {
+      "additionalProperties": false,
+      "description": "Answer whether prompt-visible task language is materially ambiguous.",
+      "properties": {
+        "ambiguities": {
+          "items": {
+            "maxLength": 96,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Ambiguities",
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "clear",
+            "ambiguous",
+            "insufficient_evidence"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "TaskAmbiguityPayloadV2",
+      "type": "object"
+    },
+    "TemporalInteractionRelationPayloadV2": {
+      "additionalProperties": false,
+      "description": "Classify a temporal relation supported by distinct FPV frames.",
+      "properties": {
+        "relation": {
+          "enum": [
+            "crosses_candidate_path",
+            "approaches_candidate_path",
+            "moves_away_from_path",
+            "same_direction",
+            "opposite_direction",
+            "persistent_occupancy",
+            "unknown"
+          ],
+          "title": "Relation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "relation"
+      ],
+      "title": "TemporalInteractionRelationPayloadV2",
+      "type": "object"
+    },
+    "TrafficControlApplicabilityPayloadV2": {
+      "additionalProperties": false,
+      "description": "Judge whether a visible control governs supplied directions.",
+      "properties": {
+        "applicability": {
+          "enum": [
+            "applies",
+            "does_not_apply",
+            "uncertain"
+          ],
+          "title": "Applicability",
+          "type": "string"
+        },
+        "controlled_direction_labels": {
+          "items": {
+            "maxLength": 96,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Controlled Direction Labels",
+          "type": "array"
+        },
+        "effect": {
+          "enum": [
+            "proceed",
+            "slow",
+            "yield",
+            "wait",
+            "stop",
+            "detour",
+            "avoid",
+            "unknown"
+          ],
+          "title": "Effect",
+          "type": "string"
+        }
+      },
+      "required": [
+        "applicability",
+        "effect"
+      ],
+      "title": "TrafficControlApplicabilityPayloadV2",
+      "type": "object"
+    },
+    "TrajectoryCompatibilityPayloadV2": {
+      "additionalProperties": false,
+      "description": "Classify task and visible-scene compatibility of one candidate.",
+      "properties": {
+        "reason_codes": {
+          "items": {
+            "maxLength": 96,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Reason Codes",
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "compatible",
+            "conditional",
+            "incompatible",
+            "insufficient_evidence"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "TrajectoryCompatibilityPayloadV2",
+      "type": "object"
+    },
+    "UnavailableDirectionsPayloadV2": {
+      "additionalProperties": false,
+      "description": "Identify unusable labels only within a supplied candidate set.",
+      "properties": {
+        "direction_labels": {
+          "items": {
+            "maxLength": 96,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Direction Labels",
+          "type": "array"
+        },
+        "reason_codes": {
+          "items": {
+            "maxLength": 96,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Reason Codes",
+          "type": "array"
+        }
+      },
+      "title": "UnavailableDirectionsPayloadV2",
+      "type": "object"
+    },
+    "VQAQuestionV2": {
+      "additionalProperties": false,
+      "description": "Represent one answer-independent atomic navigation question.",
+      "properties": {
+        "candidate_direction_labels": {
+          "items": {
+            "maxLength": 96,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Candidate Direction Labels",
+          "type": "array"
+        },
+        "candidate_set_id": {
+          "anyOf": [
+            {
+              "maxLength": 160,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Set Id"
+        },
+        "conditioned_direction_label": {
+          "anyOf": [
+            {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Conditioned Direction Label"
+        },
+        "direction_profile_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Direction Profile Id"
+        },
+        "evidence_refs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "question_text": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Question Text",
+          "type": "string"
+        },
+        "target_candidate_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Candidate Id"
+        },
+        "target_refs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Target Refs",
+          "type": "array"
+        },
+        "task_id": {
+          "enum": [
+            "a1_goal_understanding",
+            "a2_explicit_requirement",
+            "a3_task_ambiguity",
+            "b1_direction_affordance",
+            "b2_direction_clearance",
+            "b3_direction_surface_effect",
+            "b4_conditional_affordance",
+            "b5_direction_comparison",
+            "b6_unavailable_directions",
+            "c1_goal_to_direction",
+            "c2_pixel_goal_to_direction",
+            "c2_waypoint_to_direction",
+            "c3_bev_route_alignment",
+            "c4_bev_object_anchoring",
+            "c5_outside_view_direction",
+            "c6_bev_fpv_executability",
+            "d1_agent_relevance",
+            "d2_static_interaction_relation",
+            "d3_temporal_interaction_relation",
+            "d4_applicable_constraint",
+            "d5_appropriate_response",
+            "d6_traffic_control_applicability",
+            "e0_demonstrated_direction_selection",
+            "e1_candidate_trajectory_preference",
+            "e2_candidate_direction_classification",
+            "e3_trajectory_compatibility",
+            "e4_alternative_direction"
+          ],
+          "title": "Task Id",
+          "type": "string"
+        },
+        "template_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Template Id",
+          "type": "string"
+        },
+        "visible_candidates": {
+          "items": {
+            "$ref": "#/$defs/VQAVisibleCandidateV2"
+          },
+          "maxItems": 16,
+          "title": "Visible Candidates",
+          "type": "array"
+        }
+      },
+      "required": [
+        "task_id",
+        "template_id",
+        "question_text"
+      ],
+      "title": "VQAQuestionV2",
+      "type": "object"
+    },
+    "VQAVisibleCandidateV2": {
+      "additionalProperties": false,
+      "description": "Bind a candidate ID to its prompt-visible representation.",
+      "properties": {
+        "candidate_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "prompt_visible_representation_ref": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Prompt Visible Representation Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "prompt_visible_representation_ref"
+      ],
+      "title": "VQAVisibleCandidateV2",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Store one accepted typed answer with auditable provenance.",
+  "properties": {
+    "annotation_context_digest": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Annotation Context Digest",
+      "type": "string"
+    },
+    "annotation_id": {
+      "maxLength": 400,
+      "minLength": 1,
+      "title": "Annotation Id",
+      "type": "string"
+    },
+    "answer": {
+      "discriminator": {
+        "mapping": {
+          "a1_goal_understanding": "#/$defs/A1AnswerV2",
+          "a2_explicit_requirement": "#/$defs/A2AnswerV2",
+          "a3_task_ambiguity": "#/$defs/A3AnswerV2",
+          "b1_direction_affordance": "#/$defs/B1AnswerV2",
+          "b2_direction_clearance": "#/$defs/B2AnswerV2",
+          "b3_direction_surface_effect": "#/$defs/B3AnswerV2",
+          "b4_conditional_affordance": "#/$defs/B4AnswerV2",
+          "b5_direction_comparison": "#/$defs/B5AnswerV2",
+          "b6_unavailable_directions": "#/$defs/B6AnswerV2",
+          "c1_goal_to_direction": "#/$defs/C1AnswerV2",
+          "c2_pixel_goal_to_direction": "#/$defs/C2PixelAnswerV2",
+          "c2_waypoint_to_direction": "#/$defs/C2WaypointAnswerV2",
+          "c3_bev_route_alignment": "#/$defs/C3AnswerV2",
+          "c4_bev_object_anchoring": "#/$defs/C4AnswerV2",
+          "c5_outside_view_direction": "#/$defs/C5AnswerV2",
+          "c6_bev_fpv_executability": "#/$defs/C6AnswerV2",
+          "d1_agent_relevance": "#/$defs/D1AnswerV2",
+          "d2_static_interaction_relation": "#/$defs/D2AnswerV2",
+          "d3_temporal_interaction_relation": "#/$defs/D3AnswerV2",
+          "d4_applicable_constraint": "#/$defs/D4AnswerV2",
+          "d5_appropriate_response": "#/$defs/D5AnswerV2",
+          "d6_traffic_control_applicability": "#/$defs/D6AnswerV2",
+          "e0_demonstrated_direction_selection": "#/$defs/E0AnswerV2",
+          "e1_candidate_trajectory_preference": "#/$defs/E1AnswerV2",
+          "e2_candidate_direction_classification": "#/$defs/E2AnswerV2",
+          "e3_trajectory_compatibility": "#/$defs/E3AnswerV2",
+          "e4_alternative_direction": "#/$defs/E4AnswerV2"
+        },
+        "propertyName": "task_id"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/A1AnswerV2"
+        },
+        {
+          "$ref": "#/$defs/A2AnswerV2"
+        },
+        {
+          "$ref": "#/$defs/A3AnswerV2"
+        },
+        {
+          "$ref": "#/$defs/B1AnswerV2"
+        },
+        {
+          "$ref": "#/$defs/B2AnswerV2"
+        },
+        {
+          "$ref": "#/$defs/B3AnswerV2"
+        },
+        {
+          "$ref": "#/$defs/B4AnswerV2"
+        },
+        {
+          "$ref": "#/$defs/B5AnswerV2"
+        },
+        {
+          "$ref": "#/$defs/B6AnswerV2"
+        },
+        {
+          "$ref": "#/$defs/C1AnswerV2"
+        },
+        {
+          "$ref": "#/$defs/C2PixelAnswerV2"
+        },
+        {
+          "$ref": "#/$defs/C2WaypointAnswerV2"
+        },
+        {
+          "$ref": "#/$defs/C3AnswerV2"
+        },
+        {
+          "$ref": "#/$defs/C4AnswerV2"
+        },
+        {
+          "$ref": "#/$defs/C5AnswerV2"
+        },
+        {
+          "$ref": "#/$defs/C6AnswerV2"
+        },
+        {
+          "$ref": "#/$defs/D1AnswerV2"
+        },
+        {
+          "$ref": "#/$defs/D2AnswerV2"
+        },
+        {
+          "$ref": "#/$defs/D3AnswerV2"
+        },
+        {
+          "$ref": "#/$defs/D4AnswerV2"
+        },
+        {
+          "$ref": "#/$defs/D5AnswerV2"
+        },
+        {
+          "$ref": "#/$defs/D6AnswerV2"
+        },
+        {
+          "$ref": "#/$defs/E0AnswerV2"
+        },
+        {
+          "$ref": "#/$defs/E1AnswerV2"
+        },
+        {
+          "$ref": "#/$defs/E2AnswerV2"
+        },
+        {
+          "$ref": "#/$defs/E3AnswerV2"
+        },
+        {
+          "$ref": "#/$defs/E4AnswerV2"
+        }
+      ],
+      "title": "Answer"
+    },
+    "evidence_refs": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 64,
+      "minItems": 1,
+      "title": "Evidence Refs",
+      "type": "array"
+    },
+    "input_fingerprint": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Input Fingerprint",
+      "type": "string"
+    },
+    "label_source": {
+      "enum": [
+        "derived_gt",
+        "lvlm_weak",
+        "external_gt"
+      ],
+      "title": "Label Source",
+      "type": "string"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "title": "Metadata",
+      "type": "object"
+    },
+    "producer_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Producer Id",
+      "type": "string"
+    },
+    "producer_version": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Producer Version",
+      "type": "string"
+    },
+    "prompt_policy_digest": {
+      "anyOf": [
+        {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Prompt Policy Digest"
+    },
+    "prompt_profile_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Prompt Profile Id"
+    },
+    "question": {
+      "$ref": "#/$defs/VQAQuestionV2"
+    },
+    "schema_version": {
+      "const": "urbannav_navigation_vqa_annotation_v2_0",
+      "default": "urbannav_navigation_vqa_annotation_v2_0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_field_refs": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 32,
+      "title": "Source Field Refs",
+      "type": "array"
+    },
+    "source_fingerprint": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Fingerprint",
+      "type": "string"
+    },
+    "source_group_id": {
+      "maxLength": 240,
+      "minLength": 1,
+      "title": "Source Group Id",
+      "type": "string"
+    },
+    "source_kind": {
+      "maxLength": 96,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "title": "Source Kind",
+      "type": "string"
+    },
+    "teacher_model": {
+      "anyOf": [
+        {
+          "maxLength": 256,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Teacher Model"
+    },
+    "teacher_provider": {
+      "anyOf": [
+        {
+          "maxLength": 64,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Teacher Provider"
+    }
+  },
+  "required": [
+    "annotation_id",
+    "source_group_id",
+    "source_fingerprint",
+    "question",
+    "answer",
+    "label_source",
+    "source_kind",
+    "evidence_refs",
+    "producer_id",
+    "producer_version",
+    "input_fingerprint",
+    "annotation_context_digest"
+  ],
+  "title": "VQAAnnotationV2",
+  "type": "object"
+}

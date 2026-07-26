@@ -1,0 +1,565 @@
+{
+  "cases": [
+    {
+      "case_id": "c2_pixel_goal_to_direction_missing_producer_version",
+      "expected_error_contains": "producer_version",
+      "interface_model": "PixelGoalDirectionInterfaceV2",
+      "task_id": "c2_pixel_goal_to_direction",
+      "value": {
+        "answer": {
+          "payload": {
+            "direction_label": "left_10",
+            "status": "aligned"
+          },
+          "task_id": "c2_pixel_goal_to_direction"
+        },
+        "coordinate_convention_version": "pixel_goal_xy_v1",
+        "coordinate_frame": "fpv_pixel_xy_top_left",
+        "direction": {
+          "angle_deg": -10.0,
+          "bin_mode": "degree10_with_stop",
+          "choice": "I",
+          "derivation_version": "pixel_goal_direction_rule_v1",
+          "label_index": 8,
+          "label_name": "left_10",
+          "profile_id": "fpv_degree10_terminal_centroid_v2",
+          "profile_version": "2.0",
+          "source": "pixel_goal_annotation"
+        },
+        "evidence_refs": [
+          "fpv.current",
+          "goal.pixel_1"
+        ],
+        "image_height": 1080,
+        "image_width": 1920,
+        "input_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "pixel_goal_source_ref": "goal.pixel_1",
+        "producer_id": "fixture_pixel_goal_producer",
+        "qc_status": "accepted",
+        "source_field_refs": [
+          "pixel_goal.xy"
+        ],
+        "source_group_id": "vqa-v2-interface-fixture",
+        "source_kind": "pixel_goal_direction"
+      }
+    },
+    {
+      "case_id": "c2_waypoint_to_direction_missing_producer_version",
+      "expected_error_contains": "producer_version",
+      "interface_model": "WaypointDirectionInterfaceV2",
+      "task_id": "c2_waypoint_to_direction",
+      "value": {
+        "answer": {
+          "payload": {
+            "direction_label": "right_10",
+            "status": "aligned"
+          },
+          "task_id": "c2_waypoint_to_direction"
+        },
+        "coordinate_frame": "ego_x_right_y_front",
+        "coordinate_unit": "meter",
+        "direction": {
+          "angle_deg": 10.0,
+          "bin_mode": "degree10_with_stop",
+          "choice": "K",
+          "derivation_version": "waypoint_direction_rule_v1",
+          "label_index": 10,
+          "label_name": "right_10",
+          "profile_id": "fpv_degree10_terminal_centroid_v2",
+          "profile_version": "2.0",
+          "source": "waypoint_annotation"
+        },
+        "evidence_refs": [
+          "fpv.current",
+          "waypoint.active"
+        ],
+        "input_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "producer_id": "fixture_waypoint_producer",
+        "qc_status": "accepted",
+        "source_field_refs": [
+          "waypoint.xy"
+        ],
+        "source_group_id": "vqa-v2-interface-fixture",
+        "source_kind": "waypoint_direction",
+        "transform_version": "waypoint_transform_v1",
+        "waypoint_source_ref": "waypoint.active"
+      }
+    },
+    {
+      "case_id": "c3_bev_route_alignment_missing_producer_version",
+      "expected_error_contains": "producer_version",
+      "interface_model": "BEVRouteAlignmentInterfaceV2",
+      "task_id": "c3_bev_route_alignment",
+      "value": {
+        "answer": {
+          "payload": {
+            "alignment_status": "aligned",
+            "direction_label": "right_20"
+          },
+          "task_id": "c3_bev_route_alignment"
+        },
+        "bev_evidence_ref": "bev.current",
+        "direction": {
+          "angle_deg": 20.0,
+          "bin_mode": "degree10_with_stop",
+          "choice": "L",
+          "derivation_version": "bev_alignment_rule_v1",
+          "label_index": 11,
+          "label_name": "right_20",
+          "profile_id": "fpv_degree10_terminal_centroid_v2",
+          "profile_version": "2.0",
+          "source": "independent_bev_annotation"
+        },
+        "evidence_refs": [
+          "fpv.current",
+          "bev.current"
+        ],
+        "fpv_evidence_ref": "fpv.current",
+        "independent_source": true,
+        "input_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "producer_id": "fixture_bev_alignment_producer",
+        "qc_status": "accepted",
+        "source_field_refs": [
+          "independent_bev_direction_record"
+        ],
+        "source_group_id": "vqa-v2-interface-fixture",
+        "source_kind": "bev_route_direction"
+      }
+    },
+    {
+      "case_id": "c4_bev_object_anchoring_missing_producer_version",
+      "expected_error_contains": "producer_version",
+      "interface_model": "CrossViewEntityBindingInterfaceV2",
+      "task_id": "c4_bev_object_anchoring",
+      "value": {
+        "answer": {
+          "payload": {
+            "bev_ref": "bev.building_a",
+            "direction_label": "right_30",
+            "fpv_entity_ref": "fpv.entity_e2",
+            "status": "matched"
+          },
+          "task_id": "c4_bev_object_anchoring"
+        },
+        "bev_ref": "bev.building_a",
+        "direction": {
+          "angle_deg": 30.0,
+          "bin_mode": "degree10_with_stop",
+          "choice": "M",
+          "derivation_version": "cross_view_direction_rule_v1",
+          "label_index": 12,
+          "label_name": "right_30",
+          "profile_id": "fpv_degree10_terminal_centroid_v2",
+          "profile_version": "2.0",
+          "source": "cross_view_annotation"
+        },
+        "evidence_refs": [
+          "fpv.current",
+          "bev.current",
+          "bev.building_a",
+          "fpv.entity_e2"
+        ],
+        "fpv_entity_ref": "fpv.entity_e2",
+        "input_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "producer_id": "fixture_cross_view_producer",
+        "qc_status": "accepted",
+        "source_field_refs": [
+          "cross_view_match_record"
+        ],
+        "source_group_id": "vqa-v2-interface-fixture",
+        "source_kind": "cross_view_entity_binding"
+      }
+    },
+    {
+      "case_id": "c5_outside_view_direction_missing_producer_version",
+      "expected_error_contains": "producer_version",
+      "interface_model": "OutsideViewDirectionInterfaceV2",
+      "task_id": "c5_outside_view_direction",
+      "value": {
+        "answer": {
+          "payload": {
+            "current_direction_label": "straight",
+            "future_direction_label": "left_40",
+            "outside_view_information": [
+              "upcoming_turn"
+            ]
+          },
+          "task_id": "c5_outside_view_direction"
+        },
+        "current_direction": {
+          "angle_deg": 0.0,
+          "bin_mode": "degree10_with_stop",
+          "choice": "J",
+          "derivation_version": "current_direction_rule_v1",
+          "label_index": 9,
+          "label_name": "straight",
+          "profile_id": "fpv_degree10_terminal_centroid_v2",
+          "profile_version": "2.0",
+          "source": "current_direction_annotation"
+        },
+        "evidence_refs": [
+          "fpv.current",
+          "bev.current",
+          "bev.transition_1"
+        ],
+        "future_direction": {
+          "angle_deg": -40.0,
+          "bin_mode": "degree10_with_stop",
+          "choice": "F",
+          "derivation_version": "future_direction_rule_v1",
+          "label_index": 5,
+          "label_name": "left_40",
+          "profile_id": "fpv_degree10_terminal_centroid_v2",
+          "profile_version": "2.0",
+          "source": "future_direction_annotation"
+        },
+        "future_horizon": 3.0,
+        "future_horizon_unit": "second",
+        "future_not_yet_executed": true,
+        "input_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "producer_id": "fixture_future_direction_producer",
+        "qc_status": "accepted",
+        "source_field_refs": [
+          "current_direction_record",
+          "future_direction_record"
+        ],
+        "source_group_id": "vqa-v2-interface-fixture",
+        "source_kind": "outside_view_direction",
+        "transition_ref": "bev.transition_1"
+      }
+    },
+    {
+      "case_id": "c6_bev_fpv_executability_missing_producer_version",
+      "expected_error_contains": "producer_version",
+      "interface_model": "BEVFPVExecutabilityInterfaceV2",
+      "task_id": "c6_bev_fpv_executability",
+      "value": {
+        "answer": {
+          "payload": {
+            "direction_label": "right_20",
+            "status": "executable"
+          },
+          "task_id": "c6_bev_fpv_executability"
+        },
+        "bev_alignment_evidence_ref": "bev.current",
+        "bev_direction": {
+          "angle_deg": 20.0,
+          "bin_mode": "degree10_with_stop",
+          "choice": "L",
+          "derivation_version": "bev_alignment_rule_v1",
+          "label_index": 11,
+          "label_name": "right_20",
+          "profile_id": "fpv_degree10_terminal_centroid_v2",
+          "profile_version": "2.0",
+          "source": "independent_bev_annotation"
+        },
+        "evidence_refs": [
+          "fpv.current",
+          "bev.current"
+        ],
+        "fpv_executability_evidence_ref": "fpv.current",
+        "input_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "local_executability_producer_id": "fixture_local_executability",
+        "local_executability_producer_version": "fixture_local_executability_v1",
+        "producer_id": "fixture_executability_producer",
+        "qc_status": "accepted",
+        "source_field_refs": [
+          "bev_alignment_record",
+          "fpv_executability_record"
+        ],
+        "source_group_id": "vqa-v2-interface-fixture",
+        "source_kind": "bev_fpv_executability"
+      }
+    },
+    {
+      "case_id": "e1_candidate_trajectory_preference_missing_producer_version",
+      "expected_error_contains": "producer_version",
+      "interface_model": "CandidatePreferenceInterfaceV2",
+      "task_id": "e1_candidate_trajectory_preference",
+      "value": {
+        "answer": {
+          "payload": {
+            "preferred_candidate": "candidate_b",
+            "reason_codes": [
+              "better_clearance"
+            ]
+          },
+          "task_id": "e1_candidate_trajectory_preference"
+        },
+        "candidate_set": {
+          "candidate_producer_id": "fixture_candidate_producer",
+          "candidate_producer_version": "fixture_candidate_producer_v1",
+          "candidate_set_id": "candidate-set-1",
+          "candidates": [
+            {
+              "candidate_id": "candidate_a",
+              "direction": {
+                "angle_deg": 0.0,
+                "bin_mode": "degree10_with_stop",
+                "choice": "J",
+                "derivation_version": "candidate_overlay_rule_v1",
+                "label_index": 9,
+                "label_name": "straight",
+                "profile_id": "fpv_degree10_terminal_centroid_v2",
+                "profile_version": "2.0",
+                "source": "candidate_overlay_a"
+              },
+              "prompt_visible_representation_ref": "fpv.candidate_a"
+            },
+            {
+              "candidate_id": "candidate_b",
+              "direction": {
+                "angle_deg": 20.0,
+                "bin_mode": "degree10_with_stop",
+                "choice": "L",
+                "derivation_version": "candidate_overlay_rule_v1",
+                "label_index": 11,
+                "label_name": "right_20",
+                "profile_id": "fpv_degree10_terminal_centroid_v2",
+                "profile_version": "2.0",
+                "source": "candidate_overlay_b"
+              },
+              "prompt_visible_representation_ref": "fpv.candidate_b"
+            }
+          ]
+        },
+        "evidence_refs": [
+          "fpv.current",
+          "fpv.candidate_a",
+          "fpv.candidate_b"
+        ],
+        "input_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "producer_id": "fixture_preference_producer",
+        "qc_status": "accepted",
+        "source_field_refs": [
+          "candidate_preference_label"
+        ],
+        "source_group_id": "vqa-v2-interface-fixture",
+        "source_kind": "candidate_trajectory_preference"
+      }
+    },
+    {
+      "case_id": "e2_candidate_direction_classification_missing_producer_version",
+      "expected_error_contains": "producer_version",
+      "interface_model": "CandidateDirectionInterfaceV2",
+      "task_id": "e2_candidate_direction_classification",
+      "value": {
+        "answer": {
+          "payload": {
+            "direction_label": "right_20"
+          },
+          "task_id": "e2_candidate_direction_classification"
+        },
+        "candidate_set": {
+          "candidate_producer_id": "fixture_candidate_producer",
+          "candidate_producer_version": "fixture_candidate_producer_v1",
+          "candidate_set_id": "candidate-set-1",
+          "candidates": [
+            {
+              "candidate_id": "candidate_a",
+              "direction": {
+                "angle_deg": 0.0,
+                "bin_mode": "degree10_with_stop",
+                "choice": "J",
+                "derivation_version": "candidate_overlay_rule_v1",
+                "label_index": 9,
+                "label_name": "straight",
+                "profile_id": "fpv_degree10_terminal_centroid_v2",
+                "profile_version": "2.0",
+                "source": "candidate_overlay_a"
+              },
+              "prompt_visible_representation_ref": "fpv.candidate_a"
+            },
+            {
+              "candidate_id": "candidate_b",
+              "direction": {
+                "angle_deg": 20.0,
+                "bin_mode": "degree10_with_stop",
+                "choice": "L",
+                "derivation_version": "candidate_overlay_rule_v1",
+                "label_index": 11,
+                "label_name": "right_20",
+                "profile_id": "fpv_degree10_terminal_centroid_v2",
+                "profile_version": "2.0",
+                "source": "candidate_overlay_b"
+              },
+              "prompt_visible_representation_ref": "fpv.candidate_b"
+            }
+          ]
+        },
+        "evidence_refs": [
+          "fpv.current",
+          "fpv.candidate_a",
+          "fpv.candidate_b"
+        ],
+        "input_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "producer_id": "fixture_candidate_direction_producer",
+        "qc_status": "accepted",
+        "source_field_refs": [
+          "candidate_direction_label"
+        ],
+        "source_group_id": "vqa-v2-interface-fixture",
+        "source_kind": "candidate_direction",
+        "target_candidate_id": "candidate_b"
+      }
+    },
+    {
+      "case_id": "e3_trajectory_compatibility_missing_producer_version",
+      "expected_error_contains": "producer_version",
+      "interface_model": "TrajectoryCompatibilityInterfaceV2",
+      "task_id": "e3_trajectory_compatibility",
+      "value": {
+        "answer": {
+          "payload": {
+            "reason_codes": [
+              "blocked_direction"
+            ],
+            "status": "incompatible"
+          },
+          "task_id": "e3_trajectory_compatibility"
+        },
+        "candidate_set": {
+          "candidate_producer_id": "fixture_candidate_producer",
+          "candidate_producer_version": "fixture_candidate_producer_v1",
+          "candidate_set_id": "candidate-set-1",
+          "candidates": [
+            {
+              "candidate_id": "candidate_a",
+              "direction": {
+                "angle_deg": 0.0,
+                "bin_mode": "degree10_with_stop",
+                "choice": "J",
+                "derivation_version": "candidate_overlay_rule_v1",
+                "label_index": 9,
+                "label_name": "straight",
+                "profile_id": "fpv_degree10_terminal_centroid_v2",
+                "profile_version": "2.0",
+                "source": "candidate_overlay_a"
+              },
+              "prompt_visible_representation_ref": "fpv.candidate_a"
+            },
+            {
+              "candidate_id": "candidate_b",
+              "direction": {
+                "angle_deg": 20.0,
+                "bin_mode": "degree10_with_stop",
+                "choice": "L",
+                "derivation_version": "candidate_overlay_rule_v1",
+                "label_index": 11,
+                "label_name": "right_20",
+                "profile_id": "fpv_degree10_terminal_centroid_v2",
+                "profile_version": "2.0",
+                "source": "candidate_overlay_b"
+              },
+              "prompt_visible_representation_ref": "fpv.candidate_b"
+            }
+          ]
+        },
+        "constraint_evidence_refs": [
+          "fpv.current"
+        ],
+        "evidence_refs": [
+          "fpv.current",
+          "fpv.candidate_a",
+          "fpv.candidate_b"
+        ],
+        "input_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "producer_id": "fixture_compatibility_producer",
+        "qc_status": "accepted",
+        "source_field_refs": [
+          "candidate_compatibility_label"
+        ],
+        "source_group_id": "vqa-v2-interface-fixture",
+        "source_kind": "trajectory_compatibility",
+        "target_candidate_id": "candidate_a"
+      }
+    },
+    {
+      "case_id": "c3_route_theta_forbidden",
+      "expected_error_contains": "forbidden",
+      "interface_model": "BEVRouteAlignmentInterfaceV2",
+      "task_id": "c3_bev_route_alignment",
+      "value": {
+        "answer": {
+          "payload": {
+            "alignment_status": "aligned",
+            "direction_label": "right_20"
+          },
+          "task_id": "c3_bev_route_alignment"
+        },
+        "bev_evidence_ref": "bev.current",
+        "direction": {
+          "angle_deg": 20.0,
+          "bin_mode": "degree10_with_stop",
+          "choice": "L",
+          "derivation_version": "bev_alignment_rule_v1",
+          "label_index": 11,
+          "label_name": "right_20",
+          "profile_id": "fpv_degree10_terminal_centroid_v2",
+          "profile_version": "2.0",
+          "source": "route_theta"
+        },
+        "evidence_refs": [
+          "fpv.current",
+          "bev.current"
+        ],
+        "fpv_evidence_ref": "fpv.current",
+        "independent_source": true,
+        "input_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "producer_id": "fixture_bev_alignment_producer",
+        "producer_version": "fixture_producer_v1",
+        "qc_status": "accepted",
+        "source_field_refs": [
+          "independent_bev_direction_record"
+        ],
+        "source_group_id": "vqa-v2-interface-fixture",
+        "source_kind": "bev_route_direction"
+      }
+    },
+    {
+      "case_id": "c4_hidden_entity_id_forbidden",
+      "expected_error_contains": "prompt-visible evidence",
+      "interface_model": "CrossViewEntityBindingInterfaceV2",
+      "task_id": "c4_bev_object_anchoring",
+      "value": {
+        "answer": {
+          "payload": {
+            "bev_ref": "bev.building_a",
+            "direction_label": "right_30",
+            "fpv_entity_ref": "fpv.entity_e2",
+            "status": "matched"
+          },
+          "task_id": "c4_bev_object_anchoring"
+        },
+        "bev_ref": "bev.building_a",
+        "direction": {
+          "angle_deg": 30.0,
+          "bin_mode": "degree10_with_stop",
+          "choice": "M",
+          "derivation_version": "cross_view_direction_rule_v1",
+          "label_index": 12,
+          "label_name": "right_30",
+          "profile_id": "fpv_degree10_terminal_centroid_v2",
+          "profile_version": "2.0",
+          "source": "cross_view_annotation"
+        },
+        "evidence_refs": [
+          "fpv.current",
+          "bev.current",
+          "bev.building_a"
+        ],
+        "fpv_entity_ref": "fpv.entity_e2",
+        "input_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "producer_id": "fixture_cross_view_producer",
+        "producer_version": "fixture_producer_v1",
+        "qc_status": "accepted",
+        "source_field_refs": [
+          "cross_view_match_record"
+        ],
+        "source_group_id": "vqa-v2-interface-fixture",
+        "source_kind": "cross_view_entity_binding"
+      }
+    }
+  ],
+  "schema_version": "urbannav_navigation_vqa_contract_artifacts_v2"
+}

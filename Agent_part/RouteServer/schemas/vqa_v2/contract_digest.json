@@ -1,0 +1,61 @@
+{
+  "artifact_sha256": {
+    "direction_profile.schema.json": "9c0b58f383c76533f1655aaeb58ff6812eae32bb4f2bad6ec5f1f038a1f8c7a7",
+    "vqa_annotation_v2.schema.json": "55ac5bfa2cbedf6bd2be403ecdf4642758571af21d48396c47890ac84d3e4bdc",
+    "vqa_capabilities_v2.schema.json": "f9897e4974d305439b1304241c08da54218cf873ab90cfdd9547117d9806deba",
+    "vqa_source_v2.schema.json": "f0312d5823d54e9a66846f2eec674e168538e865cb4df46fd77a7322024d8d79",
+    "vqa_training_view_v2.schema.json": "3376da9ff74438ce48abf5a36d8144ddeb0295e6a849f292c199748c6e6c890b",
+    "vqa_v2.schema.json": "c3b324215fb700d7f178ad0e2f017de4c636701c9f1ec99954ee142b13c89b6c",
+    "vqa_v2_golden_invalid.json": "5020f4d37ad690eed4f7294a8db834b16de7957c943fddde32c8af7d0574cf64",
+    "vqa_v2_golden_valid.json": "ddde2192d7b66e863092aa002d00ef22d338f56b330d5978a131712bd2f6faa2",
+    "vqa_v2_interface_golden_invalid.json": "79a0e7f25b08d608fe09144e80f2507c6b7f7dcc9793e598d2d60aacfbb7de53",
+    "vqa_v2_interface_golden_valid.json": "f3f30c8fdceb3d05a61273eddfe2f7703d6004ed0ddec313a6daec0727345530",
+    "vqa_v2_stage_a_capabilities.json": "ea66c71f8b481633f1206840418f4e37a63aecd7bf9e0ed25af93ad470e9376b"
+  },
+  "canonical_source_sha256": {
+    "config/vqa_v2_stage_a_capabilities.json": "5416ba585b4b225a25442f257c7abce555f73f035c7d679a723648481be44ac6",
+    "src/mcp_server/agent/vqa_v2_prompt_policy.py": "dcb47487f9157eed57285e7249aac9808a8207b2fbe3b9a979a93ab76a2d95cf",
+    "src/mcp_server/agent/vqa_v2_text.py": "cef082a86a83941ec693b8ce107b24bbd43aecc155937bc1dd1a4003f06bc231",
+    "src/mcp_server/contracts/direction_profile.py": "3cfee6891c23ed4b312e0010c9c8c9fa9d3a056adb8691b62f3d31c27f50b46f",
+    "src/mcp_server/contracts/vqa_dataset_v2.py": "a912f2af30c157e80b9f4d6e550c7364967426f59883be86c0289f4ebd768e56",
+    "src/mcp_server/contracts/vqa_v2.py": "d02e46df48c4c9a84b3c3553bd613690ed7a1d9a12c2c53b95b5b009c040900b",
+    "src/mcp_server/data/vqa_v2_audit.py": "d933ae7c5829d5bbb89938d497c8ddfbc958e44b3afbdb3f4f76f3cc920e562e",
+    "src/mcp_server/data/vqa_v2_eligibility.py": "1fada838a5a6e395a34119cd1e998a19ce46ad42fea763017d0210167d42c045",
+    "src/mcp_server/data/vqa_v2_producers.py": "8d41f56a74ac3288b9a99c65185700e4f209f7eb16f8605d92e7886d8f86deb9",
+    "src/mcp_server/data/vqa_v2_questions.py": "8ac58ff42ee07b28dce70d9375bbb8500fc3f74bc22cdf8079a2ae74afb1abe4",
+    "src/mcp_server/data/vqa_v2_source.py": "941d3999ef0927a18151a9dc66238ac3a3ca5068350b2d467206859b05aab9fc",
+    "src/mcp_server/data/vqa_v2_views.py": "4d6e8e5a89ef4700ca07c33a5b1e2d323ee089b93a7cb567ed0dafa8d01553ee",
+    "src/mcp_server/teacher/vqa_v2_batch.py": "c29cc30e102c69febe8d85bfb280d92ac97d1c409ccfda3bd616f7e9f9c2ff9a",
+    "src/mcp_server/teacher/vqa_v2_profiles.py": "c1b11775c98b11d751dfbd72449c733864faeef5431e81fc8fed8b61dfa631f7",
+    "src/mcp_server/teacher/vqa_v2_teacher.py": "e04835fb4098c3cf2cdf83810cb95305f988c970d4c06d80827977fdec5f2fbe"
+  },
+  "protocol_ids": {
+    "parser_id": "urbannav_navigation_vqa_parser_v2_0",
+    "renderer_id": "urbannav_navigation_vqa_renderer_v2_0",
+    "task_registry_version": "urbannav_navigation_vqa_task_registry_v2_0",
+    "wire_format_version": "urbannav_navigation_vqa_wire_v2"
+  },
+  "schema_version": "urbannav_navigation_vqa_contract_artifacts_v2",
+  "student_prompt_policy_digest": "43aa1a6cb30300d5d921c88b3fa100b9123eb900656c9987aa0ff9d5f40d7352",
+  "teacher_prompt_policy_digests": {
+    "a1_goal_understanding": "8a7e85d4ec4fdb7fd4def355805d86d5d209856c639d59e084fa629f39817209",
+    "a2_explicit_requirement": "b39dfef17f9d20ce2d0caa7d9fb6067e49359a8e93de1cce866ec04fed01a72d",
+    "a3_task_ambiguity": "394a9e84e5a8bc397fbbede0cabd6a8006f21bcf30ca99881a41666993dc26b2",
+    "b1_direction_affordance": "3994f62e7c8d0b35f09eea834e2cec8f7216f627e766e3de8dfeda13775d4cad",
+    "b2_direction_clearance": "5b2d5291fd58912e2fbfcbe7439096910f5cb814700f5408e1d4932c943ad141",
+    "b3_direction_surface_effect": "141d905d9f20fa25b0fc706ba2570b39d29275f82276066f72fc69377e128315",
+    "b4_conditional_affordance": "2b3f37a7544efeec3f133ea6d93dc5a4bcd634a31737fc1698a142aed83a92c6",
+    "b5_direction_comparison": "3fc4f6c2dbe98cac631296b723ce824c2ee5786e86b23359a0995be30e06a92d",
+    "b6_unavailable_directions": "f697c20c6fbdde79f4397466d360fd4a56278d070f90a6da6dd5625dec7cf2a1",
+    "c1_goal_to_direction": "ac09e97cd853ccabff59f704dcaa85bc53ef3362e7b783178bbd9edf34c8be4a",
+    "d1_agent_relevance": "50c95f044b6f39e9cc402de8d8dc447aa1b6d1404186355ce87b9006399c2400",
+    "d2_static_interaction_relation": "510777529dc7e9281e4fb5e1ed9d5ae0c33fdcfe4bb64c1109086801edd072e1",
+    "d3_temporal_interaction_relation": "73d2d4764333103cf414b518e3586134aa61d07d056be45ae94da3dfe1cf0a39",
+    "d4_applicable_constraint": "c901c53a63b1d3f4356a68c0eef16940c96316c41ed3db7cb9ccb1148ba330fa",
+    "d5_appropriate_response": "247205bdbe517f0f2b4630b244fd97a4cf78e56bff301405bc99360bb2f535f1",
+    "d6_traffic_control_applicability": "58d904845b69c778ab76588a7478fb69d48bb92b5b9ae02419a072b5e0eb22ac",
+    "e4_alternative_direction": "7b162194227aea40d0ffaa17c94233a2bd4d688d7d0c2e33b84e817731c2cde7"
+  },
+  "vqa_contract_schema_digest": "b96367c076be7007fa5915342ff5e0880ded4797114c2c9d4272557c8c650a50",
+  "vqa_schema_version": "urbannav_navigation_vqa_v2_0"
+}

@@ -1,0 +1,1958 @@
+{
+  "$defs": {
+    "BEVFPVExecutabilityInterfaceV2": {
+      "additionalProperties": false,
+      "description": "Future binding for route intent and local FPV executability.",
+      "properties": {
+        "answer": {
+          "$ref": "#/$defs/C6AnswerV2"
+        },
+        "bev_alignment_evidence_ref": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Bev Alignment Evidence Ref",
+          "type": "string"
+        },
+        "bev_direction": {
+          "$ref": "#/$defs/DirectionLabelStamp"
+        },
+        "evidence_refs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "fpv_executability_evidence_ref": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Fpv Executability Evidence Ref",
+          "type": "string"
+        },
+        "input_fingerprint": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Input Fingerprint",
+          "type": "string"
+        },
+        "local_executability_producer_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Local Executability Producer Id",
+          "type": "string"
+        },
+        "local_executability_producer_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Local Executability Producer Version",
+          "type": "string"
+        },
+        "producer_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Producer Id",
+          "type": "string"
+        },
+        "producer_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Producer Version",
+          "type": "string"
+        },
+        "qc_status": {
+          "const": "accepted",
+          "title": "Qc Status",
+          "type": "string"
+        },
+        "source_field_refs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Source Field Refs",
+          "type": "array"
+        },
+        "source_group_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Group Id",
+          "type": "string"
+        },
+        "source_kind": {
+          "const": "bev_fpv_executability",
+          "title": "Source Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_group_id",
+        "producer_id",
+        "producer_version",
+        "input_fingerprint",
+        "qc_status",
+        "evidence_refs",
+        "source_field_refs",
+        "source_kind",
+        "bev_direction",
+        "bev_alignment_evidence_ref",
+        "fpv_executability_evidence_ref",
+        "local_executability_producer_id",
+        "local_executability_producer_version",
+        "answer"
+      ],
+      "title": "BEVFPVExecutabilityInterfaceV2",
+      "type": "object"
+    },
+    "BEVFPVExecutabilityPayloadV2": {
+      "additionalProperties": false,
+      "description": "Judge current FPV executability of a validated BEV direction.",
+      "properties": {
+        "direction_label": {
+          "anyOf": [
+            {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Direction Label"
+        },
+        "status": {
+          "enum": [
+            "executable",
+            "conditional",
+            "locally_blocked",
+            "conflict",
+            "insufficient_evidence"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "BEVFPVExecutabilityPayloadV2",
+      "type": "object"
+    },
+    "BEVObjectAnchoringPayloadV2": {
+      "additionalProperties": false,
+      "description": "Bind validated prompt-visible BEV and FPV entity references.",
+      "properties": {
+        "bev_ref": {
+          "anyOf": [
+            {
+              "maxLength": 160,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bev Ref"
+        },
+        "direction_label": {
+          "anyOf": [
+            {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Direction Label"
+        },
+        "fpv_entity_ref": {
+          "anyOf": [
+            {
+              "maxLength": 160,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fpv Entity Ref"
+        },
+        "status": {
+          "enum": [
+            "matched",
+            "ambiguous",
+            "not_visible",
+            "insufficient_evidence"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "BEVObjectAnchoringPayloadV2",
+      "type": "object"
+    },
+    "BEVRouteAlignmentInterfaceV2": {
+      "additionalProperties": false,
+      "description": "Future independent BEV-route alignment binding.",
+      "properties": {
+        "answer": {
+          "$ref": "#/$defs/C3AnswerV2"
+        },
+        "bev_evidence_ref": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Bev Evidence Ref",
+          "type": "string"
+        },
+        "direction": {
+          "$ref": "#/$defs/DirectionLabelStamp"
+        },
+        "evidence_refs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "fpv_evidence_ref": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Fpv Evidence Ref",
+          "type": "string"
+        },
+        "independent_source": {
+          "const": true,
+          "title": "Independent Source",
+          "type": "boolean"
+        },
+        "input_fingerprint": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Input Fingerprint",
+          "type": "string"
+        },
+        "producer_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Producer Id",
+          "type": "string"
+        },
+        "producer_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Producer Version",
+          "type": "string"
+        },
+        "qc_status": {
+          "const": "accepted",
+          "title": "Qc Status",
+          "type": "string"
+        },
+        "source_field_refs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Source Field Refs",
+          "type": "array"
+        },
+        "source_group_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Group Id",
+          "type": "string"
+        },
+        "source_kind": {
+          "const": "bev_route_direction",
+          "title": "Source Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_group_id",
+        "producer_id",
+        "producer_version",
+        "input_fingerprint",
+        "qc_status",
+        "evidence_refs",
+        "source_field_refs",
+        "source_kind",
+        "independent_source",
+        "bev_evidence_ref",
+        "fpv_evidence_ref",
+        "direction",
+        "answer"
+      ],
+      "title": "BEVRouteAlignmentInterfaceV2",
+      "type": "object"
+    },
+    "BEVRouteAlignmentPayloadV2": {
+      "additionalProperties": false,
+      "description": "Align an independently validated BEV route to FPV direction.",
+      "properties": {
+        "alignment_status": {
+          "enum": [
+            "aligned",
+            "locally_blocked",
+            "not_visible",
+            "conflict",
+            "insufficient_evidence"
+          ],
+          "title": "Alignment Status",
+          "type": "string"
+        },
+        "direction_label": {
+          "anyOf": [
+            {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Direction Label"
+        }
+      },
+      "required": [
+        "alignment_status"
+      ],
+      "title": "BEVRouteAlignmentPayloadV2",
+      "type": "object"
+    },
+    "C2PixelAnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for dormant C2 pixel-goal answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/SuppliedTargetDirectionPayloadV2"
+        },
+        "task_id": {
+          "const": "c2_pixel_goal_to_direction",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "C2PixelAnswerV2",
+      "type": "object"
+    },
+    "C2WaypointAnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for dormant C2 waypoint answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/SuppliedTargetDirectionPayloadV2"
+        },
+        "task_id": {
+          "const": "c2_waypoint_to_direction",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "C2WaypointAnswerV2",
+      "type": "object"
+    },
+    "C3AnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for dormant C3 BEV-route-alignment answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/BEVRouteAlignmentPayloadV2"
+        },
+        "task_id": {
+          "const": "c3_bev_route_alignment",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "C3AnswerV2",
+      "type": "object"
+    },
+    "C4AnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for dormant C4 cross-view anchoring answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/BEVObjectAnchoringPayloadV2"
+        },
+        "task_id": {
+          "const": "c4_bev_object_anchoring",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "C4AnswerV2",
+      "type": "object"
+    },
+    "C5AnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for dormant C5 outside-view-direction answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/OutsideViewDirectionPayloadV2"
+        },
+        "task_id": {
+          "const": "c5_outside_view_direction",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "C5AnswerV2",
+      "type": "object"
+    },
+    "C6AnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for dormant C6 BEV-FPV-executability answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/BEVFPVExecutabilityPayloadV2"
+        },
+        "task_id": {
+          "const": "c6_bev_fpv_executability",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "C6AnswerV2",
+      "type": "object"
+    },
+    "CandidateDirectionClassificationPayloadV2": {
+      "additionalProperties": false,
+      "description": "Classify one prompt-visible candidate under a direction profile.",
+      "properties": {
+        "direction_label": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Direction Label",
+          "type": "string"
+        }
+      },
+      "required": [
+        "direction_label"
+      ],
+      "title": "CandidateDirectionClassificationPayloadV2",
+      "type": "object"
+    },
+    "CandidateDirectionInterfaceV2": {
+      "additionalProperties": false,
+      "description": "Future direction label for one prompt-visible candidate.",
+      "properties": {
+        "answer": {
+          "$ref": "#/$defs/E2AnswerV2"
+        },
+        "candidate_set": {
+          "$ref": "#/$defs/CandidateSetV2"
+        },
+        "evidence_refs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "input_fingerprint": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Input Fingerprint",
+          "type": "string"
+        },
+        "producer_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Producer Id",
+          "type": "string"
+        },
+        "producer_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Producer Version",
+          "type": "string"
+        },
+        "qc_status": {
+          "const": "accepted",
+          "title": "Qc Status",
+          "type": "string"
+        },
+        "source_field_refs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Source Field Refs",
+          "type": "array"
+        },
+        "source_group_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Group Id",
+          "type": "string"
+        },
+        "source_kind": {
+          "const": "candidate_direction",
+          "title": "Source Kind",
+          "type": "string"
+        },
+        "target_candidate_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Target Candidate Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_group_id",
+        "producer_id",
+        "producer_version",
+        "input_fingerprint",
+        "qc_status",
+        "evidence_refs",
+        "source_field_refs",
+        "source_kind",
+        "candidate_set",
+        "target_candidate_id",
+        "answer"
+      ],
+      "title": "CandidateDirectionInterfaceV2",
+      "type": "object"
+    },
+    "CandidatePreferenceInterfaceV2": {
+      "additionalProperties": false,
+      "description": "Future preference label over prompt-visible candidates.",
+      "properties": {
+        "answer": {
+          "$ref": "#/$defs/E1AnswerV2"
+        },
+        "candidate_set": {
+          "$ref": "#/$defs/CandidateSetV2"
+        },
+        "evidence_refs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "input_fingerprint": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Input Fingerprint",
+          "type": "string"
+        },
+        "producer_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Producer Id",
+          "type": "string"
+        },
+        "producer_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Producer Version",
+          "type": "string"
+        },
+        "qc_status": {
+          "const": "accepted",
+          "title": "Qc Status",
+          "type": "string"
+        },
+        "source_field_refs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Source Field Refs",
+          "type": "array"
+        },
+        "source_group_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Group Id",
+          "type": "string"
+        },
+        "source_kind": {
+          "const": "candidate_trajectory_preference",
+          "title": "Source Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_group_id",
+        "producer_id",
+        "producer_version",
+        "input_fingerprint",
+        "qc_status",
+        "evidence_refs",
+        "source_field_refs",
+        "source_kind",
+        "candidate_set",
+        "answer"
+      ],
+      "title": "CandidatePreferenceInterfaceV2",
+      "type": "object"
+    },
+    "CandidateSetV2": {
+      "additionalProperties": false,
+      "description": "Freeze candidate identity and presentation order.",
+      "properties": {
+        "candidate_producer_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Candidate Producer Id",
+          "type": "string"
+        },
+        "candidate_producer_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Candidate Producer Version",
+          "type": "string"
+        },
+        "candidate_set_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Candidate Set Id",
+          "type": "string"
+        },
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/PromptVisibleCandidateV2"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Candidates",
+          "type": "array"
+        }
+      },
+      "required": [
+        "candidate_set_id",
+        "candidate_producer_id",
+        "candidate_producer_version",
+        "candidates"
+      ],
+      "title": "CandidateSetV2",
+      "type": "object"
+    },
+    "CandidateTrajectoryPreferencePayloadV2": {
+      "additionalProperties": false,
+      "description": "Select one prompt-visible candidate trajectory.",
+      "properties": {
+        "preferred_candidate": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Preferred Candidate",
+          "type": "string"
+        },
+        "reason_codes": {
+          "items": {
+            "maxLength": 96,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "maxItems": 8,
+          "title": "Reason Codes",
+          "type": "array"
+        }
+      },
+      "required": [
+        "preferred_candidate"
+      ],
+      "title": "CandidateTrajectoryPreferencePayloadV2",
+      "type": "object"
+    },
+    "CrossViewEntityBindingInterfaceV2": {
+      "additionalProperties": false,
+      "description": "Future validated BEV-to-FPV entity correspondence.",
+      "properties": {
+        "answer": {
+          "$ref": "#/$defs/C4AnswerV2"
+        },
+        "bev_ref": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Bev Ref",
+          "type": "string"
+        },
+        "direction": {
+          "$ref": "#/$defs/DirectionLabelStamp"
+        },
+        "evidence_refs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "fpv_entity_ref": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Fpv Entity Ref",
+          "type": "string"
+        },
+        "input_fingerprint": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Input Fingerprint",
+          "type": "string"
+        },
+        "producer_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Producer Id",
+          "type": "string"
+        },
+        "producer_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Producer Version",
+          "type": "string"
+        },
+        "qc_status": {
+          "const": "accepted",
+          "title": "Qc Status",
+          "type": "string"
+        },
+        "source_field_refs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Source Field Refs",
+          "type": "array"
+        },
+        "source_group_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Group Id",
+          "type": "string"
+        },
+        "source_kind": {
+          "const": "cross_view_entity_binding",
+          "title": "Source Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_group_id",
+        "producer_id",
+        "producer_version",
+        "input_fingerprint",
+        "qc_status",
+        "evidence_refs",
+        "source_field_refs",
+        "source_kind",
+        "bev_ref",
+        "fpv_entity_ref",
+        "direction",
+        "answer"
+      ],
+      "title": "CrossViewEntityBindingInterfaceV2",
+      "type": "object"
+    },
+    "DirectionLabelStamp": {
+      "additionalProperties": false,
+      "description": "Carry a complete direction-label identity and its derivation source.",
+      "properties": {
+        "angle_deg": {
+          "anyOf": [
+            {
+              "maximum": 180.0,
+              "minimum": -180.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Angle Deg"
+        },
+        "bin_mode": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Bin Mode",
+          "type": "string"
+        },
+        "choice": {
+          "maxLength": 32,
+          "minLength": 1,
+          "title": "Choice",
+          "type": "string"
+        },
+        "derivation_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Derivation Version",
+          "type": "string"
+        },
+        "label_index": {
+          "minimum": 0,
+          "title": "Label Index",
+          "type": "integer"
+        },
+        "label_name": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Label Name",
+          "type": "string"
+        },
+        "profile_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Profile Id",
+          "type": "string"
+        },
+        "profile_version": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Profile Version",
+          "type": "string"
+        },
+        "source": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile_id",
+        "profile_version",
+        "label_index",
+        "label_name",
+        "choice",
+        "source",
+        "bin_mode",
+        "derivation_version"
+      ],
+      "title": "DirectionLabelStamp",
+      "type": "object"
+    },
+    "DirectionSupervisionV4": {
+      "additionalProperties": false,
+      "description": "Carry one complete, profile-stamped deterministic direction label.",
+      "properties": {
+        "angle_deg": {
+          "anyOf": [
+            {
+              "maximum": 180.0,
+              "minimum": -180.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Angle Deg"
+        },
+        "bin_mode": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Bin Mode",
+          "type": "string"
+        },
+        "choice": {
+          "maxLength": 32,
+          "minLength": 1,
+          "title": "Choice",
+          "type": "string"
+        },
+        "derivation_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Derivation Version",
+          "type": "string"
+        },
+        "label_index": {
+          "minimum": 0,
+          "title": "Label Index",
+          "type": "integer"
+        },
+        "label_name": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Label Name",
+          "type": "string"
+        },
+        "profile_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Profile Id",
+          "type": "string"
+        },
+        "profile_version": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Profile Version",
+          "type": "string"
+        },
+        "source": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile_id",
+        "profile_version",
+        "label_index",
+        "label_name",
+        "choice",
+        "source",
+        "bin_mode",
+        "derivation_version"
+      ],
+      "title": "DirectionSupervisionV4",
+      "type": "object"
+    },
+    "E1AnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for dormant E1 candidate-preference answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/CandidateTrajectoryPreferencePayloadV2"
+        },
+        "task_id": {
+          "const": "e1_candidate_trajectory_preference",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "E1AnswerV2",
+      "type": "object"
+    },
+    "E2AnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for dormant E2 candidate-direction answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/CandidateDirectionClassificationPayloadV2"
+        },
+        "task_id": {
+          "const": "e2_candidate_direction_classification",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "E2AnswerV2",
+      "type": "object"
+    },
+    "E3AnswerV2": {
+      "additionalProperties": false,
+      "description": "Envelope for dormant E3 trajectory-compatibility answers.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/TrajectoryCompatibilityPayloadV2"
+        },
+        "task_id": {
+          "const": "e3_trajectory_compatibility",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "payload"
+      ],
+      "title": "E3AnswerV2",
+      "type": "object"
+    },
+    "EvidenceCatalogEntryV4": {
+      "additionalProperties": false,
+      "description": "Describe one raw prompt-visible evidence item.",
+      "properties": {
+        "attributes": {
+          "additionalProperties": true,
+          "title": "Attributes",
+          "type": "object"
+        },
+        "modality": {
+          "enum": [
+            "instruction",
+            "fpv",
+            "bev",
+            "goal",
+            "goal_image",
+            "pixel_goal",
+            "waypoint"
+          ],
+          "title": "Modality",
+          "type": "string"
+        },
+        "ref": {
+          "maxLength": 160,
+          "minLength": 5,
+          "pattern": "^(instruction|fpv|bev|goal|waypoint)\\.[a-z0-9_]+$",
+          "title": "Ref",
+          "type": "string"
+        },
+        "summary": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Summary"
+        }
+      },
+      "required": [
+        "ref",
+        "modality"
+      ],
+      "title": "EvidenceCatalogEntryV4",
+      "type": "object"
+    },
+    "InputModalitiesV4": {
+      "additionalProperties": false,
+      "description": "Record which Stage-A inputs are actually present for one sample.",
+      "properties": {
+        "bev": {
+          "default": false,
+          "title": "Bev",
+          "type": "boolean"
+        },
+        "fpv": {
+          "const": true,
+          "default": true,
+          "title": "Fpv",
+          "type": "boolean"
+        },
+        "goal_image": {
+          "default": false,
+          "title": "Goal Image",
+          "type": "boolean"
+        },
+        "history_fpv": {
+          "default": false,
+          "title": "History Fpv",
+          "type": "boolean"
+        },
+        "instruction": {
+          "default": false,
+          "title": "Instruction",
+          "type": "boolean"
+        },
+        "pixel_goal": {
+          "default": false,
+          "title": "Pixel Goal",
+          "type": "boolean"
+        },
+        "waypoint": {
+          "default": false,
+          "title": "Waypoint",
+          "type": "boolean"
+        }
+      },
+      "title": "InputModalitiesV4",
+      "type": "object"
+    },
+    "NavObservationV4": {
+      "additionalProperties": false,
+      "description": "Freeze exactly the single-turn input visible to teacher and student.",
+      "properties": {
+        "dataset_source": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Dataset Source",
+          "type": "string"
+        },
+        "evidence_catalog": {
+          "items": {
+            "$ref": "#/$defs/EvidenceCatalogEntryV4"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Evidence Catalog",
+          "type": "array"
+        },
+        "image_roles": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Image Roles",
+          "type": "array"
+        },
+        "images": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Images",
+          "type": "array"
+        },
+        "input_modalities": {
+          "$ref": "#/$defs/InputModalitiesV4"
+        },
+        "instruction": {
+          "anyOf": [
+            {
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Instruction"
+        },
+        "model_visible_context": {
+          "additionalProperties": true,
+          "title": "Model Visible Context",
+          "type": "object"
+        },
+        "source_group_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Group Id",
+          "type": "string"
+        },
+        "source_record_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Record Id",
+          "type": "string"
+        },
+        "split_group_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Split Group Id",
+          "type": "string"
+        },
+        "temporal_evidence_eligible": {
+          "default": false,
+          "title": "Temporal Evidence Eligible",
+          "type": "boolean"
+        },
+        "travel_mode": {
+          "default": "pedestrian_assist",
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Travel Mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_group_id",
+        "dataset_source",
+        "source_record_id",
+        "split_group_id",
+        "images",
+        "image_roles",
+        "evidence_catalog",
+        "input_modalities"
+      ],
+      "title": "NavObservationV4",
+      "type": "object"
+    },
+    "OutsideViewDirectionInterfaceV2": {
+      "additionalProperties": false,
+      "description": "Future binding that separates current and future direction.",
+      "properties": {
+        "answer": {
+          "$ref": "#/$defs/C5AnswerV2"
+        },
+        "current_direction": {
+          "$ref": "#/$defs/DirectionLabelStamp"
+        },
+        "evidence_refs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "future_direction": {
+          "$ref": "#/$defs/DirectionLabelStamp"
+        },
+        "future_horizon": {
+          "exclusiveMinimum": 0.0,
+          "title": "Future Horizon",
+          "type": "number"
+        },
+        "future_horizon_unit": {
+          "maxLength": 32,
+          "minLength": 1,
+          "title": "Future Horizon Unit",
+          "type": "string"
+        },
+        "future_not_yet_executed": {
+          "const": true,
+          "title": "Future Not Yet Executed",
+          "type": "boolean"
+        },
+        "input_fingerprint": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Input Fingerprint",
+          "type": "string"
+        },
+        "producer_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Producer Id",
+          "type": "string"
+        },
+        "producer_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Producer Version",
+          "type": "string"
+        },
+        "qc_status": {
+          "const": "accepted",
+          "title": "Qc Status",
+          "type": "string"
+        },
+        "source_field_refs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Source Field Refs",
+          "type": "array"
+        },
+        "source_group_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Group Id",
+          "type": "string"
+        },
+        "source_kind": {
+          "const": "outside_view_direction",
+          "title": "Source Kind",
+          "type": "string"
+        },
+        "transition_ref": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Transition Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_group_id",
+        "producer_id",
+        "producer_version",
+        "input_fingerprint",
+        "qc_status",
+        "evidence_refs",
+        "source_field_refs",
+        "source_kind",
+        "current_direction",
+        "future_direction",
+        "future_horizon",
+        "future_horizon_unit",
+        "transition_ref",
+        "future_not_yet_executed",
+        "answer"
+      ],
+      "title": "OutsideViewDirectionInterfaceV2",
+      "type": "object"
+    },
+    "OutsideViewDirectionPayloadV2": {
+      "additionalProperties": false,
+      "description": "Separate present motion from validated future BEV information.",
+      "properties": {
+        "current_direction_label": {
+          "anyOf": [
+            {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Current Direction Label"
+        },
+        "future_direction_label": {
+          "anyOf": [
+            {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Future Direction Label"
+        },
+        "outside_view_information": {
+          "items": {
+            "maxLength": 96,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Outside View Information",
+          "type": "array"
+        }
+      },
+      "title": "OutsideViewDirectionPayloadV2",
+      "type": "object"
+    },
+    "PixelGoalDirectionInterfaceV2": {
+      "additionalProperties": false,
+      "description": "Future validated pixel-goal direction binding.",
+      "properties": {
+        "answer": {
+          "$ref": "#/$defs/C2PixelAnswerV2"
+        },
+        "coordinate_convention_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Coordinate Convention Version",
+          "type": "string"
+        },
+        "coordinate_frame": {
+          "const": "fpv_pixel_xy_top_left",
+          "title": "Coordinate Frame",
+          "type": "string"
+        },
+        "direction": {
+          "$ref": "#/$defs/DirectionLabelStamp"
+        },
+        "evidence_refs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "image_height": {
+          "exclusiveMinimum": 0,
+          "title": "Image Height",
+          "type": "integer"
+        },
+        "image_width": {
+          "exclusiveMinimum": 0,
+          "title": "Image Width",
+          "type": "integer"
+        },
+        "input_fingerprint": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Input Fingerprint",
+          "type": "string"
+        },
+        "pixel_goal_source_ref": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Pixel Goal Source Ref",
+          "type": "string"
+        },
+        "producer_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Producer Id",
+          "type": "string"
+        },
+        "producer_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Producer Version",
+          "type": "string"
+        },
+        "qc_status": {
+          "const": "accepted",
+          "title": "Qc Status",
+          "type": "string"
+        },
+        "source_field_refs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Source Field Refs",
+          "type": "array"
+        },
+        "source_group_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Group Id",
+          "type": "string"
+        },
+        "source_kind": {
+          "const": "pixel_goal_direction",
+          "title": "Source Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_group_id",
+        "producer_id",
+        "producer_version",
+        "input_fingerprint",
+        "qc_status",
+        "evidence_refs",
+        "source_field_refs",
+        "source_kind",
+        "coordinate_frame",
+        "image_width",
+        "image_height",
+        "coordinate_convention_version",
+        "pixel_goal_source_ref",
+        "direction",
+        "answer"
+      ],
+      "title": "PixelGoalDirectionInterfaceV2",
+      "type": "object"
+    },
+    "PromptVisibleCandidateV2": {
+      "additionalProperties": false,
+      "description": "Describe one candidate representation actually visible to students.",
+      "properties": {
+        "candidate_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "direction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DirectionLabelStamp"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "prompt_visible_representation_ref": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Prompt Visible Representation Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "prompt_visible_representation_ref"
+      ],
+      "title": "PromptVisibleCandidateV2",
+      "type": "object"
+    },
+    "SuppliedTargetDirectionPayloadV2": {
+      "additionalProperties": false,
+      "description": "Align a supplied pixel goal or waypoint to a direction.",
+      "properties": {
+        "direction_label": {
+          "anyOf": [
+            {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Direction Label"
+        },
+        "status": {
+          "enum": [
+            "aligned",
+            "conflict",
+            "not_visible",
+            "insufficient_evidence"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "SuppliedTargetDirectionPayloadV2",
+      "type": "object"
+    },
+    "TrajectoryCompatibilityInterfaceV2": {
+      "additionalProperties": false,
+      "description": "Future compatibility label for one prompt-visible candidate.",
+      "properties": {
+        "answer": {
+          "$ref": "#/$defs/E3AnswerV2"
+        },
+        "candidate_set": {
+          "$ref": "#/$defs/CandidateSetV2"
+        },
+        "constraint_evidence_refs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Constraint Evidence Refs",
+          "type": "array"
+        },
+        "evidence_refs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "input_fingerprint": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Input Fingerprint",
+          "type": "string"
+        },
+        "producer_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Producer Id",
+          "type": "string"
+        },
+        "producer_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Producer Version",
+          "type": "string"
+        },
+        "qc_status": {
+          "const": "accepted",
+          "title": "Qc Status",
+          "type": "string"
+        },
+        "source_field_refs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Source Field Refs",
+          "type": "array"
+        },
+        "source_group_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Group Id",
+          "type": "string"
+        },
+        "source_kind": {
+          "const": "trajectory_compatibility",
+          "title": "Source Kind",
+          "type": "string"
+        },
+        "target_candidate_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Target Candidate Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_group_id",
+        "producer_id",
+        "producer_version",
+        "input_fingerprint",
+        "qc_status",
+        "evidence_refs",
+        "source_field_refs",
+        "source_kind",
+        "candidate_set",
+        "target_candidate_id",
+        "answer"
+      ],
+      "title": "TrajectoryCompatibilityInterfaceV2",
+      "type": "object"
+    },
+    "TrajectoryCompatibilityPayloadV2": {
+      "additionalProperties": false,
+      "description": "Classify task and visible-scene compatibility of one candidate.",
+      "properties": {
+        "reason_codes": {
+          "items": {
+            "maxLength": 96,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Reason Codes",
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "compatible",
+            "conditional",
+            "incompatible",
+            "insufficient_evidence"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "TrajectoryCompatibilityPayloadV2",
+      "type": "object"
+    },
+    "VQASourceInterfacesV2": {
+      "additionalProperties": false,
+      "description": "Hold dormant external-label interfaces without enabling them.",
+      "properties": {
+        "bev_fpv_executability": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BEVFPVExecutabilityInterfaceV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "bev_route_alignment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BEVRouteAlignmentInterfaceV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "candidate_direction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CandidateDirectionInterfaceV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "candidate_preference": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CandidatePreferenceInterfaceV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "cross_view_entity_binding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CrossViewEntityBindingInterfaceV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "outside_view_direction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OutsideViewDirectionInterfaceV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "pixel_goal_direction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PixelGoalDirectionInterfaceV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "trajectory_compatibility": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrajectoryCompatibilityInterfaceV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "waypoint_direction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WaypointDirectionInterfaceV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "VQASourceInterfacesV2",
+      "type": "object"
+    },
+    "WaypointDirectionInterfaceV2": {
+      "additionalProperties": false,
+      "description": "Future validated waypoint direction binding.",
+      "properties": {
+        "answer": {
+          "$ref": "#/$defs/C2WaypointAnswerV2"
+        },
+        "coordinate_frame": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Coordinate Frame",
+          "type": "string"
+        },
+        "coordinate_unit": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Coordinate Unit",
+          "type": "string"
+        },
+        "direction": {
+          "$ref": "#/$defs/DirectionLabelStamp"
+        },
+        "evidence_refs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "input_fingerprint": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Input Fingerprint",
+          "type": "string"
+        },
+        "producer_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Producer Id",
+          "type": "string"
+        },
+        "producer_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Producer Version",
+          "type": "string"
+        },
+        "qc_status": {
+          "const": "accepted",
+          "title": "Qc Status",
+          "type": "string"
+        },
+        "source_field_refs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Source Field Refs",
+          "type": "array"
+        },
+        "source_group_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Group Id",
+          "type": "string"
+        },
+        "source_kind": {
+          "const": "waypoint_direction",
+          "title": "Source Kind",
+          "type": "string"
+        },
+        "transform_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Transform Version",
+          "type": "string"
+        },
+        "waypoint_source_ref": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Waypoint Source Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_group_id",
+        "producer_id",
+        "producer_version",
+        "input_fingerprint",
+        "qc_status",
+        "evidence_refs",
+        "source_field_refs",
+        "source_kind",
+        "coordinate_frame",
+        "coordinate_unit",
+        "transform_version",
+        "waypoint_source_ref",
+        "direction",
+        "answer"
+      ],
+      "title": "WaypointDirectionInterfaceV2",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Partition visible VQA input from private label interfaces.",
+  "properties": {
+    "direction_supervision": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DirectionSupervisionV4"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "interfaces": {
+      "$ref": "#/$defs/VQASourceInterfacesV2"
+    },
+    "observation": {
+      "$ref": "#/$defs/NavObservationV4"
+    },
+    "schema_version": {
+      "const": "urbannav_navigation_vqa_source_v2_0",
+      "default": "urbannav_navigation_vqa_source_v2_0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_fingerprint": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Fingerprint",
+      "type": "string"
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 128,
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "observation",
+    "source_fingerprint"
+  ],
+  "title": "VQASourceV2",
+  "type": "object"
+}

@@ -1,0 +1,165 @@
+{
+  "$defs": {
+    "VQATaskCapabilityV2": {
+      "additionalProperties": false,
+      "description": "Declare implementation and activation state for one atomic task.",
+      "properties": {
+        "contract_ready": {
+          "const": true,
+          "default": true,
+          "title": "Contract Ready",
+          "type": "boolean"
+        },
+        "depends_on": {
+          "items": {
+            "enum": [
+              "a1_goal_understanding",
+              "a2_explicit_requirement",
+              "a3_task_ambiguity",
+              "b1_direction_affordance",
+              "b2_direction_clearance",
+              "b3_direction_surface_effect",
+              "b4_conditional_affordance",
+              "b5_direction_comparison",
+              "b6_unavailable_directions",
+              "c1_goal_to_direction",
+              "c2_pixel_goal_to_direction",
+              "c2_waypoint_to_direction",
+              "c3_bev_route_alignment",
+              "c4_bev_object_anchoring",
+              "c5_outside_view_direction",
+              "c6_bev_fpv_executability",
+              "d1_agent_relevance",
+              "d2_static_interaction_relation",
+              "d3_temporal_interaction_relation",
+              "d4_applicable_constraint",
+              "d5_appropriate_response",
+              "d6_traffic_control_applicability",
+              "e0_demonstrated_direction_selection",
+              "e1_candidate_trajectory_preference",
+              "e2_candidate_direction_classification",
+              "e3_trajectory_compatibility",
+              "e4_alternative_direction"
+            ],
+            "type": "string"
+          },
+          "maxItems": 8,
+          "title": "Depends On",
+          "type": "array"
+        },
+        "disabled_reason": {
+          "anyOf": [
+            {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Disabled Reason"
+        },
+        "evaluation_enabled": {
+          "title": "Evaluation Enabled",
+          "type": "boolean"
+        },
+        "label_producer_ready": {
+          "title": "Label Producer Ready",
+          "type": "boolean"
+        },
+        "producer_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Producer Ids",
+          "type": "array"
+        },
+        "source_interface_ready": {
+          "const": true,
+          "default": true,
+          "title": "Source Interface Ready",
+          "type": "boolean"
+        },
+        "task_id": {
+          "enum": [
+            "a1_goal_understanding",
+            "a2_explicit_requirement",
+            "a3_task_ambiguity",
+            "b1_direction_affordance",
+            "b2_direction_clearance",
+            "b3_direction_surface_effect",
+            "b4_conditional_affordance",
+            "b5_direction_comparison",
+            "b6_unavailable_directions",
+            "c1_goal_to_direction",
+            "c2_pixel_goal_to_direction",
+            "c2_waypoint_to_direction",
+            "c3_bev_route_alignment",
+            "c4_bev_object_anchoring",
+            "c5_outside_view_direction",
+            "c6_bev_fpv_executability",
+            "d1_agent_relevance",
+            "d2_static_interaction_relation",
+            "d3_temporal_interaction_relation",
+            "d4_applicable_constraint",
+            "d5_appropriate_response",
+            "d6_traffic_control_applicability",
+            "e0_demonstrated_direction_selection",
+            "e1_candidate_trajectory_preference",
+            "e2_candidate_direction_classification",
+            "e3_trajectory_compatibility",
+            "e4_alternative_direction"
+          ],
+          "title": "Task Id",
+          "type": "string"
+        },
+        "training_export_enabled": {
+          "title": "Training Export Enabled",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "task_id",
+        "label_producer_ready",
+        "training_export_enabled",
+        "evaluation_enabled"
+      ],
+      "title": "VQATaskCapabilityV2",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Freeze the task activation registry outside the wire contract.",
+  "properties": {
+    "profile_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Profile Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "urbannav_navigation_vqa_capabilities_v2_0",
+      "default": "urbannav_navigation_vqa_capabilities_v2_0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "tasks": {
+      "items": {
+        "$ref": "#/$defs/VQATaskCapabilityV2"
+      },
+      "minItems": 1,
+      "title": "Tasks",
+      "type": "array"
+    }
+  },
+  "required": [
+    "profile_id",
+    "tasks"
+  ],
+  "title": "VQACapabilityConfigV2",
+  "type": "object"
+}
