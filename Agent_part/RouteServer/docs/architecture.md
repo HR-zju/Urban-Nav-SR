@@ -611,8 +611,8 @@ x_{px}=\frac{x_{grid}}{1000}W,\qquad
 y_{px}=\frac{y_{grid}}{1000}H.
 \]
 
-这是图像平面可视化/兼容监督，不是 metric ego control，也不是生产 V3.3 Full CoT
-或 section QA 的字段。新 exporter 不再写出它。
+这是图像平面可视化/兼容监督，不是 metric ego control，也不是生产 V4 Full CoT
+字段。新 exporter 不再写出它。
 
 ### 4.5 Stage2 v1 与 v2 finish
 
@@ -680,28 +680,30 @@ a_{t,k+1}^{S2}=\pi_{\theta}^{S2}
 
 其中 \(c\) 是 tool call，\(r\) 是 tool response。这样支持多工具串联、路线修改和失败恢复。
 
-### 5.3 Reasoning V3.3 Full CoT 与社会导航语义
+### 5.3 Reasoning V4 单轮 Full CoT 与社会导航语义
 
-当前新 Full CoT 的唯一生产合同是 Reasoning V3.3：
+当前新 Full CoT 的唯一生产合同是 Reasoning V4：
 
 ```text
 TaskGrounding
 SceneGrounding
 LocalTraversability
 NavigationContextGrounding
-InteractionAndRuleGrounding
+InteractionConstraintGrounding
 Decision
 finish
 optional masked readout
 ```
 
-writer、双阶段 teacher、validator 与 composer 的完整字段合同以
-`docs/REASONING_V3_DATA_ANNOTATION_DESIGN.md` 为准。RouteServer 先在不含隐藏 GT 的
-Pass A/B 中生成任务语义与视觉事实，再在冻结事实和可信 outcome 下生成 Pass C
-decision rationale；规则只负责权威事实、数据集 trust policy、结构闭合和验证。
+完整字段、来源、teacher、validator、composer 和 loss 合同以
+`docs/REASONING_V4_DATA_ANNOTATION_DESIGN.md` 为准。五个 grounding teacher 独立读取
+同一份 `NavObservationV4`，Decision 再读取完整输入和五段已验证结果。已有 direction 与
+System1 trajectory 只作为 private sidecar；teacher 不可见，composer 也不回写 LVLM
+语义。
 
-下面的 ReasoningTraceV2 五段合同和 section QA 仅供既有 V2 数据、消融和旧 agentic
-实验读取。新 exporter、V3.3 cache 和全量标注不得写入或静默混入这些字段。
+下面的 ReasoningTraceV2 五段合同仅供既有 V2 数据、消融和旧 agentic 实验读取。
+旧 section-QA 生成与消费链已删除；新 exporter、V4 cache 和全量标注不得写入或
+静默混入这些字段。
 
 #### 5.3.1 Legacy ReasoningTraceV2
 
@@ -769,22 +771,16 @@ ordered images + image_roles
 instruction / dialogue
 model_visible_context
 evidence_catalog
-task_family / task_type / question     # 仅 QA row
+task_family / task_type
 ```
 
-对应的 assistant target 分为两类：
+对应的 assistant target 只保留 Full CoT：
 
 ```text
 Full CoT:
   five ReasoningTraceV2 sections
   -> finish
   -> navigate-only masked [SYS1_i]
-
-Section QA:
-  exactly one requested V2 section
-  -> no finish
-  -> no [SYS1_i]
-  -> no trajectory/action/segmentation sidecar
 ```
 
 因此 `[SYS1_i]` 不是社会行为文本，也不是离散方向标签；它只是 System1 从 LVLM
@@ -801,80 +797,19 @@ selected path relation supported
 travel mode applicable
 ```
 
-缺少任何一项时必须写 `unknown`、空 `applicable`，或不导出对应 QA；不能为了填满
-CoT 而生成 yield、pass、TTC 或 right-of-way 伪真值。
+缺少任何一项时必须写 `unknown` 或空 `applicable`；不能为了填满 CoT 而生成
+yield、pass、TTC 或 right-of-way 伪真值。
 
-### 5.4 Legacy V2 Full CoT 与 section QA 的单源投影
+### 5.4 Legacy V2 导出边界
 
-本节只描述既有 V2 projection。V3.3 不导出 sparse QA；后续 VQA 使用独立 typed
-question/rationale/answer 合同，不能从 V3.3 Full CoT 静默拆段。
-
-既有 V2 Full CoT、Map QA 和 SocialNav QA 从一个
-`ReasoningTraceV2` 投影：
+V2 exporter 只保留 canonical Full CoT/System1 view。旧的 Map/Social section-QA
+registry、投影器和弱 teacher gate 已删除；后续 VQA 使用独立 typed
+question/rationale/answer 合同，不能从 V2 或 V4 Full CoT 静默拆段。
 
 ```text
-ReasoningTraceV2
-  + finish                  -> Full CoT row
-  + one selected section    -> LM-only QA row
-  + trajectory_ego_t        -> navigate-only joint System1 row
+ReasoningTraceV2 + finish + optional trajectory_ego_t
+  -> Full CoT/System1 row
 ```
-
-当前 QA registry 包含：
-
-```text
-Map:
-  instruction_to_map_selection
-  map_route_state_reading
-  route_to_fpv_grounding
-  local_route_executability
-  control_path_applicability
-
-SocialNav:
-  social_traversability
-  social_agent_path_relation
-  social_constraint_applicability
-  social_trajectory_selection
-```
-
-这里的“registry 已实现”只表示任务、section 投影和 gate 已有代码，不表示当前数据已经
-具备四类 SocialNav 强标签。实际监督等级如下：
-
-| QA | 投影 section | 最低输入/标签要求 | 当前定位 |
-| --- | --- | --- | --- |
-| `social_traversability` | `EvidenceGrounding` | FPV；最好有 segmentation/human，当前也允许 `validated_vlm_teacher` | 弱观察蒸馏，不是真实交互真值 |
-| `social_agent_path_relation` | `EvidenceGrounding` | FPV + `track` + `selected_path`；tracked agents/human | 强关系监督 |
-| `social_constraint_applicability` | `ConstraintApplicability` | FPV + `track` + `selected_path`；tracked agents/human | 强约束监督 |
-| `social_trajectory_selection` | `Decision` | FPV + `selected_path`；demonstration/human/validated controller | 强策略监督 |
-
-每个 QA 必须同时通过 modality gate、`valid=true`、置信度阈值、evidence refs 和
-`label_source` 白名单。QA answer 虽然直接渲染同一个 V2 section，但问题语义仍必须
-被该 section 的具体字段回答。例如：
-
-```text
-social_traversability
-  requires relevant_facts describing clear/blocked/social support
-
-social_agent_path_relation
-  requires track.* and selected corridor/path relations
-
-social_constraint_applicability
-  requires applicable/not_applicable entries with trigger_refs
-
-social_trajectory_selection
-  requires evidence-backed motion/speed/social_action/fallback
-```
-
-只有 generic `fpv.current` 或 `corridor.center` 引用、但 `relevant_facts=[]` 的样本，不应
-被解释为高质量 SocialNav QA。当前 view exporter 的
-`derive_observational_teacher_qa=true` 会把 route-to-FPV、local executability 和
-`social_traversability` 作为明确标记的 `validated_vlm_teacher` 蒸馏视图补出；它们只适合
-低权重蒸馏或人工复核。构建强监督训练集时应传
-`--no-vlm-observational-qa`，只保留 source 中显式给出的 label-validity gate。
-
-因此 smoke 样本出现一个名为 `social_traversability` 的 row，并不意味着已经获得
-真实 SocialNav 标注。如果输入没有 `track`、`selected_path`、时序 agent 关系或人工/
-controller 标签，则后三类 SocialNav QA 必须缺席。trajectory endpoint heuristic 也不能
-冒充社会交互真值。
 
 ---
 
@@ -1477,13 +1412,6 @@ has(system1\_output)\land has(action\_dispatched)
 | preempted System1 output | 可在 trace 中审计 | 否 | 不作为 target |
 | reward/replay key | 否 | 否 | rollout/RL metadata |
 
-V2 section QA 使用固定 mask：
-
-```json
-{"lm":true,"system1_action":false,"trajectory":false,"segmentation":false}
-```
-
-QA row 不携带 `pixel_trajectory`、`trajectory_ego_t` 或 segmentation sidecar。
 完整 navigate row 才可同时启用 LM 与 System1 loss；`ask_user/complete_task/abort_task`
 不含 readout，也不启用 System1 loss。
 
@@ -1554,16 +1482,15 @@ QA row 不携带 `pixel_trajectory`、`trajectory_ego_t` 或 segmentation sideca
 
 ### 10.2 同源多任务视图
 
-同一个 `source_group_id` 可以生成三种 row，但每条 row 只激活自身合法 loss：
+同一个 `source_group_id` 可以生成 V4 full/section row，但每条 row 只激活自身合法 loss：
 
 | Row view | assistant target | LM | System1 | seg/pixel traj |
 | --- | --- | --- | --- | --- |
-| V3.3 Full CoT | 六段 V3.3 + finish | 是 | 否 | 默认否 |
-| V3.3 joint navigate | 六段 V3.3 + finish + masked readout | 按 section mask | `trajectory_ego_t` | 默认否 |
-| V3.3 ask/terminal | 六段 V3.3 + finish，无 readout | 按 section mask | 否 | 否 |
-| Legacy V2 Map/Social section QA | 一个 V2 section | 是 | 否 | 否 |
+| V4 grounding section | 完整输入到单个 grounding section | 是 | 否 | 否 |
+| V4 Decision section | 完整输入加五段 grounding 到 Decision | 是 | 否 | 否 |
+| V4 Full CoT | 六段 V4 + finish + optional masked readout | 六段与 finish | optional `trajectory_ego_t` | 否 |
 
-新 QA 生成器不依据图片数量猜模态。`images` 保留原始有序列表，
+未来独立 VQA 生成器也不得依据图片数量猜模态。`images` 保留原始有序列表，
 `image_roles` 显式区分 `fpv_history/fpv/bev/goal_image`；否则多帧 FPV 会被误当成
 FPV+BEV 并产生错误的 CrossModalAlignment 标签。
 
@@ -2119,8 +2046,8 @@ messages
 tools                  # 当前 exporter 为 JSON string
 images
 image_roles             # 与 images 一一对应，禁止按数量猜 BEV
-available_modalities    # QA capability gate
-source_group_id         # Full CoT/QA/System1 同源关联
+available_modalities    # evidence capability gate
+source_group_id         # Full CoT/System1 同源关联
 trajectory_ego_t optional
 action_ego_t optional, legacy/ablation
 action_mask optional
@@ -2178,7 +2105,6 @@ system1_supervision_valid
 | tool response | trace | 是 | 否 | 间接条件 | tool metrics |
 | symbolic finish | trace | 自回归 | 是 | query 前置条件 | text/action metrics |
 | ReasoningTraceV3 Full CoT | derived row | 是 | 按 section mask | navigate row | schema/grounding |
-| Legacy ReasoningTraceV2 section QA | derived row | 是 | 是 | 否 | section accuracy/grounding |
 | `[SYS1_i]` | row | 是 | 否 | latent query | query diagnostics |
 | `trajectory_ego_t` | trace/row top-level | 否 | 否 | 是 | ADE/FDE/safety |
 | safety/intervention/controller | trace | 后续 decision 可见必要摘要 | 否 | preempted 不监督 | closed-loop metrics |
@@ -2200,13 +2126,13 @@ raw sensors/user events/provider state
   -> ms-swift messages + top-level System1 supervision
 ```
 
-### 11.11 Reasoning V3.3 Full CoT 离线标注链
+### 11.11 Reasoning V4 Full CoT 离线标注链
 
-当前主线由 `ReasoningSourceV3 -> two-pass LVLM observation/rationale ->
-ReasoningAnnotationV3 -> ReasoningTrainingViewV3` 构成，并由
-`tools/model_processing/run_reasoning_v3_full.py` 统一执行 prepare、worker 和 finalize。
-完整合同、门禁和四数据集 trust policy 见
-`docs/REASONING_V3_DATA_ANNOTATION_DESIGN.md`。
+当前主线由 `ReasoningSourceV4 -> five independent grounding calls -> joint Decision ->
+ReasoningAnnotationV4 -> ReasoningTrainingViewV4` 构成。source、label 和 view 分别通过
+`build_reasoning_v4_sources.py`、`label_reasoning_v4.py` 和
+`export_reasoning_v4_views.py` 处理。完整合同和数据集 trust policy 见
+`docs/REASONING_V4_DATA_ANNOTATION_DESIGN.md`。
 
 #### 11.11.1 Legacy Evidence-conditioned Reasoning V2
 
@@ -2216,7 +2142,7 @@ ReasoningAnnotationV3 -> ReasoningTrainingViewV3` 构成，并由
 existing FPV/BEV/instruction/route assets
   -> ReasoningSourceV2          # 冻结 teacher/model 可见输入
   -> ReasoningAnnotationV2      # 原始回答、修复历史、验证结果
-  -> ReasoningTrainingViewV2    # Full CoT 或单 section QA
+  -> ReasoningTrainingViewV2    # Full CoT/System1 only
   -> ms-swift manifest row      # messages + navigate-only System1 sidecar
 ```
 
@@ -2230,7 +2156,7 @@ existing FPV/BEV/instruction/route assets
 | grounding | `evidence_catalog` | teacher 可引用的完整地址空间 |
 | optional condition | `goal_geometry/route_points_ego_t` | Goal Encoder 或路线条件，不进入 assistant target |
 | System1 sidecar | `trajectory_ego_t/trajectory_policy/action_mask/system1_enabled` | 仅训练连续 head，teacher 不可见 |
-| audit | `reasoning_qa_label_validity/teacher_private_context/metadata/source_fingerprint` | QA provenance、私有审计和不可变绑定 |
+| audit | `reasoning_qa_label_validity/teacher_private_context/metadata/source_fingerprint` | 冻结旧 source 的兼容审计字段、私有审计和不可变绑定 |
 
 route/waypoint 只有在来源可验证时才进入模型：显式
 `independent_route_evidence=true`，或 provenance 为 map provider、route session、tool
@@ -2252,12 +2178,8 @@ constraint-to-path applicability、finish 合法性校验。当前 E2E 标注阶
 `decision_type=navigate`，且没有实际 tool call，因此 `tool_evidence_refs=[]`。
 非法回答使用 validator error 原因做有限 repair；没有 rule/template fallback。
 
-QA 不是第二套标签，而是对同一个 `ReasoningTraceV2` section 的确定性投影。
-所有 QA 都必须同时满足 modality、label source、confidence 和 evidence refs gate。
-其中 `validated_vlm_teacher` 只允许生成观测型
-`route_to_fpv_grounding/local_route_executability/social_traversability`；涉及跟踪运动、
-traffic-control region 或社会约束适用性的 QA 必须来自 tracked/calibrated/human label。
-QA view 物理删除 trajectory/policy/action mask，并固定只启用 LM loss。
+`reasoning_qa_label_validity` 只为已冻结 V2 source/fingerprint 保留，不再触发 QA
+projection 或训练 view。新 VQA 不复用该字段。
 
 实现入口：
 
@@ -2265,8 +2187,7 @@ QA view 物理删除 trajectory/policy/action mask，并固定只启用 LM loss�
 contracts/reasoning_dataset.py       # 三个 Pydantic artifact
 data/reasoning_source.py             # legacy assets -> frozen source
 teacher/reasoning_v2_teacher.py      # VLM call, repair, resume
-data/reasoning_views.py              # accepted target -> Full CoT/QA
-qa/reasoning_views.py                # sparse QA registry and gates
+data/reasoning_views.py              # accepted target -> Full CoT/System1
 tools/model_processing/
   build_reasoning_v2_sources.py
   label_reasoning_v2.py
@@ -2535,37 +2456,32 @@ ms-swift/swift/sidewalk_nav/models/latent_query.py
 ms-swift/swift/sidewalk_nav/models/goal_encoder.py
 ```
 
-其中当前 Full CoT V3.3 使用：
+其中当前 Full CoT V4 使用：
 
 ```text
-reasoning_v3_3_full_cot:
+reasoning_v4_full_cot_sft:
   system = shared accessibility / evidence / safety / uncertainty policy
   user   = ordered images + instruction + model-visible conditions + evidence catalog
   target = six canonical sections + finish + optional navigate readout
 ```
 
-V3.3 的 source/annotation/training-view schema、prompt profile digest 和 section mask
+V4 的 source/annotation/training-view schema、prompt profile digest 和 LM span mask
 必须版本一致。训练后还必须加载生成出的 adapter 做至少一条真实生成回读；仅完成
 forward/backward 不能视为推理链已打通。
 
-以下 Reasoning V2 是 legacy 的两个模板入口：
+以下 Reasoning V2 只保留 legacy Full-CoT 模板入口：
 
 ```text
 reasoning_v2_cot_system1:
   system = DEFAULT_REASONING_V2_SYSTEM_PROMPT
   user   = multimodal evidence + full reasoning instruction
   target = five sections + finish + navigate-only readout
-
-qa_reasoning_v2:
-  system = DEFAULT_REASONING_V2_SYSTEM_PROMPT
-  user   = task_family + task_type + requested section + question
-  target = exactly one section
 ```
 
 旧 `Scene/FPVScene/BEVContext/CrossView/Plan` prompt 仅用于 legacy 数据读取和消融，
-不能与 V3.3 生产 target 混写。`DEFAULT_REASONING_V2_SYSTEM_PROMPT` 中的
+不能与 V4 生产 target 混写。`DEFAULT_REASONING_V2_SYSTEM_PROMPT` 中的
 社会导航原则是推理约束，不是每条 row 都必须填充的社会标签；没有 agent/path/control
-证据时，SocialNav 字段应为空或 `unknown`，相应 QA row 也应被 gate 掉。
+证据时，SocialNav 字段应为空或 `unknown`。
 
 `navigate` row 的因果顺序固定为：
 
@@ -2672,7 +2588,7 @@ system1_target_field = trajectory_ego_t
 system1_target_format = ego_pose_xyt_flu_v1
 ```
 
-缺少该字段的纯 LM/VQA row 将关闭本 row 的 action loss；trainer 不再隐式回退到 `action_ego_t`。`action_ego_t` 只允许在显式 delta-action 消融配置和独立 checkpoint 中使用。
+缺少该字段的纯 LM row 将关闭本 row 的 action loss；trainer 不再隐式回退到 `action_ego_t`。`action_ego_t` 只允许在显式 delta-action 消融配置和独立 checkpoint 中使用。
 
 梯度边界由配置控制，但语义必须保持：
 
@@ -2879,20 +2795,20 @@ src/mcp_server/contracts/episode.py
 src/mcp_server/contracts/task.py
   ExternalUserEvent / TaskState / DialogueState / ControlState
 
-src/mcp_server/contracts/reasoning_v3.py
-  ReasoningTraceV3 / FinishV3 / six canonical Full-CoT sections
+src/mcp_server/contracts/reasoning_v4.py
+  ReasoningTraceV4 / FinishV4 / six shared-input Full-CoT sections
 
-src/mcp_server/contracts/reasoning_dataset_v3.py
-  V3.3 source / annotation / training-view artifacts
+src/mcp_server/contracts/reasoning_dataset_v4.py
+  V4 source / annotation / training-view and strong-sidecar artifacts
 
-src/mcp_server/teacher/reasoning_v3_batch.py
-  two-pass LVLM teacher, cache, retry and bounded correction
+src/mcp_server/teacher/reasoning_v4_batch.py
+  five independent grounding calls, joint Decision, cache and retry
 
-src/mcp_server/data/reasoning_v3_composer.py
-  authoritative facts + validated LVLM semantics -> canonical target
+src/mcp_server/data/reasoning_v4_composer.py
+  validated LVLM sections + isolated sidecars -> canonical target
 
-src/mcp_server/agent/reasoning_v3_validation.py
-  V3.3 evidence closure and semantic validation
+src/mcp_server/agent/reasoning_v4_validation.py
+  V4 raw-evidence closure, cross-section findings and executability
 
 src/mcp_server/contracts/reasoning.py
   Legacy ReasoningTraceV2 / FinishV2 / five strongly typed sections
@@ -2902,9 +2818,6 @@ src/mcp_server/agent/reasoning_text.py
 
 src/mcp_server/agent/reasoning_validation.py
   evidence resolution, constraint applicability and finish/readout validation
-
-src/mcp_server/qa/reasoning_views.py
-  label-gated Map/Social section QA projections
 
 src/mcp_server/runtime/interfaces.py
   System2Action / TerminalDecision / System1Output / environment protocols
@@ -2963,12 +2876,6 @@ swift/sidewalk_nav/prompt.py
 
 swift/sidewalk_nav/reasoning.py
   training-side V2 contract, parser, renderer and legacy adapter
-
-swift/sidewalk_nav/data/reasoning_qa.py
-  sparse Map/Social QA registry and section projection
-
-swift/sidewalk_nav/data/qa_artifacts.py
-  canonical V2 QA bundle generation without continuous-label leakage
 
 swift/sidewalk_nav/tokens.py
   [TRAJ_i]/[SYS1_i] registration, indexing and LM masking
@@ -3029,12 +2936,10 @@ swift/sidewalk_nav/rollout/urbannav_env.py
 | RouteSession mutation CAS/idempotency | 已实现，单进程 | expected revision + idempotency key；分布式 store 未完成 |
 | EpisodeTraceV2 | 已实现 | event-sourced contract |
 | v2 assistant-suffix readout | 已实现 | `[SYS1_i]` 位于 finish 后且 LM mask |
-| Reasoning V3.3 六段 Full CoT | 已实现，待服务器生产验收 | 双阶段 teacher、composer、质量门禁、两仓 schema/profile/section-mask 一致性测试 |
-| Reasoning V3.3 真实 LVLM/训练/生成 smoke | 待完成 | 四数据集 HTML、质量报告、两步 LoRA 与 checkpoint 回读均通过后才能全量重标 |
+| Reasoning V4 六段 Full CoT | 已实现本地合同与单测，待真实 LVLM smoke | 五段独立 teacher、联合 Decision、composer、两仓 schema/profile parity |
+| Reasoning V4 真实 LVLM/训练/生成 smoke | 待完成 | 人工 review、短训练与 checkpoint 生成回读通过后才能全量标注 |
 | Legacy ReasoningTraceV2 五段 CoT | 已实现 | 仅供既有 V2 数据和旧 agentic 实验 |
-| Legacy Map section QA | 已实现 | 同源投影、label source 与 modality gate、LM-only mask |
-| Legacy Social section QA 框架 | 已实现 | 强标签覆盖取决于 track/path/human/controller 数据；不属于 V3.3 Full CoT |
-| Social observational QA | 部分实现 | `validated_vlm_teacher` 仅为弱蒸馏，批量强监督默认应关闭自动派生 |
+| Legacy V2 section QA | 已删除 | schema、投影器、teacher gate、artifact 和训练消费入口均已下线 |
 | V1 CoT/finish 读取兼容 | 已实现 | adapter 双读；新 Stage2 exporter 只写 V2 |
 | isolated latent queries | 已实现 | 独立 query table |
 | coordinate Goal Encoder | 已实现可选项 | 顶层 geometry，不进入 LM target |
@@ -3076,7 +2981,7 @@ swift/sidewalk_nav/rollout/urbannav_env.py
 15. RouteSession mutation 必须使用 expected revision 和 idempotency context，模型不能直接修改内部 route object。
 16. 新 session trace 必须按 `decision_id` 导出；`tick_id` 仅表示环境 transition，不能覆盖同 tick 多次决策。
 17. active System1 trainable row 必须携带与 checkpoint 一致的 `trajectory_policy`，不能依赖 shape 或默认值推断。
-18. 新 Full CoT 只能写六段 `ReasoningTraceV3`；V2 和更早 modality-oriented CoT 只允许经 versioned adapter 显式读取。
-19. V3.3 Full CoT 禁止裸 `ToolResultUse`；tool-aware/agentic target 必须使用后续独立 typed profile。Legacy V2 的 `ToolResultUse` 位置约束只适用于 V2。
-20. VQA 不得从 V3.3 Full CoT 直接拆段冒充独立推理标签；必须使用独立 question/rationale/answer schema、validator 和 loss。Legacy V2 section QA 继续受 modality、label source 和 confidence gate 约束。
+18. 新 Full CoT 只能写六段 `ReasoningTraceV4`；V2 和更早 modality-oriented CoT 只允许经 versioned adapter 显式读取。
+19. V4 Full CoT 禁止裸 `ToolResultUse`；tool-aware/agentic target 必须使用未来独立 `AgentStep` profile。Legacy V2 的 `ToolResultUse` 位置约束只适用于 V2。
+20. VQA 不得从 V4 Full CoT 直接拆段冒充独立 QA 标签；必须使用独立 question/rationale/answer schema、validator 和 loss，且不得恢复 legacy V2 section-QA 入口。
 21. 多帧输入必须携带 `image_roles`；禁止用 `len(images)>1` 推断 BEV。
