@@ -221,6 +221,14 @@ def build_reasoning_v4_user_prompt(
             for index, role in enumerate(view.image_roles)
         ],
         "input_modalities": view.input_modalities.model_dump(mode="json"),
+        "temporal_evidence_eligible": len(
+            {
+                image
+                for image, role in zip(view.images, view.image_roles)
+                if role.startswith("fpv.")
+            }
+        )
+        >= 2,
         "model_visible_context": view.model_visible_context,
         "evidence_catalog": [
             item.model_dump(mode="json", exclude_none=True)

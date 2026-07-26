@@ -85,7 +85,7 @@ def build_reasoning_v4_section_question(
     payload: dict[str, Any] = {
         "requested_section": profile.section_name,
         "complete_visible_input": visible_input,
-        "output_json_schema": profile.model_type.model_json_schema(),
+        "output_json_schema": profile.output_json_schema,
     }
     if profile.section_name == "Decision":
         if groundings is None or not groundings.complete:

@@ -6,7 +6,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Mapping
+from typing import Any, Mapping
 
 from pydantic import BaseModel
 
@@ -22,6 +22,7 @@ from mcp_server.contracts.reasoning_v4 import (
     REASONING_V4_SECTION_DEFINITION_VERSION,
     REASONING_V4_VALIDATOR_ID,
     REASONING_V4_WIRE_FORMAT_VERSION,
+    STAGE_A_DECISION_TYPES_V4,
     SceneGroundingV4,
     TaskGroundingV4,
     reasoning_v4_contract_schema_digest,
@@ -29,62 +30,75 @@ from mcp_server.contracts.reasoning_v4 import (
 
 
 _COMMON_POLICY = """\
-You are an offline annotation teacher for single-turn urban pedestrian navigation.
-Use only the complete prompt-visible observation and ordered images supplied in the
-user message. FPV is the only authority for immediate local safety. Instruction,
-goal, waypoint, and BEV context may express task direction, but cannot prove unseen
-free space. Do not use GPS, pose, calibration, route theta, future trajectory,
-runtime task phase, tracking truth, segmentation truth, bounding-box truth, or
-calibrated confidence.
+You are an offline annotation teacher for the System2 policy of an urban pedestrian
+navigation assistance robot. The system supports blind or low-vision users and
+people with mobility impairments through safe, predictable, accessible, and
+socially considerate local navigation.
 
-Raw evidence_refs must be copied exactly from evidence_catalog. Locally created
-semantic refs must use the namespaces required by the schema. Categories and
-reason codes are constrained open lower-snake-case strings, not a hidden class
-choice. Do not invent facts merely to fill a field; use an empty list or an
-explicit unknown status where the schema permits it.
+Use the complete prompt-visible multimodal observation supplied in the user
+message. FPV is authoritative for immediate local safety, visible walkable
+support, obstacles, clearance, traffic controls, and interaction risk.
+Instructions, goals, BEV, and waypoints provide task direction but cannot prove
+that an unseen or visibly blocked region is traversable.
+
+Raw evidence_refs must exactly match evidence_catalog entries. Semantic refs are
+sample-local links that organize reasoning but do not create evidence. Categories
+and reason codes are constrained open lower-snake-case strings rather than a
+hidden class choice. When evidence is insufficient, use the schema's unknown
+state, an empty list, or a conservative judgment instead of fabricating facts.
+
+Every grounding section independently reads the complete visible input. A single
+FPV image can support static occupancy, proximity, obstruction, and clearance.
+Claims about crossing, approaching, moving away, or persistent interaction should
+use ordered historical FPV evidence; otherwise use a static relation or an
+uncertain constraint.
+
+Only prompt-visible evidence may appear in the reasoning text; private sidecar
+supervision is outside the teacher boundary.
 
 Return exactly one JSON object for the requested section. Do not return markdown,
-XML tags, explanations, a full six-section trace, Finish, direction labels, or
-private supervision."""
+XML tags, explanations, a full six-section trace, Finish, or readout tokens."""
 
 
 _SECTION_POLICIES = {
     "TaskGrounding": """\
-Normalize only what the prompt-visible task sources ask the robot to do. A missing
-instruction is not a generic instruction. Requirements must be task-specific and
-directly evidenced. Do not describe visual entities, paths, or interactions here.""",
+Normalize the supplied task into its objective, goal specification, explicit user
+requirements, and material task ambiguity. Base every item on the actual visible
+task sources. Leave scene description, goal visibility, traversability, and action
+selection to their responsible sections.""",
     "SceneGrounding": """\
 Record only directly visible navigation-relevant entities and traffic controls.
-Every item must cite FPV evidence. Do not claim masks, boxes, instance identity,
-tracking, motion, path blockage, traversability, or interaction policy.""",
+Every item must cite FPV evidence. Describe observable scene facts without turning
+them into traversability, source-to-path relations, or navigation policy.""",
     "LocalTraversability": """\
 Describe visible local regions and their immediate traversability from FPV. Use
 sample-local semantic region refs based on the areas actually observed; do not
-force every scene into a fixed left/center/right partition. Do not infer GPS
-geometry, route matching, future motion, or precise metric clearance. A
-conditional, blocked, or forbidden region needs a concise lower-snake-case
-limiting factor code.""",
+force every scene into a fixed left/center/right partition. Record surface,
+lateral position, coarse clearance, state, and visible limiting factors without
+selecting the final action. A conditional, blocked, or forbidden region needs a
+concise lower-snake-case limiting factor code.""",
     "NavigationContextGrounding": """\
 Interpret the task and each actually available goal, waypoint, or BEV source
 against the current FPV scene. This section may propose semantic region refs, but
-must not claim local safety from non-FPV context. If sources do not resolve a
-direction, use the schema's insufficient or ambiguous status.""",
+FPV safety evidence remains authoritative. Produce goal/source alignments, coarse
+task direction, and candidate regions; use insufficient or ambiguous states when
+the visible sources do not resolve them.""",
     "InteractionConstraintGrounding": """\
 Record only task, traffic, social, accessibility, or local-safety constraints that
-can affect the current local choice. LVLM judgments are weak labels. Dynamic
-crossing or approaching relations require at least two distinct FPV evidence refs;
-otherwise use a static or uncertain relation, or omit the constraint. Do not claim
-tracking identity, TTC, calibrated risk, or normative rules not supported by the
-visible input or explicit instruction.""",
+affect current candidate regions. Seeing an entity or control alone is not a
+constraint. Each record must establish a source, affected candidate region,
+source-to-path relation, and behavioral effect. Use historical FPV for supported
+crossing or approaching claims; otherwise choose a static relation, mark the
+constraint uncertain, or omit it.""",
     "Decision": """\
 Choose one short-horizon semantic decision using the complete raw observation and
-the five validated grounding sections supplied in the user message. Resolve
-selected_region_ref and support_refs against those sections. Decision evidence_refs
-must still cite raw evidence_catalog entries. This Stage-A dataset has no reliable
-arrival state, so never emit decision_type=finish. Do not output a direction class
-or continuous trajectory; deterministic direction supervision and System1 targets
-are attached later by the exporter. If no safe executable region exists, prefer a
-stop, request_user, or request_replan decision justified by the validated inputs.""",
+the five validated grounding sections supplied in the user message. Read the
+original input directly; the sections are structured support rather than a
+replacement for raw evidence. Resolve selected_region_ref and support_refs, cite
+the raw evidence supporting the action, and respect visible traversability and
+applicable constraints. Stage-A allows only decision_type=navigate or
+decision_type=stop. Fine direction and continuous trajectory targets are attached
+later as private supervision.""",
 }
 
 _SECTION_MODELS: dict[str, type[BaseModel]] = {
@@ -105,6 +119,7 @@ class ReasoningV4TeacherProfile:
         profile_id: Stable identifier written into annotation artifacts.
         section_name: Canonical Reasoning V4 section name.
         model_type: Pydantic model accepted from the teacher.
+        output_json_schema: Section schema projected to the active Stage-A policy.
         system_prompt: Exact provider-side policy text.
         policy_digest: Digest over schema, section, model schema, and prompt.
     """
@@ -112,20 +127,44 @@ class ReasoningV4TeacherProfile:
     profile_id: str
     section_name: str
     model_type: type[BaseModel]
+    output_json_schema: dict[str, Any]
     system_prompt: str
     policy_digest: str
+
+
+def _section_output_schema(
+    section_name: str,
+    model_type: type[BaseModel],
+) -> dict[str, Any]:
+    """Project the canonical model schema to the active Stage-A subset."""
+
+    schema = json.loads(
+        json.dumps(
+            model_type.model_json_schema(),
+            ensure_ascii=False,
+        )
+    )
+    if section_name == "Decision":
+        schema["properties"]["decision_type"]["enum"] = list(
+            STAGE_A_DECISION_TYPES_V4
+        )
+    return schema
 
 
 def _profile(section_name: str) -> ReasoningV4TeacherProfile:
     """Build one immutable section profile from the canonical policy."""
 
     model_type = _SECTION_MODELS[section_name]
+    output_json_schema = _section_output_schema(
+        section_name,
+        model_type,
+    )
     system_prompt = (
         f"{_COMMON_POLICY}\n\nSECTION RESPONSIBILITY — {section_name}\n"
         f"{_SECTION_POLICIES[section_name]}"
     )
     payload = {
-        "profile_id": f"reasoning_v4_teacher_{section_name.lower()}_v1",
+        "profile_id": f"reasoning_v4_teacher_{section_name.lower()}_v2",
         "trace_schema_version": REASONING_TRACE_V4_SCHEMA_VERSION,
         "contract_schema_digest": reasoning_v4_contract_schema_digest(),
         "wire_format_version": REASONING_V4_WIRE_FORMAT_VERSION,
@@ -137,7 +176,7 @@ def _profile(section_name: str) -> ReasoningV4TeacherProfile:
         "renderer_id": REASONING_V4_RENDERER_ID,
         "validator_id": REASONING_V4_VALIDATOR_ID,
         "section_name": section_name,
-        "section_schema": model_type.model_json_schema(),
+        "section_schema": output_json_schema,
         "system_prompt": system_prompt,
     }
     digest = hashlib.sha256(
@@ -152,6 +191,7 @@ def _profile(section_name: str) -> ReasoningV4TeacherProfile:
         profile_id=payload["profile_id"],
         section_name=section_name,
         model_type=model_type,
+        output_json_schema=output_json_schema,
         system_prompt=system_prompt,
         policy_digest=digest,
     )

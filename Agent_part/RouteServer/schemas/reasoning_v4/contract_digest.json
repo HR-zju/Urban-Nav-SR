@@ -6,34 +6,34 @@
     "reasoning_v4_golden_valid.json": "6bb6c344a201a508876061c4be0cbac99411e1d034ebbb68cac17a0b08805c18"
   },
   "canonical_source_sha256": {
-    "src/mcp_server/agent/reasoning_v4_prompt_policy.py": "4b1e991cdee80363ba4cbb2277a63c4fe166e15f9d0d19eee413ee96e06c7b67",
+    "src/mcp_server/agent/reasoning_v4_prompt_policy.py": "ca0300f496d95d7ceba2c0d318ad39ebc0de91c3b607c260d750077b4e2cb72e",
     "src/mcp_server/agent/reasoning_v4_text.py": "34eb44a3cd6790ac2c0b77b318ad5be3d6045bda4fa30d5683a56378edbfd2f7",
-    "src/mcp_server/agent/reasoning_v4_validation.py": "a0ec85c7f6099534484c50389948dad3fcd2cf69789dd68c8e3e91eb450504c1",
-    "src/mcp_server/contracts/reasoning_dataset_v4.py": "8e40fbdd220ee466dce3efa9665cc6e78e506bd94a021be8c4ba34f7bb645a1c",
-    "src/mcp_server/contracts/reasoning_v4.py": "bbf56df27c807ceb82b825043db7881a75ad294dc3e5356235e7d915de861e4d",
+    "src/mcp_server/agent/reasoning_v4_validation.py": "4df82e4553fc8d566197eae7efcd8f1cc1e25275fa2b761d5efe3f4803815af1",
+    "src/mcp_server/contracts/reasoning_dataset_v4.py": "333871184f01250a8fa34d9a725b2949381018eae9917de7b54fcf9f930164e7",
+    "src/mcp_server/contracts/reasoning_v4.py": "fda565bc567935287a86b49765c981ae1e29bd233cb49fd315b51e2cdbde1716",
     "src/mcp_server/data/reasoning_v4_audit.py": "9d9224d6fdbf125395139afb647556d965c88ca80ca36773fda320cfd5f2b47f",
     "src/mcp_server/data/reasoning_v4_composer.py": "096ff734c44c694155ebf7fae7524a9098a4a61201e952a4b5ee09ca5a1c7d98",
     "src/mcp_server/data/reasoning_v4_source.py": "afc3180974024d6e5c55cf92bbff8d99f9bb02fb465f0d76b96ceaf555406e61",
-    "src/mcp_server/data/reasoning_v4_views.py": "633702962d1d8c26f128d68f915375ea2816503e21009b2abda305dd484d8acc",
+    "src/mcp_server/data/reasoning_v4_views.py": "372abb02224ae8b9a6ef75abd673fb1b78f04f889c4eef16ec099abc7c213b96",
     "src/mcp_server/teacher/reasoning_v4_batch.py": "8676fe8bff8ce96d71bc69edf3f8918bd96db7a8f2b6921d502de0482424d730",
-    "src/mcp_server/teacher/reasoning_v4_profiles.py": "602db218680321ad545551d88bb652a0e58c8814b961ff6eedf4278385930bc9",
-    "src/mcp_server/teacher/reasoning_v4_teacher.py": "a235dcdc8a273e3f74d3836d8b4f180f102542493da1cf5b9fce075c72db522e"
+    "src/mcp_server/teacher/reasoning_v4_profiles.py": "8098f5c3b38f310b2adc906051f319cb8fbf3b08a2d5b202a920107ab54e62c7",
+    "src/mcp_server/teacher/reasoning_v4_teacher.py": "08ba037afbc77ff12e1052f6dcb0544be759578d974320ea4fcd7b2cb0a8ffb0"
   },
   "prompt_policy_digests": {
-    "urbannav_reasoning_v4_0_decision_section_sft_v1": "c355ff5d8691735321c523694a16f5cdf866feed37c95d2742e8ba6b5a7cd890",
-    "urbannav_reasoning_v4_0_full_cot_sft_v1": "7dbcc23e943870483e4306ec3f7f762a890d1e33e36ca8116c149e417e495ad8",
-    "urbannav_reasoning_v4_0_interactionconstraintgrounding_section_sft_v1": "e9c91f2f0d0a9be7c7d3356faa6ff28303ae802bfd32477e1773cb12edf65b2d",
-    "urbannav_reasoning_v4_0_localtraversability_section_sft_v1": "d8a02a26205661baca21c05b0243f3605d49263578e40f87a4ea88a7fbcfcbac",
-    "urbannav_reasoning_v4_0_navigationcontextgrounding_section_sft_v1": "5ab2e2db7bdfa1414d72c95fcad5f5dee178971d906282174fa3a5041076a2ec",
-    "urbannav_reasoning_v4_0_scenegrounding_section_sft_v1": "47e3075d89fe980544951a56758981e349b51520f4ac3b77b854bedbbc3dac6e",
-    "urbannav_reasoning_v4_0_taskgrounding_section_sft_v1": "ccad65064fe991b827d786814072193acef478cd7990ae33df576776dbb1b664"
+    "urbannav_reasoning_v4_0_decision_section_sft_v2": "9365213b094e0af713e7b6f6658aeba85520038c80a76db5713eb0a2f45d93a2",
+    "urbannav_reasoning_v4_0_full_cot_sft_v2": "13d783cb7b279cc1a6817d36179b2d2e0d46de3e25bc9c4630c816af8e7652de",
+    "urbannav_reasoning_v4_0_interactionconstraintgrounding_section_sft_v2": "ead6ae8427457722e0d4b4f81ded71dea83fe8d043728516d38f7d704e8028b2",
+    "urbannav_reasoning_v4_0_localtraversability_section_sft_v2": "f5238e15a1b1e89b79fdd7fe2aaf6df40ee9070295f4105515e280d736c38786",
+    "urbannav_reasoning_v4_0_navigationcontextgrounding_section_sft_v2": "ed45b8ceb93b1ac4b2bbe94d93fbee60509a0cb1b9486b19eb0c99127fe28dac",
+    "urbannav_reasoning_v4_0_scenegrounding_section_sft_v2": "544d03a542b58d8a4ebd1fb3a31d58bdf35cce3a4f1ba0d475f328186fff7edb",
+    "urbannav_reasoning_v4_0_taskgrounding_section_sft_v2": "db131a00fde4643e90e7f2c84735c7c24fa7b191e487e3729573ff3f25d3907a"
   },
   "protocol_ids": {
-    "evidence_policy_version": "urbannav_reasoning_v4_evidence_policy_v1",
+    "evidence_policy_version": "urbannav_reasoning_v4_evidence_policy_v2",
     "parser_id": "parse_reasoning_target_v4_v1",
     "renderer_id": "render_reasoning_target_v4_v1",
-    "section_definition_version": "urbannav_reasoning_v4_section_definitions_v1",
-    "validator_id": "validate_reasoning_target_v4_v1",
+    "section_definition_version": "urbannav_reasoning_v4_section_definitions_v2",
+    "validator_id": "validate_reasoning_target_v4_v2",
     "wire_format_version": "urbannav_reasoning_v4_wire_v1"
   },
   "reasoning_contract_schema_digest": "3cdc4f1cbcc4a0c0a6e9c375616bdca0270544f28cf8de46d7eab5b9eec6df25",

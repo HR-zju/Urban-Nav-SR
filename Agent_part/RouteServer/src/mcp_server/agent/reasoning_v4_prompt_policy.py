@@ -23,6 +23,7 @@ from mcp_server.contracts.reasoning_v4 import (
     REASONING_V4_VALIDATOR_ID,
     REASONING_V4_WIRE_FORMAT_VERSION,
     ReasoningTargetV4,
+    STAGE_A_DECISION_TYPES_V4,
     SceneGroundingV4,
     TaskGroundingV4,
     reasoning_v4_contract_schema_digest,
@@ -30,52 +31,145 @@ from mcp_server.contracts.reasoning_v4 import (
 
 
 _BASE_POLICY = """\
-You are the single-turn local navigation reasoning model for an urban pedestrian
-assistance robot. Use only the supplied instruction, ordered images, optional
-prompt-visible goal, waypoint, or BEV context, and evidence catalog. FPV is the
-only authority for immediate local safety. Non-FPV navigation context may express
-task direction but cannot prove unseen traversability.
+You are the System2 reasoning policy of an urban pedestrian navigation assistance
+system for a mobile robot. The system supports people with disabilities, including
+blind or low-vision users and people with mobility impairments, by providing safe,
+predictable, accessible, and socially considerate local navigation.
 
-Never use or claim GPS, pose, calibration, route matching, route theta, future
-trajectory, runtime task phase, masks, boxes, instance tracking, TTC, or calibrated
-confidence. Raw evidence_refs must copy exact evidence_catalog refs. Semantic refs
-are sample-local links, not detector or tracker truth. Use empty lists or explicit
-unknown states when evidence is insufficient.
+Transform the complete prompt-visible multimodal observation into one grounded
+short-horizon navigation decision. Read all supplied information, including the
+active instruction, ordered FPV observations, optional BEV, goal, pixel-goal, or
+waypoint context, and the evidence catalog.
 
-The field responsibilities are fixed:
-- TaskGrounding normalizes the visible task goal, explicit requirements, and
-  material ambiguity; it does not describe the scene or choose an action.
+Evidence principles:
+- Use only evidence explicitly available in the current prompt.
+- FPV is authoritative for immediate local safety, visible walkable support,
+  obstacles, clearance, occlusion, traffic controls, and local interaction risk.
+- Instructions, goals, BEV, and waypoints provide task direction, but cannot prove
+  that an unseen or visibly blocked region is traversable.
+- Raw evidence_refs must exactly match entries in the evidence catalog.
+- Semantic refs are sample-local reasoning links. They organize task objects,
+  visible entities, controls, regions, alignments, and constraints, but do not
+  create evidence by themselves.
+- When evidence is insufficient, use the defined unknown state, an empty list, or
+  a conservative decision. Do not fabricate missing entities, regions, relations,
+  or navigation context.
+
+Section independence:
+- Every grounding section independently reads the complete prompt-visible input.
+- Earlier sections may provide useful structured context, but they are not the
+  sole source of evidence for later sections.
+- Every substantive claim must remain directly supportable by raw prompt-visible
+  evidence.
+- Avoid repeating information that belongs to another section.
+
+Temporal evidence:
+- A single FPV image may support visible occupancy, proximity, obstruction,
+  clearance, and other static local relations.
+- Use ordered historical FPV observations when claiming temporal relations such
+  as crossing, approaching, moving away, or persistent path interaction.
+- When temporal evidence does not clearly support a dynamic relation, use a static
+  relation or an uncertain constraint rather than inventing motion.
+
+The section responsibilities are fixed:
+
+- TaskGrounding normalizes the supplied task into an objective, goal specification,
+  explicit user requirements, and material task ambiguity. It does not determine
+  whether the goal is currently visible, describe the scene, or choose an action.
+
 - SceneGrounding records directly visible navigation-relevant entities and traffic
-  controls; it does not claim traversability or interaction policy.
-- LocalTraversability describes FPV-visible local regions, coarse surface,
-  traversability state, clearance category, and visible limiting factors.
-- NavigationContextGrounding aligns actual task/goal/waypoint/BEV sources with the
-  FPV scene and proposes a coarse task direction without deriving local safety from
-  non-FPV context.
-- InteractionConstraintGrounding records only evidence-supported social, traffic,
-  accessibility, or local-safety constraints that affect local candidate regions.
-- Decision selects one short-horizon semantic action using raw evidence and
-  resolvable semantic support. Stage-A has no reliable arrival state, so it must
-  not emit decision_type=finish.
+  controls in FPV. It describes observable scene facts only and does not determine
+  traversability, path interaction, or navigation policy.
 
-Do not output tool calls, dialogue turns, agent-loop state, or private supervision."""
+- LocalTraversability identifies FPV-visible local regions and describes their
+  surface type, lateral position, traversability state, clearance category, and
+  visible limiting factors. It does not select the final route or action.
+
+- NavigationContextGrounding aligns the normalized task and any prompt-visible
+  goal, pixel-goal, waypoint, or BEV source with current FPV entities and local
+  regions. It determines coarse task direction and candidate regions, but does
+  not override FPV safety evidence or apply social and traffic constraints.
+
+- InteractionConstraintGrounding records only evidence-supported social, traffic,
+  accessibility, or local-safety constraints that affect current candidate
+  regions. Seeing an entity or traffic control alone is not sufficient. A
+  constraint must identify its source, the affected candidate region, the
+  source-to-path relation, and its behavioral effect.
+
+- Decision selects one short-horizon semantic action by jointly considering the
+  complete raw input and all structured grounding sections. It must select a
+  resolvable local region for navigation and must not violate visible
+  traversability or applicable constraints.
+
+Stage-A is single-turn local E2E navigation. The only allowed decision_type values
+are navigate and stop. Do not output task completion, tool calls, user-interaction
+actions, replanning actions, dialogue turns, agent-loop state, or private
+supervision.
+
+Continuous trajectory targets, future poses, direction-label metadata,
+segmentation annotations, and other sidecar supervision must not appear in the
+reasoning text."""
 
 _FULL_OUTPUT = """\
-Return exactly one canonical document: a <think> block containing
-TaskGrounding, SceneGrounding, LocalTraversability,
-NavigationContextGrounding, InteractionConstraintGrounding, and Decision in that
-order, followed by one <finish> JSON projection. If the prompt requests System1
-readout anchors, append exactly one <readout> block after <finish>."""
+Return exactly one canonical document with the following order:
+
+<think>
+<TaskGrounding>{...}</TaskGrounding>
+<SceneGrounding>{...}</SceneGrounding>
+<LocalTraversability>{...}</LocalTraversability>
+<NavigationContextGrounding>{...}</NavigationContextGrounding>
+<InteractionConstraintGrounding>{...}</InteractionConstraintGrounding>
+<Decision>{...}</Decision>
+</think>
+<finish>{...}</finish>
+
+Do not output prose, headings, markdown, comments, or any additional tags.
+
+The finish JSON is a compact runtime projection of Decision and must exactly match
+Decision for decision_type, motion, speed, and social_action.
+
+Append exactly one <readout> block after <finish> only when all of the following
+conditions hold:
+1. the active prompt explicitly requests System1 readout anchors;
+2. Decision.decision_type is navigate; and
+3. the sample is eligible for System1 trajectory supervision.
+
+The readout block must use the exact requested System1 tokens and contain no
+natural-language content."""
 
 _GROUNDING_OUTPUT = """\
-Return exactly one tagged JSON object for the requested grounding section and no
-other section, Finish, readout, markdown, or prose."""
+Return exactly one tagged JSON object for the requested grounding section and
+nothing else.
+
+The requested section must independently use the complete prompt-visible
+instruction, ordered FPV observations, optional multimodal navigation context,
+and evidence catalog. Do not assume that another grounding section has already
+extracted the required information.
+
+Do not output any other section, Decision, finish, readout, markdown, or prose."""
 
 _DECISION_OUTPUT = """\
-The five grounding sections supplied in the prompt are validated conditioning
-context. Return exactly one <Decision> JSON object. Resolve selected_region_ref and
-support_refs against that context, while evidence_refs must still cite raw catalog
-entries. Do not output Finish, direction classes, trajectory, markdown, or prose."""
+The prompt contains the complete original multimodal observation, evidence catalog,
+and five validated grounding sections.
+
+Read the original input directly. Treat the grounding sections as structured
+supporting context, not as replacements for raw evidence.
+
+Return exactly one <Decision> JSON object.
+
+Requirements:
+- selected_region_ref must resolve to a valid local region when decision_type is
+  navigate;
+- support_refs must resolve to relevant task, entity, control, region, alignment,
+  ambiguity, requirement, or constraint objects in the grounding context;
+- evidence_refs must exactly cite raw evidence-catalog entries supporting the
+  final decision;
+- the selected region must not be blocked or forbidden;
+- the decision must remain compatible with applicable interaction constraints;
+- the only allowed decision_type values in Stage-A are navigate and stop.
+
+Do not output finish, direction classes, trajectories, readout tokens, markdown,
+or prose."""
 
 _SECTION_MODEL_TYPES = (
     ("TaskGrounding", TaskGroundingV4),
@@ -172,9 +266,8 @@ _ENUM_GUIDANCE = {
         "behavioral consequence of this constraint, not a duplicated scene fact"
     ),
     "DecisionV4.decision_type": (
-        "navigate=produce local motion; stop=hold without task completion; "
-        "request_user=material task ambiguity; request_replan=no safe/current "
-        "navigation solution; finish is forbidden in Stage-A"
+        "Stage-A subset only: navigate=move through one executable selected "
+        "region; stop=hold position without claiming task completion"
     ),
     "DecisionV4.motion": (
         "coarse semantic action only; fine direction remains private sidecar "
@@ -194,6 +287,11 @@ _ENUM_GUIDANCE = {
     "FinishV4.motion": "must exactly equal Decision.motion",
     "FinishV4.speed": "must exactly equal Decision.speed",
     "FinishV4.social_action": "must exactly equal Decision.social_action",
+}
+
+_STAGE_A_ENUM_OVERRIDES = {
+    "DecisionV4.decision_type": list(STAGE_A_DECISION_TYPES_V4),
+    "FinishV4.decision_type": list(STAGE_A_DECISION_TYPES_V4),
 }
 
 
@@ -229,15 +327,17 @@ def _canonical_field_contract_text() -> str:
         if not isinstance(properties, dict):
             continue
         for field_name, field_schema in properties.items():
-            values = _schema_enum_values(field_schema)
+            qualified_name = f"{model_name}.{field_name}"
+            values = _STAGE_A_ENUM_OVERRIDES.get(
+                qualified_name,
+                _schema_enum_values(field_schema),
+            )
             if values:
                 line = (
                     f"- {model_name}.{field_name}: "
                     + " | ".join(str(value) for value in values)
                 )
-                guidance = _ENUM_GUIDANCE.get(
-                    f"{model_name}.{field_name}"
-                )
+                guidance = _ENUM_GUIDANCE.get(qualified_name)
                 if guidance:
                     line += f". Meaning: {guidance}"
                 lines.append(line)
@@ -320,13 +420,13 @@ def _student_profile(
 
 
 STUDENT_FULL_COT_PROFILE_V4 = _student_profile(
-    profile_id="urbannav_reasoning_v4_0_full_cot_sft_v1",
+    profile_id="urbannav_reasoning_v4_0_full_cot_sft_v2",
     view_type="full_cot_sft",
     section_name=None,
     output_policy=_FULL_OUTPUT,
 )
 STUDENT_DECISION_PROFILE_V4 = _student_profile(
-    profile_id="urbannav_reasoning_v4_0_decision_section_sft_v1",
+    profile_id="urbannav_reasoning_v4_0_decision_section_sft_v2",
     view_type="decision_section_sft",
     section_name="Decision",
     output_policy=_DECISION_OUTPUT,
@@ -338,7 +438,7 @@ STUDENT_GROUNDING_PROFILES_V4: Mapping[
         section_name: _student_profile(
             profile_id=(
                 "urbannav_reasoning_v4_0_"
-                f"{section_name.lower()}_section_sft_v1"
+                f"{section_name.lower()}_section_sft_v2"
             ),
             view_type="grounding_section_sft",
             section_name=section_name,

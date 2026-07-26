@@ -16,6 +16,7 @@ from mcp_server.contracts.reasoning_v4 import (
     LocalTraversabilityV4,
     NavigationContextGroundingV4,
     ReasoningTargetV4,
+    STAGE_A_DECISION_TYPES_V4,
     SceneGroundingV4,
     TaskGroundingV4,
     raw_evidence_refs_v4,
@@ -81,6 +82,15 @@ def validate_reasoning_section_v4(
     unknown = sorted(raw_refs - catalog_refs)
     if unknown:
         errors.append(f"unknown_raw_evidence_refs:{unknown}")
+    if (
+        section_name == "Decision"
+        and isinstance(section, DecisionV4)
+        and section.decision_type not in STAGE_A_DECISION_TYPES_V4
+    ):
+        errors.append(
+            "stage_a_decision_type_not_allowed:"
+            f"{section.decision_type}"
+        )
     _validate_visual_evidence_roles(
         section_name,
         section,
@@ -210,6 +220,9 @@ def validate_reasoning_target_v4(
             )
 
     candidate_refs = set(navigation.task_direction.candidate_region_refs)
+    alignment_refs = {
+        item.alignment_ref for item in navigation.source_alignments
+    }
     unresolved_candidates = sorted(candidate_refs - set(region_by_ref))
     if unresolved_candidates:
         warnings.append(
@@ -249,8 +262,6 @@ def validate_reasoning_target_v4(
             )
 
     decision = trace.decision
-    if decision.decision_type == "finish":
-        errors.append("finish_decision_requires_unavailable_runtime_arrival_evidence")
     if decision.decision_type == "navigate":
         selected = decision.selected_region_ref
         if selected not in region_by_ref:
@@ -265,35 +276,13 @@ def validate_reasoning_target_v4(
             errors.append(
                 f"selected_region_not_in_task_candidates:{selected}"
             )
-    if decision.decision_type == "request_user":
-        has_task_ambiguity = bool(ambiguity_refs)
-        has_goal_ambiguity = (
-            navigation.goal_alignment is not None
-            and navigation.goal_alignment.status == "ambiguous"
-        )
-        if not (has_task_ambiguity or has_goal_ambiguity):
-            errors.append("request_user_requires_material_ambiguity")
-    if decision.decision_type == "request_replan":
-        no_executable_candidate = not any(
-            ref in region_by_ref
-            and region_by_ref[ref].state in {"direct", "conditional"}
-            for ref in candidate_refs
-        )
-        if navigation.task_direction.status not in {
-            "conflict",
-            "not_visible",
-            "insufficient_evidence",
-        } and not no_executable_candidate:
-            errors.append(
-                "request_replan_requires_navigation_failure_or_no_candidate"
-            )
-
     known_support_refs = {
         "task.goal",
         "nav.task_direction",
         *entity_refs,
         *control_refs,
         *region_by_ref,
+        *alignment_refs,
         *requirement_refs,
         *ambiguity_refs,
         *constraint_by_ref,

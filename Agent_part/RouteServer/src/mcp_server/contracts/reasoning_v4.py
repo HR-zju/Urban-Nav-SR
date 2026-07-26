@@ -24,14 +24,14 @@ REASONING_TRAINING_VIEW_V4_SCHEMA_VERSION = (
 )
 REASONING_V4_WIRE_FORMAT_VERSION = "urbannav_reasoning_v4_wire_v1"
 REASONING_V4_SECTION_DEFINITION_VERSION = (
-    "urbannav_reasoning_v4_section_definitions_v1"
+    "urbannav_reasoning_v4_section_definitions_v2"
 )
 REASONING_V4_EVIDENCE_POLICY_VERSION = (
-    "urbannav_reasoning_v4_evidence_policy_v1"
+    "urbannav_reasoning_v4_evidence_policy_v2"
 )
 REASONING_V4_RENDERER_ID = "render_reasoning_target_v4_v1"
 REASONING_V4_PARSER_ID = "parse_reasoning_target_v4_v1"
-REASONING_V4_VALIDATOR_ID = "validate_reasoning_target_v4_v1"
+REASONING_V4_VALIDATOR_ID = "validate_reasoning_target_v4_v2"
 REASONING_V4_SECTION_NAMES = (
     "TaskGrounding",
     "SceneGrounding",
@@ -177,6 +177,7 @@ ConstraintEffectV4 = Literal[
     "request_clarification",
 ]
 DecisionTypeV4 = Literal["navigate", "stop", "finish", "request_user", "request_replan"]
+STAGE_A_DECISION_TYPES_V4 = ("navigate", "stop")
 MotionV4 = Literal["go_straight", "turn_left", "turn_right", "stop"]
 SpeedV4 = Literal["normal", "slow", "stop"]
 SocialActionV4 = Literal[

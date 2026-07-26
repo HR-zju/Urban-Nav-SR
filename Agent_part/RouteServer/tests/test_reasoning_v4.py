@@ -12,6 +12,10 @@ from mcp_server.agent.reasoning_v4_text import (
     parse_reasoning_target_v4,
     render_reasoning_target_v4,
 )
+from mcp_server.agent.reasoning_v4_prompt_policy import (
+    STUDENT_DECISION_PROFILE_V4,
+    STUDENT_FULL_COT_PROFILE_V4,
+)
 from mcp_server.agent.reasoning_v4_validation import (
     validate_reasoning_section_v4,
     validate_reasoning_target_v4,
@@ -50,6 +54,7 @@ from mcp_server.data.reasoning_v4_audit import (
 from mcp_server.data.reasoning_source import ReasoningSourceBuildConfig
 from mcp_server.data.reasoning_v4_source import build_reasoning_source_v4
 from mcp_server.data.reasoning_v4_views import (
+    build_reasoning_v4_user_prompt,
     build_reasoning_training_views_v4,
 )
 from mcp_server.teacher.reasoning_v2_teacher import TeacherGeneration
@@ -57,6 +62,12 @@ from mcp_server.teacher.reasoning_v4_batch import (
     ReasoningV4BatchConfig,
     annotate_reasoning_source_v4,
     label_reasoning_source_manifest_v4,
+)
+from mcp_server.teacher.reasoning_v4_profiles import (
+    REASONING_V4_TEACHER_PROFILES,
+)
+from mcp_server.teacher.reasoning_v4_teacher import (
+    build_reasoning_v4_section_question,
 )
 
 
@@ -177,6 +188,65 @@ def test_compose_render_parse_and_validate_round_trip() -> None:
     assert "trajectory" not in text.lower()
     assert text.index("<TaskGrounding>") < text.index("<Decision>")
     assert "<InteractionConstraintGrounding>" in text
+
+
+def test_decision_support_refs_accept_defined_navigation_alignment() -> None:
+    decision = _decision().model_copy(
+        update={
+            "support_refs": [
+                "alignment.instruction",
+                "nav.task_direction",
+                "region.center",
+            ]
+        }
+    )
+    composition = compose_reasoning_target_v4(
+        _source(),
+        _groundings(),
+        decision,
+    )
+
+    assert composition.target.reasoning.decision.support_refs[0] == (
+        "alignment.instruction"
+    )
+
+
+def test_prompt_prioritizes_grounded_navigation_over_prohibition_lists() -> None:
+    full_prompt = STUDENT_FULL_COT_PROFILE_V4.system_prompt
+    decision_prompt = STUDENT_DECISION_PROFILE_V4.system_prompt
+
+    assert "supports people with disabilities" in full_prompt
+    assert "Every grounding section independently reads" in full_prompt
+    assert "A single FPV image may support visible occupancy" in full_prompt
+    assert "source-to-path relation" in full_prompt
+    assert "only allowed decision_type values" in decision_prompt
+    assert "DecisionV4.decision_type: navigate | stop" in decision_prompt
+    assert "request_user=material task ambiguity" not in decision_prompt
+    assert "Never use or claim GPS, pose, calibration" not in full_prompt
+
+
+def test_student_prompt_exposes_deterministic_temporal_eligibility() -> None:
+    source = _source()
+    annotation = asyncio.run(
+        annotate_reasoning_source_v4(
+            source,
+            backend=_FakeBackend(),
+            config=ReasoningV4BatchConfig(),
+        )
+    )
+    view = next(
+        item
+        for item in build_reasoning_training_views_v4(
+            source,
+            annotation,
+        )
+        if item.view_type == "full_cot_sft"
+    )
+    payload = json.loads(
+        build_reasoning_v4_user_prompt(view).split("\n", 2)[2]
+    )
+
+    assert payload["temporal_evidence_eligible"] is False
 
 
 def test_source_keeps_private_geometry_out_and_preserves_direction_stamp() -> None:
@@ -404,25 +474,43 @@ def test_incomplete_legacy_direction_is_dropped_without_losing_source() -> None:
     )
 
 
-def test_stage_a_rejects_finish_without_arrival_evidence() -> None:
-    finish_decision = _decision().model_copy(
+@pytest.mark.parametrize(
+    "decision_type",
+    ("finish", "request_user", "request_replan"),
+)
+def test_stage_a_rejects_non_navigation_control_states(
+    decision_type: str,
+) -> None:
+    unsupported_decision = _decision().model_copy(
         update={
-            "decision_type": "finish",
+            "decision_type": decision_type,
             "motion": "stop",
             "speed": "stop",
             "selected_region_ref": None,
         }
     )
 
-    with pytest.raises(ValueError, match="finish_decision"):
+    checked = validate_reasoning_section_v4(
+        "Decision",
+        unsupported_decision,
+        observation=_source().observation,
+    )
+    assert checked.errors == [
+        f"stage_a_decision_type_not_allowed:{decision_type}"
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match=f"stage_a_decision_type_not_allowed:{decision_type}",
+    ):
         compose_reasoning_target_v4(
             _source(),
             _groundings(),
-            finish_decision,
+            unsupported_decision,
         )
 
 
-def test_blocked_task_candidate_can_drive_request_replan() -> None:
+def test_blocked_task_candidate_can_drive_stop() -> None:
     groundings = _groundings()
     blocked_local = LocalTraversabilityV4(
         regions=[
@@ -441,11 +529,11 @@ def test_blocked_task_candidate_can_drive_request_replan() -> None:
         update={"local_traversability": blocked_local}
     )
     decision = DecisionV4(
-        decision_type="request_replan",
+        decision_type="stop",
         motion="stop",
         speed="stop",
         social_action="none",
-        fallback="request_replan",
+        fallback="stop",
         support_refs=["nav.task_direction", "region.center"],
         evidence_refs=["instruction.active", "fpv.current"],
     )
@@ -456,9 +544,7 @@ def test_blocked_task_candidate_can_drive_request_replan() -> None:
         decision,
     )
 
-    assert composition.target.reasoning.decision.decision_type == (
-        "request_replan"
-    )
+    assert composition.target.reasoning.decision.decision_type == "stop"
 
 
 def test_explicit_goal_requires_navigation_goal_alignment() -> None:
@@ -731,6 +817,25 @@ def test_source_coverage_audit_detects_private_visible_context(
         error.startswith("private_visible_context_keys:")
         for error in report["errors"]
     )
+
+
+def test_decision_teacher_exposes_only_stage_a_decision_types() -> None:
+    profile = REASONING_V4_TEACHER_PROFILES["Decision"]
+    question = build_reasoning_v4_section_question(
+        _source().observation,
+        profile,
+        groundings=_groundings(),
+    )
+    payload = json.loads(question.split("\n\n", 1)[1])
+
+    assert payload["output_json_schema"]["properties"][
+        "decision_type"
+    ]["enum"] == ["navigate", "stop"]
+    assert "supports blind or low-vision users" in profile.system_prompt
+    assert "source-to-path relation" in REASONING_V4_TEACHER_PROFILES[
+        "InteractionConstraintGrounding"
+    ].system_prompt
+    assert "Do not use GPS, pose, calibration" not in profile.system_prompt
 
 
 class _FakeBackend:

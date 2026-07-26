@@ -18,6 +18,7 @@ from mcp_server.contracts.reasoning_v4 import (
     NavigationContextGroundingV4,
     REASONING_TRAINING_VIEW_V4_SCHEMA_VERSION,
     ReasoningTargetV4,
+    STAGE_A_DECISION_TYPES_V4,
     SceneGroundingV4,
     TaskGroundingV4,
     coarse_motion_for_direction_label_v4,
@@ -454,6 +455,13 @@ class ReasoningTrainingViewV4(BaseModel):
             if self.section_name is not None or self.reasoning_target is None:
                 raise ValueError(
                     "full_cot_sft requires reasoning_target and no section_name"
+                )
+            if (
+                self.reasoning_target.finish.decision_type
+                not in STAGE_A_DECISION_TYPES_V4
+            ):
+                raise ValueError(
+                    "full_cot_sft requires a Stage-A navigate/stop decision"
                 )
         elif self.view_type == "grounding_section_sft":
             if self.section_name not in {
