@@ -28,6 +28,7 @@ _APPROVED_STAGE_A_DIRECTION_PROFILES: dict[str, dict[str, Any]] = {
     FPV_DEGREE10_TERMINAL_CENTROID_V2: {
         "profile_version": "2.0",
         "bin_mode": "degree10_with_stop",
+        "intent_compatibility_tolerance_deg": 10.0,
         "derivation_version": (
             "pixel_trajectory_terminal_centroid_rule_v2"
         ),
@@ -52,10 +53,20 @@ _APPROVED_STAGE_A_DIRECTION_PROFILES: dict[str, dict[str, Any]] = {
             float(angle) for angle in range(-90, 91, 10)
         )
         + (None,),
+        "coarse_motions": tuple(
+            "go_straight"
+            if abs(angle) <= 10
+            else "turn_left"
+            if angle < 0
+            else "turn_right"
+            for angle in range(-90, 91, 10)
+        )
+        + ("stop",),
     },
     EGO_DEGREE10_12WAY_TERMINAL_CENTROID_V2: {
         "profile_version": "2.0",
         "bin_mode": "degree10_12way_with_stop",
+        "intent_compatibility_tolerance_deg": 10.0,
         "derivation_version": (
             "ego_x_right_y_front_terminal_centroid_rule_v2"
         ),
@@ -89,6 +100,20 @@ _APPROVED_STAGE_A_DIRECTION_PROFILES: dict[str, dict[str, Any]] = {
             40.0,
             -50.0,
             50.0,
+        ),
+        "coarse_motions": (
+            "stop",
+            "go_straight",
+            "go_straight",
+            "go_straight",
+            "turn_left",
+            "turn_right",
+            "turn_left",
+            "turn_right",
+            "turn_left",
+            "turn_right",
+            "turn_left",
+            "turn_right",
         ),
     },
 }
@@ -200,6 +225,73 @@ def direction_label_names(profile_id: str) -> tuple[str, ...]:
     return tuple(str(value) for value in profile["labels"])
 
 
+def coarse_motion_for_direction_label(
+    profile_id: str,
+    label_name: str,
+) -> str:
+    """Map one approved direction label through its owning profile.
+
+    Args:
+        profile_id: Exact approved profile identifier.
+        label_name: Exact label in the profile output space.
+
+    Returns:
+        One of ``go_straight``, ``turn_left``, ``turn_right``, or ``stop``.
+
+    Raises:
+        ValueError: If the label is outside the selected profile.
+    """
+
+    profile = resolve_stage_a_direction_profile(profile_id)
+    labels = tuple(str(value) for value in profile["labels"])
+    try:
+        index = labels.index(str(label_name))
+    except ValueError as exc:
+        raise ValueError(
+            "direction label is outside approved profile: "
+            f"profile={profile_id}, label={label_name}"
+        ) from exc
+    return str(profile["coarse_motions"][index])
+
+
+def direction_labels_are_intent_compatible(
+    profile_id: str,
+    first_label: str,
+    second_label: str,
+) -> bool:
+    """Compare two labels using the owning profile's angular tolerance.
+
+    Args:
+        profile_id: Exact approved profile identifier.
+        first_label: First exact label in the profile.
+        second_label: Second exact label in the profile.
+
+    Returns:
+        Whether both labels are identical stop actions or their canonical
+        angles differ by no more than the profile-owned tolerance.
+
+    Raises:
+        ValueError: If either label is outside the selected profile.
+    """
+
+    profile = resolve_stage_a_direction_profile(profile_id)
+    labels = tuple(str(value) for value in profile["labels"])
+    try:
+        first_index = labels.index(str(first_label))
+        second_index = labels.index(str(second_label))
+    except ValueError as exc:
+        raise ValueError(
+            "direction label is outside approved profile: "
+            f"profile={profile_id}, labels=({first_label}, {second_label})"
+        ) from exc
+    first_angle = profile["angles"][first_index]
+    second_angle = profile["angles"][second_index]
+    if first_angle is None or second_angle is None:
+        return first_angle is None and second_angle is None
+    tolerance = float(profile["intent_compatibility_tolerance_deg"])
+    return abs(float(first_angle) - float(second_angle)) <= tolerance
+
+
 def canonical_direction_derivation_version(profile_id: str) -> str:
     """Return the canonical trajectory derivation for one profile.
 
@@ -223,6 +315,8 @@ __all__ = [
     "FPV_DEGREE10_TERMINAL_CENTROID_V2",
     "approved_stage_a_direction_profiles",
     "canonical_direction_derivation_version",
+    "coarse_motion_for_direction_label",
+    "direction_labels_are_intent_compatible",
     "direction_label_names",
     "resolve_stage_a_direction_profile",
 ]

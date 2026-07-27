@@ -11,7 +11,7 @@ from typing import Any, Mapping
 from pydantic import BaseModel
 
 from mcp_server.contracts.reasoning_v4 import (
-    DecisionV4,
+    DecisionProposalV4,
     InteractionConstraintGroundingV4,
     LocalTraversabilityV4,
     NavigationContextGroundingV4,
@@ -30,10 +30,10 @@ from mcp_server.contracts.reasoning_v4 import (
 
 
 _COMMON_POLICY = """\
-You are an offline annotation teacher for the System2 policy of an urban pedestrian
-navigation assistance robot. The system supports blind or low-vision users and
-people with mobility impairments through safe, predictable, accessible, and
-socially considerate local navigation.
+You are an offline annotation teacher for the System2 policy of an urban
+pedestrian navigation assistance robot. The system supports blind or low-vision
+users and people with mobility impairments through safe, predictable,
+accessible, and socially considerate local navigation.
 
 Use the complete prompt-visible multimodal observation supplied in the user
 message. FPV is authoritative for immediate local safety, visible walkable
@@ -41,11 +41,12 @@ support, obstacles, clearance, traffic controls, and interaction risk.
 Instructions, goals, BEV, and waypoints provide task direction but cannot prove
 that an unseen or visibly blocked region is traversable.
 
-Raw evidence_refs must exactly match evidence_catalog entries. Semantic refs are
-sample-local links that organize reasoning but do not create evidence. Categories
-and reason codes are constrained open lower-snake-case strings rather than a
-hidden class choice. When evidence is insufficient, use the schema's unknown
-state, an empty list, or a conservative judgment instead of fabricating facts.
+Raw evidence_refs must exactly match evidence_catalog entries. The public
+direction_output_space defines legal direction labels but never reveals the
+selected action. Categories, support types, source types, source states,
+uncertainty codes, and reason codes are open lower_snake_case strings.
+evidence_status is categorical support metadata, not calibrated confidence,
+probability, a loss weight, or a runtime score.
 
 Every grounding section independently reads the complete visible input. A single
 FPV image can support static occupancy, proximity, obstruction, and clearance.
@@ -53,8 +54,13 @@ Claims about crossing, approaching, moving away, or persistent interaction shoul
 use ordered historical FPV evidence; otherwise use a static relation or an
 uncertain constraint.
 
-Only prompt-visible evidence may appear in the reasoning text; private sidecar
-supervision is outside the teacher boundary.
+Do not invent masks, boxes, tracks, TTC, metric geometry, hidden object identity,
+geometric areas, route segments, trajectory corridors, or numeric confidence.
+A prompt-visible BEV route overlay may support route direction and upcoming
+topology when its orientation is clear. The absence of local safety authority
+only prevents BEV from proving traversability, clearance, or collision safety.
+Pixel-goal and waypoint values cannot derive direction labels in V4.2 until
+their frame and derivation contracts are frozen.
 
 Return exactly one JSON object for the requested section. Do not return markdown,
 XML tags, explanations, a full six-section trace, Finish, or readout tokens."""
@@ -68,37 +74,95 @@ task sources. Leave scene description, goal visibility, traversability, and acti
 selection to their responsible sections.""",
     "SceneGrounding": """\
 Record only directly visible navigation-relevant entities and traffic controls.
-Every item must cite FPV evidence. Describe observable scene facts without turning
-them into traversability, source-to-path relations, or navigation policy.""",
+Use neutral refs such as entity.e01 and control.c01. Put semantics in open
+category/category_candidates fields and cite FPV evidence. For
+evidence_status=supported, set one category and category_candidates=[]; for
+ambiguous, set category=null and at least two candidates; for insufficient, set
+category=null and candidates=[]. Apply the same rule to traffic controls. Do not
+turn visible facts into traversability, interaction, or policy.""",
     "LocalTraversability": """\
-Describe visible local regions and their immediate traversability from FPV. Use
-sample-local semantic region refs based on the areas actually observed; do not
-force every scene into a fixed left/center/right partition. Record surface,
-lateral position, coarse clearance, state, and visible limiting factors without
-selecting the final action. A conditional, blocked, or forbidden region needs a
-concise lower-snake-case limiting factor code.""",
+Judge immediate FPV support for public direction labels. Emit at most one
+direction_affordance per label with an open support_type, affordance, coarse
+clearance, visible limiting factors, and evidence status. Do not create geometric
+areas and do not select the private strong direction.""",
     "NavigationContextGrounding": """\
 Interpret the task and each actually available goal, waypoint, or BEV source
-against the current FPV scene. This section may propose semantic region refs, but
-FPV safety evidence remains authoritative. Produce goal/source alignments, coarse
-task direction, and candidate regions; use insufficient or ambiguous states when
-the visible sources do not resolve them.""",
+against current visible evidence. Use open target descriptions and public
+direction labels. Do not create entity or geometric-area refs here.
+
+Keep status-dependent fields exact. A resolved goal has target_description,
+no candidate_target_descriptions, and may have supported directions. An
+ambiguous goal has at least two candidate_target_descriptions and no
+target_description. A not_visible or insufficient_evidence goal has no target
+description, no candidates, and no supported directions.
+
+For every source_alignment, copy source_ref exactly from evidence_catalog and
+also include that same ref in the alignment's evidence_refs. Set alignment_role
+to task_intent, route_intent, or local_safety_bias. status=supports requires one
+or more supported directions; every other status requires none. Before returning,
+audit every source_alignment: status=supports with
+supported_direction_labels=[] is invalid, so change its status to
+insufficient_evidence when no label is supported. A prompt-visible BEV route
+overlay may use route_intent and supported movement labels only when its
+orientation is clear. Pixel-goal and waypoint source alignments must remain
+insufficient because their geometry is not frozen. task_direction contains only
+task_intent/route_intent movement labels, never stop; it must not absorb
+local_safety_bias labels.""",
     "InteractionConstraintGrounding": """\
 Record only task, traffic, social, accessibility, or local-safety constraints that
-affect current candidate regions. Seeing an entity or control alone is not a
-constraint. Each record must establish a source, affected candidate region,
-source-to-path relation, and behavioral effect. Use historical FPV for supported
-crossing or approaching claims; otherwise choose a static relation, mark the
-constraint uncertain, or omit it.""",
+change the current action. Use neutral constraint refs, open source_type and
+source_state, a closed relation, and one of slow/yield/stop/avoid. An empty
+affected_direction_labels means a global current-action constraint. A global
+red pedestrian signal uses effect=stop and an empty list; never enumerate all
+non-stop labels and never emit affected_direction_scope. Use a non-empty list
+only for an affected subset that leaves other directions viable; effect=avoid
+requires such a subset. Do not cite other section IDs as sources. Crossing or
+approach relations require distinct historical FPV; otherwise use a static
+relation, uncertain status, or omit the constraint. A navigation instruction or
+a visibly clear/supportive path is context, not by itself a slow constraint;
+omit records that do not actually restrict behavior.
+
+The default output is {"constraints":[]}. Add an item only when you can name and
+cite the specific visible or explicit trigger that makes the current action
+slower, yielding, stopped, or redirected than it would otherwise be. Effects are
+restrictions, never permissions or generic caution. In particular, do not emit
+source_type=instruction with source_state=active_navigation_instruction, and do
+not emit clear_walkable_path, visible_sidewalk, route_following, safety_priority,
+or similar context as a constraint.""",
     "Decision": """\
 Choose one short-horizon semantic decision using the complete raw observation and
-the five validated grounding sections supplied in the user message. Read the
-original input directly; the sections are structured support rather than a
-replacement for raw evidence. Resolve selected_region_ref and support_refs, cite
-the raw evidence supporting the action, and respect visible traversability and
-applicable constraints. Stage-A allows only decision_type=navigate or
-decision_type=stop. Fine direction and continuous trajectory targets are attached
-later as private supervision.""",
+the five validated grounding sections. Output navigation_intent_direction_label
+for the non-stop task/route direction and selected_action_label for the immediate
+action. A teacher_only_action_constraint may supply the private trajectory-derived
+demonstrated direction as an ordinary-navigation prior. It is not current-action
+truth, student input, evidence, or rationale. An applicable global stop constraint
+must select stop even when the demonstrated direction is a movement label, without
+rewriting task/route intent.
+
+Output decision_type, navigation_intent_direction_label,
+selected_action_label, speed, social_action, fallback,
+critical_uncertainties, support_refs, and evidence_refs. Do not output motion;
+the deterministic composer derives motion and decision_type consistency from
+selected_action_label. Stage-A allows only navigate or stop. selected_action=stop
+requires decision_type=stop, speed=stop, social_action=wait, and fallback=stop.
+navigation_intent_direction_label must never be stop. A stop action must cite
+an applicable global stop/yield constraint, all blocked task-intent directions,
+or a material stop-policy uncertainty. Do not stop merely because a destination
+is absent when the visible short-horizon path and instruction permit
+continuing.
+
+Honor every applicable constraint whose affected_direction_labels is empty or
+contains selected_action_label: slow requires speed=slow or stop; yield requires
+social_action=yield or a stop action; stop requires the exact stop tuple; avoid
+requires selecting outside the affected subset. Include the corresponding
+constraint_ref in support_refs when it changes the decision.
+
+Run this final audit before returning: for each applicable global constraint and
+each applicable subset constraint covering selected_action_label, verify the
+chosen speed/social_action/selected_action_label satisfies its effect. If any
+slow constraint applies, speed=normal is invalid. If any avoid constraint covers
+the selected label, that label is invalid. Revise the action, not the grounding,
+until all applicable effects are satisfied.""",
 }
 
 _SECTION_MODELS: dict[str, type[BaseModel]] = {
@@ -107,7 +171,7 @@ _SECTION_MODELS: dict[str, type[BaseModel]] = {
     "LocalTraversability": LocalTraversabilityV4,
     "NavigationContextGrounding": NavigationContextGroundingV4,
     "InteractionConstraintGrounding": InteractionConstraintGroundingV4,
-    "Decision": DecisionV4,
+    "Decision": DecisionProposalV4,
 }
 
 
@@ -164,7 +228,7 @@ def _profile(section_name: str) -> ReasoningV4TeacherProfile:
         f"{_SECTION_POLICIES[section_name]}"
     )
     payload = {
-        "profile_id": f"reasoning_v4_teacher_{section_name.lower()}_v2",
+        "profile_id": f"reasoning_v4_teacher_{section_name.lower()}_v4",
         "trace_schema_version": REASONING_TRACE_V4_SCHEMA_VERSION,
         "contract_schema_digest": reasoning_v4_contract_schema_digest(),
         "wire_format_version": REASONING_V4_WIRE_FORMAT_VERSION,

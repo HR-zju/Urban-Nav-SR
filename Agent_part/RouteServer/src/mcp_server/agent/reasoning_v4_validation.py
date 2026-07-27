@@ -1,16 +1,22 @@
-"""Semantic validation for shared-input UrbanNav Reasoning V4."""
+"""Semantic validation for shared-input UrbanNav Reasoning V4.2."""
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from pydantic import BaseModel
 
-from mcp_server.agent.reasoning_v4_text import parse_reasoning_target_v4
+from mcp_server.agent.reasoning_v4_text import (
+    parse_reasoning_target_v4,
+)
+from mcp_server.contracts.direction_profile import (
+    coarse_motion_for_direction_label,
+    direction_labels_are_intent_compatible,
+)
 from mcp_server.contracts.reasoning_dataset_v4 import NavObservationV4
 from mcp_server.contracts.reasoning_v4 import (
+    DecisionProposalV4,
     DecisionV4,
     InteractionConstraintGroundingV4,
     LocalTraversabilityV4,
@@ -25,12 +31,7 @@ from mcp_server.contracts.reasoning_v4 import (
 
 @dataclass(frozen=True)
 class ReasoningValidationResultV4:
-    """Return hard failures separately from soft cross-section findings.
-
-    Args:
-        errors: Hard schema, evidence, safety, or executability violations.
-        warnings: Non-fatal missing semantic links or coverage findings.
-    """
+    """Return hard failures separately from non-fatal findings."""
 
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -48,59 +49,60 @@ def validate_reasoning_section_v4(
     *,
     observation: NavObservationV4,
 ) -> ReasoningValidationResultV4:
-    """Validate one independently generated grounding or Decision section.
+    """Validate one independent grounding or Decision proposal."""
 
-    Args:
-        section_name: Canonical V4 section tag.
-        section: Typed section object.
-        observation: Complete prompt-visible input shared by all sections.
-
-    Returns:
-        Section-local errors and warnings.
-
-    Raises:
-        ValueError: If ``section_name`` and the typed object disagree.
-    """
-
-    expected_types: dict[str, type[BaseModel]] = {
-        "TaskGrounding": TaskGroundingV4,
-        "SceneGrounding": SceneGroundingV4,
-        "LocalTraversability": LocalTraversabilityV4,
-        "NavigationContextGrounding": NavigationContextGroundingV4,
-        "InteractionConstraintGrounding": InteractionConstraintGroundingV4,
-        "Decision": DecisionV4,
+    expected_types: dict[str, tuple[type[BaseModel], ...]] = {
+        "TaskGrounding": (TaskGroundingV4,),
+        "SceneGrounding": (SceneGroundingV4,),
+        "LocalTraversability": (LocalTraversabilityV4,),
+        "NavigationContextGrounding": (
+            NavigationContextGroundingV4,
+        ),
+        "InteractionConstraintGrounding": (
+            InteractionConstraintGroundingV4,
+        ),
+        "Decision": (DecisionProposalV4, DecisionV4),
     }
     expected = expected_types.get(section_name)
     if expected is None or not isinstance(section, expected):
         raise ValueError(
-            f"section/type mismatch: {section_name}/{type(section).__name__}"
+            f"section/type mismatch: "
+            f"{section_name}/{type(section).__name__}"
         )
     errors: list[str] = []
-    warnings: list[str] = []
-    raw_refs = _raw_refs_from_value(section.model_dump(mode="json"))
-    catalog_refs = {entry.ref for entry in observation.evidence_catalog}
+    raw_refs = _raw_refs_from_value(
+        section.model_dump(mode="json")
+    )
+    catalog_refs = {
+        entry.ref for entry in observation.evidence_catalog
+    }
     unknown = sorted(raw_refs - catalog_refs)
     if unknown:
         errors.append(f"unknown_raw_evidence_refs:{unknown}")
     if (
         section_name == "Decision"
-        and isinstance(section, DecisionV4)
-        and section.decision_type not in STAGE_A_DECISION_TYPES_V4
+        and getattr(section, "decision_type", None)
+        not in STAGE_A_DECISION_TYPES_V4
     ):
         errors.append(
             "stage_a_decision_type_not_allowed:"
-            f"{section.decision_type}"
+            f"{getattr(section, 'decision_type', None)}"
         )
-    _validate_visual_evidence_roles(
+    _validate_direction_membership(
         section_name,
         section,
         observation=observation,
         errors=errors,
-        warnings=warnings,
+    )
+    _validate_temporal_evidence(
+        section_name,
+        section,
+        observation=observation,
+        errors=errors,
     )
     return ReasoningValidationResultV4(
         errors=_unique(errors),
-        warnings=_unique(warnings),
+        warnings=[],
     )
 
 
@@ -110,22 +112,17 @@ def validate_reasoning_target_v4(
     observation: NavObservationV4,
     assistant_text: str | None = None,
 ) -> ReasoningValidationResultV4:
-    """Validate raw evidence closure, weak links, and Decision executability.
-
-    Args:
-        target: Fully assembled V4 target.
-        observation: Prompt-visible input used to produce every section.
-        assistant_text: Optional rendered text for strict round-trip validation.
-
-    Returns:
-        Hard failures and soft cross-section warnings.
-    """
+    """Validate evidence closure, public labels, and final action semantics."""
 
     errors: list[str] = []
     warnings: list[str] = []
     trace = target.reasoning
-    catalog = {entry.ref: entry for entry in observation.evidence_catalog}
-    unknown_raw = sorted(raw_evidence_refs_v4(trace) - set(catalog))
+    catalog_refs = {
+        entry.ref for entry in observation.evidence_catalog
+    }
+    unknown_raw = sorted(
+        raw_evidence_refs_v4(trace) - catalog_refs
+    )
     if unknown_raw:
         errors.append(f"unknown_raw_evidence_refs:{unknown_raw}")
 
@@ -143,194 +140,225 @@ def validate_reasoning_target_v4(
         ),
         ("Decision", trace.decision),
     ):
-        result = validate_reasoning_section_v4(
+        checked = validate_reasoning_section_v4(
             section_name,
             section,
             observation=observation,
         )
-        errors.extend(f"{section_name}:{item}" for item in result.errors)
+        errors.extend(
+            f"{section_name}:{item}"
+            for item in checked.errors
+        )
         warnings.extend(
-            f"{section_name}:{item}" for item in result.warnings
+            f"{section_name}:{item}"
+            for item in checked.warnings
         )
 
-    entity_refs = {
-        item.entity_ref for item in trace.scene_grounding.entities
-    }
-    control_refs = {
-        item.control_ref
-        for item in trace.scene_grounding.traffic_controls
-    }
-    region_by_ref = {
-        item.region_ref: item
-        for item in trace.local_traversability.regions
-    }
-    requirement_refs = {
-        item.requirement_ref
-        for item in trace.task_grounding.requirements
-    }
-    ambiguity_refs = {
-        item.ambiguity_ref for item in trace.task_grounding.ambiguities
-    }
-    navigation = trace.navigation_context_grounding
-    goal_is_absent = trace.task_grounding.goal.goal_type == "none"
-    if goal_is_absent and navigation.goal_alignment is not None:
-        errors.append("absent_task_goal_cannot_have_goal_alignment")
-    if not goal_is_absent and navigation.goal_alignment is None:
-        errors.append("explicit_task_goal_requires_goal_alignment")
-
-    for region in trace.local_traversability.regions:
-        missing = sorted(set(region.related_entity_refs) - entity_refs)
-        if missing:
-            warnings.append(
-                f"cross_section_missing_region_entities:{region.region_ref}:{missing}"
-            )
-
-    if navigation.goal_alignment is not None:
-        alignment = navigation.goal_alignment
-        semantic_targets = {
-            ref
-            for ref in [
-                alignment.target_ref,
-                *alignment.candidate_target_refs,
-            ]
-            if isinstance(ref, str)
-            and ref.startswith(("entity.", "control."))
-        }
-        known_targets = entity_refs | control_refs
-        missing = sorted(semantic_targets - known_targets)
-        if missing:
-            warnings.append(
-                f"cross_section_missing_goal_targets:{missing}"
-            )
-        unresolved_regions = sorted(
-            set(alignment.aligned_region_refs) - set(region_by_ref)
-        )
-        if unresolved_regions:
-            warnings.append(
-                f"cross_section_missing_goal_regions:{unresolved_regions}"
-            )
-    for alignment in navigation.source_alignments:
-        unresolved = sorted(
-            set(alignment.aligned_region_refs) - set(region_by_ref)
-        )
-        if unresolved:
-            warnings.append(
-                f"cross_section_missing_alignment_regions:"
-                f"{alignment.alignment_ref}:{unresolved}"
-            )
-
-    candidate_refs = set(navigation.task_direction.candidate_region_refs)
-    alignment_refs = {
-        item.alignment_ref for item in navigation.source_alignments
-    }
-    unresolved_candidates = sorted(candidate_refs - set(region_by_ref))
-    if unresolved_candidates:
-        warnings.append(
-            f"cross_section_missing_candidate_regions:{unresolved_candidates}"
-        )
-
-    constraint_by_ref = {
-        item.constraint_ref: item
-        for item in trace.interaction_constraint_grounding.constraints
-    }
-    known_constraint_sources = (
-        entity_refs | control_refs | requirement_refs | {"task.goal"}
+    goal_absent = trace.task_grounding.goal.goal_type == "none"
+    goal_alignment = (
+        trace.navigation_context_grounding.goal_alignment
     )
-    for constraint in constraint_by_ref.values():
-        semantic_sources = {
-            ref
-            for ref in constraint.source_refs
-            if not ref.startswith(
-                ("instruction.", "fpv.", "bev.", "goal.", "waypoint.")
-            )
-        }
-        missing_sources = sorted(
-            semantic_sources - known_constraint_sources
+    if goal_absent and goal_alignment is not None:
+        errors.append(
+            "absent_task_goal_cannot_have_goal_alignment"
         )
-        if missing_sources:
-            warnings.append(
-                f"cross_section_missing_constraint_sources:"
-                f"{constraint.constraint_ref}:{missing_sources}"
-            )
-        non_candidate = sorted(
-            set(constraint.applies_to_region_refs) - candidate_refs
+    if not goal_absent and goal_alignment is None:
+        errors.append(
+            "explicit_task_goal_requires_goal_alignment"
         )
-        if non_candidate:
-            warnings.append(
-                f"constraint_regions_not_in_task_candidates:"
-                f"{constraint.constraint_ref}:{non_candidate}"
-            )
 
-    decision = trace.decision
-    if decision.decision_type == "navigate":
-        selected = decision.selected_region_ref
-        if selected not in region_by_ref:
-            errors.append(f"selected_region_does_not_resolve:{selected}")
-        else:
-            region = region_by_ref[selected]
-            if region.state in {"blocked", "forbidden", "unknown"}:
-                errors.append(
-                    f"selected_region_is_not_executable:{selected}:{region.state}"
-                )
-        if selected not in candidate_refs:
-            errors.append(
-                f"selected_region_not_in_task_candidates:{selected}"
-            )
-    known_support_refs = {
-        "task.goal",
-        "nav.task_direction",
-        *entity_refs,
-        *control_refs,
-        *region_by_ref,
-        *alignment_refs,
-        *requirement_refs,
-        *ambiguity_refs,
-        *constraint_by_ref,
-    }
+    known_support_refs = _known_support_refs(target)
     missing_support = sorted(
-        set(decision.support_refs) - known_support_refs
+        set(trace.decision.support_refs) - known_support_refs
     )
     if missing_support:
         errors.append(
-            f"decision_support_refs_do_not_resolve:{missing_support}"
+            "decision_support_refs_do_not_resolve:"
+            f"{missing_support}"
         )
-    _validate_decision_constraints(
-        decision,
-        constraint_by_ref=constraint_by_ref,
-        errors=errors,
-    )
+
+    allowed = {
+        str(value)
+        for value in observation.direction_output_space.allowed_labels
+    }
+    selected_action = str(trace.decision.selected_action_label)
+    if selected_action not in allowed:
+        errors.append(
+            f"selected_action_outside_output_space:{selected_action}"
+        )
+    else:
+        expected_motion = coarse_motion_for_direction_label(
+            observation.direction_output_space.profile_id,
+            selected_action,
+        )
+        if trace.decision.motion != expected_motion:
+            errors.append(
+                "profile_motion_mismatch:"
+                f"label={selected_action}, "
+                f"motion={trace.decision.motion}, "
+                f"expected={expected_motion}"
+            )
+        expected_type = (
+            "stop" if expected_motion == "stop" else "navigate"
+        )
+        if trace.decision.decision_type != expected_type:
+            errors.append(
+                "selected_action_decision_type_mismatch:"
+                f"label={selected_action}, "
+                f"decision={trace.decision.decision_type}"
+            )
+        _validate_selected_direction_grounding(
+            target,
+            direction_label=selected_action,
+            errors=errors,
+        )
+        _validate_constraint_effects(
+            target,
+            selected_action_label=selected_action,
+            errors=errors,
+        )
+        if selected_action == "stop" and not _stop_action_has_support(
+            target
+        ):
+            errors.append("stop_action_lacks_visible_support")
+
+    intent = trace.decision.navigation_intent_direction_label
+    task_direction = trace.navigation_context_grounding.task_direction
+    if task_direction.status == "aligned":
+        if intent is None:
+            errors.append(
+                "aligned_task_direction_requires_navigation_intent"
+            )
+        elif str(intent) not in {
+            str(value)
+            for value in task_direction.candidate_direction_labels
+        }:
+            errors.append(
+                "navigation_intent_not_in_task_direction_candidates:"
+                f"{intent}"
+            )
+    demonstrated = str(target.finish.demonstrated_direction.label)
+    if demonstrated not in allowed:
+        errors.append(
+            "demonstrated_direction_outside_output_space:"
+            f"{demonstrated}"
+        )
+    elif intent is not None and not direction_labels_are_intent_compatible(
+        observation.direction_output_space.profile_id,
+        demonstrated,
+        str(intent),
+    ):
+        warnings.append(
+            "demonstrated_navigation_intent_mismatch:"
+            f"demonstrated={demonstrated},intent={intent}"
+        )
 
     if assistant_text is not None:
         leaked = _forbidden_text_tokens(assistant_text)
         if leaked:
-            errors.append(f"forbidden_fields_in_assistant:{leaked}")
+            errors.append(
+                f"forbidden_fields_in_assistant:{leaked}"
+            )
         parsed = parse_reasoning_target_v4(assistant_text)
         if not parsed.valid or parsed.target is None:
             errors.extend(
-                f"assistant_text:{item}" for item in parsed.errors
+                f"assistant_text:{item}"
+                for item in parsed.errors
             )
         elif parsed.target != target:
-            errors.append("assistant_text_target_roundtrip_mismatch")
+            errors.append(
+                "assistant_text_target_roundtrip_mismatch"
+            )
     return ReasoningValidationResultV4(
         errors=_unique(errors),
         warnings=_unique(warnings),
     )
 
 
-def _validate_visual_evidence_roles(
+def _validate_direction_membership(
     section_name: str,
     section: BaseModel,
     *,
     observation: NavObservationV4,
     errors: list[str],
-    warnings: list[str],
 ) -> None:
-    """Apply input-dependent temporal and evidence-authority rules."""
+    """Require every semantic direction to use the public profile."""
 
-    del warnings
+    allowed = {
+        str(value)
+        for value in observation.direction_output_space.allowed_labels
+    }
+    labels: list[str] = []
+    if section_name == "LocalTraversability":
+        labels.extend(
+            str(item.direction_label)
+            for item in section.direction_affordances
+        )
+    elif section_name == "NavigationContextGrounding":
+        if section.goal_alignment is not None:
+            labels.extend(
+                str(value)
+                for value in (
+                    section.goal_alignment.supported_direction_labels
+                )
+            )
+        for alignment in section.source_alignments:
+            labels.extend(
+                str(value)
+                for value in alignment.supported_direction_labels
+            )
+        labels.extend(
+            str(value)
+            for value in (
+                section.task_direction.candidate_direction_labels
+            )
+        )
+    elif section_name == "InteractionConstraintGrounding":
+        for constraint in section.constraints:
+            affected = {
+                str(value)
+                for value in constraint.affected_direction_labels
+            }
+            labels.extend(
+                affected
+            )
+            if affected and affected == allowed - {"stop"}:
+                errors.append(
+                    "global_constraint_must_not_enumerate_all_moving:"
+                    f"{constraint.constraint_ref}"
+                )
+    elif section_name == "Decision":
+        if section.navigation_intent_direction_label is not None:
+            labels.append(
+                str(section.navigation_intent_direction_label)
+            )
+        labels.append(str(section.selected_action_label))
+        for uncertainty in section.critical_uncertainties:
+            labels.extend(
+                str(value)
+                for value in (
+                    uncertainty.affected_direction_labels
+                )
+            )
+    outside = sorted(set(labels) - allowed)
+    if outside:
+        errors.append(
+            "direction_labels_outside_public_output_space:"
+            f"{outside}"
+        )
+
+
+def _validate_temporal_evidence(
+    section_name: str,
+    section: BaseModel,
+    *,
+    observation: NavObservationV4,
+    errors: list[str],
+) -> None:
+    """Require distinct FPV images for temporal relation claims."""
+
     if section_name != "InteractionConstraintGrounding":
         return
-    constraints = getattr(section, "constraints", [])
     image_by_ref = {
         role: path
         for path, role in zip(
@@ -339,7 +367,7 @@ def _validate_visual_evidence_roles(
         )
         if role.startswith("fpv.")
     }
-    for constraint in constraints:
+    for constraint in section.constraints:
         if constraint.relation not in {
             "crosses_candidate_path",
             "approaches_candidate_path",
@@ -360,57 +388,156 @@ def _validate_visual_evidence_roles(
             or len(distinct_images) < 2
         ):
             errors.append(
-                f"dynamic_constraint_requires_distinct_frames:"
+                "dynamic_constraint_requires_distinct_fpv:"
                 f"{constraint.constraint_ref}"
             )
 
 
-def _validate_decision_constraints(
-    decision: DecisionV4,
+def _known_support_refs(
+    target: ReasoningTargetV4,
+) -> set[str]:
+    """Return all semantic objects that Decision may cite."""
+
+    trace = target.reasoning
+    refs = {"task.goal", "nav.task_direction"}
+    refs.update(
+        item.requirement_ref
+        for item in trace.task_grounding.requirements
+    )
+    refs.update(
+        item.ambiguity_ref
+        for item in trace.task_grounding.ambiguities
+    )
+    refs.update(
+        item.entity_ref
+        for item in trace.scene_grounding.entities
+    )
+    refs.update(
+        item.control_ref
+        for item in trace.scene_grounding.traffic_controls
+    )
+    refs.update(
+        item.alignment_ref
+        for item in (
+            trace.navigation_context_grounding.source_alignments
+        )
+    )
+    refs.update(
+        item.constraint_ref
+        for item in (
+            trace.interaction_constraint_grounding.constraints
+        )
+    )
+    refs.update(
+        item.uncertainty_ref
+        for item in trace.decision.critical_uncertainties
+    )
+    return refs
+
+
+def _validate_constraint_effects(
+    target: ReasoningTargetV4,
     *,
-    constraint_by_ref: dict[str, Any],
+    selected_action_label: str,
     errors: list[str],
 ) -> None:
-    """Reject decisions that contradict applicable supported constraints."""
+    """Reject a selected action that violates an applicable constraint."""
 
-    selected = decision.selected_region_ref
-    for ref in decision.support_refs:
-        constraint = constraint_by_ref.get(ref)
-        if constraint is None or constraint.status != "applicable":
+    decision = target.reasoning.decision
+    for constraint in (
+        target.reasoning.interaction_constraint_grounding.constraints
+    ):
+        affected = {
+            str(value)
+            for value in constraint.affected_direction_labels
+        }
+        if constraint.status != "applicable":
             continue
+        if affected and selected_action_label not in affected:
+            continue
+        compatible = {
+            "slow": decision.speed in {"slow", "stop"},
+            "yield": (
+                decision.social_action == "yield"
+                or decision.speed == "stop"
+            ),
+            "stop": (
+                decision.decision_type == "stop"
+                and decision.selected_action_label == "stop"
+            ),
+            "avoid": selected_action_label not in affected,
+        }[constraint.effect]
+        if not compatible:
+            errors.append(
+                "constraint_effect_conflicts_with_final_decision:"
+                f"{constraint.constraint_ref}:{constraint.effect}"
+            )
+
+
+def _validate_selected_direction_grounding(
+    target: ReasoningTargetV4,
+    *,
+    direction_label: str,
+    errors: list[str],
+) -> None:
+    """Reject full supervision when weak FPV affordance vetoes the GT label."""
+
+    for affordance in (
+        target.reasoning.local_traversability.direction_affordances
+    ):
         if (
-            selected is not None
-            and selected not in constraint.applies_to_region_refs
+            str(affordance.direction_label) == direction_label
+            and affordance.affordance in {"blocked", "forbidden"}
         ):
             errors.append(
-                "decision_support_constraint_not_applicable_to_selected_region:"
-                f"{constraint.constraint_ref}:{selected}"
+                "weak_strong_grounding_conflict:"
+                f"direction={direction_label}, "
+                f"affordance={affordance.affordance}"
             )
-            continue
-        effect = constraint.effect
-        if effect in {"stop", "wait"} and decision.speed != "stop":
-            errors.append(
-                f"decision_violates_{effect}_constraint:{constraint.constraint_ref}"
-            )
-        if effect == "slow" and decision.speed == "normal":
-            errors.append(
-                f"decision_violates_slow_constraint:{constraint.constraint_ref}"
-            )
-        if effect == "yield" and decision.social_action not in {
-            "yield",
-            "wait",
-        }:
-            errors.append(
-                f"decision_violates_yield_constraint:{constraint.constraint_ref}"
-            )
-        if effect == "detour" and decision.social_action != "detour":
-            errors.append(
-                f"decision_violates_detour_constraint:{constraint.constraint_ref}"
-            )
+
+
+def _stop_action_has_support(target: ReasoningTargetV4) -> bool:
+    """Return whether a stop action cites a visible stop-capable reason."""
+
+    trace = target.reasoning
+    support_refs = {str(value) for value in trace.decision.support_refs}
+    for constraint in (
+        trace.interaction_constraint_grounding.constraints
+    ):
+        if (
+            constraint.status == "applicable"
+            and not constraint.affected_direction_labels
+            and constraint.effect in {"stop", "yield"}
+            and str(constraint.constraint_ref) in support_refs
+        ):
+            return True
+    intent_labels = {
+        str(value)
+        for value in (
+            trace.navigation_context_grounding.task_direction
+            .candidate_direction_labels
+        )
+    }
+    blocked_labels = {
+        str(item.direction_label)
+        for item in trace.local_traversability.direction_affordances
+        if item.affordance in {"blocked", "forbidden"}
+    }
+    if (
+        intent_labels
+        and intent_labels.issubset(blocked_labels)
+        and "nav.task_direction" in support_refs
+    ):
+        return True
+    return any(
+        item.resolution_policy == "stop"
+        and str(item.uncertainty_ref) in support_refs
+        for item in trace.decision.critical_uncertainties
+    )
 
 
 def _raw_refs_from_value(value: Any) -> set[str]:
-    """Collect raw evidence-shaped strings from an arbitrary JSON value."""
+    """Recursively collect raw evidence-address strings."""
 
     refs: set[str] = set()
     if isinstance(value, dict):
@@ -427,15 +554,18 @@ def _raw_refs_from_value(value: Any) -> set[str]:
 
 
 def _forbidden_text_tokens(text: str) -> list[str]:
-    """Return private or unsupported field names leaked into assistant text."""
+    """Return unsupported private or numeric-uncertainty fields."""
 
     lowered = text.lower()
     forbidden = (
+        '"confidence"',
+        '"confidence_score"',
+        '"cost"',
+        '"cost_score"',
         "active_route_state",
         "arrival_gt",
         "bbox",
         "calibration",
-        "confidence",
         "gnss",
         "goal_distance",
         "gps",

@@ -12,6 +12,7 @@ from pydantic import BaseModel, ValidationError
 from mcp_server.contracts.reasoning_dataset_v4 import (
     GroundingOutputsV4,
     NavObservationV4,
+    TeacherActionConstraintV4,
 )
 from mcp_server.teacher.reasoning_v4_profiles import (
     ReasoningV4TeacherProfile,
@@ -44,6 +45,7 @@ def build_reasoning_v4_section_question(
     profile: ReasoningV4TeacherProfile,
     *,
     groundings: GroundingOutputsV4 | None = None,
+    teacher_action_constraint: TeacherActionConstraintV4 | None = None,
     previous_answer: str | None = None,
     previous_errors: Iterable[str] = (),
 ) -> str:
@@ -54,6 +56,8 @@ def build_reasoning_v4_section_question(
             sidecars cannot cross this function boundary.
         profile: Requested section profile.
         groundings: Five validated groundings required only for Decision.
+        teacher_action_constraint: Optional private demonstrated direction,
+            legal only in the Decision teacher prompt.
         previous_answer: Optional invalid provider response for repair.
         previous_errors: Deterministic errors from the previous attempt.
 
@@ -74,6 +78,9 @@ def build_reasoning_v4_section_question(
         ],
         "input_modalities": observation.input_modalities.model_dump(
             mode="json"
+        ),
+        "direction_output_space": (
+            observation.direction_output_space.model_dump(mode="json")
         ),
         "temporal_evidence_eligible": observation.temporal_evidence_eligible,
         "model_visible_context": observation.model_visible_context,
@@ -96,9 +103,28 @@ def build_reasoning_v4_section_question(
             mode="json",
             exclude_none=True,
         )
+        if teacher_action_constraint is not None:
+            demonstrated = str(
+                teacher_action_constraint.demonstrated_direction_label
+            )
+            if demonstrated not in {
+                str(value)
+                for value in observation.direction_output_space.allowed_labels
+            }:
+                raise ValueError(
+                    "teacher demonstrated direction is outside the public "
+                    "direction output space"
+                )
+            payload["teacher_only_action_constraint"] = (
+                teacher_action_constraint.model_dump(mode="json")
+            )
     elif groundings is not None:
         raise ValueError(
             "grounding section prompts must not consume other section outputs"
+        )
+    elif teacher_action_constraint is not None:
+        raise ValueError(
+            "grounding prompts cannot consume teacher action constraint"
         )
 
     repair = ""
@@ -171,6 +197,15 @@ def parse_reasoning_v4_section_answer(
             section=None,
             errors=["section_payload_must_be_json_object"],
         )
+    forbidden_numeric = _forbidden_numeric_uncertainty_fields(payload)
+    if forbidden_numeric:
+        return ReasoningV4SectionParseResult(
+            section=None,
+            errors=[
+                "numeric_confidence_or_cost_forbidden:"
+                f"{forbidden_numeric}"
+            ],
+        )
     try:
         section = profile.model_type.model_validate(payload)
     except (TypeError, ValueError, ValidationError) as exc:
@@ -190,3 +225,43 @@ def _strip_single_json_fence(value: str) -> str:
         flags=re.DOTALL | re.IGNORECASE,
     )
     return match.group("body").strip() if match else value
+
+
+def _forbidden_numeric_uncertainty_fields(
+    value: Any,
+    *,
+    prefix: str = "",
+) -> list[str]:
+    """Find numeric confidence/cost fields in a teacher payload."""
+
+    findings: list[str] = []
+    if isinstance(value, dict):
+        for raw_key, item in value.items():
+            key = str(raw_key)
+            path = f"{prefix}.{key}" if prefix else key
+            normalized = key.lower()
+            if (
+                isinstance(item, (int, float))
+                and not isinstance(item, bool)
+                and (
+                    "confidence" in normalized
+                    or normalized == "cost"
+                    or normalized.endswith("_cost")
+                )
+            ):
+                findings.append(path)
+            findings.extend(
+                _forbidden_numeric_uncertainty_fields(
+                    item,
+                    prefix=path,
+                )
+            )
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            findings.extend(
+                _forbidden_numeric_uncertainty_fields(
+                    item,
+                    prefix=f"{prefix}[{index}]",
+                )
+            )
+    return findings

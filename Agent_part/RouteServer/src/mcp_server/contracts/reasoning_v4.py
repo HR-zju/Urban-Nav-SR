@@ -1,9 +1,9 @@
-"""Canonical UrbanNav Reasoning V4 semantic and wire contracts.
+"""Canonical UrbanNav Reasoning V4.2 semantic and wire contracts.
 
-Reasoning V4 is a single-turn, shared-input representation for short-horizon
-pedestrian navigation.  The five grounding sections independently interpret
-the same prompt-visible observation.  Cross-section references are semantic
-links, while ``evidence_refs`` always point to raw prompt-visible evidence.
+V4.2 separates deterministic demonstrated direction, weak navigation intent,
+and the immediately selected action. Prompt-visible direction labels define the
+shared vocabulary; the deterministic composer derives ``Decision.motion`` only
+from ``Decision.selected_action_label``.
 """
 
 from __future__ import annotations
@@ -17,21 +17,21 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from mcp_server.contracts.reasoning import ReasonCode
 
 
-REASONING_TRACE_V4_SCHEMA_VERSION = "urbannav_reasoning_trace_v4_0"
-FINISH_V4_SCHEMA_VERSION = "urbannav_finish_v4_0"
+REASONING_TRACE_V4_SCHEMA_VERSION = "urbannav_reasoning_trace_v4_2"
+FINISH_V4_SCHEMA_VERSION = "urbannav_finish_v4_2"
 REASONING_TRAINING_VIEW_V4_SCHEMA_VERSION = (
-    "urbannav_reasoning_training_view_v4_0"
+    "urbannav_reasoning_training_view_v4_2"
 )
-REASONING_V4_WIRE_FORMAT_VERSION = "urbannav_reasoning_v4_wire_v1"
+REASONING_V4_WIRE_FORMAT_VERSION = "urbannav_reasoning_v4_wire_v3"
 REASONING_V4_SECTION_DEFINITION_VERSION = (
-    "urbannav_reasoning_v4_section_definitions_v2"
+    "urbannav_reasoning_v4_section_definitions_v4"
 )
 REASONING_V4_EVIDENCE_POLICY_VERSION = (
-    "urbannav_reasoning_v4_evidence_policy_v2"
+    "urbannav_reasoning_v4_evidence_policy_v4"
 )
-REASONING_V4_RENDERER_ID = "render_reasoning_target_v4_v1"
-REASONING_V4_PARSER_ID = "parse_reasoning_target_v4_v1"
-REASONING_V4_VALIDATOR_ID = "validate_reasoning_target_v4_v2"
+REASONING_V4_RENDERER_ID = "render_reasoning_target_v4_v3"
+REASONING_V4_PARSER_ID = "parse_reasoning_target_v4_v3"
+REASONING_V4_VALIDATOR_ID = "validate_reasoning_target_v4_v4"
 REASONING_V4_SECTION_NAMES = (
     "TaskGrounding",
     "SceneGrounding",
@@ -52,31 +52,51 @@ ExternalEvidenceRefV4 = Annotated[
 TaskGoalRefV4 = Literal["task.goal"]
 RequirementRefV4 = Annotated[
     str,
-    Field(min_length=13, max_length=128, pattern=r"^requirement\.[a-z0-9_]+$"),
+    Field(
+        min_length=13,
+        max_length=128,
+        pattern=r"^requirement\.[a-z0-9_]+$",
+    ),
 ]
 AmbiguityRefV4 = Annotated[
     str,
-    Field(min_length=11, max_length=128, pattern=r"^ambiguity\.[a-z0-9_]+$"),
+    Field(
+        min_length=11,
+        max_length=128,
+        pattern=r"^ambiguity\.[a-z0-9_]+$",
+    ),
 ]
 EntityRefV4 = Annotated[
     str,
-    Field(min_length=8, max_length=128, pattern=r"^entity\.[a-z0-9_]+$"),
+    Field(min_length=10, max_length=32, pattern=r"^entity\.e[0-9]{2,}$"),
 ]
 ControlRefV4 = Annotated[
     str,
-    Field(min_length=9, max_length=128, pattern=r"^control\.[a-z0-9_]+$"),
-]
-RegionRefV4 = Annotated[
-    str,
-    Field(min_length=8, max_length=128, pattern=r"^region\.[a-z0-9_]+$"),
+    Field(min_length=11, max_length=32, pattern=r"^control\.c[0-9]{2,}$"),
 ]
 AlignmentRefV4 = Annotated[
     str,
-    Field(min_length=11, max_length=128, pattern=r"^alignment\.[a-z0-9_]+$"),
+    Field(
+        min_length=13,
+        max_length=32,
+        pattern=r"^alignment\.a[0-9]{2,}$",
+    ),
 ]
 ConstraintRefV4 = Annotated[
     str,
-    Field(min_length=12, max_length=128, pattern=r"^constraint\.[a-z0-9_]+$"),
+    Field(
+        min_length=14,
+        max_length=32,
+        pattern=r"^constraint\.k[0-9]{2,}$",
+    ),
+]
+UncertaintyRefV4 = Annotated[
+    str,
+    Field(
+        min_length=15,
+        max_length=32,
+        pattern=r"^uncertainty\.u[0-9]{2,}$",
+    ),
 ]
 SemanticRefV4 = Annotated[
     str,
@@ -86,21 +106,9 @@ SemanticRefV4 = Annotated[
         pattern=(
             r"^(task\.goal|nav\.task_direction|"
             r"requirement\.[a-z0-9_]+|ambiguity\.[a-z0-9_]+|"
-            r"entity\.[a-z0-9_]+|control\.[a-z0-9_]+|"
-            r"region\.[a-z0-9_]+|alignment\.[a-z0-9_]+|"
-            r"constraint\.[a-z0-9_]+)$"
-        ),
-    ),
-]
-ConstraintSourceRefV4 = Annotated[
-    str,
-    Field(
-        min_length=5,
-        max_length=160,
-        pattern=(
-            r"^(instruction|fpv|bev|goal|waypoint)\.[a-z0-9_]+$|"
-            r"^(task\.goal|requirement\.[a-z0-9_]+|"
-            r"entity\.[a-z0-9_]+|control\.[a-z0-9_]+)$"
+            r"entity\.e[0-9]{2,}|control\.c[0-9]{2,}|"
+            r"alignment\.a[0-9]{2,}|constraint\.k[0-9]{2,}|"
+            r"uncertainty\.u[0-9]{2,})$"
         ),
     ),
 ]
@@ -122,61 +130,110 @@ GoalTypeV4 = Literal[
     "multimodal_goal",
     "none",
 ]
-GoalSpecificationV4 = Literal["specified", "ambiguous", "underspecified", "absent"]
-RequirementPolarityV4 = Literal["required", "preferred", "avoid", "forbidden"]
-LateralPositionV4 = Literal["left", "center", "right", "spanning", "unknown"]
+GoalSpecificationV4 = Literal[
+    "specified",
+    "ambiguous",
+    "underspecified",
+    "absent",
+]
+RequirementPolarityV4 = Literal[
+    "required",
+    "preferred",
+    "avoid",
+    "forbidden",
+]
+LateralPositionV4 = Literal[
+    "left",
+    "center",
+    "right",
+    "spanning",
+    "unknown",
+]
 DepthPositionV4 = Literal["near", "mid", "far", "unknown"]
-TraversabilityStateV4 = Literal["direct", "conditional", "blocked", "forbidden", "unknown"]
-ClearanceV4 = Literal["sufficient", "narrow", "insufficient", "unknown"]
+EvidenceStatusV4 = Literal["supported", "ambiguous", "insufficient"]
+ObservationQualityV4 = Literal["clear", "partial", "poor", "unknown"]
+DirectionAffordanceStateV4 = Literal[
+    "direct",
+    "conditional",
+    "blocked",
+    "forbidden",
+    "unknown",
+]
+ClearanceV4 = Literal[
+    "sufficient",
+    "narrow",
+    "insufficient",
+    "unknown",
+]
 GoalAlignmentStatusV4 = Literal[
     "resolved",
     "ambiguous",
     "not_visible",
     "insufficient_evidence",
 ]
-SourceAlignmentStatusV4 = Literal["supports", "conflicts", "not_visible", "insufficient"]
-LocalEffectV4 = Literal[
-    "approach_goal",
-    "continue_route",
-    "follow_waypoint",
-    "left",
-    "straight",
-    "right",
-    "stop",
-    "unknown",
+SourceAlignmentStatusV4 = Literal[
+    "supports",
+    "conflicts",
+    "not_visible",
+    "insufficient",
 ]
-DesiredMotionV4 = Literal["left", "straight", "right", "stop", "unknown"]
+AlignmentRoleV4 = Literal[
+    "task_intent",
+    "route_intent",
+    "local_safety_bias",
+]
 TaskDirectionStatusV4 = Literal[
     "aligned",
     "conflict",
     "not_visible",
     "insufficient_evidence",
 ]
-ConstraintKindV4 = Literal["social", "traffic", "accessibility", "local_safety"]
+ConstraintKindV4 = Literal[
+    "task",
+    "social",
+    "traffic",
+    "accessibility",
+    "local_safety",
+]
 ConstraintRelationV4 = Literal[
-    "occupies_candidate_region",
+    "controls_current_path",
+    "occupies_candidate_path",
     "crosses_candidate_path",
     "approaches_candidate_path",
     "near_candidate_path",
-    "narrows_candidate_region",
-    "blocks_candidate_region",
-    "controls_candidate_region",
-    "violates_requirement",
-    "supports_requirement",
+    "reduces_clearance",
+    "blocks_candidate_path",
+    "conflicts_with_requirement",
     "unknown",
 ]
-TemporalBasisV4 = Literal["single_frame", "multi_frame", "static_control", "instruction"]
 ConstraintStatusV4 = Literal["applicable", "uncertain"]
 ConstraintEffectV4 = Literal[
-    "proceed",
+    "slow",
+    "yield",
+    "stop",
+    "avoid",
+]
+UncertaintyTypeV4 = Literal[
+    "task",
+    "perception",
+    "temporal",
+    "cross_modal",
+    "rule_applicability",
+]
+ResolutionPolicyV4 = Literal[
+    "continue_observing",
     "slow",
     "yield",
     "wait",
     "stop",
-    "detour",
-    "request_clarification",
 ]
-DecisionTypeV4 = Literal["navigate", "stop", "finish", "request_user", "request_replan"]
+DecisionTypeV4 = Literal[
+    "navigate",
+    "stop",
+    "finish",
+    "request_user",
+    "request_replan",
+]
 STAGE_A_DECISION_TYPES_V4 = ("navigate", "stop")
 MotionV4 = Literal["go_straight", "turn_left", "turn_right", "stop"]
 SpeedV4 = Literal["normal", "slow", "stop"]
@@ -201,26 +258,39 @@ FallbackV4 = Literal[
 
 
 class TaskGoalV4(BaseModel):
-    """Normalize the goal defined by prompt-visible task sources."""
+    """Normalize a goal from prompt-visible task sources."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     goal_ref: TaskGoalRefV4 = "task.goal"
     goal_type: GoalTypeV4
-    description: str | None = Field(default=None, min_length=1, max_length=320)
+    description: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=320,
+    )
     specification: GoalSpecificationV4
-    source_refs: list[ExternalEvidenceRefV4] = Field(default_factory=list, max_length=12)
+    source_refs: list[ExternalEvidenceRefV4] = Field(
+        default_factory=list,
+        max_length=12,
+    )
 
     @model_validator(mode="after")
     def validate_goal_specification(self) -> "TaskGoalV4":
-        """Keep absence, goal type, and source evidence mutually consistent."""
+        """Keep goal absence and evidence mutually consistent."""
 
         if self.specification == "absent" and self.goal_type != "none":
-            raise ValueError("absent goal specification requires goal_type=none")
+            raise ValueError(
+                "absent goal specification requires goal_type=none"
+            )
         if self.goal_type == "none" and self.specification != "absent":
-            raise ValueError("goal_type=none requires specification=absent")
+            raise ValueError(
+                "goal_type=none requires specification=absent"
+            )
         if self.specification == "specified" and not self.source_refs:
-            raise ValueError("specified goal requires at least one raw source ref")
+            raise ValueError(
+                "specified goal requires at least one raw source ref"
+            )
         return self
 
 
@@ -232,33 +302,49 @@ class TaskRequirementV4(BaseModel):
     requirement_ref: RequirementRefV4
     code: ReasonCode
     polarity: RequirementPolarityV4
-    target_ref: SemanticRefV4 | ExternalEvidenceRefV4 | None = None
-    evidence_refs: list[ExternalEvidenceRefV4] = Field(min_length=1, max_length=12)
+    target_description: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=320,
+    )
+    evidence_refs: list[ExternalEvidenceRefV4] = Field(
+        min_length=1,
+        max_length=12,
+    )
 
 
 class TaskAmbiguityV4(BaseModel):
-    """Represent one task ambiguity that may change the next action."""
+    """Represent one task ambiguity that can change the next action."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     ambiguity_ref: AmbiguityRefV4
     code: ReasonCode
-    source_refs: list[ExternalEvidenceRefV4] = Field(min_length=1, max_length=12)
+    source_refs: list[ExternalEvidenceRefV4] = Field(
+        min_length=1,
+        max_length=12,
+    )
 
 
 class TaskGroundingV4(BaseModel):
-    """Normalize task sources without predicting visual scene facts."""
+    """Normalize task sources without predicting scene facts."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     objective: ObjectiveV4
     goal: TaskGoalV4
-    requirements: list[TaskRequirementV4] = Field(default_factory=list, max_length=12)
-    ambiguities: list[TaskAmbiguityV4] = Field(default_factory=list, max_length=12)
+    requirements: list[TaskRequirementV4] = Field(
+        default_factory=list,
+        max_length=12,
+    )
+    ambiguities: list[TaskAmbiguityV4] = Field(
+        default_factory=list,
+        max_length=12,
+    )
 
     @model_validator(mode="after")
     def validate_local_refs(self) -> "TaskGroundingV4":
-        """Require unique task-local requirement and ambiguity references."""
+        """Require unique task-local references."""
 
         _require_unique(
             [item.requirement_ref for item in self.requirements],
@@ -277,51 +363,91 @@ class SceneEntityV4(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     entity_ref: EntityRefV4
-    category: ReasonCode
+    category: ReasonCode | None = None
+    category_candidates: list[ReasonCode] = Field(
+        default_factory=list,
+        max_length=8,
+    )
+    evidence_status: EvidenceStatusV4
+    observation_quality: ObservationQualityV4 = "unknown"
     lateral_position: LateralPositionV4 = "unknown"
     depth_position: DepthPositionV4 = "unknown"
-    evidence_refs: list[ExternalEvidenceRefV4] = Field(min_length=1, max_length=12)
+    evidence_refs: list[ExternalEvidenceRefV4] = Field(
+        min_length=1,
+        max_length=12,
+    )
 
     @model_validator(mode="after")
-    def validate_visual_evidence(self) -> "SceneEntityV4":
-        """Require raw FPV support for every visual entity."""
+    def validate_entity(self) -> "SceneEntityV4":
+        """Require FPV support and a coherent open-category claim."""
 
         _require_fpv_evidence(self.evidence_refs, "scene entity")
+        _validate_open_category(
+            category=self.category,
+            candidates=self.category_candidates,
+            evidence_status=self.evidence_status,
+            object_name="scene entity",
+        )
         return self
 
 
 class TrafficControlV4(BaseModel):
-    """Describe one directly visible traffic-control facility and state."""
+    """Describe one directly visible traffic-control facility."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     control_ref: ControlRefV4
-    category: ReasonCode
-    state: ReasonCode = "unknown"
+    category: ReasonCode | None = None
+    category_candidates: list[ReasonCode] = Field(
+        default_factory=list,
+        max_length=8,
+    )
+    state: ReasonCode | None = None
+    evidence_status: EvidenceStatusV4
+    observation_quality: ObservationQualityV4 = "unknown"
     lateral_position: LateralPositionV4 = "unknown"
-    evidence_refs: list[ExternalEvidenceRefV4] = Field(min_length=1, max_length=12)
+    depth_position: DepthPositionV4 = "unknown"
+    evidence_refs: list[ExternalEvidenceRefV4] = Field(
+        min_length=1,
+        max_length=12,
+    )
 
     @model_validator(mode="after")
-    def validate_visual_evidence(self) -> "TrafficControlV4":
-        """Require raw FPV support for every visual traffic control."""
+    def validate_control(self) -> "TrafficControlV4":
+        """Require FPV support and a coherent open-category claim."""
 
         _require_fpv_evidence(self.evidence_refs, "traffic control")
+        _validate_open_category(
+            category=self.category,
+            candidates=self.category_candidates,
+            evidence_status=self.evidence_status,
+            object_name="traffic control",
+        )
         return self
 
 
 class SceneGroundingV4(BaseModel):
-    """Collect visible scene facts without path or interaction judgments."""
+    """Collect visible scene facts without path-policy judgments."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    entities: list[SceneEntityV4] = Field(default_factory=list, max_length=32)
-    traffic_controls: list[TrafficControlV4] = Field(default_factory=list, max_length=16)
+    entities: list[SceneEntityV4] = Field(
+        default_factory=list,
+        max_length=32,
+    )
+    traffic_controls: list[TrafficControlV4] = Field(
+        default_factory=list,
+        max_length=16,
+    )
 
     @model_validator(mode="after")
     def validate_local_refs(self) -> "SceneGroundingV4":
-        """Require unique scene-local entity and control references."""
+        """Require unique neutral scene references."""
 
-        _require_unique([item.entity_ref for item in self.entities], "entity_ref")
+        _require_unique(
+            [item.entity_ref for item in self.entities],
+            "entity_ref",
+        )
         _require_unique(
             [item.control_ref for item in self.traffic_controls],
             "control_ref",
@@ -329,124 +455,235 @@ class SceneGroundingV4(BaseModel):
         return self
 
 
-class TraversabilityRegionV4(BaseModel):
-    """Describe one visible local region that may be selected for navigation."""
+class DirectionAffordanceV4(BaseModel):
+    """Describe FPV support for one public direction label.
+
+    Args:
+        direction_label: Label selected from the public direction vocabulary.
+        support_type: Open semantic code for the visible walking support.
+        affordance: Categorical local executability judgment.
+        clearance: Coarse visual clearance category.
+        limiting_factor_codes: Open codes explaining a non-direct judgment.
+        evidence_status: Categorical support state, not a probability.
+        evidence_refs: Raw FPV evidence addresses supporting the judgment.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    region_ref: RegionRefV4
-    surface: ReasonCode
-    lateral_position: LateralPositionV4 = "unknown"
-    state: TraversabilityStateV4
+    direction_label: ReasonCode
+    support_type: ReasonCode
+    affordance: DirectionAffordanceStateV4
     clearance: ClearanceV4 = "unknown"
-    related_entity_refs: list[EntityRefV4] = Field(default_factory=list, max_length=12)
-    limiting_factor_codes: list[ReasonCode] = Field(default_factory=list, max_length=12)
-    evidence_refs: list[ExternalEvidenceRefV4] = Field(min_length=1, max_length=12)
+    limiting_factor_codes: list[ReasonCode] = Field(
+        default_factory=list,
+        max_length=12,
+    )
+    evidence_status: EvidenceStatusV4
+    evidence_refs: list[ExternalEvidenceRefV4] = Field(
+        min_length=1,
+        max_length=12,
+    )
 
     @model_validator(mode="after")
-    def validate_region(self) -> "TraversabilityRegionV4":
-        """Enforce raw FPV support and non-contradictory direct clearance."""
+    def validate_affordance(self) -> "DirectionAffordanceV4":
+        """Require visible support and non-contradictory status fields."""
 
-        _require_fpv_evidence(self.evidence_refs, "traversability region")
-        if self.state == "direct" and self.clearance == "insufficient":
-            raise ValueError("direct region cannot have insufficient clearance")
-        if self.state in {"conditional", "blocked", "forbidden"} and not self.limiting_factor_codes:
-            raise ValueError(f"{self.state} region requires a limiting factor code")
+        _require_fpv_evidence(
+            self.evidence_refs,
+            "direction affordance",
+        )
+        if self.affordance == "direct" and self.clearance == "insufficient":
+            raise ValueError(
+                "direct direction cannot have insufficient clearance"
+            )
+        if (
+            self.affordance in {"conditional", "blocked", "forbidden"}
+            and not self.limiting_factor_codes
+        ):
+            raise ValueError(
+                f"{self.affordance} direction requires limiting factors"
+            )
         return self
 
 
 class LocalTraversabilityV4(BaseModel):
-    """Organize the visible environment into candidate local regions."""
+    """Judge the public direction vocabulary from current FPV evidence."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    regions: list[TraversabilityRegionV4] = Field(default_factory=list, max_length=16)
+    direction_affordances: list[DirectionAffordanceV4] = Field(
+        default_factory=list,
+        max_length=24,
+    )
 
     @model_validator(mode="after")
-    def validate_local_refs(self) -> "LocalTraversabilityV4":
-        """Require one unique definition for every local region."""
+    def validate_local_labels(self) -> "LocalTraversabilityV4":
+        """Require at most one record per public direction label."""
 
-        _require_unique([item.region_ref for item in self.regions], "region_ref")
+        _require_unique(
+            [
+                str(item.direction_label)
+                for item in self.direction_affordances
+            ],
+            "direction_label",
+        )
         return self
 
 
 class GoalAlignmentV4(BaseModel):
-    """Align the normalized task goal with visible targets and regions."""
+    """Align a task goal to open target semantics and public directions."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     goal_ref: TaskGoalRefV4 = "task.goal"
     status: GoalAlignmentStatusV4
-    target_ref: SemanticRefV4 | ExternalEvidenceRefV4 | None = None
-    candidate_target_refs: list[SemanticRefV4 | ExternalEvidenceRefV4] = Field(
+    target_description: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=320,
+    )
+    candidate_target_descriptions: list[str] = Field(
         default_factory=list,
         max_length=12,
     )
-    aligned_region_refs: list[RegionRefV4] = Field(default_factory=list, max_length=12)
-    evidence_refs: list[ExternalEvidenceRefV4] = Field(min_length=1, max_length=16)
+    supported_direction_labels: list[ReasonCode] = Field(
+        default_factory=list,
+        max_length=24,
+    )
+    evidence_refs: list[ExternalEvidenceRefV4] = Field(
+        min_length=1,
+        max_length=16,
+    )
 
     @model_validator(mode="after")
     def validate_alignment(self) -> "GoalAlignmentV4":
-        """Keep target candidates consistent with the alignment state."""
+        """Keep open target descriptions consistent with alignment status."""
 
-        if self.status == "resolved" and self.target_ref is None:
-            raise ValueError("resolved goal alignment requires target_ref")
-        if self.status != "resolved" and self.target_ref is not None:
-            raise ValueError("non-resolved goal alignment cannot carry target_ref")
-        if self.status == "resolved" and self.candidate_target_refs:
+        if self.status == "resolved" and self.target_description is None:
             raise ValueError(
-                "resolved goal alignment cannot carry candidate_target_refs"
+                "resolved goal alignment requires target_description"
             )
-        if self.status == "ambiguous" and len(
-            self.candidate_target_refs
-        ) < 2:
+        if self.status != "resolved" and self.target_description is not None:
             raise ValueError(
-                "ambiguous goal alignment requires at least two candidates"
+                "non-resolved goal alignment cannot carry target_description"
             )
-        if self.status in {"not_visible", "insufficient_evidence"} and (
-            self.candidate_target_refs
+        if self.status == "resolved" and self.candidate_target_descriptions:
+            raise ValueError(
+                "resolved goal alignment cannot carry target candidates"
+            )
+        if (
+            self.status == "ambiguous"
+            and len(self.candidate_target_descriptions) < 2
         ):
             raise ValueError(
-                f"{self.status} goal alignment cannot carry candidates"
+                "ambiguous goal alignment requires two target descriptions"
+            )
+        if self.status in {"not_visible", "insufficient_evidence"} and (
+            self.candidate_target_descriptions
+            or self.supported_direction_labels
+        ):
+            raise ValueError(
+                f"{self.status} goal alignment cannot assert directions"
+            )
+        if (
+            self.supported_direction_labels
+            and _contains_disabled_direction_source(self.evidence_refs)
+        ):
+            raise ValueError(
+                "pixel-goal and waypoint evidence cannot support goal "
+                "direction labels in V4.2"
             )
         return self
 
 
 class NavigationSourceAlignmentV4(BaseModel):
-    """Align one prompt-visible navigation source to local regions."""
+    """Record evidence-supported directions for one visible task source."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     alignment_ref: AlignmentRefV4
     source_ref: ExternalEvidenceRefV4
-    local_effect: LocalEffectV4
-    aligned_region_refs: list[RegionRefV4] = Field(default_factory=list, max_length=12)
+    alignment_role: AlignmentRoleV4
+    supported_direction_labels: list[ReasonCode] = Field(
+        default_factory=list,
+        max_length=24,
+    )
     status: SourceAlignmentStatusV4
-    evidence_refs: list[ExternalEvidenceRefV4] = Field(min_length=1, max_length=16)
+    evidence_refs: list[ExternalEvidenceRefV4] = Field(
+        min_length=1,
+        max_length=16,
+    )
 
     @model_validator(mode="after")
-    def validate_source_evidence(self) -> "NavigationSourceAlignmentV4":
-        """Require each alignment to cite the source it interprets."""
+    def validate_source_alignment(self) -> "NavigationSourceAlignmentV4":
+        """Require direct source evidence and block unsupported geometry."""
 
         if self.source_ref not in self.evidence_refs:
-            raise ValueError("source alignment must cite source_ref as raw evidence")
+            raise ValueError(
+                "source alignment must cite source_ref as raw evidence"
+            )
+        unavailable_geometry = _contains_disabled_direction_source(
+            [self.source_ref]
+        )
+        if unavailable_geometry and (
+            self.status != "insufficient"
+            or self.supported_direction_labels
+        ):
+            raise ValueError(
+                "pixel-goal and waypoint source alignment must be "
+                "insufficient without direction labels in V4.2"
+            )
+        if self.status == "supports" and not self.supported_direction_labels:
+            raise ValueError(
+                "supporting source alignment requires direction labels"
+            )
+        if self.status != "supports" and self.supported_direction_labels:
+            raise ValueError(
+                f"{self.status} source alignment cannot assert supported "
+                "directions"
+            )
         return self
 
 
 class TaskDirectionV4(BaseModel):
-    """Represent the coarse direction requested by task and navigation context."""
+    """Collect public direction candidates implied by visible task evidence."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     direction_ref: Literal["nav.task_direction"] = "nav.task_direction"
-    desired_motion: DesiredMotionV4
-    candidate_region_refs: list[RegionRefV4] = Field(default_factory=list, max_length=12)
+    candidate_direction_labels: list[ReasonCode] = Field(
+        default_factory=list,
+        max_length=24,
+    )
     status: TaskDirectionStatusV4
-    evidence_refs: list[ExternalEvidenceRefV4] = Field(min_length=1, max_length=16)
+    evidence_refs: list[ExternalEvidenceRefV4] = Field(
+        min_length=1,
+        max_length=16,
+    )
+
+    @model_validator(mode="after")
+    def validate_candidates(self) -> "TaskDirectionV4":
+        """Keep candidate availability consistent with resolution status."""
+
+        if "stop" in self.candidate_direction_labels:
+            raise ValueError(
+                "task direction cannot use stop as navigation intent"
+            )
+        if self.status == "aligned" and not self.candidate_direction_labels:
+            raise ValueError(
+                "aligned task direction requires candidate labels"
+            )
+        if self.status in {"not_visible", "insufficient_evidence"} and (
+            self.candidate_direction_labels
+        ):
+            raise ValueError(
+                f"{self.status} task direction cannot assert candidates"
+            )
+        return self
 
 
 class NavigationContextGroundingV4(BaseModel):
-    """Ground task and optional navigation sources to the current local scene."""
+    """Ground visible task sources to the public direction vocabulary."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -459,62 +696,116 @@ class NavigationContextGroundingV4(BaseModel):
 
     @model_validator(mode="after")
     def validate_local_refs(self) -> "NavigationContextGroundingV4":
-        """Require unique source-alignment references."""
+        """Require unique refs and close task candidates to local alignments."""
 
         _require_unique(
             [item.alignment_ref for item in self.source_alignments],
             "alignment_ref",
         )
+        grounded_labels: set[str] = set()
+        if self.goal_alignment is not None:
+            grounded_labels.update(
+                str(value)
+                for value in (
+                    self.goal_alignment.supported_direction_labels
+                )
+            )
+        for alignment in self.source_alignments:
+            if alignment.alignment_role == "local_safety_bias":
+                continue
+            grounded_labels.update(
+                str(value)
+                for value in alignment.supported_direction_labels
+            )
+        ungrounded = sorted(
+            {
+                str(value)
+                for value in (
+                    self.task_direction.candidate_direction_labels
+                )
+            }
+            - grounded_labels
+        )
+        if ungrounded:
+            raise ValueError(
+                "task direction candidates require same-section source "
+                f"support: {ungrounded}"
+            )
         return self
 
 
 class InteractionConstraintV4(BaseModel):
-    """Convert a visible task, scene, or control relation into a behavior constraint."""
+    """Convert visible evidence into a global or subset behavior constraint.
+
+    An empty ``affected_direction_labels`` list means that the constraint applies
+    to the current action globally. A non-empty list identifies only the affected
+    subset; it must not enumerate the complement or expand an ``all_moving``
+    pseudo-scope.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     constraint_ref: ConstraintRefV4
-    constraint_code: ReasonCode
     kind: ConstraintKindV4
-    source_refs: list[ConstraintSourceRefV4] = Field(min_length=1, max_length=16)
-    applies_to_region_refs: list[RegionRefV4] = Field(min_length=1, max_length=12)
+    source_type: ReasonCode
+    source_state: ReasonCode
+    affected_direction_labels: list[ReasonCode] = Field(
+        default_factory=list,
+        max_length=24,
+    )
     relation: ConstraintRelationV4
-    temporal_basis: TemporalBasisV4
     status: ConstraintStatusV4
     effect: ConstraintEffectV4
-    evidence_refs: list[ExternalEvidenceRefV4] = Field(min_length=1, max_length=16)
+    evidence_refs: list[ExternalEvidenceRefV4] = Field(
+        min_length=1,
+        max_length=16,
+    )
 
     @model_validator(mode="after")
     def validate_constraint(self) -> "InteractionConstraintV4":
-        """Enforce evidence-family and temporal-basis invariants."""
+        """Validate global-stop, subset-avoid, and dynamic evidence semantics."""
 
+        _require_unique(
+            [str(value) for value in self.affected_direction_labels],
+            "affected_direction_labels",
+        )
+        if self.effect == "stop" and self.affected_direction_labels:
+            raise ValueError(
+                "stop constraint must not enumerate affected directions"
+            )
+        if self.effect == "avoid" and not self.affected_direction_labels:
+            raise ValueError(
+                "avoid constraint requires affected_direction_labels"
+            )
         dynamic = self.relation in {
             "crosses_candidate_path",
             "approaches_candidate_path",
         }
-        fpv_refs = {ref for ref in self.evidence_refs if ref.startswith("fpv.")}
-        if dynamic and (self.temporal_basis != "multi_frame" or len(fpv_refs) < 2):
+        fpv_refs = {
+            ref
+            for ref in self.evidence_refs
+            if ref.startswith("fpv.")
+        }
+        if dynamic and len(fpv_refs) < 2:
             raise ValueError(
-                "dynamic interaction requires temporal_basis=multi_frame "
-                "and at least two FPV refs"
+                "dynamic interaction requires two distinct FPV refs"
             )
-        if self.kind == "traffic" and not any(
-            ref.startswith("control.") for ref in self.source_refs
-        ):
-            raise ValueError("traffic constraint requires a control source ref")
         return self
 
 
 class InteractionConstraintGroundingV4(BaseModel):
-    """Collect only constraints that affect current candidate regions."""
+    """Collect direction-scoped interaction and rule constraints."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    constraints: list[InteractionConstraintV4] = Field(default_factory=list, max_length=24)
+    constraints: list[InteractionConstraintV4] = Field(
+        default_factory=list,
+        max_length=24,
+    )
 
     @model_validator(mode="after")
     def validate_local_refs(self) -> "InteractionConstraintGroundingV4":
-        """Require unique constraint references."""
+        """Require unique neutral constraint references."""
 
         _require_unique(
             [item.constraint_ref for item in self.constraints],
@@ -523,39 +814,139 @@ class InteractionConstraintGroundingV4(BaseModel):
         return self
 
 
-class DecisionV4(BaseModel):
-    """Represent one short-horizon semantic navigation decision."""
+class CriticalUncertaintyV4(BaseModel):
+    """Represent a material unresolved issue without pseudo-confidence.
+
+    Args:
+        uncertainty_ref: Neutral sample-local uncertainty identifier.
+        uncertainty_code: Open semantic code for the unresolved issue.
+        uncertainty_type: Closed uncertainty family.
+        affected_direction_labels: Public directions affected by the issue.
+        resolution_policy: Closed conservative response policy.
+        evidence_refs: Raw visible evidence addresses.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    uncertainty_ref: UncertaintyRefV4
+    uncertainty_code: ReasonCode
+    uncertainty_type: UncertaintyTypeV4
+    affected_direction_labels: list[ReasonCode] = Field(
+        default_factory=list,
+        max_length=24,
+    )
+    resolution_policy: ResolutionPolicyV4
+    evidence_refs: list[ExternalEvidenceRefV4] = Field(
+        min_length=1,
+        max_length=16,
+    )
+
+
+class DecisionProposalV4(BaseModel):
+    """Teacher-produced decision fields before deterministic motion mapping.
+
+    Args:
+        decision_type: Stage-specific semantic decision type.
+        navigation_intent_direction_label: Optional non-stop task direction
+            inferred from prompt-visible evidence.
+        selected_action_label: Immediate action selected from the public
+            DirectionProfile, including ``stop`` when required.
+        speed: Coarse non-metric speed policy.
+        social_action: Closed social-interaction action.
+        fallback: Conservative policy if the selected action becomes invalid.
+        critical_uncertainties: Material unresolved issues for this action.
+        support_refs: Sample-local semantic objects supporting the decision.
+        evidence_refs: Raw prompt-visible evidence supporting the decision.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     decision_type: DecisionTypeV4
-    motion: MotionV4
+    navigation_intent_direction_label: ReasonCode | None = None
+    selected_action_label: ReasonCode
     speed: SpeedV4
     social_action: SocialActionV4
-    selected_region_ref: RegionRefV4 | None = None
     fallback: FallbackV4
-    support_refs: list[SemanticRefV4] = Field(default_factory=list, max_length=16)
-    evidence_refs: list[ExternalEvidenceRefV4] = Field(min_length=1, max_length=16)
+    critical_uncertainties: list[CriticalUncertaintyV4] = Field(
+        default_factory=list,
+        max_length=12,
+    )
+    support_refs: list[SemanticRefV4] = Field(
+        default_factory=list,
+        max_length=16,
+    )
+    evidence_refs: list[ExternalEvidenceRefV4] = Field(
+        min_length=1,
+        max_length=16,
+    )
+
+    @model_validator(mode="after")
+    def validate_proposal_shape(self) -> "DecisionProposalV4":
+        """Enforce the local shape of a stop proposal."""
+
+        _require_unique(
+            [
+                item.uncertainty_ref
+                for item in self.critical_uncertainties
+            ],
+            "uncertainty_ref",
+        )
+        if self.navigation_intent_direction_label == "stop":
+            raise ValueError(
+                "navigation intent direction cannot be stop"
+            )
+        selected_is_stop = self.selected_action_label == "stop"
+        if (self.decision_type == "stop") != selected_is_stop:
+            raise ValueError(
+                "decision_type must match selected_action_label stop state"
+            )
+        if self.decision_type == "stop" and (
+            self.speed != "stop"
+            or self.social_action != "wait"
+            or self.fallback != "stop"
+        ):
+            raise ValueError(
+                "stop decision proposal requires speed=stop, "
+                "social_action=wait, and fallback=stop"
+            )
+        if self.decision_type == "navigate" and self.speed == "stop":
+            raise ValueError(
+                "navigate decision proposal cannot use speed=stop"
+            )
+        return self
+
+
+class DecisionV4(DecisionProposalV4):
+    """Canonical decision after profile-owned motion composition.
+
+    Args:
+        motion: Coarse motion deterministically projected by DirectionProfile.
+        **inherited: All weak proposal fields from :class:`DecisionProposalV4`.
+    """
+
+    motion: MotionV4
 
     @model_validator(mode="after")
     def validate_decision_shape(self) -> "DecisionV4":
-        """Enforce the local shape of navigation and stop decisions."""
+        """Require a stop decision to carry stop motion and speed."""
 
-        if self.decision_type == "navigate" and self.selected_region_ref is None:
-            raise ValueError("navigate decision requires selected_region_ref")
         if self.decision_type == "stop" and (
             self.motion != "stop" or self.speed != "stop"
         ):
-            raise ValueError("stop decision requires motion=stop and speed=stop")
+            raise ValueError(
+                "stop decision requires motion=stop and speed=stop"
+            )
         return self
 
 
 class ReasoningTraceV4(BaseModel):
-    """Canonical six-section shared-input Reasoning V4 trace."""
+    """Canonical six-section shared-input Reasoning V4.2 trace."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[REASONING_TRACE_V4_SCHEMA_VERSION] = REASONING_TRACE_V4_SCHEMA_VERSION
+    schema_version: Literal[REASONING_TRACE_V4_SCHEMA_VERSION] = (
+        REASONING_TRACE_V4_SCHEMA_VERSION
+    )
     task_grounding: TaskGroundingV4
     scene_grounding: SceneGroundingV4
     local_traversability: LocalTraversabilityV4
@@ -565,30 +956,31 @@ class ReasoningTraceV4(BaseModel):
 
 
 class FinishDirectionV4(BaseModel):
-    """Expose the trainable language projection of a strong direction label."""
+    """Expose exactly one trainable demonstrated direction label."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    choice: str = Field(min_length=1, max_length=32)
     label: ReasonCode
-    angle_deg: float | None = Field(default=None, ge=-180.0, le=180.0)
 
 
 class FinishV4(BaseModel):
-    """Runtime projection of Decision and optional strong direction supervision."""
+    """Project the current Decision and deterministic demonstrated direction."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[FINISH_V4_SCHEMA_VERSION] = FINISH_V4_SCHEMA_VERSION
+    schema_version: Literal[FINISH_V4_SCHEMA_VERSION] = (
+        FINISH_V4_SCHEMA_VERSION
+    )
     decision_type: DecisionTypeV4
     motion: MotionV4
     speed: SpeedV4
     social_action: SocialActionV4
-    direction: FinishDirectionV4 | None = None
+    selected_action_label: ReasonCode
+    demonstrated_direction: FinishDirectionV4
 
 
 class ReasoningTargetV4(BaseModel):
-    """Pair a canonical Reasoning V4 trace with its deterministic finish."""
+    """Pair a canonical Reasoning V4.2 trace with its finish projection."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -605,54 +997,26 @@ class ReasoningTargetV4(BaseModel):
             self.finish.motion,
             self.finish.speed,
             self.finish.social_action,
+            self.finish.selected_action_label,
         ) != (
             decision.decision_type,
             decision.motion,
             decision.speed,
             decision.social_action,
+            decision.selected_action_label,
         ):
-            raise ValueError("finish must be an exact semantic projection of Decision")
-        if self.finish.direction is not None:
-            expected_motion = coarse_motion_for_direction_label_v4(
-                self.finish.direction.label
+            raise ValueError(
+                "finish must be an exact semantic projection of Decision"
             )
-            if expected_motion != decision.motion:
-                raise ValueError(
-                    "finish direction is incompatible with Decision.motion: "
-                    f"label={self.finish.direction.label}, motion={decision.motion}"
-                )
         return self
 
 
-def coarse_motion_for_direction_label_v4(label: str) -> MotionV4:
-    """Map an approved direction label to the coarse Decision motion.
-
-    Args:
-        label: Canonical direction label such as ``left_20`` or ``straight``.
-
-    Returns:
-        The corresponding coarse V4 motion.
-
-    Raises:
-        ValueError: If the direction label cannot be mapped safely.
-    """
-
-    normalized = str(label).strip().lower()
-    if normalized == "stop":
-        return "stop"
-    if normalized == "straight":
-        return "go_straight"
-    if normalized.startswith("left_"):
-        return "turn_left"
-    if normalized.startswith("right_"):
-        return "turn_right"
-    raise ValueError(f"unsupported direction label for coarse motion: {label!r}")
-
-
 def reasoning_v4_contract_schema_digest() -> str:
-    """Return a semantic SHA-256 digest for the canonical V4 target schema."""
+    """Return a semantic SHA-256 digest for the canonical V4.2 target."""
 
-    schema = _semantic_contract_schema(ReasoningTargetV4.model_json_schema())
+    schema = _semantic_contract_schema(
+        ReasoningTargetV4.model_json_schema()
+    )
     payload = json.dumps(
         schema,
         ensure_ascii=False,
@@ -663,7 +1027,7 @@ def reasoning_v4_contract_schema_digest() -> str:
 
 
 def raw_evidence_refs_v4(trace: ReasoningTraceV4) -> set[str]:
-    """Collect all raw prompt-visible evidence references in a V4 trace."""
+    """Collect all prompt-visible evidence references in a V4.2 trace."""
 
     refs: set[str] = set(trace.task_grounding.goal.source_refs)
     for requirement in trace.task_grounding.requirements:
@@ -674,8 +1038,8 @@ def raw_evidence_refs_v4(trace: ReasoningTraceV4) -> set[str]:
         refs.update(entity.evidence_refs)
     for control in trace.scene_grounding.traffic_controls:
         refs.update(control.evidence_refs)
-    for region in trace.local_traversability.regions:
-        refs.update(region.evidence_refs)
+    for affordance in trace.local_traversability.direction_affordances:
+        refs.update(affordance.evidence_refs)
     navigation = trace.navigation_context_grounding
     if navigation.goal_alignment is not None:
         refs.update(navigation.goal_alignment.evidence_refs)
@@ -683,71 +1047,76 @@ def raw_evidence_refs_v4(trace: ReasoningTraceV4) -> set[str]:
         refs.add(alignment.source_ref)
         refs.update(alignment.evidence_refs)
     refs.update(navigation.task_direction.evidence_refs)
-    for constraint in trace.interaction_constraint_grounding.constraints:
-        refs.update(
-            ref
-            for ref in constraint.source_refs
-            if _is_external_evidence_ref(ref)
-        )
+    for constraint in (
+        trace.interaction_constraint_grounding.constraints
+    ):
         refs.update(constraint.evidence_refs)
+    for uncertainty in trace.decision.critical_uncertainties:
+        refs.update(uncertainty.evidence_refs)
     refs.update(trace.decision.evidence_refs)
     return refs
 
 
 def semantic_refs_v4(trace: ReasoningTraceV4) -> set[str]:
-    """Collect cross-section semantic links without treating them as evidence."""
+    """Collect sample-local links used by the final Decision."""
 
-    refs: set[str] = set()
-    for region in trace.local_traversability.regions:
-        refs.update(region.related_entity_refs)
-    navigation = trace.navigation_context_grounding
-    if navigation.goal_alignment is not None:
-        if (
-            navigation.goal_alignment.target_ref is not None
-            and not _is_external_evidence_ref(navigation.goal_alignment.target_ref)
-        ):
-            refs.add(navigation.goal_alignment.target_ref)
-        refs.update(
-            ref
-            for ref in navigation.goal_alignment.candidate_target_refs
-            if not _is_external_evidence_ref(ref)
+    return set(trace.decision.support_refs)
+
+
+def _validate_open_category(
+    *,
+    category: str | None,
+    candidates: list[str],
+    evidence_status: str,
+    object_name: str,
+) -> None:
+    """Keep open category values and ambiguity status coherent."""
+
+    if evidence_status == "supported":
+        if category is None:
+            raise ValueError(
+                f"supported {object_name} requires category"
+            )
+        if candidates:
+            raise ValueError(
+                f"supported {object_name} cannot carry candidates"
+            )
+    elif evidence_status == "ambiguous":
+        if category is not None or len(candidates) < 2:
+            raise ValueError(
+                f"ambiguous {object_name} requires two candidates"
+            )
+    elif category is not None or candidates:
+        raise ValueError(
+            f"insufficient {object_name} cannot assert category"
         )
-        refs.update(navigation.goal_alignment.aligned_region_refs)
-    for alignment in navigation.source_alignments:
-        refs.update(alignment.aligned_region_refs)
-    refs.update(navigation.task_direction.candidate_region_refs)
-    for constraint in trace.interaction_constraint_grounding.constraints:
-        refs.update(
-            ref
-            for ref in constraint.source_refs
-            if not _is_external_evidence_ref(ref)
-        )
-        refs.update(constraint.applies_to_region_refs)
-    refs.update(trace.decision.support_refs)
-    if trace.decision.selected_region_ref is not None:
-        refs.add(trace.decision.selected_region_ref)
-    return refs
 
 
 def _require_unique(values: list[str], field_name: str) -> None:
-    """Raise when one sample-local reference is defined more than once."""
+    """Raise when one sample-local value is emitted more than once."""
 
     if len(values) != len(set(values)):
         raise ValueError(f"{field_name} values must be unique")
 
 
-def _require_fpv_evidence(values: list[str], object_name: str) -> None:
+def _require_fpv_evidence(
+    values: list[str],
+    object_name: str,
+) -> None:
     """Require at least one raw FPV frame for a visual claim."""
 
     if not any(value.startswith("fpv.") for value in values):
-        raise ValueError(f"{object_name} requires at least one FPV evidence ref")
+        raise ValueError(
+            f"{object_name} requires at least one FPV evidence ref"
+        )
 
 
-def _is_external_evidence_ref(value: str) -> bool:
-    """Return whether a value belongs to the Stage-A raw evidence namespace."""
+def _contains_disabled_direction_source(values: list[str]) -> bool:
+    """Return whether evidence depends on disabled direction geometry."""
 
-    return str(value).startswith(
-        ("instruction.", "fpv.", "bev.", "goal.", "waypoint.")
+    return any(
+        value.startswith(("waypoint.", "goal.pixel_"))
+        for value in values
     )
 
 
@@ -765,4 +1134,6 @@ def _semantic_contract_schema(value: Any) -> Any:
     return value
 
 
-REASONING_V4_CONTRACT_SCHEMA_DIGEST = reasoning_v4_contract_schema_digest()
+REASONING_V4_CONTRACT_SCHEMA_DIGEST = (
+    reasoning_v4_contract_schema_digest()
+)

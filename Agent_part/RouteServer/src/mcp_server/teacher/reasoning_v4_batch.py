@@ -22,8 +22,10 @@ from mcp_server.contracts.reasoning_dataset_v4 import (
     NavObservationV4,
     ReasoningAnnotationV4,
     ReasoningSourceV4,
+    TeacherActionConstraintV4,
 )
 from mcp_server.contracts.reasoning_v4 import (
+    DecisionProposalV4,
     DecisionV4,
     InteractionConstraintGroundingV4,
     LocalTraversabilityV4,
@@ -231,6 +233,7 @@ async def annotate_reasoning_source_v4(
             source,
             status=_overall_failure_status(records.values()),
             groundings=groundings,
+            decision_proposal=None,
             decision=None,
             records=records,
             errors=errors or ["incomplete_groundings"],
@@ -244,6 +247,7 @@ async def annotate_reasoning_source_v4(
         backend=backend,
         config=cfg,
         groundings=groundings,
+        teacher_action_constraint=_teacher_action_constraint_v4(source),
     )
     records["Decision"] = decision_outcome.record
     generations.extend(decision_outcome.generations)
@@ -255,12 +259,16 @@ async def annotate_reasoning_source_v4(
         f"Decision:{warning}"
         for warning in decision_outcome.record.warnings
     )
-    decision = _typed_section(decision_outcome.section, DecisionV4)
-    if decision is None:
+    decision_proposal = _typed_section(
+        decision_outcome.section,
+        DecisionProposalV4,
+    )
+    if decision_proposal is None:
         return _annotation_v4(
             source,
             status=_overall_failure_status(records.values()),
             groundings=groundings,
+            decision_proposal=None,
             decision=None,
             records=records,
             errors=errors or ["decision_missing"],
@@ -272,7 +280,7 @@ async def annotate_reasoning_source_v4(
         composition = compose_reasoning_target_v4(
             source,
             groundings,
-            decision,
+            decision_proposal,
         )
     except (TypeError, ValueError) as exc:
         errors.append(f"composition_failed:{exc}")
@@ -280,7 +288,8 @@ async def annotate_reasoning_source_v4(
             source,
             status="partial",
             groundings=groundings,
-            decision=decision,
+            decision_proposal=decision_proposal,
+            decision=None,
             records=records,
             errors=errors,
             warnings=warnings,
@@ -291,7 +300,8 @@ async def annotate_reasoning_source_v4(
         source,
         status="accepted",
         groundings=groundings,
-        decision=decision,
+        decision_proposal=decision_proposal,
+        decision=composition.target.reasoning.decision,
         target=composition.target,
         records=records,
         errors=[],
@@ -307,6 +317,7 @@ async def _run_stage_v4(
     backend: ReasoningV4TeacherBackend,
     config: ReasoningV4BatchConfig,
     groundings: GroundingOutputsV4 | None = None,
+    teacher_action_constraint: TeacherActionConstraintV4 | None = None,
 ) -> _StageOutcome:
     """Generate, parse, validate, and repair one V4 section."""
 
@@ -322,6 +333,7 @@ async def _run_stage_v4(
             source.observation,
             profile,
             groundings=groundings,
+            teacher_action_constraint=teacher_action_constraint,
             previous_answer=answer,
             previous_errors=errors,
         )
@@ -391,6 +403,7 @@ def _annotation_v4(
     *,
     status: str,
     groundings: GroundingOutputsV4,
+    decision_proposal: DecisionProposalV4 | None,
     decision: DecisionV4 | None,
     records: dict[str, AnnotationStageRecordV4],
     errors: list[str],
@@ -406,6 +419,7 @@ def _annotation_v4(
         source_fingerprint=source.source_fingerprint,
         status=status,
         grounding_outputs=groundings,
+        decision_proposal=decision_proposal,
         decision=decision,
         target=target,
         stage_records=records,
@@ -418,6 +432,19 @@ def _annotation_v4(
             "annotation_flow": "five_independent_groundings_then_decision",
             "successful_provider_calls": len(generations),
         },
+    )
+
+
+def _teacher_action_constraint_v4(
+    source: ReasoningSourceV4,
+) -> TeacherActionConstraintV4 | None:
+    """Expose demonstrated direction only at the private Decision boundary."""
+
+    direction = source.direction_supervision
+    if direction is None:
+        return None
+    return TeacherActionConstraintV4(
+        demonstrated_direction_label=direction.label_name,
     )
 
 

@@ -7,13 +7,18 @@
       "value": {
         "finish": {
           "decision_type": "navigate",
+          "demonstrated_direction": {
+            "label": "straight"
+          },
           "motion": "turn_left",
-          "schema_version": "urbannav_finish_v4_0",
+          "schema_version": "urbannav_finish_v4_2",
+          "selected_action_label": "straight",
           "social_action": "none",
           "speed": "normal"
         },
         "reasoning": {
           "decision": {
+            "critical_uncertainties": [],
             "decision_type": "navigate",
             "evidence_refs": [
               "instruction.active",
@@ -21,54 +26,53 @@
             ],
             "fallback": "stop",
             "motion": "go_straight",
-            "selected_region_ref": "region.center",
+            "navigation_intent_direction_label": "straight",
+            "selected_action_label": "straight",
             "social_action": "none",
             "speed": "normal",
             "support_refs": [
               "nav.task_direction",
-              "region.center"
+              "alignment.a01"
             ]
           },
           "interaction_constraint_grounding": {
             "constraints": []
           },
           "local_traversability": {
-            "regions": [
+            "direction_affordances": [
               {
+                "affordance": "direct",
                 "clearance": "sufficient",
+                "direction_label": "straight",
                 "evidence_refs": [
                   "fpv.current"
                 ],
-                "lateral_position": "center",
+                "evidence_status": "supported",
                 "limiting_factor_codes": [],
-                "region_ref": "region.center",
-                "related_entity_refs": [],
-                "state": "direct",
-                "surface": "sidewalk"
+                "support_type": "visible_sidewalk"
               }
             ]
           },
           "navigation_context_grounding": {
             "source_alignments": [
               {
-                "aligned_region_refs": [
-                  "region.center"
-                ],
-                "alignment_ref": "alignment.instruction",
+                "alignment_ref": "alignment.a01",
+                "alignment_role": "task_intent",
                 "evidence_refs": [
                   "instruction.active",
                   "fpv.current"
                 ],
-                "local_effect": "straight",
                 "source_ref": "instruction.active",
-                "status": "supports"
+                "status": "supports",
+                "supported_direction_labels": [
+                  "straight"
+                ]
               }
             ],
             "task_direction": {
-              "candidate_region_refs": [
-                "region.center"
+              "candidate_direction_labels": [
+                "straight"
               ],
-              "desired_motion": "straight",
               "direction_ref": "nav.task_direction",
               "evidence_refs": [
                 "instruction.active",
@@ -81,102 +85,7 @@
             "entities": [],
             "traffic_controls": []
           },
-          "schema_version": "urbannav_reasoning_trace_v4_0",
-          "task_grounding": {
-            "ambiguities": [],
-            "goal": {
-              "goal_ref": "task.goal",
-              "goal_type": "none",
-              "source_refs": [],
-              "specification": "absent"
-            },
-            "objective": "follow_instruction",
-            "requirements": []
-          }
-        }
-      }
-    },
-    {
-      "case_id": "navigate_without_selected_region",
-      "entrypoint": "reasoning_target",
-      "expected_error_contains": "navigate decision requires selected_region_ref",
-      "value": {
-        "finish": {
-          "decision_type": "navigate",
-          "motion": "go_straight",
-          "schema_version": "urbannav_finish_v4_0",
-          "social_action": "none",
-          "speed": "normal"
-        },
-        "reasoning": {
-          "decision": {
-            "decision_type": "navigate",
-            "evidence_refs": [
-              "instruction.active",
-              "fpv.current"
-            ],
-            "fallback": "stop",
-            "motion": "go_straight",
-            "social_action": "none",
-            "speed": "normal",
-            "support_refs": [
-              "nav.task_direction",
-              "region.center"
-            ]
-          },
-          "interaction_constraint_grounding": {
-            "constraints": []
-          },
-          "local_traversability": {
-            "regions": [
-              {
-                "clearance": "sufficient",
-                "evidence_refs": [
-                  "fpv.current"
-                ],
-                "lateral_position": "center",
-                "limiting_factor_codes": [],
-                "region_ref": "region.center",
-                "related_entity_refs": [],
-                "state": "direct",
-                "surface": "sidewalk"
-              }
-            ]
-          },
-          "navigation_context_grounding": {
-            "source_alignments": [
-              {
-                "aligned_region_refs": [
-                  "region.center"
-                ],
-                "alignment_ref": "alignment.instruction",
-                "evidence_refs": [
-                  "instruction.active",
-                  "fpv.current"
-                ],
-                "local_effect": "straight",
-                "source_ref": "instruction.active",
-                "status": "supports"
-              }
-            ],
-            "task_direction": {
-              "candidate_region_refs": [
-                "region.center"
-              ],
-              "desired_motion": "straight",
-              "direction_ref": "nav.task_direction",
-              "evidence_refs": [
-                "instruction.active",
-                "fpv.current"
-              ],
-              "status": "aligned"
-            }
-          },
-          "scene_grounding": {
-            "entities": [],
-            "traffic_controls": []
-          },
-          "schema_version": "urbannav_reasoning_trace_v4_0",
+          "schema_version": "urbannav_reasoning_trace_v4_2",
           "task_grounding": {
             "ambiguities": [],
             "goal": {
@@ -198,13 +107,18 @@
       "value": {
         "finish": {
           "decision_type": "navigate",
+          "demonstrated_direction": {
+            "label": "straight"
+          },
           "motion": "go_straight",
-          "schema_version": "urbannav_finish_v4_0",
+          "schema_version": "urbannav_finish_v4_2",
+          "selected_action_label": "straight",
           "social_action": "none",
           "speed": "normal"
         },
         "reasoning": {
           "decision": {
+            "critical_uncertainties": [],
             "decision_type": "navigate",
             "evidence_refs": [
               "instruction.active",
@@ -212,54 +126,53 @@
             ],
             "fallback": "stop",
             "motion": "go_straight",
-            "selected_region_ref": "region.center",
+            "navigation_intent_direction_label": "straight",
+            "selected_action_label": "straight",
             "social_action": "none",
             "speed": "normal",
             "support_refs": [
               "nav.task_direction",
-              "region.center"
+              "alignment.a01"
             ]
           },
           "interaction_constraint_grounding": {
             "constraints": []
           },
           "local_traversability": {
-            "regions": [
+            "direction_affordances": [
               {
+                "affordance": "direct",
                 "clearance": "sufficient",
+                "direction_label": "straight",
                 "evidence_refs": [
                   "fpv.current"
                 ],
-                "lateral_position": "center",
+                "evidence_status": "supported",
                 "limiting_factor_codes": [],
-                "region_ref": "region.center",
-                "related_entity_refs": [],
-                "state": "direct",
-                "surface": "sidewalk"
+                "support_type": "visible_sidewalk"
               }
             ]
           },
           "navigation_context_grounding": {
             "source_alignments": [
               {
-                "aligned_region_refs": [
-                  "region.center"
-                ],
-                "alignment_ref": "alignment.instruction",
+                "alignment_ref": "alignment.a01",
+                "alignment_role": "task_intent",
                 "evidence_refs": [
                   "instruction.active",
                   "fpv.current"
                 ],
-                "local_effect": "straight",
                 "source_ref": "instruction.active",
-                "status": "supports"
+                "status": "supports",
+                "supported_direction_labels": [
+                  "straight"
+                ]
               }
             ],
             "task_direction": {
-              "candidate_region_refs": [
-                "region.center"
+              "candidate_direction_labels": [
+                "straight"
               ],
-              "desired_motion": "straight",
               "direction_ref": "nav.task_direction",
               "evidence_refs": [
                 "instruction.active",
@@ -272,17 +185,20 @@
             "entities": [
               {
                 "category": "pedestrian",
+                "category_candidates": [],
                 "depth_position": "near",
-                "entity_ref": "entity.person",
+                "entity_ref": "entity.e01",
                 "evidence_refs": [
                   "instruction.active"
                 ],
-                "lateral_position": "center"
+                "evidence_status": "supported",
+                "lateral_position": "center",
+                "observation_quality": "clear"
               }
             ],
             "traffic_controls": []
           },
-          "schema_version": "urbannav_reasoning_trace_v4_0",
+          "schema_version": "urbannav_reasoning_trace_v4_2",
           "task_grounding": {
             "ambiguities": [],
             "goal": {
@@ -298,19 +214,24 @@
       }
     },
     {
-      "case_id": "conditional_region_without_limiting_factor",
+      "case_id": "conditional_direction_without_limiting_factor",
       "entrypoint": "reasoning_target",
-      "expected_error_contains": "conditional region requires a limiting factor code",
+      "expected_error_contains": "conditional direction requires limiting factors",
       "value": {
         "finish": {
           "decision_type": "navigate",
+          "demonstrated_direction": {
+            "label": "straight"
+          },
           "motion": "go_straight",
-          "schema_version": "urbannav_finish_v4_0",
+          "schema_version": "urbannav_finish_v4_2",
+          "selected_action_label": "straight",
           "social_action": "none",
           "speed": "normal"
         },
         "reasoning": {
           "decision": {
+            "critical_uncertainties": [],
             "decision_type": "navigate",
             "evidence_refs": [
               "instruction.active",
@@ -318,54 +239,53 @@
             ],
             "fallback": "stop",
             "motion": "go_straight",
-            "selected_region_ref": "region.center",
+            "navigation_intent_direction_label": "straight",
+            "selected_action_label": "straight",
             "social_action": "none",
             "speed": "normal",
             "support_refs": [
               "nav.task_direction",
-              "region.center"
+              "alignment.a01"
             ]
           },
           "interaction_constraint_grounding": {
             "constraints": []
           },
           "local_traversability": {
-            "regions": [
+            "direction_affordances": [
               {
+                "affordance": "conditional",
                 "clearance": "sufficient",
+                "direction_label": "straight",
                 "evidence_refs": [
                   "fpv.current"
                 ],
-                "lateral_position": "center",
+                "evidence_status": "supported",
                 "limiting_factor_codes": [],
-                "region_ref": "region.center",
-                "related_entity_refs": [],
-                "state": "conditional",
-                "surface": "sidewalk"
+                "support_type": "visible_sidewalk"
               }
             ]
           },
           "navigation_context_grounding": {
             "source_alignments": [
               {
-                "aligned_region_refs": [
-                  "region.center"
-                ],
-                "alignment_ref": "alignment.instruction",
+                "alignment_ref": "alignment.a01",
+                "alignment_role": "task_intent",
                 "evidence_refs": [
                   "instruction.active",
                   "fpv.current"
                 ],
-                "local_effect": "straight",
                 "source_ref": "instruction.active",
-                "status": "supports"
+                "status": "supports",
+                "supported_direction_labels": [
+                  "straight"
+                ]
               }
             ],
             "task_direction": {
-              "candidate_region_refs": [
-                "region.center"
+              "candidate_direction_labels": [
+                "straight"
               ],
-              "desired_motion": "straight",
               "direction_ref": "nav.task_direction",
               "evidence_refs": [
                 "instruction.active",
@@ -378,7 +298,7 @@
             "entities": [],
             "traffic_controls": []
           },
-          "schema_version": "urbannav_reasoning_trace_v4_0",
+          "schema_version": "urbannav_reasoning_trace_v4_2",
           "task_grounding": {
             "ambiguities": [],
             "goal": {
@@ -396,17 +316,22 @@
     {
       "case_id": "dynamic_relation_without_two_frames",
       "entrypoint": "reasoning_target",
-      "expected_error_contains": "dynamic interaction requires temporal_basis=multi_frame",
+      "expected_error_contains": "dynamic interaction requires two distinct FPV refs",
       "value": {
         "finish": {
           "decision_type": "navigate",
+          "demonstrated_direction": {
+            "label": "straight"
+          },
           "motion": "go_straight",
-          "schema_version": "urbannav_finish_v4_0",
+          "schema_version": "urbannav_finish_v4_2",
+          "selected_action_label": "straight",
           "social_action": "none",
           "speed": "normal"
         },
         "reasoning": {
           "decision": {
+            "critical_uncertainties": [],
             "decision_type": "navigate",
             "evidence_refs": [
               "instruction.active",
@@ -414,73 +339,69 @@
             ],
             "fallback": "stop",
             "motion": "go_straight",
-            "selected_region_ref": "region.center",
+            "navigation_intent_direction_label": "straight",
+            "selected_action_label": "straight",
             "social_action": "none",
             "speed": "normal",
             "support_refs": [
               "nav.task_direction",
-              "region.center"
+              "alignment.a01"
             ]
           },
           "interaction_constraint_grounding": {
             "constraints": [
               {
-                "applies_to_region_refs": [
-                  "region.center"
+                "affected_direction_labels": [
+                  "straight"
                 ],
-                "constraint_code": "pedestrian_crossing",
-                "constraint_ref": "constraint.crossing",
+                "constraint_ref": "constraint.k01",
                 "effect": "yield",
                 "evidence_refs": [
                   "fpv.current"
                 ],
                 "kind": "social",
                 "relation": "crosses_candidate_path",
-                "source_refs": [
-                  "fpv.current"
-                ],
-                "status": "applicable",
-                "temporal_basis": "single_frame"
+                "source_state": "crossing",
+                "source_type": "pedestrian",
+                "status": "applicable"
               }
             ]
           },
           "local_traversability": {
-            "regions": [
+            "direction_affordances": [
               {
+                "affordance": "direct",
                 "clearance": "sufficient",
+                "direction_label": "straight",
                 "evidence_refs": [
                   "fpv.current"
                 ],
-                "lateral_position": "center",
+                "evidence_status": "supported",
                 "limiting_factor_codes": [],
-                "region_ref": "region.center",
-                "related_entity_refs": [],
-                "state": "direct",
-                "surface": "sidewalk"
+                "support_type": "visible_sidewalk"
               }
             ]
           },
           "navigation_context_grounding": {
             "source_alignments": [
               {
-                "aligned_region_refs": [
-                  "region.center"
-                ],
-                "alignment_ref": "alignment.instruction",
+                "alignment_ref": "alignment.a01",
+                "alignment_role": "task_intent",
                 "evidence_refs": [
                   "instruction.active",
                   "fpv.current"
                 ],
-                "local_effect": "straight",
                 "source_ref": "instruction.active",
-                "status": "supports"
+                "status": "supports",
+                "supported_direction_labels": [
+                  "straight"
+                ]
               }
             ],
             "task_direction": {
-              "candidate_region_refs": [
-                "region.center"
+              "candidate_direction_labels": [
+                "straight"
               ],
-              "desired_motion": "straight",
               "direction_ref": "nav.task_direction",
               "evidence_refs": [
                 "instruction.active",
@@ -493,7 +414,211 @@
             "entities": [],
             "traffic_controls": []
           },
-          "schema_version": "urbannav_reasoning_trace_v4_0",
+          "schema_version": "urbannav_reasoning_trace_v4_2",
+          "task_grounding": {
+            "ambiguities": [],
+            "goal": {
+              "goal_ref": "task.goal",
+              "goal_type": "none",
+              "source_refs": [],
+              "specification": "absent"
+            },
+            "objective": "follow_instruction",
+            "requirements": []
+          }
+        }
+      }
+    },
+    {
+      "case_id": "global_stop_with_direction_enumeration",
+      "entrypoint": "reasoning_target",
+      "expected_error_contains": "stop constraint must not enumerate affected directions",
+      "value": {
+        "finish": {
+          "decision_type": "navigate",
+          "demonstrated_direction": {
+            "label": "straight"
+          },
+          "motion": "go_straight",
+          "schema_version": "urbannav_finish_v4_2",
+          "selected_action_label": "straight",
+          "social_action": "none",
+          "speed": "normal"
+        },
+        "reasoning": {
+          "decision": {
+            "critical_uncertainties": [],
+            "decision_type": "navigate",
+            "evidence_refs": [
+              "instruction.active",
+              "fpv.current"
+            ],
+            "fallback": "stop",
+            "motion": "go_straight",
+            "navigation_intent_direction_label": "straight",
+            "selected_action_label": "straight",
+            "social_action": "none",
+            "speed": "normal",
+            "support_refs": [
+              "nav.task_direction",
+              "alignment.a01"
+            ]
+          },
+          "interaction_constraint_grounding": {
+            "constraints": [
+              {
+                "affected_direction_labels": [
+                  "straight"
+                ],
+                "constraint_ref": "constraint.k01",
+                "effect": "stop",
+                "evidence_refs": [
+                  "fpv.current"
+                ],
+                "kind": "traffic",
+                "relation": "controls_current_path",
+                "source_state": "red_hand",
+                "source_type": "pedestrian_signal",
+                "status": "applicable"
+              }
+            ]
+          },
+          "local_traversability": {
+            "direction_affordances": [
+              {
+                "affordance": "direct",
+                "clearance": "sufficient",
+                "direction_label": "straight",
+                "evidence_refs": [
+                  "fpv.current"
+                ],
+                "evidence_status": "supported",
+                "limiting_factor_codes": [],
+                "support_type": "visible_sidewalk"
+              }
+            ]
+          },
+          "navigation_context_grounding": {
+            "source_alignments": [
+              {
+                "alignment_ref": "alignment.a01",
+                "alignment_role": "task_intent",
+                "evidence_refs": [
+                  "instruction.active",
+                  "fpv.current"
+                ],
+                "source_ref": "instruction.active",
+                "status": "supports",
+                "supported_direction_labels": [
+                  "straight"
+                ]
+              }
+            ],
+            "task_direction": {
+              "candidate_direction_labels": [
+                "straight"
+              ],
+              "direction_ref": "nav.task_direction",
+              "evidence_refs": [
+                "instruction.active",
+                "fpv.current"
+              ],
+              "status": "aligned"
+            }
+          },
+          "scene_grounding": {
+            "entities": [],
+            "traffic_controls": []
+          },
+          "schema_version": "urbannav_reasoning_trace_v4_2",
+          "task_grounding": {
+            "ambiguities": [],
+            "goal": {
+              "goal_ref": "task.goal",
+              "goal_type": "none",
+              "source_refs": [],
+              "specification": "absent"
+            },
+            "objective": "follow_instruction",
+            "requirements": []
+          }
+        }
+      }
+    },
+    {
+      "case_id": "legacy_geometric_area_field",
+      "entrypoint": "reasoning_target",
+      "expected_error_contains": "Extra inputs are not permitted",
+      "value": {
+        "finish": {
+          "decision_type": "navigate",
+          "demonstrated_direction": {
+            "label": "straight"
+          },
+          "motion": "go_straight",
+          "schema_version": "urbannav_finish_v4_2",
+          "selected_action_label": "straight",
+          "social_action": "none",
+          "speed": "normal"
+        },
+        "reasoning": {
+          "decision": {
+            "critical_uncertainties": [],
+            "decision_type": "navigate",
+            "evidence_refs": [
+              "instruction.active",
+              "fpv.current"
+            ],
+            "fallback": "stop",
+            "motion": "go_straight",
+            "navigation_intent_direction_label": "straight",
+            "selected_action_label": "straight",
+            "social_action": "none",
+            "speed": "normal",
+            "support_refs": [
+              "nav.task_direction",
+              "alignment.a01"
+            ]
+          },
+          "interaction_constraint_grounding": {
+            "constraints": []
+          },
+          "local_traversability": {
+            "regions": []
+          },
+          "navigation_context_grounding": {
+            "source_alignments": [
+              {
+                "alignment_ref": "alignment.a01",
+                "alignment_role": "task_intent",
+                "evidence_refs": [
+                  "instruction.active",
+                  "fpv.current"
+                ],
+                "source_ref": "instruction.active",
+                "status": "supports",
+                "supported_direction_labels": [
+                  "straight"
+                ]
+              }
+            ],
+            "task_direction": {
+              "candidate_direction_labels": [
+                "straight"
+              ],
+              "direction_ref": "nav.task_direction",
+              "evidence_refs": [
+                "instruction.active",
+                "fpv.current"
+              ],
+              "status": "aligned"
+            }
+          },
+          "scene_grounding": {
+            "entities": [],
+            "traffic_controls": []
+          },
+          "schema_version": "urbannav_reasoning_trace_v4_2",
           "task_grounding": {
             "ambiguities": [],
             "goal": {
@@ -512,14 +637,14 @@
       "case_id": "free_text_after_document",
       "entrypoint": "assistant_text",
       "expected_error_contains": "unexpected_text_outside_document",
-      "value": "<think>\n<TaskGrounding>{\"objective\":\"follow_instruction\",\"goal\":{\"goal_ref\":\"task.goal\",\"goal_type\":\"none\",\"specification\":\"absent\",\"source_refs\":[]},\"requirements\":[],\"ambiguities\":[]}</TaskGrounding>\n<SceneGrounding>{\"entities\":[],\"traffic_controls\":[]}</SceneGrounding>\n<LocalTraversability>{\"regions\":[{\"region_ref\":\"region.center\",\"surface\":\"sidewalk\",\"lateral_position\":\"center\",\"state\":\"direct\",\"clearance\":\"sufficient\",\"related_entity_refs\":[],\"limiting_factor_codes\":[],\"evidence_refs\":[\"fpv.current\"]}]}</LocalTraversability>\n<NavigationContextGrounding>{\"source_alignments\":[{\"alignment_ref\":\"alignment.instruction\",\"source_ref\":\"instruction.active\",\"local_effect\":\"straight\",\"aligned_region_refs\":[\"region.center\"],\"status\":\"supports\",\"evidence_refs\":[\"instruction.active\",\"fpv.current\"]}],\"task_direction\":{\"direction_ref\":\"nav.task_direction\",\"desired_motion\":\"straight\",\"candidate_region_refs\":[\"region.center\"],\"status\":\"aligned\",\"evidence_refs\":[\"instruction.active\",\"fpv.current\"]}}</NavigationContextGrounding>\n<InteractionConstraintGrounding>{\"constraints\":[]}</InteractionConstraintGrounding>\n<Decision>{\"decision_type\":\"navigate\",\"motion\":\"go_straight\",\"speed\":\"normal\",\"social_action\":\"none\",\"selected_region_ref\":\"region.center\",\"fallback\":\"stop\",\"support_refs\":[\"nav.task_direction\",\"region.center\"],\"evidence_refs\":[\"instruction.active\",\"fpv.current\"]}</Decision>\n</think>\n<finish>{\"schema_version\":\"urbannav_finish_v4_0\",\"decision_type\":\"navigate\",\"motion\":\"go_straight\",\"speed\":\"normal\",\"social_action\":\"none\"}</finish>\nfree text"
+      "value": "<think>\n<TaskGrounding>{\"objective\":\"follow_instruction\",\"goal\":{\"goal_ref\":\"task.goal\",\"goal_type\":\"none\",\"specification\":\"absent\",\"source_refs\":[]},\"requirements\":[],\"ambiguities\":[]}</TaskGrounding>\n<SceneGrounding>{\"entities\":[],\"traffic_controls\":[]}</SceneGrounding>\n<LocalTraversability>{\"direction_affordances\":[{\"direction_label\":\"straight\",\"support_type\":\"visible_sidewalk\",\"affordance\":\"direct\",\"clearance\":\"sufficient\",\"limiting_factor_codes\":[],\"evidence_status\":\"supported\",\"evidence_refs\":[\"fpv.current\"]}]}</LocalTraversability>\n<NavigationContextGrounding>{\"source_alignments\":[{\"alignment_ref\":\"alignment.a01\",\"source_ref\":\"instruction.active\",\"alignment_role\":\"task_intent\",\"supported_direction_labels\":[\"straight\"],\"status\":\"supports\",\"evidence_refs\":[\"instruction.active\",\"fpv.current\"]}],\"task_direction\":{\"direction_ref\":\"nav.task_direction\",\"candidate_direction_labels\":[\"straight\"],\"status\":\"aligned\",\"evidence_refs\":[\"instruction.active\",\"fpv.current\"]}}</NavigationContextGrounding>\n<InteractionConstraintGrounding>{\"constraints\":[]}</InteractionConstraintGrounding>\n<Decision>{\"decision_type\":\"navigate\",\"navigation_intent_direction_label\":\"straight\",\"selected_action_label\":\"straight\",\"speed\":\"normal\",\"social_action\":\"none\",\"fallback\":\"stop\",\"critical_uncertainties\":[],\"support_refs\":[\"nav.task_direction\",\"alignment.a01\"],\"evidence_refs\":[\"instruction.active\",\"fpv.current\"],\"motion\":\"go_straight\"}</Decision>\n</think>\n<finish>{\"schema_version\":\"urbannav_finish_v4_2\",\"decision_type\":\"navigate\",\"motion\":\"go_straight\",\"speed\":\"normal\",\"social_action\":\"none\",\"selected_action_label\":\"straight\",\"demonstrated_direction\":{\"label\":\"straight\"}}</finish>\nfree text"
     },
     {
       "case_id": "section_order_mismatch",
       "entrypoint": "assistant_text",
       "expected_error_contains": "invalid_reasoning_section_order",
-      "value": "<think>\n<SceneGrounding>{\"objective\":\"follow_instruction\",\"goal\":{\"goal_ref\":\"task.goal\",\"goal_type\":\"none\",\"specification\":\"absent\",\"source_refs\":[]},\"requirements\":[],\"ambiguities\":[]}</SceneGrounding>\n<TaskGrounding>{\"entities\":[],\"traffic_controls\":[]}</TaskGrounding>\n<LocalTraversability>{\"regions\":[{\"region_ref\":\"region.center\",\"surface\":\"sidewalk\",\"lateral_position\":\"center\",\"state\":\"direct\",\"clearance\":\"sufficient\",\"related_entity_refs\":[],\"limiting_factor_codes\":[],\"evidence_refs\":[\"fpv.current\"]}]}</LocalTraversability>\n<NavigationContextGrounding>{\"source_alignments\":[{\"alignment_ref\":\"alignment.instruction\",\"source_ref\":\"instruction.active\",\"local_effect\":\"straight\",\"aligned_region_refs\":[\"region.center\"],\"status\":\"supports\",\"evidence_refs\":[\"instruction.active\",\"fpv.current\"]}],\"task_direction\":{\"direction_ref\":\"nav.task_direction\",\"desired_motion\":\"straight\",\"candidate_region_refs\":[\"region.center\"],\"status\":\"aligned\",\"evidence_refs\":[\"instruction.active\",\"fpv.current\"]}}</NavigationContextGrounding>\n<InteractionConstraintGrounding>{\"constraints\":[]}</InteractionConstraintGrounding>\n<Decision>{\"decision_type\":\"navigate\",\"motion\":\"go_straight\",\"speed\":\"normal\",\"social_action\":\"none\",\"selected_region_ref\":\"region.center\",\"fallback\":\"stop\",\"support_refs\":[\"nav.task_direction\",\"region.center\"],\"evidence_refs\":[\"instruction.active\",\"fpv.current\"]}</Decision>\n</think>\n<finish>{\"schema_version\":\"urbannav_finish_v4_0\",\"decision_type\":\"navigate\",\"motion\":\"go_straight\",\"speed\":\"normal\",\"social_action\":\"none\"}</finish>"
+      "value": "<think>\n<SceneGrounding>{\"objective\":\"follow_instruction\",\"goal\":{\"goal_ref\":\"task.goal\",\"goal_type\":\"none\",\"specification\":\"absent\",\"source_refs\":[]},\"requirements\":[],\"ambiguities\":[]}</SceneGrounding>\n<TaskGrounding>{\"entities\":[],\"traffic_controls\":[]}</TaskGrounding>\n<LocalTraversability>{\"direction_affordances\":[{\"direction_label\":\"straight\",\"support_type\":\"visible_sidewalk\",\"affordance\":\"direct\",\"clearance\":\"sufficient\",\"limiting_factor_codes\":[],\"evidence_status\":\"supported\",\"evidence_refs\":[\"fpv.current\"]}]}</LocalTraversability>\n<NavigationContextGrounding>{\"source_alignments\":[{\"alignment_ref\":\"alignment.a01\",\"source_ref\":\"instruction.active\",\"alignment_role\":\"task_intent\",\"supported_direction_labels\":[\"straight\"],\"status\":\"supports\",\"evidence_refs\":[\"instruction.active\",\"fpv.current\"]}],\"task_direction\":{\"direction_ref\":\"nav.task_direction\",\"candidate_direction_labels\":[\"straight\"],\"status\":\"aligned\",\"evidence_refs\":[\"instruction.active\",\"fpv.current\"]}}</NavigationContextGrounding>\n<InteractionConstraintGrounding>{\"constraints\":[]}</InteractionConstraintGrounding>\n<Decision>{\"decision_type\":\"navigate\",\"navigation_intent_direction_label\":\"straight\",\"selected_action_label\":\"straight\",\"speed\":\"normal\",\"social_action\":\"none\",\"fallback\":\"stop\",\"critical_uncertainties\":[],\"support_refs\":[\"nav.task_direction\",\"alignment.a01\"],\"evidence_refs\":[\"instruction.active\",\"fpv.current\"],\"motion\":\"go_straight\"}</Decision>\n</think>\n<finish>{\"schema_version\":\"urbannav_finish_v4_2\",\"decision_type\":\"navigate\",\"motion\":\"go_straight\",\"speed\":\"normal\",\"social_action\":\"none\",\"selected_action_label\":\"straight\",\"demonstrated_direction\":{\"label\":\"straight\"}}</finish>"
     }
   ],
-  "schema_version": "urbannav_reasoning_v4_contract_artifacts_v1"
+  "schema_version": "urbannav_reasoning_v4_contract_artifacts_v4"
 }

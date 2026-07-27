@@ -7,21 +7,24 @@ from dataclasses import dataclass, field
 from mcp_server.agent.reasoning_v4_validation import (
     validate_reasoning_target_v4,
 )
+from mcp_server.contracts.direction_profile import (
+    coarse_motion_for_direction_label,
+)
 from mcp_server.contracts.reasoning_dataset_v4 import (
     GroundingOutputsV4,
     ReasoningSourceV4,
 )
 from mcp_server.contracts.reasoning_v4 import (
     DecisionV4,
+    DecisionProposalV4,
     FinishDirectionV4,
     FinishV4,
     ReasoningTargetV4,
     ReasoningTraceV4,
-    coarse_motion_for_direction_label_v4,
 )
 
 
-REASONING_V4_COMPOSER_VERSION = "reasoning_v4_composer_v1"
+REASONING_V4_COMPOSER_VERSION = "reasoning_v4_composer_v3"
 
 
 @dataclass(frozen=True)
@@ -40,41 +43,51 @@ class ReasoningCompositionResultV4:
 def compose_reasoning_target_v4(
     source: ReasoningSourceV4,
     groundings: GroundingOutputsV4,
-    decision: DecisionV4,
+    decision_proposal: DecisionProposalV4,
 ) -> ReasoningCompositionResultV4:
     """Assemble a complete V4 target without changing teacher semantics.
 
     Args:
         source: Frozen observation and optional strong sidecars.
         groundings: Five independently generated grounding sections.
-        decision: Joint Decision generated from raw input and groundings.
+        decision_proposal: Weak Decision fields generated from raw input and
+            groundings. Motion is intentionally absent.
 
     Returns:
         Validated target and soft cross-section warnings.
 
     Raises:
-        ValueError: If a grounding is missing, strong direction conflicts with
-            Decision, or the assembled target violates a hard V4 invariant.
+        ValueError: If a grounding is missing, demonstrated direction is absent,
+            the selected action is invalid, or a hard invariant fails.
     """
 
     if not groundings.complete:
         raise ValueError("cannot compose V4 target from incomplete groundings")
     direction = source.direction_supervision
-    finish_direction = None
-    if direction is not None:
-        expected_motion = coarse_motion_for_direction_label_v4(
-            direction.label_name
+    if direction is None:
+        raise ValueError(
+            "full V4.2 composition requires private direction supervision"
         )
-        if expected_motion != decision.motion:
-            raise ValueError(
-                "decision_direction_coarse_mismatch:"
-                f"decision={decision.motion}, direction={direction.label_name}"
-            )
-        finish_direction = FinishDirectionV4(
-            choice=direction.choice,
-            label=direction.label_name,
-            angle_deg=direction.angle_deg,
+    expected_motion = coarse_motion_for_direction_label(
+        source.observation.direction_output_space.profile_id,
+        decision_proposal.selected_action_label,
+    )
+    expected_decision_type = (
+        "stop" if expected_motion == "stop" else "navigate"
+    )
+    if decision_proposal.decision_type != expected_decision_type:
+        raise ValueError(
+            "selected_action_decision_type_conflict:"
+            f"proposal={decision_proposal.decision_type}, "
+            f"selected_action={decision_proposal.selected_action_label}"
         )
+    decision = DecisionV4(
+        **decision_proposal.model_dump(mode="python"),
+        motion=expected_motion,
+    )
+    finish_direction = FinishDirectionV4(
+        label=direction.label_name,
+    )
 
     trace = ReasoningTraceV4(
         task_grounding=groundings.task_grounding,
@@ -89,7 +102,8 @@ def compose_reasoning_target_v4(
         motion=decision.motion,
         speed=decision.speed,
         social_action=decision.social_action,
-        direction=finish_direction,
+        selected_action_label=decision.selected_action_label,
+        demonstrated_direction=finish_direction,
     )
     target = ReasoningTargetV4(reasoning=trace, finish=finish)
     validation = validate_reasoning_target_v4(

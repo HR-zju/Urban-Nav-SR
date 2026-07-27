@@ -30,7 +30,7 @@ from mcp_server.data.jsonl_io import iter_jsonl, write_jsonl_atomic
 
 
 REASONING_V4_TRAINING_POLICY_VERSION = (
-    "urbannav_reasoning_v4_0_language_sft_policy_v1"
+    "urbannav_reasoning_v4_2_language_sft_policy_v1"
 )
 
 
@@ -83,7 +83,7 @@ def build_reasoning_training_views_v4(
                 **_common_view_fields(source),
                 sample_id=(
                     f"{observation.source_group_id}:"
-                    f"{section_name}:v4_0"
+                    f"{section_name}:v4_2"
                 ),
                 view_type="grounding_section_sft",
                 section_name=section_name,
@@ -121,7 +121,7 @@ def build_reasoning_training_views_v4(
                     source,
                     model_visible_context=decision_context,
                 ),
-                sample_id=f"{observation.source_group_id}:Decision:v4_0",
+                sample_id=f"{observation.source_group_id}:Decision:v4_2",
                 view_type="decision_section_sft",
                 section_name="Decision",
                 assistant_text=render_reasoning_section_v4(
@@ -167,7 +167,7 @@ def build_reasoning_training_views_v4(
         views.append(
             ReasoningTrainingViewV4(
                 **_common_view_fields(source),
-                sample_id=f"{observation.source_group_id}:full_cot:v4_0",
+                sample_id=f"{observation.source_group_id}:full_cot:v4_2",
                 view_type="full_cot_sft",
                 assistant_text=assistant_text,
                 reasoning_target=annotation.target,
@@ -221,6 +221,9 @@ def build_reasoning_v4_user_prompt(
             for index, role in enumerate(view.image_roles)
         ],
         "input_modalities": view.input_modalities.model_dump(mode="json"),
+        "direction_output_space": (
+            view.direction_output_space.model_dump(mode="json")
+        ),
         "temporal_evidence_eligible": len(
             {
                 image
@@ -321,7 +324,7 @@ def export_reasoning_training_views_v4(
     write_jsonl_atomic(output_jsonl, outputs)
     return {
         "schema_version": (
-            "urbannav_reasoning_training_view_v4_0_report_v1"
+            "urbannav_reasoning_training_view_v4_2_report_v1"
         ),
         "source_jsonl": str(source_jsonl),
         "annotation_jsonl": str(annotation_jsonl),
@@ -354,6 +357,7 @@ def _common_view_fields(
         ),
         "evidence_catalog": observation.evidence_catalog,
         "input_modalities": observation.input_modalities,
+        "direction_output_space": observation.direction_output_space,
     }
 
 

@@ -7,9 +7,14 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Mapping
 
+from mcp_server.contracts.direction_profile import (
+    direction_label_names,
+    resolve_stage_a_direction_profile,
+)
 from mcp_server.contracts.reasoning_dataset_v4 import (
     REASONING_SOURCE_V4_SCHEMA_VERSION,
     V4_FORBIDDEN_VISIBLE_CONTEXT_KEY_PARTS,
+    DirectionOutputSpaceV4,
     DirectionSupervisionV4,
     EvidenceCatalogEntryV4,
     InputModalitiesV4,
@@ -121,6 +126,15 @@ def build_reasoning_source_v4(
         if role.startswith("fpv.")
     ]
     temporal_evidence_eligible = len(set(fpv_paths)) >= 2
+    direction, direction_warnings = _direction_supervision_v4(
+        row,
+        dataset_source=dataset_source,
+    )
+    direction_output_space = _direction_output_space_v4(
+        row,
+        dataset_source=dataset_source,
+        direction=direction,
+    )
     observation = NavObservationV4(
         source_group_id=source_group_id,
         dataset_source=dataset_source,
@@ -137,13 +151,10 @@ def build_reasoning_source_v4(
         model_visible_context=visible_context,
         evidence_catalog=evidence_catalog,
         input_modalities=modalities,
+        direction_output_space=direction_output_space,
         temporal_evidence_eligible=temporal_evidence_eligible,
     )
 
-    direction, direction_warnings = _direction_supervision_v4(
-        row,
-        dataset_source=dataset_source,
-    )
     trajectory, trajectory_policy, action_mask, trajectory_warning = (
         _system1_sidecars_v4(
             row,
@@ -353,7 +364,12 @@ def _evidence_catalog_v4(
                     ref=role,
                     modality="bev",
                     summary="optional route/topology context without local safety authority",
-                    attributes={"local_safety_authority": False},
+                    attributes={
+                        "local_safety_authority": False,
+                        "route_direction_authority": (
+                            "conditional_on_clear_visible_orientation"
+                        ),
+                    },
                 )
             )
         elif role.startswith("goal.image_"):
@@ -446,6 +462,49 @@ def _direction_supervision_v4(
             f"dataset={family}, profile={direction.profile_id}"
         )
     return direction, []
+
+
+def _direction_output_space_v4(
+    row: Mapping[str, Any],
+    *,
+    dataset_source: str,
+    direction: DirectionSupervisionV4 | None,
+) -> DirectionOutputSpaceV4:
+    """Build one public profile vocabulary without leaking its target."""
+
+    family = _dataset_family(dataset_source)
+    approved = _DIRECTION_DATASET_ALLOWLIST.get(family)
+    if approved is None:
+        raise ValueError(
+            f"unsupported V4.2 direction policy: {dataset_source}"
+        )
+    if not approved:
+        raise ValueError(
+            f"no approved V4.2 direction profile for dataset: {family}"
+        )
+    raw = _raw_direction_record(row)
+    profile_id = (
+        direction.profile_id
+        if direction is not None
+        else str((raw or {}).get("profile_id") or "").strip()
+    )
+    if not profile_id:
+        if len(approved) != 1:
+            raise ValueError(
+                "direction output profile is ambiguous for dataset"
+            )
+        profile_id = next(iter(approved))
+    if profile_id not in approved:
+        raise ValueError(
+            "direction output profile is not approved for dataset: "
+            f"dataset={family}, profile={profile_id}"
+        )
+    profile = resolve_stage_a_direction_profile(profile_id)
+    return DirectionOutputSpaceV4(
+        profile_id=profile_id,
+        profile_version=str(profile["profile_version"]),
+        allowed_labels=list(direction_label_names(profile_id)),
+    )
 
 
 def _has_explicit_v4_direction_stamp(row: Mapping[str, Any]) -> bool:

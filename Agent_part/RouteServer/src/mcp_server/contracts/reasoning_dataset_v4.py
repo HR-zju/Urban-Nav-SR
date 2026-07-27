@@ -13,10 +13,14 @@ from mcp_server.contracts.direction_profile import (
     DirectionLabelStamp,
     approved_stage_a_direction_profiles,
     canonical_direction_derivation_version,
+    coarse_motion_for_direction_label,
+    direction_label_names,
+    resolve_stage_a_direction_profile,
 )
 from mcp_server.contracts.reasoning import ReasonCode
 from mcp_server.contracts.reasoning_v4 import (
     DecisionV4,
+    DecisionProposalV4,
     ExternalEvidenceRefV4,
     InteractionConstraintGroundingV4,
     LocalTraversabilityV4,
@@ -26,12 +30,11 @@ from mcp_server.contracts.reasoning_v4 import (
     STAGE_A_DECISION_TYPES_V4,
     SceneGroundingV4,
     TaskGroundingV4,
-    coarse_motion_for_direction_label_v4,
 )
 
 
-REASONING_SOURCE_V4_SCHEMA_VERSION = "urbannav_reasoning_source_v4_0"
-REASONING_ANNOTATION_V4_SCHEMA_VERSION = "urbannav_reasoning_annotation_v4_0"
+REASONING_SOURCE_V4_SCHEMA_VERSION = "urbannav_reasoning_source_v4_2"
+REASONING_ANNOTATION_V4_SCHEMA_VERSION = "urbannav_reasoning_annotation_v4_2"
 V4_FORBIDDEN_VISIBLE_CONTEXT_KEY_PARTS = (
     "action_ego",
     "arrival",
@@ -132,6 +135,39 @@ class InputModalitiesV4(BaseModel):
     waypoint: bool = False
 
 
+class DirectionOutputSpaceV4(BaseModel):
+    """Expose an approved direction vocabulary without the selected label.
+
+    Args:
+        profile_id: Exact approved direction-profile identifier.
+        profile_version: Exact profile version.
+        allowed_labels: Complete ordered label vocabulary owned by the profile.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    profile_id: str = Field(min_length=1, max_length=128)
+    profile_version: str = Field(min_length=1, max_length=64)
+    allowed_labels: list[ReasonCode] = Field(
+        min_length=1,
+        max_length=32,
+    )
+
+    @model_validator(mode="after")
+    def validate_profile(self) -> "DirectionOutputSpaceV4":
+        """Require the exact ordered output space of one approved profile."""
+
+        profile = resolve_stage_a_direction_profile(self.profile_id)
+        if self.profile_version != profile["profile_version"]:
+            raise ValueError("direction output profile_version mismatch")
+        expected = list(direction_label_names(self.profile_id))
+        if [str(value) for value in self.allowed_labels] != expected:
+            raise ValueError(
+                "direction output allowed_labels do not match profile"
+            )
+        return self
+
+
 class NavObservationV4(BaseModel):
     """Freeze exactly the single-turn input visible to teacher and student."""
 
@@ -148,6 +184,7 @@ class NavObservationV4(BaseModel):
     model_visible_context: dict[str, Any] = Field(default_factory=dict)
     evidence_catalog: list[EvidenceCatalogEntryV4] = Field(min_length=1, max_length=64)
     input_modalities: InputModalitiesV4
+    direction_output_space: DirectionOutputSpaceV4
     temporal_evidence_eligible: bool = False
 
     @model_validator(mode="after")
@@ -209,8 +246,24 @@ class DirectionSupervisionV4(DirectionLabelStamp):
         )
         if self.derivation_version != expected_derivation:
             raise ValueError("direction derivation_version mismatch")
-        coarse_motion_for_direction_label_v4(self.label_name)
+        coarse_motion_for_direction_label(
+            self.profile_id,
+            self.label_name,
+        )
         return self
+
+
+class TeacherActionConstraintV4(BaseModel):
+    """Expose demonstrated direction only to the private Decision teacher.
+
+    Args:
+        demonstrated_direction_label: Existing trajectory-derived direction
+            label. It is an ordinary-navigation prior, not current-action truth.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    demonstrated_direction_label: ReasonCode
 
 
 class ReasoningSourceV4(BaseModel):
@@ -244,6 +297,20 @@ class ReasoningSourceV4(BaseModel):
                 self.trajectory_ego_t
             ):
                 raise ValueError("action_mask length must match trajectory_ego_t")
+        if self.direction_supervision is not None:
+            output_space = self.observation.direction_output_space
+            direction = self.direction_supervision
+            if (
+                direction.profile_id != output_space.profile_id
+                or direction.profile_version
+                != output_space.profile_version
+                or direction.label_name
+                not in output_space.allowed_labels
+            ):
+                raise ValueError(
+                    "private direction supervision does not match public "
+                    "direction output space"
+                )
         expected = reasoning_source_fingerprint_v4(
             self.model_dump(mode="json", exclude={"source_fingerprint"})
         )
@@ -306,6 +373,7 @@ class ReasoningAnnotationV4(BaseModel):
     source_fingerprint: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
     status: Literal["accepted", "partial", "rejected", "error"]
     grounding_outputs: GroundingOutputsV4
+    decision_proposal: DecisionProposalV4 | None = None
     decision: DecisionV4 | None = None
     target: ReasoningTargetV4 | None = None
     stage_records: dict[str, AnnotationStageRecordV4] = Field(default_factory=dict)
@@ -320,9 +388,15 @@ class ReasoningAnnotationV4(BaseModel):
         """Keep overall status consistent with available section outputs."""
 
         if self.status == "accepted":
-            if not self.grounding_outputs.complete or self.decision is None or self.target is None:
+            if (
+                not self.grounding_outputs.complete
+                or self.decision_proposal is None
+                or self.decision is None
+                or self.target is None
+            ):
                 raise ValueError(
-                    "accepted V4 annotation requires five groundings, Decision, and target"
+                    "accepted V4 annotation requires five groundings, "
+                    "Decision proposal, composed Decision, and target"
                 )
         elif self.target is not None:
             raise ValueError("non-accepted V4 annotation cannot carry assembled target")
@@ -349,6 +423,7 @@ class ReasoningTrainingViewV4(BaseModel):
     model_visible_context: dict[str, Any] = Field(default_factory=dict)
     evidence_catalog: list[EvidenceCatalogEntryV4] = Field(min_length=1, max_length=64)
     input_modalities: InputModalitiesV4
+    direction_output_space: DirectionOutputSpaceV4
     assistant_text: str = Field(min_length=1)
     reasoning_target: ReasoningTargetV4 | None = None
     prompt_profile_id: str = Field(min_length=1, max_length=128)
@@ -377,6 +452,21 @@ class ReasoningTrainingViewV4(BaseModel):
                 raise ValueError(
                     "full_cot_sft requires a Stage-A navigate/stop decision"
                 )
+            if self.direction_supervision is None:
+                raise ValueError(
+                    "V4.2 full_cot_sft requires direction_supervision"
+                )
+            finish_direction = (
+                self.reasoning_target.finish.demonstrated_direction
+            )
+            if (
+                str(finish_direction.label)
+                != str(self.direction_supervision.label_name)
+            ):
+                raise ValueError(
+                    "full_cot_sft Finish.demonstrated_direction must match "
+                    "private direction supervision"
+                )
         elif self.view_type == "grounding_section_sft":
             if self.section_name not in {
                 "TaskGrounding",
@@ -392,12 +482,34 @@ class ReasoningTrainingViewV4(BaseModel):
                 raise ValueError(
                     "grounding_section_sft cannot carry full reasoning_target"
                 )
+            if self.direction_supervision is not None:
+                raise ValueError(
+                    "grounding_section_sft cannot carry private direction"
+                )
         elif self.view_type == "decision_section_sft":
             if self.section_name != "Decision":
                 raise ValueError("decision_section_sft requires section_name=Decision")
             if self.reasoning_target is not None:
                 raise ValueError(
                     "decision_section_sft cannot carry full reasoning_target"
+                )
+            if self.direction_supervision is not None:
+                raise ValueError(
+                    "decision_section_sft cannot carry private direction"
+                )
+        if self.direction_supervision is not None:
+            direction = self.direction_supervision
+            if (
+                direction.profile_id
+                != self.direction_output_space.profile_id
+                or direction.profile_version
+                != self.direction_output_space.profile_version
+                or direction.label_name
+                not in self.direction_output_space.allowed_labels
+            ):
+                raise ValueError(
+                    "training-view direction supervision does not match "
+                    "public output space"
                 )
         has_trajectory = self.trajectory_ego_t is not None
         if has_trajectory != (self.trajectory_policy is not None):
@@ -406,6 +518,18 @@ class ReasoningTrainingViewV4(BaseModel):
             )
         if has_trajectory and self.view_type != "full_cot_sft":
             raise ValueError("System1 trajectory is legal only on full_cot_sft")
+        if (
+            has_trajectory
+            and self.reasoning_target is not None
+            and self.reasoning_target.finish.decision_type != "navigate"
+        ):
+            raise ValueError(
+                "System1 trajectory requires a navigate full target"
+            )
+        if self.action_mask is not None and not has_trajectory:
+            raise ValueError(
+                "training-view action_mask requires trajectory_ego_t"
+            )
         forbidden_paths = _forbidden_prompt_visible_paths_v4(
             self.model_visible_context,
             self.evidence_catalog,

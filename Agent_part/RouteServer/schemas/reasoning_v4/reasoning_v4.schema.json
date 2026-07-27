@@ -1,9 +1,91 @@
 {
   "$defs": {
+    "CriticalUncertaintyV4": {
+      "additionalProperties": false,
+      "description": "Represent a material unresolved issue without pseudo-confidence.\n\nArgs:\n    uncertainty_ref: Neutral sample-local uncertainty identifier.\n    uncertainty_code: Open semantic code for the unresolved issue.\n    uncertainty_type: Closed uncertainty family.\n    affected_direction_labels: Public directions affected by the issue.\n    resolution_policy: Closed conservative response policy.\n    evidence_refs: Raw visible evidence addresses.",
+      "properties": {
+        "affected_direction_labels": {
+          "items": {
+            "maxLength": 96,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "maxItems": 24,
+          "title": "Affected Direction Labels",
+          "type": "array"
+        },
+        "evidence_refs": {
+          "items": {
+            "maxLength": 160,
+            "minLength": 5,
+            "pattern": "^(instruction|fpv|bev|goal|waypoint)\\.[a-z0-9_]+$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "resolution_policy": {
+          "enum": [
+            "continue_observing",
+            "slow",
+            "yield",
+            "wait",
+            "stop"
+          ],
+          "title": "Resolution Policy",
+          "type": "string"
+        },
+        "uncertainty_code": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Uncertainty Code",
+          "type": "string"
+        },
+        "uncertainty_ref": {
+          "maxLength": 32,
+          "minLength": 15,
+          "pattern": "^uncertainty\\.u[0-9]{2,}$",
+          "title": "Uncertainty Ref",
+          "type": "string"
+        },
+        "uncertainty_type": {
+          "enum": [
+            "task",
+            "perception",
+            "temporal",
+            "cross_modal",
+            "rule_applicability"
+          ],
+          "title": "Uncertainty Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uncertainty_ref",
+        "uncertainty_code",
+        "uncertainty_type",
+        "resolution_policy",
+        "evidence_refs"
+      ],
+      "title": "CriticalUncertaintyV4",
+      "type": "object"
+    },
     "DecisionV4": {
       "additionalProperties": false,
-      "description": "Represent one short-horizon semantic navigation decision.",
+      "description": "Canonical decision after profile-owned motion composition.\n\nArgs:\n    motion: Coarse motion deterministically projected by DirectionProfile.\n    **inherited: All weak proposal fields from :class:`DecisionProposalV4`.",
       "properties": {
+        "critical_uncertainties": {
+          "items": {
+            "$ref": "#/$defs/CriticalUncertaintyV4"
+          },
+          "maxItems": 12,
+          "title": "Critical Uncertainties",
+          "type": "array"
+        },
         "decision_type": {
           "enum": [
             "navigate",
@@ -49,12 +131,12 @@
           "title": "Motion",
           "type": "string"
         },
-        "selected_region_ref": {
+        "navigation_intent_direction_label": {
           "anyOf": [
             {
-              "maxLength": 128,
-              "minLength": 8,
-              "pattern": "^region\\.[a-z0-9_]+$",
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9_]*$",
               "type": "string"
             },
             {
@@ -62,7 +144,14 @@
             }
           ],
           "default": null,
-          "title": "Selected Region Ref"
+          "title": "Navigation Intent Direction Label"
+        },
+        "selected_action_label": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Selected Action Label",
+          "type": "string"
         },
         "social_action": {
           "enum": [
@@ -91,7 +180,7 @@
           "items": {
             "maxLength": 160,
             "minLength": 8,
-            "pattern": "^(task\\.goal|nav\\.task_direction|requirement\\.[a-z0-9_]+|ambiguity\\.[a-z0-9_]+|entity\\.[a-z0-9_]+|control\\.[a-z0-9_]+|region\\.[a-z0-9_]+|alignment\\.[a-z0-9_]+|constraint\\.[a-z0-9_]+)$",
+            "pattern": "^(task\\.goal|nav\\.task_direction|requirement\\.[a-z0-9_]+|ambiguity\\.[a-z0-9_]+|entity\\.e[0-9]{2,}|control\\.c[0-9]{2,}|alignment\\.a[0-9]{2,}|constraint\\.k[0-9]{2,}|uncertainty\\.u[0-9]{2,})$",
             "type": "string"
           },
           "maxItems": 16,
@@ -101,39 +190,103 @@
       },
       "required": [
         "decision_type",
-        "motion",
+        "selected_action_label",
         "speed",
         "social_action",
         "fallback",
-        "evidence_refs"
+        "evidence_refs",
+        "motion"
       ],
       "title": "DecisionV4",
       "type": "object"
     },
-    "FinishDirectionV4": {
+    "DirectionAffordanceV4": {
       "additionalProperties": false,
-      "description": "Expose the trainable language projection of a strong direction label.",
+      "description": "Describe FPV support for one public direction label.\n\nArgs:\n    direction_label: Label selected from the public direction vocabulary.\n    support_type: Open semantic code for the visible walking support.\n    affordance: Categorical local executability judgment.\n    clearance: Coarse visual clearance category.\n    limiting_factor_codes: Open codes explaining a non-direct judgment.\n    evidence_status: Categorical support state, not a probability.\n    evidence_refs: Raw FPV evidence addresses supporting the judgment.",
       "properties": {
-        "angle_deg": {
-          "anyOf": [
-            {
-              "maximum": 180.0,
-              "minimum": -180.0,
-              "type": "number"
-            },
-            {
-              "type": "null"
-            }
+        "affordance": {
+          "enum": [
+            "direct",
+            "conditional",
+            "blocked",
+            "forbidden",
+            "unknown"
           ],
-          "default": null,
-          "title": "Angle Deg"
-        },
-        "choice": {
-          "maxLength": 32,
-          "minLength": 1,
-          "title": "Choice",
+          "title": "Affordance",
           "type": "string"
         },
+        "clearance": {
+          "default": "unknown",
+          "enum": [
+            "sufficient",
+            "narrow",
+            "insufficient",
+            "unknown"
+          ],
+          "title": "Clearance",
+          "type": "string"
+        },
+        "direction_label": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Direction Label",
+          "type": "string"
+        },
+        "evidence_refs": {
+          "items": {
+            "maxLength": 160,
+            "minLength": 5,
+            "pattern": "^(instruction|fpv|bev|goal|waypoint)\\.[a-z0-9_]+$",
+            "type": "string"
+          },
+          "maxItems": 12,
+          "minItems": 1,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "evidence_status": {
+          "enum": [
+            "supported",
+            "ambiguous",
+            "insufficient"
+          ],
+          "title": "Evidence Status",
+          "type": "string"
+        },
+        "limiting_factor_codes": {
+          "items": {
+            "maxLength": 96,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "maxItems": 12,
+          "title": "Limiting Factor Codes",
+          "type": "array"
+        },
+        "support_type": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Support Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "direction_label",
+        "support_type",
+        "affordance",
+        "evidence_status",
+        "evidence_refs"
+      ],
+      "title": "DirectionAffordanceV4",
+      "type": "object"
+    },
+    "FinishDirectionV4": {
+      "additionalProperties": false,
+      "description": "Expose exactly one trainable demonstrated direction label.",
+      "properties": {
         "label": {
           "maxLength": 96,
           "minLength": 1,
@@ -143,7 +296,6 @@
         }
       },
       "required": [
-        "choice",
         "label"
       ],
       "title": "FinishDirectionV4",
@@ -151,7 +303,7 @@
     },
     "FinishV4": {
       "additionalProperties": false,
-      "description": "Runtime projection of Decision and optional strong direction supervision.",
+      "description": "Project the current Decision and deterministic demonstrated direction.",
       "properties": {
         "decision_type": {
           "enum": [
@@ -164,16 +316,8 @@
           "title": "Decision Type",
           "type": "string"
         },
-        "direction": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/FinishDirectionV4"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+        "demonstrated_direction": {
+          "$ref": "#/$defs/FinishDirectionV4"
         },
         "motion": {
           "enum": [
@@ -186,9 +330,16 @@
           "type": "string"
         },
         "schema_version": {
-          "const": "urbannav_finish_v4_0",
-          "default": "urbannav_finish_v4_0",
+          "const": "urbannav_finish_v4_2",
+          "default": "urbannav_finish_v4_2",
           "title": "Schema Version",
+          "type": "string"
+        },
+        "selected_action_label": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Selected Action Label",
           "type": "string"
         },
         "social_action": {
@@ -219,45 +370,23 @@
         "decision_type",
         "motion",
         "speed",
-        "social_action"
+        "social_action",
+        "selected_action_label",
+        "demonstrated_direction"
       ],
       "title": "FinishV4",
       "type": "object"
     },
     "GoalAlignmentV4": {
       "additionalProperties": false,
-      "description": "Align the normalized task goal with visible targets and regions.",
+      "description": "Align a task goal to open target semantics and public directions.",
       "properties": {
-        "aligned_region_refs": {
+        "candidate_target_descriptions": {
           "items": {
-            "maxLength": 128,
-            "minLength": 8,
-            "pattern": "^region\\.[a-z0-9_]+$",
             "type": "string"
           },
           "maxItems": 12,
-          "title": "Aligned Region Refs",
-          "type": "array"
-        },
-        "candidate_target_refs": {
-          "items": {
-            "anyOf": [
-              {
-                "maxLength": 160,
-                "minLength": 8,
-                "pattern": "^(task\\.goal|nav\\.task_direction|requirement\\.[a-z0-9_]+|ambiguity\\.[a-z0-9_]+|entity\\.[a-z0-9_]+|control\\.[a-z0-9_]+|region\\.[a-z0-9_]+|alignment\\.[a-z0-9_]+|constraint\\.[a-z0-9_]+)$",
-                "type": "string"
-              },
-              {
-                "maxLength": 160,
-                "minLength": 5,
-                "pattern": "^(instruction|fpv|bev|goal|waypoint)\\.[a-z0-9_]+$",
-                "type": "string"
-              }
-            ]
-          },
-          "maxItems": 12,
-          "title": "Candidate Target Refs",
+          "title": "Candidate Target Descriptions",
           "type": "array"
         },
         "evidence_refs": {
@@ -288,18 +417,22 @@
           "title": "Status",
           "type": "string"
         },
-        "target_ref": {
+        "supported_direction_labels": {
+          "items": {
+            "maxLength": 96,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "maxItems": 24,
+          "title": "Supported Direction Labels",
+          "type": "array"
+        },
+        "target_description": {
           "anyOf": [
             {
-              "maxLength": 160,
-              "minLength": 8,
-              "pattern": "^(task\\.goal|nav\\.task_direction|requirement\\.[a-z0-9_]+|ambiguity\\.[a-z0-9_]+|entity\\.[a-z0-9_]+|control\\.[a-z0-9_]+|region\\.[a-z0-9_]+|alignment\\.[a-z0-9_]+|constraint\\.[a-z0-9_]+)$",
-              "type": "string"
-            },
-            {
-              "maxLength": 160,
-              "minLength": 5,
-              "pattern": "^(instruction|fpv|bev|goal|waypoint)\\.[a-z0-9_]+$",
+              "maxLength": 320,
+              "minLength": 1,
               "type": "string"
             },
             {
@@ -307,7 +440,7 @@
             }
           ],
           "default": null,
-          "title": "Target Ref"
+          "title": "Target Description"
         }
       },
       "required": [
@@ -319,7 +452,7 @@
     },
     "InteractionConstraintGroundingV4": {
       "additionalProperties": false,
-      "description": "Collect only constraints that affect current candidate regions.",
+      "description": "Collect direction-scoped interaction and rule constraints.",
       "properties": {
         "constraints": {
           "items": {
@@ -335,43 +468,32 @@
     },
     "InteractionConstraintV4": {
       "additionalProperties": false,
-      "description": "Convert a visible task, scene, or control relation into a behavior constraint.",
+      "description": "Convert visible evidence into a global or subset behavior constraint.\n\nAn empty ``affected_direction_labels`` list means that the constraint applies\nto the current action globally. A non-empty list identifies only the affected\nsubset; it must not enumerate the complement or expand an ``all_moving``\npseudo-scope.",
       "properties": {
-        "applies_to_region_refs": {
+        "affected_direction_labels": {
           "items": {
-            "maxLength": 128,
-            "minLength": 8,
-            "pattern": "^region\\.[a-z0-9_]+$",
+            "maxLength": 96,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
             "type": "string"
           },
-          "maxItems": 12,
-          "minItems": 1,
-          "title": "Applies To Region Refs",
+          "maxItems": 24,
+          "title": "Affected Direction Labels",
           "type": "array"
         },
-        "constraint_code": {
-          "maxLength": 96,
-          "minLength": 1,
-          "pattern": "^[a-z][a-z0-9_]*$",
-          "title": "Constraint Code",
-          "type": "string"
-        },
         "constraint_ref": {
-          "maxLength": 128,
-          "minLength": 12,
-          "pattern": "^constraint\\.[a-z0-9_]+$",
+          "maxLength": 32,
+          "minLength": 14,
+          "pattern": "^constraint\\.k[0-9]{2,}$",
           "title": "Constraint Ref",
           "type": "string"
         },
         "effect": {
           "enum": [
-            "proceed",
             "slow",
             "yield",
-            "wait",
             "stop",
-            "detour",
-            "request_clarification"
+            "avoid"
           ],
           "title": "Effect",
           "type": "string"
@@ -390,6 +512,7 @@
         },
         "kind": {
           "enum": [
+            "task",
             "social",
             "traffic",
             "accessibility",
@@ -400,31 +523,32 @@
         },
         "relation": {
           "enum": [
-            "occupies_candidate_region",
+            "controls_current_path",
+            "occupies_candidate_path",
             "crosses_candidate_path",
             "approaches_candidate_path",
             "near_candidate_path",
-            "narrows_candidate_region",
-            "blocks_candidate_region",
-            "controls_candidate_region",
-            "violates_requirement",
-            "supports_requirement",
+            "reduces_clearance",
+            "blocks_candidate_path",
+            "conflicts_with_requirement",
             "unknown"
           ],
           "title": "Relation",
           "type": "string"
         },
-        "source_refs": {
-          "items": {
-            "maxLength": 160,
-            "minLength": 5,
-            "pattern": "^(instruction|fpv|bev|goal|waypoint)\\.[a-z0-9_]+$|^(task\\.goal|requirement\\.[a-z0-9_]+|entity\\.[a-z0-9_]+|control\\.[a-z0-9_]+)$",
-            "type": "string"
-          },
-          "maxItems": 16,
-          "minItems": 1,
-          "title": "Source Refs",
-          "type": "array"
+        "source_state": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Source State",
+          "type": "string"
+        },
+        "source_type": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Source Type",
+          "type": "string"
         },
         "status": {
           "enum": [
@@ -433,26 +557,14 @@
           ],
           "title": "Status",
           "type": "string"
-        },
-        "temporal_basis": {
-          "enum": [
-            "single_frame",
-            "multi_frame",
-            "static_control",
-            "instruction"
-          ],
-          "title": "Temporal Basis",
-          "type": "string"
         }
       },
       "required": [
         "constraint_ref",
-        "constraint_code",
         "kind",
-        "source_refs",
-        "applies_to_region_refs",
+        "source_type",
+        "source_state",
         "relation",
-        "temporal_basis",
         "status",
         "effect",
         "evidence_refs"
@@ -462,14 +574,14 @@
     },
     "LocalTraversabilityV4": {
       "additionalProperties": false,
-      "description": "Organize the visible environment into candidate local regions.",
+      "description": "Judge the public direction vocabulary from current FPV evidence.",
       "properties": {
-        "regions": {
+        "direction_affordances": {
           "items": {
-            "$ref": "#/$defs/TraversabilityRegionV4"
+            "$ref": "#/$defs/DirectionAffordanceV4"
           },
-          "maxItems": 16,
-          "title": "Regions",
+          "maxItems": 24,
+          "title": "Direction Affordances",
           "type": "array"
         }
       },
@@ -478,7 +590,7 @@
     },
     "NavigationContextGroundingV4": {
       "additionalProperties": false,
-      "description": "Ground task and optional navigation sources to the current local scene.",
+      "description": "Ground visible task sources to the public direction vocabulary.",
       "properties": {
         "goal_alignment": {
           "anyOf": [
@@ -511,24 +623,22 @@
     },
     "NavigationSourceAlignmentV4": {
       "additionalProperties": false,
-      "description": "Align one prompt-visible navigation source to local regions.",
+      "description": "Record evidence-supported directions for one visible task source.",
       "properties": {
-        "aligned_region_refs": {
-          "items": {
-            "maxLength": 128,
-            "minLength": 8,
-            "pattern": "^region\\.[a-z0-9_]+$",
-            "type": "string"
-          },
-          "maxItems": 12,
-          "title": "Aligned Region Refs",
-          "type": "array"
-        },
         "alignment_ref": {
-          "maxLength": 128,
-          "minLength": 11,
-          "pattern": "^alignment\\.[a-z0-9_]+$",
+          "maxLength": 32,
+          "minLength": 13,
+          "pattern": "^alignment\\.a[0-9]{2,}$",
           "title": "Alignment Ref",
+          "type": "string"
+        },
+        "alignment_role": {
+          "enum": [
+            "task_intent",
+            "route_intent",
+            "local_safety_bias"
+          ],
+          "title": "Alignment Role",
           "type": "string"
         },
         "evidence_refs": {
@@ -542,20 +652,6 @@
           "minItems": 1,
           "title": "Evidence Refs",
           "type": "array"
-        },
-        "local_effect": {
-          "enum": [
-            "approach_goal",
-            "continue_route",
-            "follow_waypoint",
-            "left",
-            "straight",
-            "right",
-            "stop",
-            "unknown"
-          ],
-          "title": "Local Effect",
-          "type": "string"
         },
         "source_ref": {
           "maxLength": 160,
@@ -573,12 +669,23 @@
           ],
           "title": "Status",
           "type": "string"
+        },
+        "supported_direction_labels": {
+          "items": {
+            "maxLength": 96,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "maxItems": 24,
+          "title": "Supported Direction Labels",
+          "type": "array"
         }
       },
       "required": [
         "alignment_ref",
         "source_ref",
-        "local_effect",
+        "alignment_role",
         "status",
         "evidence_refs"
       ],
@@ -587,7 +694,7 @@
     },
     "ReasoningTraceV4": {
       "additionalProperties": false,
-      "description": "Canonical six-section shared-input Reasoning V4 trace.",
+      "description": "Canonical six-section shared-input Reasoning V4.2 trace.",
       "properties": {
         "decision": {
           "$ref": "#/$defs/DecisionV4"
@@ -605,8 +712,8 @@
           "$ref": "#/$defs/SceneGroundingV4"
         },
         "schema_version": {
-          "const": "urbannav_reasoning_trace_v4_0",
-          "default": "urbannav_reasoning_trace_v4_0",
+          "const": "urbannav_reasoning_trace_v4_2",
+          "default": "urbannav_reasoning_trace_v4_2",
           "title": "Schema Version",
           "type": "string"
         },
@@ -630,11 +737,30 @@
       "description": "Describe one directly visible navigation-relevant entity.",
       "properties": {
         "category": {
-          "maxLength": 96,
-          "minLength": 1,
-          "pattern": "^[a-z][a-z0-9_]*$",
-          "title": "Category",
-          "type": "string"
+          "anyOf": [
+            {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Category"
+        },
+        "category_candidates": {
+          "items": {
+            "maxLength": 96,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "maxItems": 8,
+          "title": "Category Candidates",
+          "type": "array"
         },
         "depth_position": {
           "default": "unknown",
@@ -648,9 +774,9 @@
           "type": "string"
         },
         "entity_ref": {
-          "maxLength": 128,
-          "minLength": 8,
-          "pattern": "^entity\\.[a-z0-9_]+$",
+          "maxLength": 32,
+          "minLength": 10,
+          "pattern": "^entity\\.e[0-9]{2,}$",
           "title": "Entity Ref",
           "type": "string"
         },
@@ -666,6 +792,15 @@
           "title": "Evidence Refs",
           "type": "array"
         },
+        "evidence_status": {
+          "enum": [
+            "supported",
+            "ambiguous",
+            "insufficient"
+          ],
+          "title": "Evidence Status",
+          "type": "string"
+        },
         "lateral_position": {
           "default": "unknown",
           "enum": [
@@ -677,11 +812,22 @@
           ],
           "title": "Lateral Position",
           "type": "string"
+        },
+        "observation_quality": {
+          "default": "unknown",
+          "enum": [
+            "clear",
+            "partial",
+            "poor",
+            "unknown"
+          ],
+          "title": "Observation Quality",
+          "type": "string"
         }
       },
       "required": [
         "entity_ref",
-        "category",
+        "evidence_status",
         "evidence_refs"
       ],
       "title": "SceneEntityV4",
@@ -689,7 +835,7 @@
     },
     "SceneGroundingV4": {
       "additionalProperties": false,
-      "description": "Collect visible scene facts without path or interaction judgments.",
+      "description": "Collect visible scene facts without path-policy judgments.",
       "properties": {
         "entities": {
           "items": {
@@ -713,7 +859,7 @@
     },
     "TaskAmbiguityV4": {
       "additionalProperties": false,
-      "description": "Represent one task ambiguity that may change the next action.",
+      "description": "Represent one task ambiguity that can change the next action.",
       "properties": {
         "ambiguity_ref": {
           "maxLength": 128,
@@ -752,29 +898,18 @@
     },
     "TaskDirectionV4": {
       "additionalProperties": false,
-      "description": "Represent the coarse direction requested by task and navigation context.",
+      "description": "Collect public direction candidates implied by visible task evidence.",
       "properties": {
-        "candidate_region_refs": {
+        "candidate_direction_labels": {
           "items": {
-            "maxLength": 128,
-            "minLength": 8,
-            "pattern": "^region\\.[a-z0-9_]+$",
+            "maxLength": 96,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
             "type": "string"
           },
-          "maxItems": 12,
-          "title": "Candidate Region Refs",
+          "maxItems": 24,
+          "title": "Candidate Direction Labels",
           "type": "array"
-        },
-        "desired_motion": {
-          "enum": [
-            "left",
-            "straight",
-            "right",
-            "stop",
-            "unknown"
-          ],
-          "title": "Desired Motion",
-          "type": "string"
         },
         "direction_ref": {
           "const": "nav.task_direction",
@@ -806,7 +941,6 @@
         }
       },
       "required": [
-        "desired_motion",
         "status",
         "evidence_refs"
       ],
@@ -815,7 +949,7 @@
     },
     "TaskGoalV4": {
       "additionalProperties": false,
-      "description": "Normalize the goal defined by prompt-visible task sources.",
+      "description": "Normalize a goal from prompt-visible task sources.",
       "properties": {
         "description": {
           "anyOf": [
@@ -881,7 +1015,7 @@
     },
     "TaskGroundingV4": {
       "additionalProperties": false,
-      "description": "Normalize task sources without predicting visual scene facts.",
+      "description": "Normalize task sources without predicting scene facts.",
       "properties": {
         "ambiguities": {
           "items": {
@@ -962,18 +1096,11 @@
           "title": "Requirement Ref",
           "type": "string"
         },
-        "target_ref": {
+        "target_description": {
           "anyOf": [
             {
-              "maxLength": 160,
-              "minLength": 8,
-              "pattern": "^(task\\.goal|nav\\.task_direction|requirement\\.[a-z0-9_]+|ambiguity\\.[a-z0-9_]+|entity\\.[a-z0-9_]+|control\\.[a-z0-9_]+|region\\.[a-z0-9_]+|alignment\\.[a-z0-9_]+|constraint\\.[a-z0-9_]+)$",
-              "type": "string"
-            },
-            {
-              "maxLength": 160,
-              "minLength": 5,
-              "pattern": "^(instruction|fpv|bev|goal|waypoint)\\.[a-z0-9_]+$",
+              "maxLength": 320,
+              "minLength": 1,
               "type": "string"
             },
             {
@@ -981,7 +1108,7 @@
             }
           ],
           "default": null,
-          "title": "Target Ref"
+          "title": "Target Description"
         }
       },
       "required": [
@@ -995,162 +1122,123 @@
     },
     "TrafficControlV4": {
       "additionalProperties": false,
-      "description": "Describe one directly visible traffic-control facility and state.",
+      "description": "Describe one directly visible traffic-control facility.",
       "properties": {
         "category": {
-          "maxLength": 96,
-          "minLength": 1,
-          "pattern": "^[a-z][a-z0-9_]*$",
-          "title": "Category",
-          "type": "string"
-        },
-        "control_ref": {
-          "maxLength": 128,
-          "minLength": 9,
-          "pattern": "^control\\.[a-z0-9_]+$",
-          "title": "Control Ref",
-          "type": "string"
-        },
-        "evidence_refs": {
-          "items": {
-            "maxLength": 160,
-            "minLength": 5,
-            "pattern": "^(instruction|fpv|bev|goal|waypoint)\\.[a-z0-9_]+$",
-            "type": "string"
-          },
-          "maxItems": 12,
-          "minItems": 1,
-          "title": "Evidence Refs",
-          "type": "array"
-        },
-        "lateral_position": {
-          "default": "unknown",
-          "enum": [
-            "left",
-            "center",
-            "right",
-            "spanning",
-            "unknown"
+          "anyOf": [
+            {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "title": "Lateral Position",
-          "type": "string"
+          "default": null,
+          "title": "Category"
         },
-        "state": {
-          "default": "unknown",
-          "maxLength": 96,
-          "minLength": 1,
-          "pattern": "^[a-z][a-z0-9_]*$",
-          "title": "State",
-          "type": "string"
-        }
-      },
-      "required": [
-        "control_ref",
-        "category",
-        "evidence_refs"
-      ],
-      "title": "TrafficControlV4",
-      "type": "object"
-    },
-    "TraversabilityRegionV4": {
-      "additionalProperties": false,
-      "description": "Describe one visible local region that may be selected for navigation.",
-      "properties": {
-        "clearance": {
-          "default": "unknown",
-          "enum": [
-            "sufficient",
-            "narrow",
-            "insufficient",
-            "unknown"
-          ],
-          "title": "Clearance",
-          "type": "string"
-        },
-        "evidence_refs": {
-          "items": {
-            "maxLength": 160,
-            "minLength": 5,
-            "pattern": "^(instruction|fpv|bev|goal|waypoint)\\.[a-z0-9_]+$",
-            "type": "string"
-          },
-          "maxItems": 12,
-          "minItems": 1,
-          "title": "Evidence Refs",
-          "type": "array"
-        },
-        "lateral_position": {
-          "default": "unknown",
-          "enum": [
-            "left",
-            "center",
-            "right",
-            "spanning",
-            "unknown"
-          ],
-          "title": "Lateral Position",
-          "type": "string"
-        },
-        "limiting_factor_codes": {
+        "category_candidates": {
           "items": {
             "maxLength": 96,
             "minLength": 1,
             "pattern": "^[a-z][a-z0-9_]*$",
             "type": "string"
           },
-          "maxItems": 12,
-          "title": "Limiting Factor Codes",
+          "maxItems": 8,
+          "title": "Category Candidates",
           "type": "array"
         },
-        "region_ref": {
-          "maxLength": 128,
-          "minLength": 8,
-          "pattern": "^region\\.[a-z0-9_]+$",
-          "title": "Region Ref",
+        "control_ref": {
+          "maxLength": 32,
+          "minLength": 11,
+          "pattern": "^control\\.c[0-9]{2,}$",
+          "title": "Control Ref",
           "type": "string"
         },
-        "related_entity_refs": {
+        "depth_position": {
+          "default": "unknown",
+          "enum": [
+            "near",
+            "mid",
+            "far",
+            "unknown"
+          ],
+          "title": "Depth Position",
+          "type": "string"
+        },
+        "evidence_refs": {
           "items": {
-            "maxLength": 128,
-            "minLength": 8,
-            "pattern": "^entity\\.[a-z0-9_]+$",
+            "maxLength": 160,
+            "minLength": 5,
+            "pattern": "^(instruction|fpv|bev|goal|waypoint)\\.[a-z0-9_]+$",
             "type": "string"
           },
           "maxItems": 12,
-          "title": "Related Entity Refs",
+          "minItems": 1,
+          "title": "Evidence Refs",
           "type": "array"
         },
-        "state": {
+        "evidence_status": {
           "enum": [
-            "direct",
-            "conditional",
-            "blocked",
-            "forbidden",
-            "unknown"
+            "supported",
+            "ambiguous",
+            "insufficient"
           ],
-          "title": "State",
+          "title": "Evidence Status",
           "type": "string"
         },
-        "surface": {
-          "maxLength": 96,
-          "minLength": 1,
-          "pattern": "^[a-z][a-z0-9_]*$",
-          "title": "Surface",
+        "lateral_position": {
+          "default": "unknown",
+          "enum": [
+            "left",
+            "center",
+            "right",
+            "spanning",
+            "unknown"
+          ],
+          "title": "Lateral Position",
           "type": "string"
+        },
+        "observation_quality": {
+          "default": "unknown",
+          "enum": [
+            "clear",
+            "partial",
+            "poor",
+            "unknown"
+          ],
+          "title": "Observation Quality",
+          "type": "string"
+        },
+        "state": {
+          "anyOf": [
+            {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "State"
         }
       },
       "required": [
-        "region_ref",
-        "surface",
-        "state",
+        "control_ref",
+        "evidence_status",
         "evidence_refs"
       ],
-      "title": "TraversabilityRegionV4",
+      "title": "TrafficControlV4",
       "type": "object"
     }
   },
   "additionalProperties": false,
-  "description": "Pair a canonical Reasoning V4 trace with its deterministic finish.",
+  "description": "Pair a canonical Reasoning V4.2 trace with its finish projection.",
   "properties": {
     "finish": {
       "$ref": "#/$defs/FinishV4"

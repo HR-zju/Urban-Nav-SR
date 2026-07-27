@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -148,7 +149,7 @@ def audit_reasoning_v4_source_coverage(
         warnings.append("no_system1_supervision_in_coverage_set")
     return {
         "schema_version": (
-            "urbannav_reasoning_v4_0_source_coverage_report_v1"
+            "urbannav_reasoning_v4_2_source_coverage_report_v1"
         ),
         "source_jsonls": [str(path) for path in paths],
         "passed": not errors,
@@ -234,14 +235,32 @@ def audit_reasoning_v4_artifacts(
             continue
         for error in annotation.errors:
             counts[f"annotation_error:{error.split(':', 1)[0]}"] += 1
-            if "decision_direction_coarse_mismatch" in error:
-                counts["direction_coarse_mismatch_rows"] += 1
+            if "selected_action_decision_type_conflict" in error:
+                counts["selected_action_decision_type_conflict_rows"] += 1
+            if "stop_action_lacks_visible_support" in error:
+                counts["unsupported_stop_rows"] += 1
         for warning in annotation.warnings:
             counts[
                 f"annotation_warning:{warning.split(':', 1)[0]}"
             ] += 1
         for name, record in annotation.stage_records.items():
             counts[f"stage:{name}:{record.status}"] += 1
+            if record.raw_answer:
+                counts["teacher_answer_rows"] += 1
+                leakage = _reasoning_v4_leakage_categories(
+                    record.raw_answer
+                )
+                for category in leakage:
+                    counts[
+                        f"teacher_answer_leakage:{category}"
+                    ] += 1
+                if record.status == "accepted":
+                    counts["accepted_teacher_answer_rows"] += 1
+                    for category in leakage:
+                        counts[
+                            "accepted_teacher_answer_leakage:"
+                            f"{category}"
+                        ] += 1
             _accumulate_audit_stage_metrics(
                 stage_metrics,
                 telemetry_totals,
@@ -271,8 +290,8 @@ def audit_reasoning_v4_artifacts(
             counts["scene_entity_count"] += len(
                 trace.scene_grounding.entities
             )
-            counts["region_count"] += len(
-                trace.local_traversability.regions
+            counts["direction_affordance_count"] += len(
+                trace.local_traversability.direction_affordances
             )
             counts["constraint_count"] += len(
                 trace.interaction_constraint_grounding.constraints
@@ -373,6 +392,33 @@ def audit_reasoning_v4_artifacts(
         accepted_rows / annotation_rows if annotation_rows else 0.0
     )
     _finalize_audit_stage_metrics(stage_metrics)
+    accepted_answer_rows = int(
+        counts["accepted_teacher_answer_rows"]
+    )
+    leakage_metrics: dict[str, dict[str, Any]] = {}
+    for category in (
+        "semantic_region",
+        "numeric_confidence_or_cost",
+        "disabled_geometry",
+    ):
+        leakage_rows = int(
+            counts[
+                f"accepted_teacher_answer_leakage:{category}"
+            ]
+        )
+        leakage_metrics[category] = {
+            "rows": leakage_rows,
+            "fraction": (
+                leakage_rows / accepted_answer_rows
+                if accepted_answer_rows
+                else 0.0
+            ),
+        }
+        if leakage_rows:
+            errors.append(
+                "accepted_teacher_answer_leakage:"
+                f"{category}:{leakage_rows}"
+            )
     provider_calls = int(telemetry_totals["provider_calls"])
     telemetry_totals["average_roundtrip_ms"] = (
         float(telemetry_totals["roundtrip_ms"]) / provider_calls
@@ -380,7 +426,7 @@ def audit_reasoning_v4_artifacts(
         else None
     )
     return {
-        "schema_version": "urbannav_reasoning_v4_0_audit_report_v1",
+        "schema_version": "urbannav_reasoning_v4_2_audit_report_v1",
         "source_jsonl": str(source_jsonl),
         "annotation_jsonl": str(annotation_jsonl),
         "view_jsonl": str(view_jsonl),
@@ -392,6 +438,7 @@ def audit_reasoning_v4_artifacts(
             ),
             "stage_metrics": stage_metrics,
             "telemetry_totals": telemetry_totals,
+            "accepted_teacher_answer_leakage": leakage_metrics,
         },
         "errors": errors[:200],
         "warnings": warnings[:500],
@@ -486,11 +533,38 @@ def _finalize_audit_stage_metrics(
         metric["average_attempts"] = (
             int(metric["attempts"]) / records if records else 0.0
         )
-        metric["average_roundtrip_ms"] = (
-            float(metric["roundtrip_ms"]) / provider_calls
-            if provider_calls
-            else None
-        )
+    metric["average_roundtrip_ms"] = (
+        float(metric["roundtrip_ms"]) / provider_calls
+        if provider_calls
+        else None
+    )
+
+
+def _reasoning_v4_leakage_categories(text: str) -> set[str]:
+    """Classify unsupported structured claims in one raw teacher answer."""
+
+    value = str(text or "")
+    findings: set[str] = set()
+    if re.search(
+        r'(?i)(?:"(?:region_ref|regions|selected_region_ref)"\s*:'
+        r"|\bregion\.[a-z0-9_]+)",
+        value,
+    ):
+        findings.add("semantic_region")
+    if re.search(
+        r'(?i)"(?:confidence|confidence_score|cost|cost_score)"'
+        r"\s*:\s*[-+]?(?:\d+(?:\.\d*)?|\.\d+)",
+        value,
+    ):
+        findings.add("numeric_confidence_or_cost")
+    if re.search(
+        r"(?i)(?:route_theta|trajectory_(?:ego|fpv)_t|"
+        r"\b(?:gps|gnss|ttc|track_id|bbox_ref|mask_ref|"
+        r"segmentation_mask|instance_mask|projected_gt)\b)",
+        value,
+    ):
+        findings.add("disabled_geometry")
+    return findings
 
 
 def _audit_number(value: Any) -> float:

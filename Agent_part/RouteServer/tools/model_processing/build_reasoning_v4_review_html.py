@@ -24,7 +24,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--views-jsonl", type=Path)
     parser.add_argument("--output-html", required=True, type=Path)
     parser.add_argument("--report-json", type=Path)
-    parser.add_argument("--title", default="UrbanNav Reasoning V4 Review")
+    parser.add_argument("--title", default="UrbanNav Reasoning V4.2 Review")
     parser.add_argument("--max-samples", type=int, default=100)
     parser.add_argument(
         "--link-images",
@@ -41,7 +41,7 @@ def build_reasoning_v4_review_html(
     output_html: str | Path,
     views_jsonl: str | Path | None = None,
     report_json: str | Path | None = None,
-    title: str = "UrbanNav Reasoning V4 Review",
+    title: str = "UrbanNav Reasoning V4.2 Review",
     max_samples: int = 100,
     embed_images: bool = True,
 ) -> dict[str, Any]:
@@ -92,7 +92,7 @@ def build_reasoning_v4_review_html(
 
     view_count = sum(len(views_by_source[item]) for item in selected_ids)
     summary: dict[str, Any] = {
-        "schema_version": "urbannav_reasoning_v4_review_report_v1",
+        "schema_version": "urbannav_reasoning_v4_2_review_report_v1",
         "output_html": str(Path(output_html).expanduser()),
         "source_rows": len(selected_ids),
         "annotation_status_counts": dict(status_counts),

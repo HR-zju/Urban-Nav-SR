@@ -94,7 +94,7 @@ def sync_reasoning_v4_cross_repo(
     *,
     check: bool = False,
 ) -> dict[str, object]:
-    """Write or verify generated training-side Python mirrors."""
+    """Write or verify generated Python and JSON contract mirrors."""
 
     route_root = Path(__file__).resolve().parents[2]
     ms_root = Path(ms_swift_root).expanduser().resolve()
@@ -148,6 +148,36 @@ def sync_reasoning_v4_cross_repo(
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text(rendered, encoding="utf-8")
             written.append(str(destination))
+    artifact_hashes: dict[str, str] = {}
+    for filename in (
+        "reasoning_v4.schema.json",
+        "reasoning_training_view_v4.schema.json",
+        "reasoning_v4_golden_valid.json",
+        "reasoning_v4_golden_invalid.json",
+        "contract_digest.json",
+    ):
+        source_path = route_root / "schemas/reasoning_v4" / filename
+        destination = (
+            ms_root
+            / "swift/sidewalk_nav/schemas/reasoning_v4"
+            / filename
+        )
+        rendered = source_path.read_text(encoding="utf-8")
+        artifact_hashes[filename] = hashlib.sha256(
+            rendered.encode("utf-8")
+        ).hexdigest()
+        current = (
+            destination.read_text(encoding="utf-8")
+            if destination.is_file()
+            else None
+        )
+        if current == rendered:
+            continue
+        stale.append(str(destination))
+        if not check:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(rendered, encoding="utf-8")
+            written.append(str(destination))
     report: dict[str, object] = {
         "schema_version": "reasoning_v4_cross_repo_python_sync_v1",
         "ms_swift_root": str(ms_root),
@@ -155,6 +185,7 @@ def sync_reasoning_v4_cross_repo(
         "written": written,
         "stale": stale,
         "sha256": hashes,
+        "artifact_sha256": artifact_hashes,
         "passed": not stale if check else True,
     }
     if check and stale:
