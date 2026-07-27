@@ -2508,6 +2508,24 @@ class VisionAnalyzer(BaseLLMService):
                 pass
         return max(90.0, self.settings.timeout_s)
 
+    def _vision_max_tokens(self) -> int | None:
+        """Return the optional response-token cap for multimodal requests."""
+
+        raw = os.getenv("LLM_VISION_MAX_TOKENS", "").strip()
+        if not raw:
+            return None
+        try:
+            return max(64, int(raw))
+        except ValueError as exc:
+            raise ValueError(
+                "LLM_VISION_MAX_TOKENS must be an integer"
+            ) from exc
+
+    def _vision_json_response_enabled(self) -> bool:
+        """Return whether multimodal chat calls should request JSON mode."""
+
+        return _truthy_env("LLM_VISION_RESPONSE_FORMAT_JSON")
+
     def _stream_timing_enabled(self) -> bool:
         return _truthy_env("LLM_VISION_STREAM_TIMING") or _truthy_env("LLM_STREAM_TIMING")
 
@@ -2659,6 +2677,11 @@ class VisionAnalyzer(BaseLLMService):
             self.settings,
         )
         payload = _apply_chat_template_kwargs(payload, self.settings)
+        max_tokens = self._vision_max_tokens()
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        if self._vision_json_response_enabled():
+            payload["response_format"] = {"type": "json_object"}
         try:
             if self._stream_timing_enabled():
                 streamed = await self._stream_chat_completions(client, payload)
@@ -2699,6 +2722,10 @@ class VisionAnalyzer(BaseLLMService):
                 "response_text_chars": len(answer),
                 "temperature": self.settings.temperature,
                 "reasoning_effort": self.settings.reasoning_effort,
+                "max_tokens": max_tokens,
+                "json_response_format": (
+                    self._vision_json_response_enabled()
+                ),
                 "timeout_s": self._vision_timeout_s(),
                 "max_retries": self.settings.max_retries,
                 "image_payload": _vision_url_payload_stats(image_urls),
@@ -2744,6 +2771,9 @@ class VisionAnalyzer(BaseLLMService):
             },
             self.settings,
         )
+        max_tokens = self._vision_max_tokens()
+        if max_tokens is not None:
+            payload["max_output_tokens"] = max_tokens
         try:
             response = await client.responses.create(**payload)
             roundtrip_ms = int(round((perf_counter() - started_at) * 1000.0))
@@ -2776,6 +2806,8 @@ class VisionAnalyzer(BaseLLMService):
                 "response_text_chars": len(answer),
                 "temperature": self.settings.temperature,
                 "reasoning_effort": self.settings.reasoning_effort,
+                "max_tokens": max_tokens,
+                "json_response_format": False,
                 "timeout_s": self._vision_timeout_s(),
                 "max_retries": self.settings.max_retries,
                 "image_payload": _vision_url_payload_stats(images),

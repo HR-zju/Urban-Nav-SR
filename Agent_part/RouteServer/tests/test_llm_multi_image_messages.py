@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import ast
+import os
 from pathlib import Path
 import unittest
+from unittest.mock import patch
+
+from mcp_server.llm import LLMSettings, VisionAnalyzer
 
 
 LLM_FILE = Path(__file__).resolve().parents[1] / "src" / "mcp_server" / "llm.py"
@@ -44,6 +48,52 @@ class LlmMultiImageMessagesTest(unittest.TestCase):
         )
         self.assertIn("extra_image_urls", _function_arg_names(arbitrate_remote))
         self.assertIn("extra_image_urls", _function_arg_names(arbitrate_local))
+
+    def test_vision_request_controls_are_explicit_opt_ins(self) -> None:
+        settings = LLMSettings(
+            provider="openai",
+            api_style="chat_completions",
+            api_key="test",
+            model="test-model",
+            base_url="http://127.0.0.1:1/v1",
+        )
+        analyzer = VisionAnalyzer(settings=settings)
+
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertIsNone(analyzer._vision_max_tokens())
+            self.assertFalse(analyzer._vision_json_response_enabled())
+
+        with patch.dict(
+            os.environ,
+            {
+                "LLM_VISION_MAX_TOKENS": "1536",
+                "LLM_VISION_RESPONSE_FORMAT_JSON": "true",
+            },
+            clear=True,
+        ):
+            self.assertEqual(analyzer._vision_max_tokens(), 1536)
+            self.assertTrue(analyzer._vision_json_response_enabled())
+
+    def test_invalid_vision_token_cap_fails_closed(self) -> None:
+        analyzer = VisionAnalyzer(
+            settings=LLMSettings(
+                provider="openai",
+                api_style="chat_completions",
+                api_key="test",
+                model="test-model",
+                base_url="http://127.0.0.1:1/v1",
+            )
+        )
+        with patch.dict(
+            os.environ,
+            {"LLM_VISION_MAX_TOKENS": "not-an-integer"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                "LLM_VISION_MAX_TOKENS must be an integer",
+            ):
+                analyzer._vision_max_tokens()
 
 
 if __name__ == "__main__":
