@@ -9,6 +9,9 @@ import json
 from pathlib import Path
 from typing import Callable, Sequence
 
+from tools.model_processing.export_vqa_v2_contract_artifacts import (
+    ARTIFACT_FILENAMES,
+)
 
 _GENERATED_HEADER = (
     "# Generated from RouteServer canonical Navigation VQA V2. "
@@ -128,7 +131,7 @@ def sync_vqa_v2_cross_repo(
     *,
     check: bool = False,
 ) -> dict[str, object]:
-    """Write or verify generated VQA V2 Python mirrors.
+    """Write or verify generated VQA V2 Python and JSON mirrors.
 
     Args:
         ms_swift_root: Sibling ms-swift repository.
@@ -200,6 +203,33 @@ def sync_vqa_v2_cross_repo(
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text(text, encoding="utf-8")
             written.append(str(destination))
+    artifact_hashes: dict[str, str] = {}
+    for filename in ARTIFACT_FILENAMES:
+        source = route_root / "schemas/vqa_v2" / filename
+        destination = (
+            ms_root
+            / "swift/sidewalk_nav/schemas/vqa_v2"
+            / filename
+        )
+        text = source.read_text(encoding="utf-8")
+        artifact_hashes[filename] = hashlib.sha256(
+            text.encode("utf-8")
+        ).hexdigest()
+        current = (
+            destination.read_text(encoding="utf-8")
+            if destination.is_file()
+            else None
+        )
+        if current == text:
+            continue
+        stale.append(str(destination))
+        if not check:
+            destination.parent.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+            destination.write_text(text, encoding="utf-8")
+            written.append(str(destination))
     report: dict[str, object] = {
         "schema_version": "vqa_v2_cross_repo_python_sync_v1",
         "ms_swift_root": str(ms_root),
@@ -207,11 +237,12 @@ def sync_vqa_v2_cross_repo(
         "written": written,
         "stale": stale,
         "sha256": hashes,
+        "artifact_sha256": artifact_hashes,
         "passed": not stale if check else True,
     }
     if check and stale:
         raise ValueError(
-            "stale VQA V2 generated mirrors: "
+            "stale VQA V2 generated Python/JSON mirrors: "
             + ", ".join(stale)
         )
     return report

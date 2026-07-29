@@ -123,6 +123,18 @@ def parse_vqa_teacher_answer_v2(
             value,
             flags=re.IGNORECASE,
         ).strip()
+    spaced_wrapper = re.fullmatch(
+        r"<\s*VQAAnswer\s*>(?P<body>.*?)"
+        r"<\s*/\s*VQAAnswer\s*>",
+        value,
+        flags=re.DOTALL,
+    )
+    if spaced_wrapper is not None:
+        value = (
+            "<VQAAnswer>"
+            + spaced_wrapper.group("body").strip()
+            + "</VQAAnswer>"
+        )
     if not value.startswith("<VQAAnswer>"):
         try:
             payload = json.loads(value)

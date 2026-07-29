@@ -342,6 +342,95 @@
       "title": "BEVRouteAlignmentPayloadV2",
       "type": "object"
     },
+    "BevRouteEvidenceV4": {
+      "additionalProperties": false,
+      "description": "Describe presentation properties of one prompt-visible BEV.\n\nThese fields are retained at the reusable observation boundary for VQA V2\ncompatibility.  Reasoning V4.5 never treats them as route-progress,\ntraversability, clearance, or collision-safety supervision.\n\nArgs:\n    frame: Declared BEV presentation frame.\n    ego_forward: Display direction corresponding to ego forward.\n    route_overlay_visible: Whether a route overlay is rendered.\n    route_direction_authority: Whether clear orientation may support a\n        visible task direction.\n    route_progress_authority: Legacy observation metadata ignored by\n        Reasoning V4.5.\n    route_terminal_marker_visible: Legacy presentation metadata ignored by\n        Reasoning V4.5.\n    route_endpoint_semantics: Legacy endpoint provenance ignored by\n        Reasoning V4.5.\n    local_safety_authority: Always false in Stage-A.\n    producer_contract_id: Versioned upstream producer identity.\n    producer_contract_version: Exact upstream producer version.",
+      "properties": {
+        "ego_forward": {
+          "default": "unknown",
+          "enum": [
+            "up",
+            "right",
+            "down",
+            "left",
+            "unknown"
+          ],
+          "title": "Ego Forward",
+          "type": "string"
+        },
+        "frame": {
+          "default": "unknown",
+          "enum": [
+            "ego",
+            "north_up",
+            "unknown"
+          ],
+          "title": "Frame",
+          "type": "string"
+        },
+        "local_safety_authority": {
+          "const": false,
+          "default": false,
+          "title": "Local Safety Authority",
+          "type": "boolean"
+        },
+        "producer_contract_id": {
+          "default": "unknown",
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Producer Contract Id",
+          "type": "string"
+        },
+        "producer_contract_version": {
+          "default": "unknown",
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Producer Contract Version",
+          "type": "string"
+        },
+        "route_direction_authority": {
+          "default": "none",
+          "enum": [
+            "none",
+            "visual_conditional"
+          ],
+          "title": "Route Direction Authority",
+          "type": "string"
+        },
+        "route_endpoint_semantics": {
+          "default": "unknown",
+          "enum": [
+            "planned_navigation_goal",
+            "recorded_clip_endpoint",
+            "crop_boundary",
+            "unknown"
+          ],
+          "title": "Route Endpoint Semantics",
+          "type": "string"
+        },
+        "route_overlay_visible": {
+          "default": false,
+          "title": "Route Overlay Visible",
+          "type": "boolean"
+        },
+        "route_progress_authority": {
+          "default": "none",
+          "enum": [
+            "none",
+            "visual_conditional"
+          ],
+          "title": "Route Progress Authority",
+          "type": "string"
+        },
+        "route_terminal_marker_visible": {
+          "default": false,
+          "title": "Route Terminal Marker Visible",
+          "type": "boolean"
+        }
+      },
+      "title": "BevRouteEvidenceV4",
+      "type": "object"
+    },
     "C2PixelAnswerV2": {
       "additionalProperties": false,
       "description": "Envelope for dormant C2 pixel-goal answers.",
@@ -807,6 +896,44 @@
       "title": "CrossViewEntityBindingInterfaceV2",
       "type": "object"
     },
+    "DirectionContextV4": {
+      "additionalProperties": false,
+      "description": "Select approved action and affordance-probe profiles.\n\nArgs:\n    action_profile_id: Canonical fine action-profile identifier.\n    action_profile_version: Exact action-profile version.\n    affordance_probe_profile_id: Canonical probe identifier.\n    affordance_probe_profile_version: Exact probe version.",
+      "properties": {
+        "action_profile_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Action Profile Id",
+          "type": "string"
+        },
+        "action_profile_version": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Action Profile Version",
+          "type": "string"
+        },
+        "affordance_probe_profile_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Affordance Probe Profile Id",
+          "type": "string"
+        },
+        "affordance_probe_profile_version": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Affordance Probe Profile Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action_profile_id",
+        "action_profile_version",
+        "affordance_probe_profile_id",
+        "affordance_probe_profile_version"
+      ],
+      "title": "DirectionContextV4",
+      "type": "object"
+    },
     "DirectionLabelStamp": {
       "additionalProperties": false,
       "description": "Carry a complete direction-label identity and its derivation source.",
@@ -890,7 +1017,7 @@
     },
     "DirectionSupervisionV4": {
       "additionalProperties": false,
-      "description": "Carry one complete, profile-stamped deterministic direction label.",
+      "description": "Carry one complete deterministic direction label.",
       "properties": {
         "angle_deg": {
           "anyOf": [
@@ -1031,12 +1158,23 @@
     },
     "EvidenceCatalogEntryV4": {
       "additionalProperties": false,
-      "description": "Describe one raw prompt-visible evidence item.",
+      "description": "Describe one prompt-visible raw input item.\n\nArgs:\n    ref: Stable input-envelope reference.\n    modality: Input modality.\n    summary: Optional prompt-visible summary.\n    attributes: Prompt-visible producer metadata.\n    bev_route_evidence: Optional BEV presentation declaration.",
       "properties": {
         "attributes": {
           "additionalProperties": true,
           "title": "Attributes",
           "type": "object"
+        },
+        "bev_route_evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BevRouteEvidenceV4"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "modality": {
           "enum": [
@@ -1081,7 +1219,7 @@
     },
     "InputModalitiesV4": {
       "additionalProperties": false,
-      "description": "Record which Stage-A inputs are actually present for one sample.",
+      "description": "Record which Stage-A inputs are present.\n\nArgs:\n    fpv: Current FPV is mandatory.\n    history_fpv: One or more history FPV images are input only.\n    instruction: An instruction is visible.\n    bev: A BEV image is visible.\n    goal_image: A goal image is visible.\n    pixel_goal: A pixel goal is visible.\n    waypoint: A waypoint is visible.",
       "properties": {
         "bev": {
           "default": false,
@@ -1125,13 +1263,16 @@
     },
     "NavObservationV4": {
       "additionalProperties": false,
-      "description": "Freeze exactly the single-turn input visible to teacher and student.",
+      "description": "Freeze the single-turn input visible to teacher and student.\n\n``temporal_evidence_eligible`` is retained only to avoid changing the\nshared VQA V2 source envelope.  Reasoning V4.5 ignores it and never derives\ntemporal targets or evidence links from history frames.\n\nArgs:\n    source_group_id: Stable group identity.\n    dataset_source: Dataset family.\n    source_record_id: Source-row identity.\n    split_group_id: Leakage-safe split group.\n    images: Ordered image paths.\n    image_roles: Addressable image roles.\n    instruction: Optional visible instruction.\n    travel_mode: Runtime mode presented to the model.\n    model_visible_context: Additional visible non-private context.\n    evidence_catalog: Prompt-visible input catalog.\n    input_modalities: Input availability flags.\n    direction_context: Public action and probe vocabularies.\n    temporal_evidence_eligible: VQA-only compatibility metadata.",
       "properties": {
         "dataset_source": {
           "maxLength": 128,
           "minLength": 1,
           "title": "Dataset Source",
           "type": "string"
+        },
+        "direction_context": {
+          "$ref": "#/$defs/DirectionContextV4"
         },
         "evidence_catalog": {
           "items": {
@@ -1221,7 +1362,8 @@
         "images",
         "image_roles",
         "evidence_catalog",
-        "input_modalities"
+        "input_modalities",
+        "direction_context"
       ],
       "title": "NavObservationV4",
       "type": "object"

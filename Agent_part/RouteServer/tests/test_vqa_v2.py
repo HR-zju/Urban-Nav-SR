@@ -15,8 +15,10 @@ from mcp_server.agent.vqa_v2_text import (
 )
 from mcp_server.contracts.direction_profile import DirectionLabelStamp
 from mcp_server.contracts.reasoning_dataset_v4 import (
+    DirectionContextV4,
     InputModalitiesV4,
     NavObservationV4,
+    REASONING_SOURCE_V4_SCHEMA_VERSION,
     ReasoningSourceV4,
     reasoning_source_fingerprint_v4,
 )
@@ -57,6 +59,9 @@ from mcp_server.teacher.vqa_v2_batch import (
     annotate_vqa_question_v2,
     label_vqa_source_manifest_v2,
 )
+from mcp_server.teacher.vqa_v2_teacher import (
+    parse_vqa_teacher_answer_v2,
+)
 from tools.model_processing.build_vqa_v2_review_html import (
     build_vqa_v2_review_html,
 )
@@ -96,6 +101,12 @@ def _source(
             history_fpv=temporal,
             instruction=True,
         ),
+        direction_context=DirectionContextV4(
+            action_profile_id="fpv_degree10_terminal_centroid_v2",
+            action_profile_version="2.0",
+            affordance_probe_profile_id="fpv_degree10_affordance7_v1",
+            affordance_probe_profile_version="1.0",
+        ),
         temporal_evidence_eligible=temporal,
     )
     direction = {
@@ -112,7 +123,7 @@ def _source(
         ),
     }
     payload = {
-        "schema_version": "urbannav_reasoning_source_v4_0",
+        "schema_version": REASONING_SOURCE_V4_SCHEMA_VERSION,
         "observation": observation.model_dump(mode="json"),
         "direction_supervision": direction,
         "trajectory_ego_t": None,
@@ -277,6 +288,12 @@ def test_dormant_interfaces_are_question_ready_when_activated() -> None:
             pixel_goal=True,
             waypoint=True,
         ),
+        direction_context=DirectionContextV4(
+            action_profile_id="fpv_degree10_terminal_centroid_v2",
+            action_profile_version="2.0",
+            affordance_probe_profile_id="fpv_degree10_affordance7_v1",
+            affordance_probe_profile_version="1.0",
+        ),
         temporal_evidence_eligible=True,
     )
     source_payload = {
@@ -411,6 +428,43 @@ def test_conditioned_direction_is_not_legal_in_answer_payload() -> None:
 
     assert not parsed.valid
     assert "extra_forbidden" in "\n".join(parsed.errors)
+
+
+def test_teacher_adapter_normalizes_spaced_vqa_wrapper_only() -> None:
+    question = VQAQuestionV2(
+        task_id="b6_unavailable_directions",
+        template_id="b6_v1",
+        question_text=(
+            "Which supplied directions are visibly unavailable?"
+        ),
+        direction_profile_id="fpv_degree10_terminal_centroid_v2",
+        candidate_direction_labels=["left_10", "right_10"],
+        evidence_refs=["fpv.current"],
+    )
+    answer, errors = parse_vqa_teacher_answer_v2(
+        (
+            "< VQAAnswer >\n"
+            '{"direction_labels":["left_10"],'
+            '"reason_codes":["visible_obstruction"]}\n'
+            "< /VQAAnswer >"
+        ),
+        question=question,
+    )
+
+    assert not errors
+    assert answer is not None
+    assert answer.payload.direction_labels == ["left_10"]
+
+    answer, errors = parse_vqa_teacher_answer_v2(
+        (
+            "prefix < VQAAnswer >"
+            '{"direction_labels":[],"reason_codes":[]}'
+            "< /VQAAnswer >"
+        ),
+        question=question,
+    )
+    assert answer is None
+    assert errors == ["vqa_answer_count:0"]
 
 
 def test_region_question_is_rejected() -> None:

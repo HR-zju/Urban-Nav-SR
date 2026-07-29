@@ -3,8 +3,8 @@
     "direction_profile.schema.json": "9c0b58f383c76533f1655aaeb58ff6812eae32bb4f2bad6ec5f1f038a1f8c7a7",
     "vqa_annotation_v2.schema.json": "55ac5bfa2cbedf6bd2be403ecdf4642758571af21d48396c47890ac84d3e4bdc",
     "vqa_capabilities_v2.schema.json": "f9897e4974d305439b1304241c08da54218cf873ab90cfdd9547117d9806deba",
-    "vqa_source_v2.schema.json": "f0312d5823d54e9a66846f2eec674e168538e865cb4df46fd77a7322024d8d79",
-    "vqa_training_view_v2.schema.json": "3376da9ff74438ce48abf5a36d8144ddeb0295e6a849f292c199748c6e6c890b",
+    "vqa_source_v2.schema.json": "c5ff169bab94ffab8a41cd79983c73f89e0cb323de19740fb3e7d0056768dec9",
+    "vqa_training_view_v2.schema.json": "179b890b8b7de617e0f6c8074647c55fdffe669fbe91075212c850a28d513438",
     "vqa_v2.schema.json": "c3b324215fb700d7f178ad0e2f017de4c636701c9f1ec99954ee142b13c89b6c",
     "vqa_v2_golden_invalid.json": "5020f4d37ad690eed4f7294a8db834b16de7957c943fddde32c8af7d0574cf64",
     "vqa_v2_golden_valid.json": "ddde2192d7b66e863092aa002d00ef22d338f56b330d5978a131712bd2f6faa2",
@@ -16,7 +16,7 @@
     "config/vqa_v2_stage_a_capabilities.json": "5416ba585b4b225a25442f257c7abce555f73f035c7d679a723648481be44ac6",
     "src/mcp_server/agent/vqa_v2_prompt_policy.py": "dcb47487f9157eed57285e7249aac9808a8207b2fbe3b9a979a93ab76a2d95cf",
     "src/mcp_server/agent/vqa_v2_text.py": "cef082a86a83941ec693b8ce107b24bbd43aecc155937bc1dd1a4003f06bc231",
-    "src/mcp_server/contracts/direction_profile.py": "3cfee6891c23ed4b312e0010c9c8c9fa9d3a056adb8691b62f3d31c27f50b46f",
+    "src/mcp_server/contracts/direction_profile.py": "2e47435c54f8d8c63ca0cede70631370de3520656be93e764370a5274e0afa4f",
     "src/mcp_server/contracts/vqa_dataset_v2.py": "a912f2af30c157e80b9f4d6e550c7364967426f59883be86c0289f4ebd768e56",
     "src/mcp_server/contracts/vqa_v2.py": "d02e46df48c4c9a84b3c3553bd613690ed7a1d9a12c2c53b95b5b009c040900b",
     "src/mcp_server/data/vqa_v2_audit.py": "d933ae7c5829d5bbb89938d497c8ddfbc958e44b3afbdb3f4f76f3cc920e562e",
@@ -27,7 +27,7 @@
     "src/mcp_server/data/vqa_v2_views.py": "4d6e8e5a89ef4700ca07c33a5b1e2d323ee089b93a7cb567ed0dafa8d01553ee",
     "src/mcp_server/teacher/vqa_v2_batch.py": "c29cc30e102c69febe8d85bfb280d92ac97d1c409ccfda3bd616f7e9f9c2ff9a",
     "src/mcp_server/teacher/vqa_v2_profiles.py": "c1b11775c98b11d751dfbd72449c733864faeef5431e81fc8fed8b61dfa631f7",
-    "src/mcp_server/teacher/vqa_v2_teacher.py": "e04835fb4098c3cf2cdf83810cb95305f988c970d4c06d80827977fdec5f2fbe"
+    "src/mcp_server/teacher/vqa_v2_teacher.py": "37cc86153dd537fed7678eea5404ed7b6eeba79b6dea91efd712e061fc37751b"
   },
   "protocol_ids": {
     "parser_id": "urbannav_navigation_vqa_parser_v2_0",
