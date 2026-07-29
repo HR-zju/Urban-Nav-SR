@@ -680,453 +680,319 @@ a_{t,k+1}^{S2}=\pi_{\theta}^{S2}
 
 其中 \(c\) 是 tool call，\(r\) 是 tool response。这样支持多工具串联、路线修改和失败恢复。
 
-### 5.3 Reasoning V4.2 单轮 Full CoT 与社会导航语义
+### 5.3 Reasoning V4.5 单轮 Compact FullCoT
 
-当前新 Full CoT 的唯一生产合同是 breaking schema Reasoning V4.2：
-
-```text
-TaskGrounding
-SceneGrounding
-LocalTraversability
-NavigationContextGrounding
-InteractionConstraintGrounding
-Decision
-finish
-optional masked readout
-```
-
-完整字段、来源、teacher、validator、composer 和 loss 合同以
-`docs/REASONING_V4_DATA_ANNOTATION_DESIGN.md` 为准。五个 grounding teacher 独立读取
-同一份 `NavObservationV4`。Decision teacher 再读取完整输入、五段已验证结果和仅约束
-普通导航先验的 private `TeacherActionConstraintV4`；该 constraint 不是 student 输入、
-evidence、当前安全动作真值或 rationale。已有 demonstrated direction 与 System1
-trajectory 是 private sidecar。composer 只用 public profile 将
-`Decision.selected_action_label` 映射为 coarse `motion`，并把 private strong label 写入
-`Finish.demonstrated_direction`；它不回写五段 LVLM 语义。
-
-#### 5.3.1 Prompt、可见输入与 Stage-A 边界
-
-Reasoning V4.2 的 system prompt 首先定义辅助导航任务：系统面向盲人、低视力用户和行动
-不便用户，形成安全、可预测、无障碍且符合社会规范的短时局部决策。它用正向规则规定
-证据优先级、section 职责、时序证据和输出 wire，而不是在主提示词中展开私有字段黑名单。
-真正的私有字段隔离由 source/view 类型和 validator fail closed。
-
-当前 prompt/validator 的有效决策子集是：
+Reasoning V4.5 是 Stage-A 单轮 E2E 导航的最小语言推理合同。它与 runtime 的 agent
+`<finish>`、tool loop 和任务终态合同分离。V4.5 不把可恢复但未经验证的 object graph、
+route progress 或时序关系包装成训练真值。
 
 ```text
-Stage-A Decision.decision_type = navigate | stop
+shared prompt-visible input
+  ├─ deterministic Task canonicalizer
+  ├─ independent Scene teacher
+  ├─ independent LocalTraversability teacher
+  ├─ independent NavigationContext teacher
+  ├─ independent InteractionConstraint teacher
+  └─ Decision teacher (visible input + five validated groundings)
+                         |
+                         v
+           blind DecisionProposalV4
+                         |
+private strong direction + deterministic composer
+                         |
+                         v
+       candidate target + immutable reconciliation audit
+                         |
+          derived review/training release state
+                         |
+                         v
+            one compact six-section LM row
 ```
 
-底层 `DecisionTypeV4` 还保留 `finish/request_user/request_replan`，只是为未来 runtime 或
-agentic profile 复用类型；teacher 的 Decision JSON Schema、student prompt enum、
-section/full validator、training-view validator 和 ms-swift adapter 均不接受这些值。
-`stop` 只表示当前短时动作保持停止，不表示到达、任务完成、请求用户或重规划。
+完整数据、teacher、audit 和 release 规则以
+`docs/REASONING_V4_DATA_ANNOTATION_DESIGN.md` 为准。canonical owner 是 RouteServer；
+ms-swift 只消费生成的 mirror、formal training view 和 loss payload。
 
-`NavObservationV4` 把 teacher 可见输入冻结为：
-
-| 字段 | 定义 | 架构作用 |
-| --- | --- | --- |
-| `source_group_id` | 同一个源样本及其派生视图的稳定组 ID | annotation/source/view join 与审计 |
-| `dataset_source` | SideWalk、Foxglove、FrodoBots、EgoWalk 等来源名 | 数据策略、覆盖统计；不是语义标签 |
-| `source_record_id` | 原数据记录 ID | 回溯原始样本 |
-| `split_group_id` | 防止同源帧跨 train/val/test 的分组键 | split 防泄漏 |
-| `images[]` | 实际图像路径，至少一张 | provider/训练 adapter 加载多模态输入 |
-| `image_roles[]` | 与 images 一一对应且唯一的 `fpv.current`、`fpv.history_*`、可选 `bev.*`/`goal.*` | 规定图像顺序和证据地址；必须恰有一个 current FPV |
-| `instruction` | 数据中真实存在的当前指令，可为空 | Task 和 navigation context 的语言输入，不合成默认目标 |
-| `travel_mode` | 当前固定为 `pedestrian_assist` 的运行语境 | 告诉 teacher 按步行辅助语义判断，不作为输出类别 |
-| `model_visible_context` | 已验证为 prompt-visible 的 goal/waypoint/BEV 等结构化上下文 | 补充图像和指令，不允许携带 private GT |
-| `evidence_catalog[]` | 本样本所有可引用 raw evidence 的地址簿 | 限定 `evidence_refs` 闭包 |
-| `input_modalities` | 实际输入 availability flags | 防止模型假设不存在的模态 |
-| `direction_output_space` | `profile_id/profile_version/allowed_labels[]`，只公开方向词表、不公开 selected label/index/choice/angle/source | 让五段使用统一 action vocabulary，同时阻断强标签泄漏 |
-| `temporal_evidence_eligible` | 是否有至少两条不同 FPV 图像路径 | teacher 动态关系门禁；student user prompt 从 view 的 FPV 路径确定性重算 |
-
-`EvidenceCatalogEntryV4` 的全部字段为：
-
-| 字段 | 定义与作用 |
-| --- | --- |
-| `ref` | `instruction.* / fpv.* / bev.* / goal.* / waypoint.*` raw 地址；输出必须逐字复制 |
-| `modality` | 对 ref namespace 的显式模态声明，防止把 goal/FPV 等来源混用 |
-| `summary` | 可选的可见证据摘要；只补充当前输入，不构成隐藏真值 |
-| `attributes` | 可选的可见结构化属性；递归经过 private-key 检查 |
-
-`InputModalitiesV4` 包含 `fpv=true`、`history_fpv`、`instruction`、`bev`、
-`goal_image`、`pixel_goal` 和 `waypoint`。这些值由实际输入确定性计算，不进入 assistant
-LM target。teacher 问题还包含 `requested_section` 与该 section 的
-`output_json_schema`；Decision teacher 问题额外包含五段已验证 grounding 和 private
-action constraint。student user prompt
-包含 `requested_view_type`、`requested_section` 和可选 `system1_readout_tokens` 请求。
-student prompt 永远不序列化 private action constraint 或 `direction_supervision`。
-system prompt 对 BEV 的权限边界是：朝向清楚、且 overlay 对模型可见时，BEV route overlay
-可支持 route direction 与 upcoming topology；BEV 没有 local safety authority，因此
-不能证明 traversability、clearance 或 collision safety。pixel goal 与 waypoint 仍因
-frame/unit/derivation 未冻结而不能支持方向。
-
-#### 5.3.2 Raw evidence ref 与 semantic ref
-
-V4 使用两个不能互换的引用空间：
-
-| 引用 | 合法 namespace | 作用 |
-| --- | --- | --- |
-| raw evidence ref | `instruction.* / fpv.* / bev.* / goal.* / waypoint.*` | 指向 prompt 中真实输入；所有事实最终证据 |
-| semantic ref | `task.goal / requirement.* / ambiguity.* / entity.eNN / control.cNN / alignment.aNN / nav.task_direction / constraint.kNN / uncertainty.uNN` | 连接样本局部推理对象与最终 Decision |
-
-`evidence_refs` 永远是 raw refs；`support_refs` 才使用 semantic refs。`entity/control/
-constraint` ref 必须是中性计数键，语义放在开放字段中。V4.2 没有 semantic region、
-mask、bbox、track、route segment 或 metric geometry ID。
-
-#### 5.3.3 六个 section 的完整字段定义
-
-所有六段都是 LVLM 基于 student-visible 输入生成的 weak language label，assistant token
-进入 LM loss。固定 enum 是 wire/state/action 协议；`category`、`code`、
-`support_type`、`source_type`、`source_state` 等 `ReasonCode` 是受
-lower-snake-case 约束的开放文本，
-不是人为封闭选择题。
-
-字段的监督来源和 loss 归属固定为：
-
-| 字段族 | Provenance | Student 可从输入推断 | 训练通道 |
-| --- | --- | --- | --- |
-| `TaskGrounding` 全字段 | LVLM weak；raw refs 为 visible deterministic address | 是 | LM |
-| `SceneGrounding` 全字段 | LVLM weak FPV observation | 是 | LM |
-| `LocalTraversability` 全字段 | LVLM weak FPV affordance | 是 | LM |
-| `NavigationContextGrounding` 全字段 | LVLM weak task/route/safety-bias alignment | 是 | LM |
-| `InteractionConstraintGrounding` 全字段 | LVLM weak visible interaction/rule | 是 | LM |
-| `Decision.navigation_intent_direction_label` | LVLM weak task/route intent | 是 | LM |
-| `Decision.selected_action_label/speed/social_action/fallback` | LVLM weak short-horizon action | 是 | LM |
-| `Decision.motion` | selected action 经 DirectionProfile deterministic projection | 是，作为 composited target | LM |
-| `Finish.demonstrated_direction.label` | existing trajectory 的 private deterministic label | 作为 imitation target 学习，输入不泄漏 exact label | LM |
-| `trajectory_ego_t/action_mask` | private deterministic/System1 sidecar | 不进入 reasoning text | System1 loss |
-| `<readout>` | deterministic latent anchor tokens | prompt 显式请求 | LM weight 0 |
-
-`TaskGroundingV4` 回答“当前可见任务要求什么”：
-
-| 字段 | 定义 | 作用 |
-| --- | --- | --- |
-| `objective` | `approach_goal/follow_instruction/follow_route/follow_waypoint/local_navigation/unknown` 的粗任务语义 | 统一不同数据源的任务条件；只读可见 task source，不读 runtime phase 或距离 |
-| `goal` | 归一化后的任务目标对象 | 为后续 goal alignment 提供唯一 `task.goal` |
-| `requirements[]` | 明示的 required/preferred/avoid/forbidden 任务要求 | 让无障碍、偏好和禁行要求可被 constraint/Decision 引用 |
-| `ambiguities[]` | 足以改变下一步动作的任务歧义 | 区分“没有要求”和“要求无法消歧” |
-
-`TaskGoalV4`：
-
-| 字段 | 定义 | 作用 |
-| --- | --- | --- |
-| `goal_ref` | 固定 `task.goal` | 全 trace 的目标语义主键 |
-| `goal_type` | `visual_entity/language_goal/pixel_goal/waypoint/route_goal/multimodal_goal/none` | 说明目标由哪类实际输入定义 |
-| `description` | 可选的简短目标描述 | 保留开放长尾语义，不把目标压成小枚举 |
-| `specification` | `specified/ambiguous/underspecified/absent` | 表示目标定义质量，而不是可见性 |
-| `source_refs[]` | 直接定义目标的 raw refs | 建立目标到输入的证据闭包 |
-
-`TaskRequirementV4` 的 `requirement_ref` 是唯一 `requirement.*` 键，`code` 是开放要求名，
-`polarity` 表示 required/preferred/avoid/forbidden，`target_description` 用开放文本表达
-要求对象而不创建跨段 entity/area ref，`evidence_refs` 指向明示该要求的 raw 输入。
-`TaskAmbiguityV4` 的 `ambiguity_ref` 是唯一
-`ambiguity.*` 键，`code` 描述歧义种类，`source_refs` 指向产生歧义的 raw 输入。
-
-`SceneGroundingV4` 回答“FPV 直接看见了什么”，包含：
-
-| 字段 | 定义 | 作用 |
-| --- | --- | --- |
-| `entities[]` | 可见且与导航相关的实体 | 记录可见事实，不自动生成 traversability/interaction 判断 |
-| `traffic_controls[]` | 可见交通控制设施及状态 | 记录 control observation，不直接生成规范行为 |
-
-`SceneEntityV4` 的 `entity_ref` 是中性唯一键 `entity.eNN`，`category` 是 supported 时
-的开放视觉类别，`category_candidates[]` 仅在 ambiguous 时存在，`evidence_status` 表示
-supported/ambiguous/insufficient，`observation_quality` 表示 clear/partial/poor/unknown，
-`lateral_position` 是 left/center/right/spanning/unknown 粗横向位置，
-`depth_position` 是 near/mid/far/unknown 粗视觉深度，`evidence_refs` 必须包含 FPV。
-`TrafficControlV4` 使用中性 `control.cNN` 并采用同一 category/evidence/quality 合同，
-可带开放 `state`。`evidence_status` 不是 calibrated confidence、loss weight 或 runtime
-probability；这些字段不表示跟踪、速度、路径冲突或 metric depth。
-
-`LocalTraversabilityV4.direction_affordances[]` 回答“FPV 对 public direction output
-中的每个被判断方向提供什么局部支持”。它不创建几何区域：
-
-| 字段 | 定义 | 作用 |
-| --- | --- | --- |
-| `direction_label` | public `allowed_labels[]` 中的 label | 统一 affordance、constraint 与 final action 词表 |
-| `support_type` | 开放 lower-snake-case 支撑语义 | 保留长尾可见 walking support，不压成固定 surface 选择题 |
-| `affordance` | direct/conditional/blocked/forbidden/unknown | 表示该方向的即时视觉可执行性 |
-| `clearance` | sufficient/narrow/insufficient/unknown | 表示视觉粗 clearance，不是实测宽度 |
-| `limiting_factor_codes[]` | conditional/blocked/forbidden 的开放原因 code | 保留长尾 blocker |
-| `evidence_status` | supported/ambiguous/insufficient | 表示证据状态而不是数值置信度 |
-| `evidence_refs[]` | 支持判断的 FPV raw refs | 保证 affordance 回到可见输入 |
-
-同一 label 最多一条记录；conditional/blocked/forbidden 必须有 limiting factor，direct
-不能同时声明 insufficient clearance。当前没有 mask、polygon、grid、route segment、
-trajectory corridor 或 SAM/SoM GT。
-
-`NavigationContextGroundingV4` 回答“visible task source 支持哪些 public directions”，
-不声称尚未冻结的跨模态几何：
-
-| 字段 | 定义 | 作用 |
-| --- | --- | --- |
-| `goal_alignment` | 可选的 goal 开放语义与方向支持 | 有显式 goal 时区分 resolved、ambiguous、not_visible、insufficient_evidence |
-| `source_alignments[]` | 每个实际导航 source 的独立局部解释 | 保留 task/route/safety 三类角色及支持或冲突，不做 route matching |
-| `task_direction` | 综合 visible task source 得到的 public 候选 labels | 表达 task evidence，不授予安全许可 |
-
-`GoalAlignmentV4` 的 `goal_ref` 固定为 `task.goal`；`status` 决定能否有唯一开放
-`target_description` 或多个 `candidate_target_descriptions[]`；
-`supported_direction_labels[]` 必须属于 public output space，`evidence_refs` 给出 raw
-闭包。`NavigationSourceAlignmentV4` 使用中性 `alignment.aNN`，`source_ref` 指向被解释
-的 raw source；`alignment_role` 是 `task_intent/route_intent/local_safety_bias`；
-`supported_direction_labels[]` 给出获证据支持的 public labels，`status` 是
-supports/conflicts/not_visible/insufficient，`evidence_refs` 必须包含 `source_ref`。
-`local_safety_bias` 不得替 task/route source 生成 `task_direction` 候选。
-`TaskDirectionV4` 的 `direction_ref` 固定为 `nav.task_direction`，
-`candidate_direction_labels[]` 和 `status` 表达 task-level 候选及其解析状态。
-
-prompt-visible BEV route overlay 在 orientation 清楚时可以用
-`alignment_role=route_intent` 支持 route direction 和 upcoming topology；这不是独立
-route matching、GPS、route theta 或 pose projection，也不给 local traversability 或
-collision safety 背书。pixel goal 与 waypoint 当前没有冻结 frame/unit/derivation
-contract，对应 source alignment 必须是 `status=insufficient` 且无 supported labels。
-`task_direction` 候选必须被本段非 safety-bias 的 goal/source alignment 支持。
-
-`InteractionConstraintGroundingV4.constraints[]` 回答“哪些 visible 关系影响哪些 public
-directions”。每条形成 `open source semantics -> affected directions -> relation ->
-effect`：
-
-| 字段 | 定义 | 作用 |
-| --- | --- | --- |
-| `constraint_ref` | 中性唯一 `constraint.kNN` 键 | 供 Decision 精确引用 |
-| `kind` | task/social/traffic/accessibility/local_safety | 区分约束来源族 |
-| `source_type` | 开放触发对象类型，如 `pedestrian_signal/cyclist` | 保留可见来源的长尾语义 |
-| `source_state` | 开放可见状态，如 `red_hand/approaching` | 将对象类别与当前状态拆开 |
-| `affected_direction_labels[]` | 只在约束影响方向子集且仍有替代方向时填写 | 禁止用全部 non-stop labels 模拟 global scope |
-| `relation` | controls_current_path/occupies_candidate_path/crosses_candidate_path/approaches_candidate_path/near_candidate_path/reduces_clearance/blocks_candidate_path/conflicts_with_requirement/unknown | 描述 source 与当前或候选方向的粗关系 |
-| `status` | applicable/uncertain | 区分已支持约束与证据不足 |
-| `effect` | slow/yield/stop/avoid | 约束对行为的最小语义后果 |
-| `evidence_refs[]` | 支持关系的 raw refs | 将 interaction 判断闭合到实际输入 |
-
-`crosses_candidate_path` 和 `approaches_candidate_path` 必须引用至少两个不同 FPV refs；
-单帧只支持静态 control、占用、邻近、阻挡和 clearance。这里没有 tracker、ego-motion
-compensation、TTC 或 normative GT。全局 stop 使用空
-`affected_direction_labels=[]`，例如当前路径受红色 pedestrian signal 控制时直接
-`effect=stop`；不得输出 `affected_direction_scope` 或枚举全部 moving labels。
-仅当约束影响子集且其他方向仍可选时才使用非空列表，并配 `effect=avoid`。
-
-Decision teacher 先输出不含 `motion` 的 `DecisionProposalV4`；composer 再用 private
-direction profile 确定性构造 `DecisionV4.motion`：
-
-| 字段 | 定义 | 作用 |
-| --- | --- | --- |
-| `decision_type` | 当前仅 navigate/stop | 区分执行局部移动与保守保持，不承担 agent loop |
-| `navigation_intent_direction_label` | 可见 task/route evidence 支持的非 stop 方向，可为空 | 保留“计划向哪走”，避免被当前 stop 覆盖 |
-| `selected_action_label` | 当前立即执行的 public direction label，可为 stop | 决定本轮动作；不是 private demonstrated label 的复制 |
-| `motion` | go_straight/turn_left/turn_right/stop；teacher 不生成 | selected action 经 profile-owned mapping 的 deterministic projection |
-| `speed` | normal/slow/stop | 给 runtime/Finish 的粗速度策略，不是 metric velocity；navigate 禁止 speed=stop |
-| `social_action` | none/yield/wait/follow/pass_left/pass_right/detour/unknown | 显式表达社会交互行为 |
-| `fallback` | continue/slow/stop/request_clarification/request_replan/unknown | 当前证据恶化或动作失败时的保守预案；不是本轮第二个 action |
-| `critical_uncertainties[]` | 会影响方向/策略的开放 uncertainty code、类型、受影响 labels、resolution policy 和 evidence | 用可审阅的 categorical weak label 代替伪数值 confidence/cost |
-| `support_refs[]` | 真正影响决策的 semantic refs | 解释 Decision 依赖的目标、要求、实体、对齐、constraint 或 uncertainty |
-| `evidence_refs[]` | 最终决策的 raw evidence 闭包 | 防止只引用模型自己生成的 semantic object |
-
-`CriticalUncertaintyV4` 的 `uncertainty_ref` 使用 `uncertainty.uNN`；
-`uncertainty_type` 为 task/perception/temporal/cross_modal/rule_applicability；
-`affected_direction_labels[]` 必须在 public output space；
-`resolution_policy` 为 continue_observing/slow/yield/wait/stop。它是普通 weak LM token，
-没有 confidence head、cost loss 或 sample weight。applicable constraint 的 effect 必须与
-最终 selected action、speed/social action/decision type 相容。stop 必须满足
-`selected_action_label=stop`、`motion=stop`、`speed=stop`、`social_action=wait` 和
-`fallback=stop`。如果 LocalTraversability 将 selected action
-明确标为 blocked/forbidden，full view 进入 partial/review；五段 weak grounding 与 GT
-均保持原值，不互相改写。
-
-`selected_action_label=stop` 还必须有可见且被 `support_refs` 引用的依据：applicable
-global stop/yield constraint、所有 task-intent directions 都 blocked/forbidden，或被引用
-且 `resolution_policy=stop` 的 material uncertainty。不能仅因没有 destination 就在清晰
-可通行的局部路径上输出 stop。
-
-#### 5.3.4 Trace、Finish、方向与 System1
-
-`ReasoningTraceV4` 包含 `schema_version` 和六个类型化字段：
-`task_grounding/scene_grounding/local_traversability/navigation_context_grounding/
-interaction_constraint_grounding/decision`。renderer 将它们确定性转换为固定六 tag wire。
-
-`ReasoningTargetV4` 只有 `reasoning` 与 `finish`。`FinishV4` 字段为：
-
-| 字段 | 定义与作用 |
-| --- | --- |
-| `schema_version` | 固定 `urbannav_finish_v4_2`，防止跨 breaking schema 静默解析 |
-| `decision_type` | 确定性复制 Decision；Stage-A 为 navigate/stop |
-| `motion` | 确定性复制 Decision.motion |
-| `speed` | 确定性复制 Decision.speed |
-| `social_action` | 确定性复制 Decision.social_action |
-| `selected_action_label` | 确定性复制 Decision 的当前立即动作 |
-| `demonstrated_direction` | private 轨迹方向的唯一 fine-label 语言投影；不由 LVLM teacher 生成 |
-
-`FinishDirectionV4` 只有 `label`。private sidecar 仍保留完整
-`profile/version/index/name/choice/angle/source/bin/derivation` identity，composer 只把
-strong label 写入 `Finish.demonstrated_direction`；因此 deterministic direction 在文本中
-只有一个 LM target，不增加独立 direction head。`Finish.selected_action_label` 可以是
-stop，而同一 row 的 demonstrated direction 可以是 left/right/straight，两者不得互相
-覆盖。profile-owned mapping 位于 `contracts/direction_profile.py`。
-
-navigate 且 source 有合法 `trajectory_ego_t/trajectory_policy` 时，full view 才追加
-`<readout>[SYS1_0] ... [SYS1_15]</readout>`。readout token 的 LM 权重为 0，只作为
-System1 action head 的 hidden-state query；连续轨迹只位于顶层 sidecar。stop 样本仍训练
-六段和 Finish，但不带 readout、trajectory 或 action mask。
-
-#### 5.3.5 Source、annotation 与 training-view envelope
-
-`ReasoningSourceV4` 把 `observation` 与 private strong sidecars 隔离：
-
-| 字段 | 作用 |
-| --- | --- |
-| `schema_version` | source artifact 版本 |
-| `observation` | teacher/student 共享语义输入 |
-| `direction_supervision` | 完整 profile-stamped 离散方向强监督；grounding teacher/student 不可见，只可投影成 Decision teacher action constraint |
-| `trajectory_ego_t/trajectory_policy/action_mask` | System1 强监督及其坐标/有效步合同，teacher 不可见 |
-| `warnings` | source 构造时的非致命降级记录 |
-| `source_fingerprint` | 对冻结 payload 的 SHA-256 绑定，防止 annotation 与 source 错配 |
-
-`DirectionSupervisionV4` 的 core identity 为
-`profile_id/profile_version/label_index/label_name/choice/angle_deg/source/bin_mode/
-derivation_version`；任何缺字段、profile 不允许、index identity 不一致或 route-theta
-来源都 fail closed。
-
-`ReasoningAnnotationV4` 保存可恢复的离线 teacher 过程：
-
-| 字段 | 作用 |
-| --- | --- |
-| `schema_version/source_group_id/source_fingerprint` | 绑定 source 版本与内容 |
-| `status` | accepted/partial/rejected/error 总状态 |
-| `grounding_outputs` | 五段可独立为空的 typed 结果，支持 partial artifact |
-| `decision_proposal` | Decision teacher 输出，不含 motion |
-| `decision` | composer 加入 profile-owned motion 后的最终决策 |
-| `target` | 仅 accepted annotation 才有的六段 + Finish |
-| `stage_records` | 每段的状态、尝试历史和 prompt 绑定 |
-| `errors/warnings` | 全局验证诊断 |
-| `teacher_provider/teacher_model` | 标注模型 provenance |
-| `metadata` | 非语义运行与审计补充 |
-
-每个 `AnnotationStageRecordV4` 包含 `status/attempts/raw_answer/errors/warnings/telemetry/
-prompt_profile_id/prompt_policy_digest`，用于重试、成本/延迟统计、prompt 漂移检测和人工
-复核；它不进入 student assistant target。
-
-`ReasoningTrainingViewV4` 是 RouteServer 到 ms-swift 的唯一 V4 训练边界：
-
-| 字段组 | 字段 | 作用 |
-| --- | --- | --- |
-| identity | `schema_version/sample_id/source_group_id/split_group_id/dataset_source` | 唯一训练样本、同源关联和防泄漏 |
-| task | `view_type/section_name` | 选择 full、单 grounding 或单 Decision SFT |
-| visible input | `images/image_roles/instruction/model_visible_context/evidence_catalog/input_modalities/direction_output_space` | 构造 student system/user messages；只公开 direction vocabulary |
-| language target | `assistant_text/reasoning_target` | canonical wire；full view 额外携带 typed target 供一致性校验 |
-| prompt binding | `prompt_profile_id/prompt_policy_digest` | 保证数据与当前 system prompt 完全一致 |
-| private strong sidecars | `direction_supervision/trajectory_ego_t/trajectory_policy/action_mask` | Finish 审计或 System1 loss；section view 禁止携带 trajectory |
-| audit | `metadata` | validation warnings、readout count、System1 省略原因等 |
-
-`full_cot_sft` 训练六段和 Finish；`grounding_section_sft` 只训练指定 grounding；
-`decision_section_sft` 只训练 Decision，并把五段已验证结果放入可见 context。
-ms-swift 先用生成的 Pydantic mirror 验证完整 view，再核对 profile digest、canonical
-renderer/parser、direction identity 和 readout/trajectory 配对，最后才构造 messages 与
-loss mask。
-
-RouteServer offline audit 对 accepted teacher raw answer 额外计算
-`semantic_region`、`numeric_confidence_or_cost` 与 `disabled_geometry` 三类 leakage
-rows/fraction；任一 accepted leakage 都使 artifact audit fail。rejected/repair answer
-只做诊断计数，不冒充可训练语义质量。
-
-下面的 ReasoningTraceV2 五段合同仅供既有 V2 数据、消融和旧 agentic 实验读取。
-旧 section-QA 生成与消费链已删除；新 exporter、V4 cache 和全量标注不得写入或
-静默混入这些字段。
-
-#### 5.3.6 Legacy ReasoningTraceV2
-
-V2 CoT 统一为五个强类型 section；更早的
-`FPVScene/BEVContext/CrossView/Plan` 只由输入 adapter 读取，新 exporter 不再写出：
-
-| Section | 只回答什么 | 禁止承载 |
-| --- | --- | --- |
-| `TaskGrounding` | goal、route、局部目标和指令约束 | 局部安全猜测、连续 waypoint |
-| `EvidenceGrounding` | task/route/FPV/tool 引用和受支持事实 | teacher 私有判断、未来 GT |
-| `CrossModalAlignment` | route 方向到当前 FPV corridor 的对应关系 | metric waypoint 重复编码 |
-| `ConstraintApplicability` | 真正与选中路径相交且适用的社会/交通约束 | 看见实体就机械套规则 |
-| `Decision` | motion、speed、social action、fallback、confidence | CFM action chunk |
-
-规范顺序是：
+#### 5.3.1 唯一 wire 与 section 职责
 
 ```text
 <think>
-  <TaskGrounding>{...}</TaskGrounding>
-  <EvidenceGrounding>{...}</EvidenceGrounding>
-  optional <ToolResultUse>{...}</ToolResultUse>
-  <CrossModalAlignment>{...}</CrossModalAlignment>
-  <ConstraintApplicability>{...}</ConstraintApplicability>
-  <Decision>{...}</Decision>
+<TaskGrounding>{...}</TaskGrounding>
+<SceneGrounding>{...}</SceneGrounding>
+<LocalTraversability>{...}</LocalTraversability>
+<NavigationContextGrounding>{...}</NavigationContextGrounding>
+<InteractionConstraintGrounding>{...}</InteractionConstraintGrounding>
+<Decision>{...}</Decision>
 </think>
-<finish>{"schema_version":"urbannav_finish_v2","decision_type":"..."}</finish>
-navigate only: <readout>[SYS1_0] ... [SYS1_15]</readout>
 ```
 
-`ToolResultUse` 只有一个合法位置：`EvidenceGrounding` 之后、跨模态对齐之前。这样工具结果先成为证据，再影响对齐、约束和决策：
+V4.5 没有 `Finish`、readout、refs、route progress 或第七段。六段共享读取完整输入；
+它们不是严格串行的隐变量链。Decision teacher 可读取五段已验证 grounding，但看不到
+private strong label。动作仅在 `Decision.selected_action_label` 出现一次并使用 LM loss。
+`stop` 只是短时 hold，不表示 arrival 或 task completion。
 
-\[
-tool\_response \prec Evidence \prec ToolResultUse
-\prec Alignment \prec Constraint \prec Decision \prec finish \prec SYS1.
-\]
+六段完整字段和职责如下：
 
-社会/交通约束必须满足：
+| Section | 字段 | 定义与作用 | 来源 | Student 可推断 | Loss |
+| --- | --- | --- | --- | --- | --- |
+| TaskGrounding | `objective` | 规范化任务 code | versioned registry/cache | 是 | LM |
+| TaskGrounding | `requirements[]` | instruction 明示要求 codes | registry/cache | 是 | LM |
+| TaskGrounding | `ambiguities[]` | 会改变动作的任务歧义 codes | registry/cache | 是 | LM |
+| SceneGrounding | `scene_type` | 粗可见场景 code | LVLM weak | 是 | LM |
+| SceneGrounding | `walkable_support` | 可见步行支撑面 code | LVLM weak FPV | 是 | LM |
+| SceneGrounding | `key_entities[]` | 影响局部导航的粗类别 | LVLM weak FPV | 是 | LM |
+| SceneGrounding | `traffic_context` | 粗交通控制语境 | LVLM weak FPV | 是 | LM |
+| LocalTraversability | `direction_affordances[]` | profile-owned 稀疏物理方向判断 | LVLM weak FPV | 是 | LM |
+| NavigationContextGrounding | `task_direction` | 可见的短时移动方向或 fail-closed 状态 | LVLM weak instruction/BEV | 条件可见 | LM |
+| InteractionConstraintGrounding | `constraints[]` | 当前高层 slow/yield/stop/avoid 限制 | LVLM weak | 是 | LM |
+| Decision | `selected_action_label` | strong-owned 唯一短时 action | private deterministic label 经 composer | 是 | LM |
+| Decision | `speed` | normal/slow/stop | constraint deterministic projection | 是 | LM |
+| Decision | `response` | proceed/slow/yield/detour/stop | constraint deterministic projection | 是 | LM |
 
-\[
-Applicable(c)=Observed(c)\land Intersects(c, path)\land ModeValid(c).
-\]
+`ReasonCode` 是 lower-snake-case 受约束开放 code，不是固定的 instruction/object 类别
+选择题。闭集只用于 wire、状态、profile action、affordance、constraint effect 和最终
+行为 tuple。
 
-例如 `yield_to_crossing_agent` 至少需要 `track.*` 和 `corridor.*`/`route.*` 引用；单帧出现 pedestrian 不能直接产生 yield 真值。`wait_for_pedestrian_signal` 同时需要 `control.*`、受控路径引用和 pedestrian travel mode。弱启发式只可进入 metadata/review，不能成为 `ConstraintApplicability.applicable`。
+#### 5.3.2 TaskGrounding 字段
 
-FPV-only 与 FPV-BEV 共用同一 V2 schema。FPV-only 使用：
+Task canonicalizer 对 instruction 执行 NFKC、case-fold、标点/符号转空格、空白折叠和
+SHA-256 fingerprint。已知 route-following 模板固定输出：
+
+```json
+{
+  "objective": "follow_route",
+  "requirements": ["route_adherence"],
+  "ambiguities": []
+}
+```
+
+未知 fingerprint 最多标注一次并进入同 run cache；同义模板不得逐样本重复调用 LVLM。
+
+| 字段 | 类型 | 约束 |
+| --- | --- | --- |
+| `objective` | `ReasonCode` | 稳定任务 taxonomy，不读 runtime phase、距离或 waypoint state |
+| `requirements` | `list[ReasonCode]` | 只保留 instruction 明示要求；唯一，最多 12 |
+| `ambiguities` | `list[ReasonCode]` | 只保留会改变动作的歧义；唯一，最多 12 |
+
+不存在 `goal` object、`local_objective`、teacher-only runtime state 或 GT phase。
+
+#### 5.3.3 SceneGrounding 字段
+
+| 字段 | 类型 | 约束 |
+| --- | --- | --- |
+| `scene_type` | `ReasonCode` | 开放粗场景，例如 `urban_sidewalk` |
+| `walkable_support` | `ReasonCode` | 开放可见支撑面，例如 `paved_sidewalk` |
+| `key_entities` | `list[ReasonCode]` | navigation-relevant 粗类别；唯一，最多 16 |
+| `traffic_context` | `ReasonCode` | 开放粗控制语境 |
+
+这些字段是 LVLM weak visual summary，不是 instance-level GT。V4.5 不输出 entity/control
+ID、位置、mask、bbox、metric depth、tracking 或 confidence。
+
+#### 5.3.4 LocalTraversability 字段
+
+`direction_affordances[]` 的每一项包含：
+
+| 字段 | 类型 | 约束 |
+| --- | --- | --- |
+| `direction_label` | `ReasonCode` | 必须来自 action profile 对应的 7-way probe；禁止 stop |
+| `affordance` | direct/conditional/blocked/forbidden/unknown | 只描述 FPV 物理可执行性 |
+| `clearance` | sufficient/narrow/insufficient/unknown | 粗视觉净空，不是 metric width |
+| `limiting_factors` | physical factor list | 唯一，最多 12；非 direct 结论必须给原因 |
+
+物理 factor 闭集为 static obstacle、dynamic occupancy、narrow clearance、non-walkable
+surface、curb、wall、vegetation、occlusion、unknown。交通规则不能作为本段 factor。
+direct 不能同时声明 insufficient clearance。BEV 不得证明本段的 traversability、
+clearance 或 collision safety。
+
+当前 profile pairing：
+
+| Action profile | Probe profile | Probe labels |
+| --- | --- | --- |
+| `fpv_degree10_terminal_centroid_v2` | `fpv_degree10_affordance7_v1` | left_90/30/10, straight, right_10/30/90 |
+| `ego_degree10_12way_terminal_centroid_v2` | `ego_12way_affordance7_v1` | left_50plus/30/10, straight, right_10/30/50plus |
+
+#### 5.3.5 NavigationContextGrounding 字段
 
 ```text
-CrossModalAlignment.available = false
-CrossModalAlignment.status = insufficient_evidence | not_visible
+NavigationContextGrounding
+  task_direction
+    status
+    optional direction
 ```
 
-它不伪造 route-to-FPV 对齐；`Decision` 仍可依据当前 FPV 证据输出保守局部策略。
+| 字段 | 类型 | 约束 |
+| --- | --- | --- |
+| `status` | aligned/conflict/not_visible/insufficient_evidence | 独立表示方向证据状态 |
+| `direction` | nullable `ReasonCode` | 只在 aligned 时存在，必须为 profile moving label，禁止 stop |
 
-#### 5.3.7 Legacy V2 Prompt 合同与监督边界
+generic route-following instruction 不能单独推出左右方向。只有明示方向 instruction，或
+朝向清楚且 route overlay 可见、具有 `visual_conditional` direction authority 的 BEV，
+可以支持 aligned direction。BEV 可以支持 route direction 和 upcoming topology；缺少
+local safety authority 只阻止它证明 traversability、clearance 和 collision safety。
+V4.5 不输出 goal/source alignments、route progress、remaining distance 或 arrival。
 
-Legacy Prompt V2 由 `ms-swift/swift/sidewalk_nav/prompt.py` 中的
-`DEFAULT_REASONING_V2_SYSTEM_PROMPT` 和具体 task template 共同构成。system prompt
-只固定长期不变的行为约束：辅助导航对象、证据优先级、社会导航原则、禁止泄漏的
-sidecar label，以及结构化输出纪律。它不把某条样本的 route、agent 或风险事实写死。
+#### 5.3.6 InteractionConstraintGrounding 字段
 
-每条样本的 user prompt 只渲染当前可见输入：
+`constraints[]` 每一项包含：
+
+| 字段 | 类型 | 约束 |
+| --- | --- | --- |
+| `kind` | `ReasonCode` | 开放粗约束类别 |
+| `status` | applicable/uncertain | 当前适用性 |
+| `effect` | slow/yield/stop/avoid | 最小行为影响 |
+| `affected_direction_labels` | action label list | 空表示全局；avoid 要求非空子集 |
+
+`constraints=[]` 是正常负判断。global stop 不枚举全部 directions；avoid 必须明确受影响
+子集。本段没有 object ID、source state、temporal relation、tracker、ego-motion、TTC
+或 normative-policy GT。
+
+#### 5.3.7 Decision、strong ownership 与 tuple
+
+`DecisionProposalV4` 是 blind LVLM proposal，字段与 final Decision 相同，但只作 audit：
 
 ```text
-ordered images + image_roles
-instruction / dialogue
-model_visible_context
-evidence_catalog
-task_family / task_type
+selected_action_label
+speed
+response
 ```
 
-对应的 assistant target 只保留 Full CoT：
+composer 用 frozen `DirectionSupervisionV4.label_name` 覆盖 proposal 的 action，不允许
+teacher 覆盖 strong direction。行为 tuple 按 applicable effects 确定性映射：
+
+| 条件 | `speed` | `response` |
+| --- | --- | --- |
+| 无 effect | normal | proceed |
+| slow | slow | slow |
+| yield | slow | yield |
+| avoid | slow | detour |
+| strong action = stop | stop | stop |
+
+strong moving 与 applicable global stop 冲突时 composition invalid 并进入 review；
+不能把 moving label 静默改写为 stop。moving action 禁止 stop speed/response；stop
+必须严格 stop/stop。V4.5 不输出 decision_type、motion、social_action、fallback、
+uncertainty 或 support/evidence refs。
+
+#### 5.3.8 Source 与 private supervision
+
+`NavObservationV4` 是 teacher/student 共享输入：
+
+| 字段 | 定义与作用 |
+| --- | --- |
+| `source_group_id` | source/annotation/view join ID |
+| `dataset_source` | 数据集族与覆盖统计 |
+| `source_record_id` | 原始样本回溯 |
+| `split_group_id` | 同源防泄漏 split |
+| `images/image_roles` | 有序多模态输入；恰有一个 `fpv.current` |
+| `instruction/travel_mode` | 真实任务文本和步行辅助语境 |
+| `model_visible_context` | 额外 prompt-visible 非私有上下文 |
+| `evidence_catalog` | 输入地址簿，不是输出 ref graph |
+| `input_modalities` | 实际模态 availability |
+| `direction_context` | public action/probe profile identity |
+| `temporal_evidence_eligible` | 仅共享 VQA V2 兼容；FullCoT 不消费 |
+
+BEV observation 中保留的 route-progress presentation metadata 也仅用于共享 VQA source
+兼容。Reasoning V4.5 不读取 route progress、terminal 或 local-safety truth。
+
+`ReasoningSourceV4` 额外保存 private sidecars：
+
+| 字段 | 定义与作用 |
+| --- | --- |
+| `direction_supervision` | 完整、已有、版本化的 deterministic direction stamp |
+| `trajectory_ego_t/trajectory_policy/action_mask` | 可选既有 System1 supervision |
+| `warnings` | source 构造诊断 |
+| `source_fingerprint` | 除 fingerprint 外整个 source 的 SHA-256 |
+
+方向 stamp 必须同时包含 profile ID/version、index、name、choice、angle、source、
+bin mode 和 derivation version。缺字段、identity 不一致、profile 不在 allowlist 或
+source 使用 route theta 时 fail closed。V4.5 不从 row trajectory、BEV、GPS、route、
+goal 或 LVLM 回答重新派生 direction。
+
+#### 5.3.9 Annotation、audit 与 append-only resolution
+
+`ReasoningAnnotationV4` 的字段：
+
+| 字段 | 定义与作用 |
+| --- | --- |
+| `schema_version/source_group_id/source_fingerprint` | 绑定 source |
+| `record_status` | complete/error，只表示 bounded pipeline 是否完成 |
+| `grounding_outputs` | 五个可独立存在的 typed grounding |
+| `decision_proposal` | blind LVLM proposal |
+| `action_reconciliation` | immutable proposal/strong/grounding audit |
+| `composer_candidate/candidate_target` | 未经隐式改写的 strong-owned candidate |
+| `composition_record` | valid/invalid/not_available 及诊断 |
+| `stage_records` | 六段状态与 producer provenance |
+| `errors/warnings` | record-level 诊断 |
+| `teacher_provider/teacher_model/metadata` | run provenance |
+
+每个 stage record 显式区分 `producer_kind=deterministic|lvlm`，并记录
+`producer_profile_id/derivation_version/prompt_policy_digest`。Task registry 结果不伪装成
+LVLM label；LVLM stage 必须绑定 prompt digest。
+
+Action Reconciliation 不是第七段。audit 只保存：
 
 ```text
-Full CoT:
-  five ReasoningTraceV2 sections
-  -> finish
-  -> navigate-only masked [SYS1_i]
+audit_id
+source_fingerprint
+proposal_digest
+groundings_digest
+comparison
+probe_projection
+four deterministic checks
+review_trigger_codes
 ```
 
-因此 `[SYS1_i]` 不是社会行为文本，也不是离散方向标签；它只是 System1 从 LVLM
-hidden state 读取连续控制条件的 masked latent slot。社会行为只在有证据时写入
-`EvidenceGrounding`、`ConstraintApplicability` 和 `Decision`，连续运动真值始终保存在
-顶层 `trajectory_ego_t`。
+它不复制 profile、proposal、strong label 或 candidate，不持久化 review priority/status。
+expanded review queue 通过 source/annotation join 生成可读对照。
 
-Prompt 中“FPV 对即时安全权威”的含义是证据优先级，而不是允许 teacher 从单帧猜测
-agent 运动。下面三项必须同时成立，才能输出适用的社会/交通约束：
+人工裁决写入 append-only `ActionReviewResolutionV4`，包含 audit ID、resolved/rejected、
+resolved action、reason code、reviewer、timezone-aware timestamp 和 note。resolution
+不能偷偷修正 source GT；若 resolved action 不等于 frozen strong label，release gate 要求
+修正上游 direction、生成新 source fingerprint 并重新标注。
 
-```text
-entity/control observed
-selected path relation supported
-travel mode applicable
-```
+#### 5.3.10 五个状态轴与 formal release
 
-缺少任何一项时必须写 `unknown` 或空 `applicable`；不能为了填满 CoT 而生成
-yield、pass、TTC 或 right-of-way 伪真值。
+状态必须独立：
 
+| 轴 | 值 |
+| --- | --- |
+| record | complete/error |
+| section | accepted/rejected/error/skipped |
+| composition | valid/invalid/not_available |
+| review | not_required/pending_human/resolved/rejected |
+| training | eligible/blocked |
+
+正式 training eligible 当且仅当 record complete、六段全部 accepted、composition valid、
+audit 存在且可重建、review 为 not_required/resolved、resolved action 仍等于 frozen
+strong，并且 candidate 对 source/profile 再验证通过。
+
+`review_preview` 永远 blocked。`formal_training` 只导出 eligible rows。ms-swift 在
+Pydantic defaults 之前检查原始 view 的 schema、canonical contract digest、
+`release_track=formal_training`、audit ID、review 和 eligibility，防止 preview 或 stale
+row 混入训练。
+
+#### 5.3.11 Training view 与 LM loss
+
+`ReasoningTrainingViewV4` 完整字段组：
+
+| 字段组 | 字段 | 作用 |
+| --- | --- | --- |
+| identity | schema/digest/sample/source/split/dataset | contract、join、防泄漏 |
+| release | release track/audit/review/training state | formal admission |
+| visible input | images/roles/instruction/context/catalog/modalities | 构造多模态 prompt |
+| public vocabulary | direction context | action/probe allowlist |
+| language target | assistant text + typed target | exact six-section LM target |
+| binding | renderer ID + prompt profile/digest | 防 renderer/prompt 漂移 |
+| private supervision | direction stamp | strong action identity校验 |
+| optional System1 | trajectory/policy/action mask | 既有 trajectory loss |
+| metadata | audit identity与非语义 provenance | 审计，不进入 assistant |
+
+assistant message 的 `loss=true`，`reasoning_v4_5_sections` 对六个 tag 全部启用 LM loss。
+`selected_action_label` 只在 Decision 中训练；没有独立 direction head，也没有 Finish 的
+重复 action target。可选 System1 trajectory 继续走既有 trajectory loss。
+
+固定审计指标是 Sources、Record Complete、All Sections Accepted、Composition Valid、
+Pending Human、Training Eligible。正式批量标注前先运行 64-row diverse smoke，生成
+self-contained HTML；full runner 同时要求上述机器 gate 全通过和人工显式批准。
 ### 5.4 Navigation VQA V2 原子监督链
 
 VQA V2 是与 Reasoning V4 并列的 answer-only LM contract，不是 Full CoT 的 section
@@ -1879,15 +1745,13 @@ has(system1\_output)\land has(action\_dispatched)
 
 ### 10.2 同源多任务视图
 
-同一个 `source_group_id` 可以生成 V4 full/section row，但每条 row 只激活自身合法 loss：
+V4.5 每个 eligible `source_group_id` 最多生成一个 compact FullCoT row：
 
 | Row view | assistant target | LM | System1 | seg/pixel traj |
 | --- | --- | --- | --- | --- |
-| V4 grounding section | 完整输入到单个 grounding section | 是 | 否 | 否 |
-| V4 Decision section | 完整输入加五段 grounding 到 Decision | 是 | 否 | 否 |
-| V4 Full CoT | 六段 V4 + finish + optional masked readout | 六段与 finish | optional `trajectory_ego_t` | 否 |
+| V4.5 FullCoT | 精确六段、无 Finish/readout | 六段全开，动作只在 Decision | optional existing `trajectory_ego_t` | 否 |
 
-未来独立 VQA 生成器也不得依据图片数量猜模态。`images` 保留原始有序列表，
+独立 VQA 生成器也不得依据图片数量猜模态。`images` 保留原始有序列表，
 `image_roles` 显式区分 `fpv_history/fpv/bev/goal_image`；否则多帧 FPV 会被误当成
 FPV+BEV 并产生错误的 CrossModalAlignment 标签。
 
@@ -2477,7 +2341,7 @@ external_event_lm_label = -100
 runtime_state_lm_label = -100
 terminal_validation_lm_label = -100
 tool_response_lm_label = -100
-reasoning_schema_version = urbannav_reasoning_trace_v4_2 | urbannav_reasoning_trace_v2 | legacy_v1
+reasoning_schema_version = urbannav_reasoning_trace_v4_5 | urbannav_reasoning_trace_v2 | legacy_v1
 ```
 
 `sidewalk_meta`：
@@ -2501,7 +2365,7 @@ system1_supervision_valid
 | tool call | trace | 是 | 是 | 间接条件 | tool metrics |
 | tool response | trace | 是 | 否 | 间接条件 | tool metrics |
 | symbolic finish | trace | 自回归 | 是 | query 前置条件 | text/action metrics |
-| ReasoningTraceV4 Full CoT | derived row | 是 | 六段和 Finish | navigate row | schema/grounding |
+| ReasoningTraceV4 Full CoT | derived row | 是 | compact 六段 + 唯一 action location；readout mask=false | navigate row | schema/grounding |
 | `[SYS1_i]` | row | 是 | 否 | latent query | query diagnostics |
 | `trajectory_ego_t` | trace/row top-level | 否 | 否 | 是 | ADE/FDE/safety |
 | safety/intervention/controller | trace | 后续 decision 可见必要摘要 | 否 | preempted 不监督 | closed-loop metrics |
@@ -2523,13 +2387,17 @@ raw sensors/user events/provider state
   -> ms-swift messages + top-level System1 supervision
 ```
 
-### 11.11 Reasoning V4.2 Full CoT 离线标注链
+### 11.11 Reasoning V4.5 离线标注链
 
-当前主线由 `ReasoningSourceV4 -> five independent grounding calls -> DecisionProposal
-with teacher-only action constraint -> profile-owned composer -> ReasoningAnnotationV4 ->
-ReasoningTrainingViewV4` 构成。source、label 和 view 分别通过
-`build_reasoning_v4_sources.py`、`label_reasoning_v4.py` 和
-`export_reasoning_v4_views.py` 处理。完整合同和数据集 trust policy 见
+当前主线由 `ReasoningSourceV4 -> deterministic Task + four independent LVLM
+groundings -> blind DecisionProposal -> immutable Action Reconciliation audit ->
+strong-owned composer candidate/CompositionRecord -> ReasoningAnnotationV4 ->
+append-only resolution -> preview/formal ReasoningTrainingViewV4` 构成。source、label、
+review projection 和 view 分别通过
+`build_reasoning_v4_sources.py`、`label_reasoning_v4.py`、
+`export_reasoning_v4_reconciliation_review.py` 和 `export_reasoning_v4_views.py`
+处理。preview 永远 blocked；只有派生 eligibility 完整通过的 formal view 才能进入
+ms-swift。完整合同和数据集 trust policy 见
 `docs/REASONING_V4_DATA_ANNOTATION_DESIGN.md`。
 
 #### 11.11.1 Legacy Evidence-conditioned Reasoning V2
@@ -2860,7 +2728,7 @@ ms-swift/swift/sidewalk_nav/models/goal_encoder.py
 reasoning_v4_full_cot_sft:
   system = shared accessibility / evidence / safety / uncertainty policy
   user   = ordered images + instruction + model-visible conditions + evidence catalog
-  target = six canonical sections + finish + optional navigate readout
+  target = six compact sections + exactly one action location + optional masked navigate readout
 ```
 
 V4 的 source/annotation/training-view schema、prompt profile digest 和 LM span mask
@@ -3194,19 +3062,19 @@ src/mcp_server/contracts/task.py
   ExternalUserEvent / TaskState / DialogueState / ControlState
 
 src/mcp_server/contracts/reasoning_v4.py
-  ReasoningTraceV4 / FinishV4 / six shared-input Full-CoT sections
+  ReasoningTraceV4 / exact six shared-input FullCoT sections / no Finish
 
 src/mcp_server/contracts/reasoning_dataset_v4.py
-  V4 source / annotation / training-view and strong-sidecar artifacts
+  V4.5 source / annotation / audit / resolution / training-view contracts
 
 src/mcp_server/teacher/reasoning_v4_batch.py
-  five independent grounding calls, joint Decision, cache and retry
+  deterministic Task, four independent groundings, blind Decision, retry
 
 src/mcp_server/data/reasoning_v4_composer.py
-  validated LVLM sections + isolated sidecars -> canonical target
+  validated sections + frozen strong direction -> canonical action tuple
 
 src/mcp_server/agent/reasoning_v4_validation.py
-  V4 raw-evidence closure, cross-section findings and executability
+  V4.5 profile, action-tuple and constraint consistency
 
 src/mcp_server/contracts/vqa_v2.py
   27-task answer-independent question and minimal typed answer contract
@@ -3355,8 +3223,8 @@ swift/sidewalk_nav/rollout/urbannav_env.py
 | RouteSession mutation CAS/idempotency | 已实现，单进程 | expected revision + idempotency key；分布式 store 未完成 |
 | EpisodeTraceV2 | 已实现 | event-sourced contract |
 | v2 assistant-suffix readout | 已实现 | `[SYS1_i]` 位于 finish 后且 LM mask |
-| Reasoning V4.2 六段 Full CoT | 已实现 breaking contract 与 focused tests，待真实 LVLM smoke | public direction vocabulary、意图/当前动作/示范方向三轴、五段独立 teacher、profile-owned composer、两仓 parity |
-| Reasoning V4.2 真实 LVLM/训练/生成 smoke | 待完成 | 先做小规模人工 review、短训练与 checkpoint 生成回读；未通过前禁止全量标注 |
+| Reasoning V4.5 Compact FullCoT | 已实现本地合同与 focused tests，待真实 LVLM smoke | 最小六段、无 Finish/ref graph、strong action ownership、append-only resolution、formal gate、两仓 parity |
+| Reasoning V4.5 真实 LVLM/人工裁决/训练/生成 smoke | 待完成 | 先做 64 条 diverse review；只有六轴 gate 全通过的 formal views 可训练 |
 | Navigation VQA V2 contract/pipeline | 已实现本地合同与 focused tests | 27 task、18 active/9 dormant、E0 derived GT、17 visible weak tasks、两仓 artifact/parser parity |
 | Navigation VQA V2 真实 LVLM/训练/生成 smoke | 待完成 | 尚未调用真实 teacher；人工 review、实际产量、短训练和 checkpoint 生成回读未验证 |
 | Navigation VQA V1 | 已删除 | 被 V2.0 取代；不保留 parser、manifest、test、设计文档或双写 |
