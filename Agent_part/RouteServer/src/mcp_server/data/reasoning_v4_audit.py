@@ -1,4 +1,4 @@
-"""Deterministic offline audits for Reasoning V4.5 artifacts."""
+"""Deterministic offline audits for Reasoning V4.6 artifacts."""
 
 from __future__ import annotations
 
@@ -10,6 +10,9 @@ from pydantic import ValidationError
 
 from mcp_server.agent.reasoning_v4_prompt_policy import (
     get_prompt_profile_v4,
+)
+from mcp_server.contracts.direction_profile import (
+    affordance_probe_candidates_for_action,
 )
 from mcp_server.contracts.reasoning_dataset_v4 import (
     ReasoningAnnotationV4,
@@ -29,6 +32,9 @@ from mcp_server.data.reasoning_v4_state import (
     derive_reasoning_release_state_v4,
     load_latest_action_resolutions_v4,
 )
+from mcp_server.data.reasoning_v4_task_canonicalization import (
+    canonicalize_task_instruction_v4,
+)
 
 
 def audit_reasoning_v4_annotation_completeness(
@@ -39,11 +45,11 @@ def audit_reasoning_v4_annotation_completeness(
 ) -> dict[str, Any]:
     """Audit source coverage and completed annotation records.
 
-    This audit intentionally does not collapse section acceptance, composition,
-    review, or training eligibility into record completeness.
+    This audit intentionally does not collapse section acceptance, candidate
+    structure, review, or formal eligibility into record completeness.
 
     Args:
-        source_jsonl: Frozen V4.5 source manifest.
+        source_jsonl: Frozen V4 source manifest.
         annotation_jsonl: Append-only annotation manifest.
         expected_rows: Exact expected unique source count.
 
@@ -74,8 +80,15 @@ def audit_reasoning_v4_annotation_completeness(
         counts["all_sections_accepted"] += int(
             annotation.all_sections_accepted
         )
-        counts["composition_valid"] += int(
-            annotation.composition_record.status == "valid"
+        counts["candidate_structurally_valid"] += int(
+            annotation.candidate_structure_record.status == "valid"
+        )
+        _accumulate_p0_annotation_gates_v4(
+            counts,
+            errors,
+            source_id=source_id,
+            source=source,
+            annotation=annotation,
         )
         audit = annotation.action_reconciliation
         counts["pending_human"] += int(
@@ -106,7 +119,7 @@ def audit_reasoning_v4_annotation_completeness(
         )
     return {
         "schema_version": (
-            "urbannav_reasoning_v4_5_annotation_completeness_v1"
+            "urbannav_reasoning_v4_6_annotation_completeness_v1"
         ),
         "source_jsonl": str(source_jsonl),
         "annotation_jsonl": str(annotation_jsonl),
@@ -124,13 +137,13 @@ def audit_reasoning_v4_annotation_completeness(
             "all_sections_accepted": int(
                 counts["all_sections_accepted"]
             ),
-            "composition_valid": int(
-                counts["composition_valid"]
+            "candidate_structurally_valid": int(
+                counts["candidate_structurally_valid"]
             ),
             "pending_human": int(
                 counts["pending_human"]
             ),
-            "training_eligible": 0,
+            "formal_training_eligible": 0,
         },
         "record_status_counts": {
             key.removeprefix("record_status:"): value
@@ -330,8 +343,15 @@ def audit_reasoning_v4_artifacts(
         counts["all_sections_accepted"] += int(
             annotation.all_sections_accepted
         )
-        counts["composition_valid"] += int(
-            annotation.composition_record.status == "valid"
+        counts["candidate_structurally_valid"] += int(
+            annotation.candidate_structure_record.status == "valid"
+        )
+        _accumulate_p0_annotation_gates_v4(
+            counts,
+            errors,
+            source_id=source_id,
+            source=source,
+            annotation=annotation,
         )
         audit = annotation.action_reconciliation
         resolution = (
@@ -356,8 +376,8 @@ def audit_reasoning_v4_artifacts(
         counts["pending_human"] += int(
             state.review_status == "pending_human"
         )
-        counts["training_eligible"] += int(
-            state.training_eligible
+        counts["formal_training_eligible"] += int(
+            state.formal_training_eligible
         )
         if (
             audit is not None
@@ -394,9 +414,28 @@ def audit_reasoning_v4_artifacts(
         counts[
             f"review_status:{view.review_status}"
         ] += 1
-        counts["view_training_eligible"] += int(
-            view.training_eligible
+        counts["view_artifact_training_eligible"] += int(
+            view.artifact_training_eligible
         )
+        if (
+            view.release_track == "review_preview"
+            and view.artifact_training_eligible
+        ):
+            counts["preview_training_leak"] += 1
+            errors.append(
+                f"preview_training_leak:{view.sample_id}"
+            )
+        if (
+            view.release_track == "formal_training"
+            and (
+                not view.artifact_training_eligible
+                or not view.formal_training_eligible
+            )
+        ):
+            counts["formal_ineligible_artifact_leak"] += 1
+            errors.append(
+                f"formal_ineligible_artifact_leak:{view.sample_id}"
+            )
         try:
             profile = get_prompt_profile_v4(
                 view.prompt_profile_id
@@ -441,7 +480,7 @@ def audit_reasoning_v4_artifacts(
             )
     return {
         "schema_version": (
-            "urbannav_reasoning_v4_5_artifact_audit_v1"
+            "urbannav_reasoning_v4_6_artifact_audit_v1"
         ),
         "source_jsonl": str(source_jsonl),
         "annotation_jsonl": str(annotation_jsonl),
@@ -459,14 +498,24 @@ def audit_reasoning_v4_artifacts(
             "all_sections_accepted": int(
                 counts["all_sections_accepted"]
             ),
-            "composition_valid": int(
-                counts["composition_valid"]
+            "candidate_structurally_valid": int(
+                counts["candidate_structurally_valid"]
             ),
             "pending_human": int(
                 counts["pending_human"]
             ),
-            "training_eligible": int(
-                counts["training_eligible"]
+            "formal_training_eligible": int(
+                counts["formal_training_eligible"]
+            ),
+            "task_canonicalization_drift": int(
+                counts["task_canonicalization_drift"]
+            ),
+            "probe_tie_loss": int(counts["probe_tie_loss"]),
+            "preview_training_leak": int(
+                counts["preview_training_leak"]
+            ),
+            "formal_ineligible_artifact_leak": int(
+                counts["formal_ineligible_artifact_leak"]
             ),
         },
         "counts": dict(counts),
@@ -474,6 +523,70 @@ def audit_reasoning_v4_artifacts(
         "warnings": warnings[:200],
         "passed": not errors,
     }
+
+
+def _accumulate_p0_annotation_gates_v4(
+    counts: Counter[str],
+    errors: list[str],
+    *,
+    source_id: str,
+    source: ReasoningSourceV4,
+    annotation: ReasoningAnnotationV4,
+) -> None:
+    """Count task-registry drift and nearest-probe tie loss.
+
+    Args:
+        counts: Mutable audit counters.
+        errors: Mutable bounded error collection.
+        source_id: Stable source identity.
+        source: Frozen source row.
+        annotation: Joined annotation row.
+
+    Returns:
+        None.
+    """
+
+    canonical_task = canonicalize_task_instruction_v4(
+        source.observation.instruction
+    )
+    if (
+        canonical_task is not None
+        and annotation.grounding_outputs.task_grounding
+        != canonical_task.task_grounding
+    ):
+        counts["task_canonicalization_drift"] += 1
+        errors.append(
+            f"task_canonicalization_drift:{source_id}"
+        )
+
+    audit = annotation.action_reconciliation
+    direction = source.direction_supervision
+    if audit is None or direction is None:
+        return
+    strong_label = str(direction.label_name)
+    expected_labels = (
+        ()
+        if strong_label == "stop"
+        else tuple(
+            sorted(
+                candidate.label
+                for candidate in affordance_probe_candidates_for_action(
+                    source.observation.direction_context.action_profile_id,
+                    strong_label,
+                )
+            )
+        )
+    )
+    actual_labels = tuple(
+        str(item.direction_label)
+        for item in audit.probe_projections
+    )
+    if actual_labels != expected_labels:
+        counts["probe_tie_loss"] += 1
+        errors.append(
+            "probe_tie_loss:"
+            f"{source_id}:{actual_labels}!={expected_labels}"
+        )
 
 
 def _source_index_v4(

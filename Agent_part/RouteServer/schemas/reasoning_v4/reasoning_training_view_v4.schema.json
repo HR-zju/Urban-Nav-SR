@@ -2,7 +2,7 @@
   "$defs": {
     "BevRouteEvidenceV4": {
       "additionalProperties": false,
-      "description": "Describe presentation properties of one prompt-visible BEV.\n\nThese fields are retained at the reusable observation boundary for VQA V2\ncompatibility.  Reasoning V4.5 never treats them as route-progress,\ntraversability, clearance, or collision-safety supervision.\n\nArgs:\n    frame: Declared BEV presentation frame.\n    ego_forward: Display direction corresponding to ego forward.\n    route_overlay_visible: Whether a route overlay is rendered.\n    route_direction_authority: Whether clear orientation may support a\n        visible task direction.\n    route_progress_authority: Legacy observation metadata ignored by\n        Reasoning V4.5.\n    route_terminal_marker_visible: Legacy presentation metadata ignored by\n        Reasoning V4.5.\n    route_endpoint_semantics: Legacy endpoint provenance ignored by\n        Reasoning V4.5.\n    local_safety_authority: Always false in Stage-A.\n    producer_contract_id: Versioned upstream producer identity.\n    producer_contract_version: Exact upstream producer version.",
+      "description": "Describe presentation properties of one prompt-visible BEV.\n\nThese fields are retained at the reusable observation boundary for VQA V2\ncompatibility.  Reasoning V4.6 never treats them as route-progress,\ntraversability, clearance, or collision-safety supervision.\n\nArgs:\n    frame: Declared BEV presentation frame.\n    ego_forward: Display direction corresponding to ego forward.\n    route_overlay_visible: Whether a route overlay is rendered.\n    route_direction_authority: Whether clear orientation may support a\n        visible task direction.\n    route_progress_authority: Legacy observation metadata ignored by\n        Reasoning V4.6.\n    route_terminal_marker_visible: Legacy presentation metadata ignored by\n        Reasoning V4.6.\n    route_endpoint_semantics: Legacy endpoint provenance ignored by\n        Reasoning V4.6.\n    local_safety_authority: Always false in Stage-A.\n    producer_contract_id: Versioned upstream producer identity.\n    producer_contract_version: Exact upstream producer version.",
       "properties": {
         "ego_forward": {
           "default": "unknown",
@@ -510,7 +510,7 @@
     },
     "ReasoningTargetV4": {
       "additionalProperties": false,
-      "description": "Wrap the canonical trace used as a training audit sidecar.\n\nArgs:\n    reasoning: Exact six-section V4.5 trace.  V4.5 has no Finish object.",
+      "description": "Wrap the canonical trace used as a training audit sidecar.\n\nArgs:\n    reasoning: Exact six-section V4.6 trace.  V4.6 has no Finish object.",
       "properties": {
         "reasoning": {
           "$ref": "#/$defs/ReasoningTraceV4"
@@ -524,7 +524,7 @@
     },
     "ReasoningTraceV4": {
       "additionalProperties": false,
-      "description": "Canonical six-section shared-input Reasoning V4.5 trace.\n\nArgs:\n    schema_version: Exact V4.5 semantic contract stamp.\n    task_grounding: Deterministically normalized task.\n    scene_grounding: Coarse visible scene summary.\n    local_traversability: Physical direction affordances.\n    navigation_context_grounding: Visible task direction.\n    interaction_constraint_grounding: High-level behavior restrictions.\n    decision: One consistent short-horizon action tuple.",
+      "description": "Canonical six-section shared-input Reasoning V4.6 trace.\n\nArgs:\n    schema_version: Exact V4.6 semantic contract stamp.\n    task_grounding: Deterministically normalized task.\n    scene_grounding: Coarse visible scene summary.\n    local_traversability: Physical direction affordances.\n    navigation_context_grounding: Visible task direction.\n    interaction_constraint_grounding: High-level behavior restrictions.\n    decision: One consistent short-horizon action tuple.",
       "properties": {
         "decision": {
           "$ref": "#/$defs/DecisionV4"
@@ -542,8 +542,8 @@
           "$ref": "#/$defs/SceneGroundingV4"
         },
         "schema_version": {
-          "const": "urbannav_reasoning_trace_v4_5",
-          "default": "urbannav_reasoning_trace_v4_5",
+          "const": "urbannav_reasoning_trace_v4_6",
+          "default": "urbannav_reasoning_trace_v4_6",
           "title": "Schema Version",
           "type": "string"
         },
@@ -609,7 +609,7 @@
     },
     "TaskDirectionV4": {
       "additionalProperties": false,
-      "description": "Store the visible short-horizon route direction.\n\nArgs:\n    status: Whether a prompt-visible direction is usable.\n    direction: Public moving direction when status is ``aligned``.",
+      "description": "Store the visible short-horizon route direction.\n\nArgs:\n    status: Whether a prompt-visible direction is usable.\n    source: Minimal visible authority for an aligned direction.\n    direction: Public moving direction when status is ``aligned``.",
       "properties": {
         "direction": {
           "anyOf": [
@@ -626,6 +626,15 @@
           "default": null,
           "title": "Direction"
         },
+        "source": {
+          "enum": [
+            "bev_route",
+            "instruction",
+            "none"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
         "status": {
           "enum": [
             "aligned",
@@ -638,7 +647,8 @@
         }
       },
       "required": [
-        "status"
+        "status",
+        "source"
       ],
       "title": "TaskDirectionV4",
       "type": "object"
@@ -685,7 +695,7 @@
     }
   },
   "additionalProperties": false,
-  "description": "Cross-repository compact FullCoT view consumed by ms-swift.\n\nReview previews and formal training rows share one syntax, but only formal\nrows may be adapted into LM-loss examples.  Formal rows are fail-closed on\nevery eligibility axis.\n\nArgs:\n    schema_version: Exact V4.5 training-view stamp.\n    reasoning_contract_schema_digest: Exact canonical contract digest.\n    sample_id: Stable view identity.\n    source_group_id: Parent source group.\n    split_group_id: Leakage-safe split group.\n    dataset_source: Dataset family.\n    view_type: Compact FullCoT SFT.\n    release_track: Review-only or formal-training track.\n    audit_id: Exact action audit.\n    review_status: Derived review state.\n    training_status: Derived training state.\n    training_eligible: Derived eligibility bit.\n    images: Ordered prompt images.\n    image_roles: Addressable image roles.\n    instruction: Optional visible instruction.\n    model_visible_context: Additional visible context.\n    evidence_catalog: Prompt-visible input catalog.\n    input_modalities: Input availability flags.\n    direction_context: Public direction profiles.\n    assistant_text: Canonical compact six-section text.\n    reasoning_target: Exact six-section typed target.\n    full_cot_renderer_id: Exact compact renderer.\n    prompt_profile_id: Student prompt profile.\n    prompt_policy_digest: Exact student prompt-policy digest.\n    direction_supervision: Complete private direction stamp.\n    trajectory_ego_t: Optional existing System1 target.\n    trajectory_policy: Existing System1 trajectory contract.\n    action_mask: Optional existing System1 mask.\n    metadata: Non-semantic export metadata.",
+  "description": "Cross-repository compact FullCoT view consumed by ms-swift.\n\nReview previews and formal training rows share one syntax, but only formal\nrows may be adapted into LM-loss examples.  Formal rows are fail-closed on\nevery eligibility axis.\n\nArgs:\n    schema_version: Exact V4.6 training-view stamp.\n    reasoning_contract_schema_digest: Exact canonical contract digest.\n    sample_id: Stable view identity.\n    source_group_id: Parent source group.\n    split_group_id: Leakage-safe split group.\n    dataset_source: Dataset family.\n    view_type: Compact FullCoT SFT.\n    release_track: Review-only or formal-training track.\n    audit_id: Exact action audit.\n    review_status: Derived review state.\n    artifact_status: Whether this artifact is preview-only or training-ready.\n    artifact_training_eligible: Whether this exact artifact may be trained.\n    formal_training_eligible: Eligibility of the joined canonical record.\n    images: Ordered prompt images.\n    image_roles: Addressable image roles.\n    instruction: Optional visible instruction.\n    model_visible_context: Additional visible context.\n    evidence_catalog: Prompt-visible input catalog.\n    input_modalities: Input availability flags.\n    direction_context: Public direction profiles.\n    assistant_text: Canonical compact six-section text.\n    reasoning_target: Exact six-section typed target.\n    full_cot_renderer_id: Exact compact renderer.\n    prompt_profile_id: Student prompt profile.\n    prompt_policy_digest: Exact student prompt-policy digest.\n    direction_supervision: Complete private direction stamp.\n    trajectory_ego_t: Optional existing System1 target.\n    trajectory_policy: Existing System1 trajectory contract.\n    action_mask: Optional existing System1 mask.\n    metadata: Non-semantic export metadata.",
   "properties": {
     "action_mask": {
       "anyOf": [
@@ -707,6 +717,18 @@
       ],
       "default": null,
       "title": "Action Mask"
+    },
+    "artifact_status": {
+      "enum": [
+        "preview_only",
+        "training_ready"
+      ],
+      "title": "Artifact Status",
+      "type": "string"
+    },
+    "artifact_training_eligible": {
+      "title": "Artifact Training Eligible",
+      "type": "boolean"
     },
     "assistant_text": {
       "minLength": 1,
@@ -749,9 +771,13 @@
       "title": "Evidence Catalog",
       "type": "array"
     },
+    "formal_training_eligible": {
+      "title": "Formal Training Eligible",
+      "type": "boolean"
+    },
     "full_cot_renderer_id": {
-      "const": "reasoning_v4_compact_full_cot_renderer_v2",
-      "default": "reasoning_v4_compact_full_cot_renderer_v2",
+      "const": "reasoning_v4_compact_full_cot_renderer_v3",
+      "default": "reasoning_v4_compact_full_cot_renderer_v3",
       "title": "Full Cot Renderer Id",
       "type": "string"
     },
@@ -814,8 +840,8 @@
       "type": "string"
     },
     "reasoning_contract_schema_digest": {
-      "const": "dfa3c1a15e32e4c66bc1a3f7689960a7e10de9a79f83d594d61ef2f64151e2aa",
-      "default": "dfa3c1a15e32e4c66bc1a3f7689960a7e10de9a79f83d594d61ef2f64151e2aa",
+      "const": "91435900c55487d4efb9379a862da17bf592651a184a21684e67c5f402eb09ac",
+      "default": "91435900c55487d4efb9379a862da17bf592651a184a21684e67c5f402eb09ac",
       "title": "Reasoning Contract Schema Digest",
       "type": "string"
     },
@@ -847,8 +873,8 @@
       "type": "string"
     },
     "schema_version": {
-      "const": "urbannav_reasoning_training_view_v4_5_compact_v1",
-      "default": "urbannav_reasoning_training_view_v4_5_compact_v1",
+      "const": "urbannav_reasoning_training_view_v4_6_compact_v1",
+      "default": "urbannav_reasoning_training_view_v4_6_compact_v1",
       "title": "Schema Version",
       "type": "string"
     },
@@ -862,18 +888,6 @@
       "maxLength": 240,
       "minLength": 1,
       "title": "Split Group Id",
-      "type": "string"
-    },
-    "training_eligible": {
-      "title": "Training Eligible",
-      "type": "boolean"
-    },
-    "training_status": {
-      "enum": [
-        "eligible",
-        "blocked"
-      ],
-      "title": "Training Status",
       "type": "string"
     },
     "trajectory_ego_t": {
@@ -921,8 +935,9 @@
     "dataset_source",
     "release_track",
     "review_status",
-    "training_status",
-    "training_eligible",
+    "artifact_status",
+    "artifact_training_eligible",
+    "formal_training_eligible",
     "images",
     "image_roles",
     "evidence_catalog",

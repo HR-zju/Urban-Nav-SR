@@ -1,4 +1,4 @@
-"""Versioned compact FullCoT student prompt policy for Reasoning V4.5."""
+"""Versioned compact FullCoT student prompt policy for Reasoning V4.6."""
 
 from __future__ import annotations
 
@@ -36,11 +36,12 @@ The six sections independently use the same complete input:
 1. TaskGrounding normalizes the task into objective, explicit requirements, and
    material ambiguities.
 2. SceneGrounding summarizes scene type, walkable support, key entity
-   categories, and traffic context without object IDs or boxes.
+   categories, and traffic context without object IDs or boxes. A crosswalk is
+   walkable support, not an entity.
 3. LocalTraversability judges physical FPV executability only for public
    affordance_probe_labels. limiting_factors contain physical causes only.
-4. NavigationContextGrounding gives only a visible moving task direction, or a
-   fail-closed status.
+4. NavigationContextGrounding gives only a visible moving task direction, its
+   minimal visible source, or a fail-closed status with source=none.
 5. InteractionConstraintGrounding records current high-level restrictions that
    require slow, yield, stop, or avoidance.
 6. Decision gives one action tuple: selected_action_label, speed, response.
@@ -52,6 +53,9 @@ overlay may support route direction and upcoming topology when its orientation
 is clear. The absence of local safety authority only prevents BEV from proving
 traversability, clearance, or collision safety. Never derive direction from GPS,
 route matching, route theta, pose, pixel-goal geometry, or waypoint geometry.
+Set task_direction.source=bev_route only when that oriented overlay supports the
+direction. Set source=instruction only when the instruction itself explicitly
+states a direction. Generic route-following text is not directional evidence.
 
 Use lower_snake_case open codes where the schema uses ReasonCode. Use only the
 provided action_labels and affordance_probe_labels for direction fields. Do not
@@ -64,19 +68,21 @@ Return exactly:
 <TaskGrounding>{"objective":"...","requirements":[],"ambiguities":[]}</TaskGrounding>
 <SceneGrounding>{"scene_type":"...","walkable_support":"...","key_entities":[],"traffic_context":"..."}</SceneGrounding>
 <LocalTraversability>{"direction_affordances":[]}</LocalTraversability>
-<NavigationContextGrounding>{"task_direction":{"status":"...","direction":"..."}}</NavigationContextGrounding>
+<NavigationContextGrounding>{"task_direction":{"status":"...","source":"...","direction":"..."}}</NavigationContextGrounding>
 <InteractionConstraintGrounding>{"constraints":[]}</InteractionConstraintGrounding>
 <Decision>{"selected_action_label":"...","speed":"...","response":"..."}</Decision>
 </think>
 
-Preserve this exact order. Omit nullable direction when status is not aligned.
-The stop action uses speed=stop and response=stop. Moving actions never use stop
-speed or response. Add no prose, markdown, comments, or extra tags."""
+Preserve this exact order. Omit nullable direction and use source=none when
+status is not aligned. The stop action uses speed=stop and response=stop. Moving
+actions never use stop speed or response. Only avoid may name affected direction
+labels; slow, yield, and stop are global and must use an empty list. Add no
+prose, markdown, comments, or extra tags."""
 
 
 @dataclass(frozen=True)
 class ReasoningV4StudentProfile:
-    """Describe one cross-repository V4.5 student policy.
+    """Describe one cross-repository V4.6 student policy.
 
     Args:
         profile_id: Stable profile identity.
@@ -94,9 +100,9 @@ class ReasoningV4StudentProfile:
 
 
 def _full_cot_profile() -> ReasoningV4StudentProfile:
-    """Build the sole V4.5 student prompt profile."""
+    """Build the sole V4.6 student prompt profile."""
 
-    profile_id = "urbannav_reasoning_v4_5_compact_full_cot_sft_v1"
+    profile_id = "urbannav_reasoning_v4_6_compact_full_cot_sft_v1"
     payload = {
         "profile_id": profile_id,
         "trace_schema_version": REASONING_TRACE_V4_SCHEMA_VERSION,
@@ -127,7 +133,7 @@ def _full_cot_profile() -> ReasoningV4StudentProfile:
         "view_type": "full_cot_sft",
         "section_name": None,
         "system_prompt": _SYSTEM_PROMPT,
-        "user_prompt_builder": "build_reasoning_v4_user_prompt_v4_5",
+        "user_prompt_builder": "build_reasoning_v4_user_prompt_v4_6",
     }
     digest = hashlib.sha256(
         json.dumps(
@@ -162,7 +168,7 @@ PROMPT_PROFILE_REGISTRY_V4: Mapping[
 def get_prompt_profile_v4(
     profile_id: str,
 ) -> ReasoningV4StudentProfile:
-    """Resolve the sole supported V4.5 student profile.
+    """Resolve the sole supported V4.6 student profile.
 
     Args:
         profile_id: Exact profile identity.
@@ -178,7 +184,7 @@ def get_prompt_profile_v4(
         return PROMPT_PROFILE_REGISTRY_V4[str(profile_id)]
     except KeyError as exc:
         raise ValueError(
-            "unsupported Reasoning V4.5 prompt profile: "
+            "unsupported Reasoning V4.6 prompt profile: "
             f"{profile_id!r}"
         ) from exc
 

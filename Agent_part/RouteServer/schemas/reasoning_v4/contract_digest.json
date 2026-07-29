@@ -1,40 +1,40 @@
 {
   "artifact_sha256": {
-    "reasoning_training_view_v4.schema.json": "66d7431ca920d54735cd139c8ce6298371692a59637fbdadecdab207d725fb60",
-    "reasoning_v4.schema.json": "e49793ca17bff0e206c67644c7cfa690657be492af75fe7ae426169cfbed87ec",
-    "reasoning_v4_golden_invalid.json": "dc0f098745bb957a33c00ac7753de86573261baf617abe3d5f8e0b7d26b053e1",
-    "reasoning_v4_golden_valid.json": "246df2bc20aaf2b660370473b9ab6245470114e4e8d1039dac32dc87a12661d3"
+    "reasoning_training_view_v4.schema.json": "3eb6ceaede5c7fd37718202b986068273f7705eb58c5a9b7a3bcfe6bc07d6b6d",
+    "reasoning_v4.schema.json": "2dc27475cd0e0902b26713fafdd56ec32d82df6f2406add3d1f4a987f40f78d4",
+    "reasoning_v4_golden_invalid.json": "912cc585002e78c38eb9781b1d413d8b8af7abf974326fa0e1ad8c9e8bf7c22d",
+    "reasoning_v4_golden_valid.json": "0b56e4da1a1de34b16ad4b9fef7ac373f44923b27d15b128a8a390a959ef1cc5"
   },
   "canonical_source_sha256": {
-    "src/mcp_server/agent/reasoning_v4_prompt_policy.py": "e45d70c943825c1d74d1a8c3e9e460ee4e15cf7c2797eecb5988af85fe24b42f",
-    "src/mcp_server/agent/reasoning_v4_text.py": "7759f2143ac25d9feda2df9977238b4039d5e1ab046fa27a040822ac2df9f1b7",
-    "src/mcp_server/agent/reasoning_v4_validation.py": "ef6b7d66c6067637de5e1c47ba6d969cd90c0166ef1183ae3a46b546c3053d84",
+    "src/mcp_server/agent/reasoning_v4_prompt_policy.py": "5effed943564f81d287013c547f3fcc515dc11f041c3eb138a32550aa9e1b9aa",
+    "src/mcp_server/agent/reasoning_v4_text.py": "f254b6404716ab414fa6054f8c8a9ad27022994ab7302e2a565130b28dbbee9b",
+    "src/mcp_server/agent/reasoning_v4_validation.py": "7b5988c3c9481cf43536ac10ee33d2d4c7ece8d6c8cb35d08b957b7efc5ebb05",
     "src/mcp_server/contracts/direction_profile.py": "2e47435c54f8d8c63ca0cede70631370de3520656be93e764370a5274e0afa4f",
-    "src/mcp_server/contracts/reasoning_dataset_v4.py": "df23784be34feee642319969ca06c4d83441c19d22392bcb0ed6e0979d031ad0",
-    "src/mcp_server/contracts/reasoning_v4.py": "28c17306d384879d6b893d4727b8d96317dff729010ad0ac3f627369d309c4e0",
-    "src/mcp_server/data/reasoning_v4_audit.py": "5f71be75e3bebfc09995433b5b35afaeeb6712fae9db0ea57798384bb57b13ed",
-    "src/mcp_server/data/reasoning_v4_compact.py": "3b00c61af69f24051e7b12ccdace61c2239f694b89fb830fabbfa164aff95a62",
-    "src/mcp_server/data/reasoning_v4_composer.py": "2ab8e77de6a39f562aaaf02dfb93a8bbbe6376785349d54681e3611a1f231200",
-    "src/mcp_server/data/reasoning_v4_reconciliation.py": "27dfdb8b73381a6d099bb7828640d22dcdda09129d48fca952cf7fc39dc6b6da",
-    "src/mcp_server/data/reasoning_v4_source.py": "03052273a02455b63575eb4cef594f2efb4e2cbb9ec220e8c04f3da944b6ffca",
-    "src/mcp_server/data/reasoning_v4_state.py": "11015bf8b0b01884fed1f5c1471c9488a4b71195815d55cfa3b1a18450a1d951",
-    "src/mcp_server/data/reasoning_v4_task_canonicalization.py": "1377c6fc343f216f5ee9679d5c204a1101514044f0a5ebe2c161a0f54799c80f",
-    "src/mcp_server/data/reasoning_v4_views.py": "eea01e984d0c228ef53c9f29cdf26a40303a0e5cb0fa03ef280b9ea067e3aeb5",
-    "src/mcp_server/teacher/reasoning_v4_batch.py": "25715f19a9e5eb877da4adab91817280ebc88e8eeb31b784b42a35dc9e4b888e",
-    "src/mcp_server/teacher/reasoning_v4_profiles.py": "cd637477c1978a7f0aae38c8b2b1c5bbe83fad6bd3095c535d6de84a894f6a22",
-    "src/mcp_server/teacher/reasoning_v4_teacher.py": "a4230bfea0ed6d3302cd36710f0335abac681f02d40089ccba0bc04374b6e946"
+    "src/mcp_server/contracts/reasoning_dataset_v4.py": "7cae2c6225cb7dce5d41b7afc8d242d1213e135d4d2dfd79d4259ebaf2736a23",
+    "src/mcp_server/contracts/reasoning_v4.py": "fdf9129e6e3bda66c580ca16ffc17da09b61ed6a41652d92fd95a4033f18fb31",
+    "src/mcp_server/data/reasoning_v4_audit.py": "86da4f4c8c37b0d4a8f9a01e76ea370ec3f7d636a73103ba582abf4116f7d58d",
+    "src/mcp_server/data/reasoning_v4_compact.py": "b4040ff89989f4693c128ab7e43dbc16d4744fb001f705748087042776a88819",
+    "src/mcp_server/data/reasoning_v4_composer.py": "c6f14aab5188ad23995d0fe7031a96ea94179d888637211547ed1d7c877c2d26",
+    "src/mcp_server/data/reasoning_v4_reconciliation.py": "2f4e85eabb71c1ee79f16dd57526e4bed3abcd37c4b5c41a4d8a1b10624c7b01",
+    "src/mcp_server/data/reasoning_v4_source.py": "de4366297dd7f689bdd9a9d3990b75505f57964377f2d47ede0251f62c0bb18f",
+    "src/mcp_server/data/reasoning_v4_state.py": "88ad56b29a7db014a0a756116daee02887988dcdbaaba57b792b1c8197e9ccdf",
+    "src/mcp_server/data/reasoning_v4_task_canonicalization.py": "6e4565af209e5c2395a46793e333688201087b923e88817391fd825075e6706d",
+    "src/mcp_server/data/reasoning_v4_views.py": "cfd376df7a75298e8a741a493ab066e95530ea3c0145bbad38cfe9f5351b37e2",
+    "src/mcp_server/teacher/reasoning_v4_batch.py": "fbb77e5f67d2e1ea8ba0fb4f2f8032522c3b7114c75a042b3e79f529b833a12f",
+    "src/mcp_server/teacher/reasoning_v4_profiles.py": "cf539339b2d96246ca486a335a113916a2beb8802d053d570a40bb216100423a",
+    "src/mcp_server/teacher/reasoning_v4_teacher.py": "9c0c7b4610fb10b2e0c141f181d49a46fe4f1ada04642aa60a18541c7bc265ed"
   },
   "prompt_policy_digests": {
-    "urbannav_reasoning_v4_5_compact_full_cot_sft_v1": "2e1a1453d2d4bf66b61824e7b3da889aafb6926bb9b787a87f66fc2472c8d61a"
+    "urbannav_reasoning_v4_6_compact_full_cot_sft_v1": "9dcc6194c41333164e5fd265289812925d8b00305b828d6bdc7956bf5010b929"
   },
   "protocol_ids": {
-    "evidence_policy_version": "urbannav_reasoning_v4_evidence_policy_v7",
-    "parser_id": "parse_reasoning_target_v4_v5",
-    "renderer_id": "render_reasoning_target_v4_v5",
-    "section_definition_version": "urbannav_reasoning_v4_section_definitions_v7",
-    "validator_id": "validate_reasoning_target_v4_v7",
-    "wire_format_version": "urbannav_reasoning_v4_wire_v5"
+    "evidence_policy_version": "urbannav_reasoning_v4_evidence_policy_v8",
+    "parser_id": "parse_reasoning_target_v4_v6",
+    "renderer_id": "render_reasoning_target_v4_v6",
+    "section_definition_version": "urbannav_reasoning_v4_section_definitions_v8",
+    "validator_id": "validate_reasoning_target_v4_v8",
+    "wire_format_version": "urbannav_reasoning_v4_wire_v6"
   },
-  "reasoning_contract_schema_digest": "dfa3c1a15e32e4c66bc1a3f7689960a7e10de9a79f83d594d61ef2f64151e2aa",
-  "schema_version": "urbannav_reasoning_v4_contract_artifacts_v8"
+  "reasoning_contract_schema_digest": "91435900c55487d4efb9379a862da17bf592651a184a21684e67c5f402eb09ac",
+  "schema_version": "urbannav_reasoning_v4_contract_artifacts_v9"
 }

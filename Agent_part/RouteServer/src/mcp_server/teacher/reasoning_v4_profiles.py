@@ -1,4 +1,4 @@
-"""Versioned independent-section teacher profiles for Reasoning V4.5."""
+"""Versioned independent-section teacher profiles for Reasoning V4.6."""
 
 from __future__ import annotations
 
@@ -65,7 +65,8 @@ Responsibility: summarize the visible navigation scene.
 Fields: scene_type, walkable_support, key_entities, and traffic_context as
 coarse lower_snake_case categories.
 Boundaries: categories are not instance IDs or boxes; include only entities
-material to local navigation; do not decide traversability or action.
+material to local navigation; a crosswalk is walkable_support and must not be
+repeated as an entity; do not decide traversability or action.
 Example:
 {"scene_type":"urban_sidewalk","walkable_support":"paved_sidewalk","key_entities":["pedestrian"],"traffic_context":"no_active_control_visible"}""",
     "LocalTraversability": """\
@@ -80,20 +81,24 @@ Example:
 {"direction_affordances":[{"direction_label":"straight","affordance":"conditional","clearance":"narrow","limiting_factors":["dynamic_occupancy"]}]}""",
     "NavigationContextGrounding": """\
 Responsibility: infer only the prompt-visible short-horizon task direction.
-Fields: task_direction.status and optional task_direction.direction.
+Fields: task_direction.status, task_direction.source, and optional
+task_direction.direction.
 Boundaries: direction must be a moving action_label; generic route-following
 text alone does not determine left/right; a clearly oriented visible BEV route
-overlay may support direction but never local safety.
+overlay may support direction but never local safety. Use source=bev_route only
+for that visible overlay, source=instruction only for an explicit directional
+instruction, and source=none whenever status is not aligned.
 Example:
-{"task_direction":{"status":"aligned","direction":"left_20"}}""",
+{"task_direction":{"status":"aligned","source":"bev_route","direction":"left_20"}}""",
     "InteractionConstraintGrounding": """\
 Responsibility: record current high-level behavior restrictions that alter the
 short action.
 Fields per constraint: kind, status, effect, affected_direction_labels.
-Boundaries: default to an empty list; stop is global and uses an empty affected
-list; avoid names a non-empty affected subset; do not add generic caution.
+Boundaries: default to an empty list; slow, yield, and stop are global and use
+an empty affected list; only avoid names a non-empty affected subset; do not
+add generic caution.
 Example:
-{"constraints":[{"kind":"pedestrian_crossing","status":"applicable","effect":"yield","affected_direction_labels":[]}]}""",
+{"constraints":[{"kind":"crossing_interaction","status":"applicable","effect":"yield","affected_direction_labels":[]}]}""",
     "Decision": """\
 Responsibility: make a blind short-horizon proposal from the complete visible
 input and the five validated grounding sections.
@@ -155,10 +160,10 @@ def _profile(section_name: str) -> ReasoningV4TeacherProfile:
         f"{_SECTION_POLICIES[section_name]}"
     )
     profile_id = (
-        f"reasoning_v4_teacher_{section_name.lower()}_v8"
+        f"reasoning_v4_teacher_{section_name.lower()}_v9"
     )
     derivation_version = (
-        f"reasoning_v4_5_{section_name.lower()}_derivation_v1"
+        f"reasoning_v4_6_{section_name.lower()}_derivation_v1"
     )
     payload = {
         "profile_id": profile_id,

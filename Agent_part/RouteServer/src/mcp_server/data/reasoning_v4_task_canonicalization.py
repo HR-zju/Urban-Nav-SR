@@ -1,4 +1,4 @@
-"""Deterministic instruction canonicalization for Reasoning V4.5.
+"""Deterministic instruction canonicalization for Reasoning V4.6.
 
 Task taxonomy is intentionally separated from per-sample visual annotation.
 Known instruction templates resolve through a versioned registry.  Unknown
@@ -19,7 +19,7 @@ from mcp_server.contracts.reasoning_v4 import TaskGroundingV4
 
 
 REASONING_V4_TASK_CANONICALIZATION_VERSION = (
-    "reasoning_v4_task_canonicalization_v1"
+    "reasoning_v4_task_canonicalization_v2"
 )
 
 _GENERIC_ROUTE_INSTRUCTIONS = (
@@ -28,6 +28,7 @@ _GENERIC_ROUTE_INSTRUCTIONS = (
     "follow the navigation route",
     "navigate along the route",
     "continue along the route",
+    "navigate safely on the sidewalk and follow the visible route",
     "请沿路线前进",
     "请按照路线前进",
     "沿导航路线前进",

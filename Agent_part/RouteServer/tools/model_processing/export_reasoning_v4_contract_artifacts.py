@@ -39,7 +39,7 @@ from mcp_server.contracts.reasoning_v4 import (
 )
 
 
-ARTIFACT_SCHEMA_VERSION = "urbannav_reasoning_v4_contract_artifacts_v8"
+ARTIFACT_SCHEMA_VERSION = "urbannav_reasoning_v4_contract_artifacts_v9"
 ARTIFACT_FILENAMES = (
     "reasoning_v4.schema.json",
     "reasoning_training_view_v4.schema.json",
@@ -243,6 +243,7 @@ def _valid_target() -> ReasoningTargetV4:
     navigation = NavigationContextGroundingV4(
         task_direction=TaskDirectionV4(
             status="aligned",
+            source="instruction",
             direction="straight",
         ),
     )

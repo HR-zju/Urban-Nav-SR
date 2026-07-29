@@ -680,10 +680,10 @@ a_{t,k+1}^{S2}=\pi_{\theta}^{S2}
 
 其中 \(c\) 是 tool call，\(r\) 是 tool response。这样支持多工具串联、路线修改和失败恢复。
 
-### 5.3 Reasoning V4.5 单轮 Compact FullCoT
+### 5.3 Reasoning V4.6 单轮 Compact FullCoT
 
-Reasoning V4.5 是 Stage-A 单轮 E2E 导航的最小语言推理合同。它与 runtime 的 agent
-`<finish>`、tool loop 和任务终态合同分离。V4.5 不把可恢复但未经验证的 object graph、
+Reasoning V4.6 是 Stage-A 单轮 E2E 导航的最小语言推理合同。它与 runtime 的 agent
+`<finish>`、tool loop 和任务终态合同分离。V4.6 不把可恢复但未经验证的 object graph、
 route progress 或时序关系包装成训练真值。
 
 ```text
@@ -703,7 +703,7 @@ private strong direction + deterministic composer
                          v
        candidate target + immutable reconciliation audit
                          |
-          derived review/training release state
+     derived candidate/review/formal/artifact state
                          |
                          v
             one compact six-section LM row
@@ -726,7 +726,7 @@ ms-swift 只消费生成的 mirror、formal training view 和 loss payload。
 </think>
 ```
 
-V4.5 没有 `Finish`、readout、refs、route progress 或第七段。六段共享读取完整输入；
+V4.6 没有 `Finish`、readout、refs、route progress 或第七段。六段共享读取完整输入；
 它们不是严格串行的隐变量链。Decision teacher 可读取五段已验证 grounding，但看不到
 private strong label。动作仅在 `Decision.selected_action_label` 出现一次并使用 LM loss。
 `stop` 只是短时 hold，不表示 arrival 或 task completion。
@@ -767,6 +767,10 @@ SHA-256 fingerprint。已知 route-following 模板固定输出：
 ```
 
 未知 fingerprint 最多标注一次并进入同 run cache；同义模板不得逐样本重复调用 LVLM。
+registry v2 将
+`Navigate safely on the sidewalk and follow the visible route.` 确定性规范化为上述 tuple。
+恢复 append-only cache 时，旧 annotation schema 或已经进入 registry 的旧 LVLM task
+结果都视为 stale，不能覆盖当前 deterministic canonicalizer。
 
 | 字段 | 类型 | 约束 |
 | --- | --- | --- |
@@ -785,8 +789,10 @@ SHA-256 fingerprint。已知 route-following 模板固定输出：
 | `key_entities` | `list[ReasonCode]` | navigation-relevant 粗类别；唯一，最多 16 |
 | `traffic_context` | `ReasonCode` | 开放粗控制语境 |
 
-这些字段是 LVLM weak visual summary，不是 instance-level GT。V4.5 不输出 entity/control
-ID、位置、mask、bbox、metric depth、tracking 或 confidence。
+这些字段是 LVLM weak visual summary，不是 instance-level GT。crosswalk 是
+`walkable_support`，不是 entity；当前过街行为影响由 Interaction 的
+`crossing_interaction` 表达。V4.6 不输出 entity/control ID、位置、mask、bbox、metric
+depth、tracking 或 confidence。
 
 #### 5.3.4 LocalTraversability 字段
 
@@ -818,18 +824,23 @@ NavigationContextGrounding
   task_direction
     status
     optional direction
+    source
 ```
 
 | 字段 | 类型 | 约束 |
 | --- | --- | --- |
 | `status` | aligned/conflict/not_visible/insufficient_evidence | 独立表示方向证据状态 |
 | `direction` | nullable `ReasonCode` | 只在 aligned 时存在，必须为 profile moving label，禁止 stop |
+| `source` | bev_route/instruction/none | aligned 记录真实可见方向来源；其他状态固定 none |
 
 generic route-following instruction 不能单独推出左右方向。只有明示方向 instruction，或
 朝向清楚且 route overlay 可见、具有 `visual_conditional` direction authority 的 BEV，
 可以支持 aligned direction。BEV 可以支持 route direction 和 upcoming topology；缺少
 local safety authority 只阻止它证明 traversability、clearance 和 collision safety。
-V4.5 不输出 goal/source alignments、route progress、remaining distance 或 arrival。
+NavigationContext teacher 单独使用 `image_detail=high`，避免 BEV route overlay 在
+provider 侧压缩后消失。aligned 必须携带 `source=bev_route|instruction`；其余状态必须为
+`direction=null, source=none`。V4.6 不输出 goal/source alignments、route progress、
+remaining distance 或 arrival。
 
 #### 5.3.6 InteractionConstraintGrounding 字段
 
@@ -840,9 +851,9 @@ V4.5 不输出 goal/source alignments、route progress、remaining distance 或 
 | `kind` | `ReasonCode` | 开放粗约束类别 |
 | `status` | applicable/uncertain | 当前适用性 |
 | `effect` | slow/yield/stop/avoid | 最小行为影响 |
-| `affected_direction_labels` | action label list | 空表示全局；avoid 要求非空子集 |
+| `affected_direction_labels` | action label list | 只有 avoid 可使用非空子集 |
 
-`constraints=[]` 是正常负判断。global stop 不枚举全部 directions；avoid 必须明确受影响
+`constraints=[]` 是正常负判断。slow/yield/stop 必须为空；avoid 必须明确非空受影响
 子集。本段没有 object ID、source state、temporal relation、tracker、ego-motion、TTC
 或 normative-policy GT。
 
@@ -867,9 +878,9 @@ teacher 覆盖 strong direction。行为 tuple 按 applicable effects 确定性�
 | avoid | slow | detour |
 | strong action = stop | stop | stop |
 
-strong moving 与 applicable global stop 冲突时 composition invalid 并进入 review；
+strong moving 与 applicable global stop 冲突时 candidate structure invalid 并进入 review；
 不能把 moving label 静默改写为 stop。moving action 禁止 stop speed/response；stop
-必须严格 stop/stop。V4.5 不输出 decision_type、motion、social_action、fallback、
+必须严格 stop/stop。V4.6 不输出 decision_type、motion、social_action、fallback、
 uncertainty 或 support/evidence refs。
 
 #### 5.3.8 Source 与 private supervision
@@ -891,7 +902,9 @@ uncertainty 或 support/evidence refs。
 | `temporal_evidence_eligible` | 仅共享 VQA V2 兼容；FullCoT 不消费 |
 
 BEV observation 中保留的 route-progress presentation metadata 也仅用于共享 VQA source
-兼容。Reasoning V4.5 不读取 route progress、terminal 或 local-safety truth。
+兼容。Reasoning V4.6 不读取 route progress、terminal 或 local-safety truth。共享 source
+envelope 仍使用 `urbannav_reasoning_source_v4_5` 是有意的；本轮输入结构未变，不能据此
+复用旧 V4.5 annotation/cache。
 
 `ReasoningSourceV4` 额外保存 private sidecars：
 
@@ -904,7 +917,7 @@ BEV observation 中保留的 route-progress presentation metadata 也仅用于�
 
 方向 stamp 必须同时包含 profile ID/version、index、name、choice、angle、source、
 bin mode 和 derivation version。缺字段、identity 不一致、profile 不在 allowlist 或
-source 使用 route theta 时 fail closed。V4.5 不从 row trajectory、BEV、GPS、route、
+source 使用 route theta 时 fail closed。V4.6 不从 row trajectory、BEV、GPS、route、
 goal 或 LVLM 回答重新派生 direction。
 
 #### 5.3.9 Annotation、audit 与 append-only resolution
@@ -919,7 +932,7 @@ goal 或 LVLM 回答重新派生 direction。
 | `decision_proposal` | blind LVLM proposal |
 | `action_reconciliation` | immutable proposal/strong/grounding audit |
 | `composer_candidate/candidate_target` | 未经隐式改写的 strong-owned candidate |
-| `composition_record` | valid/invalid/not_available 及诊断 |
+| `candidate_structure_record` | valid/invalid/not_available 及 composer 诊断 |
 | `stage_records` | 六段状态与 producer provenance |
 | `errors/warnings` | record-level 诊断 |
 | `teacher_provider/teacher_model/metadata` | run provenance |
@@ -936,10 +949,15 @@ source_fingerprint
 proposal_digest
 groundings_digest
 comparison
-probe_projection
+probe_projections
 four deterministic checks
 review_trigger_codes
 ```
+
+全部等距离最近 probe 都必须保存；例如 `right_20` 同时对应 `right_10/right_30`，不能
+按列表顺序任取一个。聚合结果为
+`all_supported/all_unsupported/mixed/unknown/not_applicable`，
+`mixed/all_unsupported/unknown` 进入 review。
 
 它不复制 profile、proposal、strong label 或 candidate，不持久化 review priority/status。
 expanded review queue 通过 source/annotation join 生成可读对照。
@@ -949,7 +967,7 @@ resolved action、reason code、reviewer、timezone-aware timestamp 和 note。r
 不能偷偷修正 source GT；若 resolved action 不等于 frozen strong label，release gate 要求
 修正上游 direction、生成新 source fingerprint 并重新标注。
 
-#### 5.3.10 五个状态轴与 formal release
+#### 5.3.10 独立状态轴与 formal release
 
 状态必须独立：
 
@@ -957,18 +975,23 @@ resolved action、reason code、reviewer、timezone-aware timestamp 和 note。r
 | --- | --- |
 | record | complete/error |
 | section | accepted/rejected/error/skipped |
-| composition | valid/invalid/not_available |
+| candidate structure | valid/invalid/not_available |
 | review | not_required/pending_human/resolved/rejected |
-| training | eligible/blocked |
+| formal eligibility | true/false |
+| artifact status | preview_only/training_ready |
+| artifact eligibility | true/false |
 
-正式 training eligible 当且仅当 record complete、六段全部 accepted、composition valid、
+正式 training eligible 当且仅当 record complete、六段全部 accepted、candidate structure
+valid、
 audit 存在且可重建、review 为 not_required/resolved、resolved action 仍等于 frozen
 strong，并且 candidate 对 source/profile 再验证通过。
 
-`review_preview` 永远 blocked。`formal_training` 只导出 eligible rows。ms-swift 在
-Pydantic defaults 之前检查原始 view 的 schema、canonical contract digest、
-`release_track=formal_training`、audit ID、review 和 eligibility，防止 preview 或 stale
-row 混入训练。
+`review_preview` 固定
+`artifact_status=preview_only, artifact_training_eligible=false`，但可展示独立的
+`formal_training_eligible`；它仍不能训练。`formal_training` 必须同时为
+`artifact_status=training_ready`、artifact/formal eligibility true。ms-swift 在 Pydantic
+defaults 之前检查这些原始字段以及 schema、canonical digest、audit ID 和 review，防止
+preview 或 stale row 混入训练。
 
 #### 5.3.11 Training view 与 LM loss
 
@@ -977,22 +1000,28 @@ row 混入训练。
 | 字段组 | 字段 | 作用 |
 | --- | --- | --- |
 | identity | schema/digest/sample/source/split/dataset | contract、join、防泄漏 |
-| release | release track/audit/review/training state | formal admission |
+| release | release track/audit/review/artifact status/artifact eligibility/formal eligibility | formal admission |
 | visible input | images/roles/instruction/context/catalog/modalities | 构造多模态 prompt |
 | public vocabulary | direction context | action/probe allowlist |
 | language target | assistant text + typed target | exact six-section LM target |
 | binding | renderer ID + prompt profile/digest | 防 renderer/prompt 漂移 |
 | private supervision | direction stamp | strong action identity校验 |
-| optional System1 | trajectory/policy/action mask | 既有 trajectory loss |
+| optional System1 | trajectory/policy/action mask；ms-swift 派生 query contract | 既有 trajectory loss 与 16-slot runtime binding |
 | metadata | audit identity与非语义 provenance | 审计，不进入 assistant |
 
-assistant message 的 `loss=true`，`reasoning_v4_5_sections` 对六个 tag 全部启用 LM loss。
+assistant message 的 `loss=true`，`reasoning_v4_6_sections` 对六个 tag 全部启用 LM loss。
 `selected_action_label` 只在 Decision 中训练；没有独立 direction head，也没有 Finish 的
-重复 action target。可选 System1 trajectory 继续走既有 trajectory loss。
+重复 action target。可选 System1 trajectory 继续走既有 trajectory loss。此类 row 必须
+同时携带 16 步 `trajectory_ego_t`、16 位 `action_mask`，并在最后一个 user turn 放置
+`[TRAJ_0]...[TRAJ_15]`；assistant 不得包含 query，query LM label 为 `-100`。query count
+与 target horizon 独立校验，不声明 token-step 一一对应；expanded encode 找不到完整
+query 时 fail closed。
 
-固定审计指标是 Sources、Record Complete、All Sections Accepted、Composition Valid、
-Pending Human、Training Eligible。正式批量标注前先运行 64-row diverse smoke，生成
-self-contained HTML；full runner 同时要求上述机器 gate 全通过和人工显式批准。
+固定审计指标包括 Sources、Record Complete、All Sections Accepted、Candidate
+Structurally Valid、Pending Human、Formal Training Eligible、Artifact Training
+Eligible，以及 task canonicalization drift、equal-nearest probe loss、preview leak。
+正式批量标注前先运行 64-row diverse smoke，生成 self-contained HTML；full runner
+同时要求上述机器 gate 全通过和人工显式批准。
 ### 5.4 Navigation VQA V2 原子监督链
 
 VQA V2 是与 Reasoning V4 并列的 answer-only LM contract，不是 Full CoT 的 section
@@ -1745,11 +1774,11 @@ has(system1\_output)\land has(action\_dispatched)
 
 ### 10.2 同源多任务视图
 
-V4.5 每个 eligible `source_group_id` 最多生成一个 compact FullCoT row：
+V4.6 每个 eligible `source_group_id` 最多生成一个 compact FullCoT row：
 
 | Row view | assistant target | LM | System1 | seg/pixel traj |
 | --- | --- | --- | --- | --- |
-| V4.5 FullCoT | 精确六段、无 Finish/readout | 六段全开，动作只在 Decision | optional existing `trajectory_ego_t` | 否 |
+| V4.6 FullCoT | 精确六段、无 Finish/readout | 六段全开，动作只在 Decision | optional existing 16-step `trajectory_ego_t/action_mask` + 16 prompt queries | 否 |
 
 独立 VQA 生成器也不得依据图片数量猜模态。`images` 保留原始有序列表，
 `image_roles` 显式区分 `fpv_history/fpv/bev/goal_image`；否则多帧 FPV 会被误当成
@@ -2387,17 +2416,17 @@ raw sensors/user events/provider state
   -> ms-swift messages + top-level System1 supervision
 ```
 
-### 11.11 Reasoning V4.5 离线标注链
+### 11.11 Reasoning V4.6 离线标注链
 
 当前主线由 `ReasoningSourceV4 -> deterministic Task + four independent LVLM
 groundings -> blind DecisionProposal -> immutable Action Reconciliation audit ->
-strong-owned composer candidate/CompositionRecord -> ReasoningAnnotationV4 ->
+strong-owned composer candidate/CandidateStructureRecord -> ReasoningAnnotationV4 ->
 append-only resolution -> preview/formal ReasoningTrainingViewV4` 构成。source、label、
 review projection 和 view 分别通过
 `build_reasoning_v4_sources.py`、`label_reasoning_v4.py`、
 `export_reasoning_v4_reconciliation_review.py` 和 `export_reasoning_v4_views.py`
-处理。preview 永远 blocked；只有派生 eligibility 完整通过的 formal view 才能进入
-ms-swift。完整合同和数据集 trust policy 见
+处理。preview artifact 永远不可训练；只有 artifact/formal eligibility 全部通过的
+formal view 才能进入 ms-swift。完整合同和数据集 trust policy 见
 `docs/REASONING_V4_DATA_ANNOTATION_DESIGN.md`。
 
 #### 11.11.1 Legacy Evidence-conditioned Reasoning V2
@@ -3065,7 +3094,7 @@ src/mcp_server/contracts/reasoning_v4.py
   ReasoningTraceV4 / exact six shared-input FullCoT sections / no Finish
 
 src/mcp_server/contracts/reasoning_dataset_v4.py
-  V4.5 source / annotation / audit / resolution / training-view contracts
+  V4.5 shared source envelope / V4.6 annotation, audit, resolution and training-view contracts
 
 src/mcp_server/teacher/reasoning_v4_batch.py
   deterministic Task, four independent groundings, blind Decision, retry
@@ -3074,7 +3103,7 @@ src/mcp_server/data/reasoning_v4_composer.py
   validated sections + frozen strong direction -> canonical action tuple
 
 src/mcp_server/agent/reasoning_v4_validation.py
-  V4.5 profile, action-tuple and constraint consistency
+  V4.6 provenance, profile, action-tuple and constraint consistency
 
 src/mcp_server/contracts/vqa_v2.py
   27-task answer-independent question and minimal typed answer contract
@@ -3223,8 +3252,8 @@ swift/sidewalk_nav/rollout/urbannav_env.py
 | RouteSession mutation CAS/idempotency | 已实现，单进程 | expected revision + idempotency key；分布式 store 未完成 |
 | EpisodeTraceV2 | 已实现 | event-sourced contract |
 | v2 assistant-suffix readout | 已实现 | `[SYS1_i]` 位于 finish 后且 LM mask |
-| Reasoning V4.5 Compact FullCoT | 已实现本地合同与 focused tests，待真实 LVLM smoke | 最小六段、无 Finish/ref graph、strong action ownership、append-only resolution、formal gate、两仓 parity |
-| Reasoning V4.5 真实 LVLM/人工裁决/训练/生成 smoke | 待完成 | 先做 64 条 diverse review；只有六轴 gate 全通过的 formal views 可训练 |
+| Reasoning V4.6 Compact FullCoT | 已实现本地合同与 focused tests，待真实 LVLM smoke | 最小六段、BEV provenance/high-detail、strong action ownership、probe tie gate、显式 formal/artifact eligibility、两仓 parity |
+| Reasoning V4.6 真实 LVLM/人工裁决/训练/生成 smoke | 待完成 | 先做 64 条 diverse review；只有全部 P0 gate 通过的 formal views 可训练 |
 | Navigation VQA V2 contract/pipeline | 已实现本地合同与 focused tests | 27 task、18 active/9 dormant、E0 derived GT、17 visible weak tasks、两仓 artifact/parser parity |
 | Navigation VQA V2 真实 LVLM/训练/生成 smoke | 待完成 | 尚未调用真实 teacher；人工 review、实际产量、短训练和 checkpoint 生成回读未验证 |
 | Navigation VQA V1 | 已删除 | 被 V2.0 取代；不保留 parser、manifest、test、设计文档或双写 |

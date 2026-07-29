@@ -1,4 +1,4 @@
-"""Deterministically compose strong-action Reasoning V4.5 targets."""
+"""Deterministically compose strong-action Reasoning V4.6 targets."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from mcp_server.contracts.reasoning_v4 import (
 )
 
 
-REASONING_V4_COMPOSER_VERSION = "reasoning_v4_5_composer_v1"
+REASONING_V4_COMPOSER_VERSION = "reasoning_v4_6_composer_v1"
 
 
 @dataclass(frozen=True)
@@ -66,12 +66,12 @@ def compose_reasoning_target_v4(
     del decision_proposal
     if not groundings.complete:
         raise ValueError(
-            "cannot compose V4.5 target from incomplete groundings"
+            "cannot compose V4.6 target from incomplete groundings"
         )
     direction = source.direction_supervision
     if direction is None:
         raise ValueError(
-            "V4.5 composition requires strong direction supervision"
+            "V4.6 composition requires strong direction supervision"
         )
     interaction = groundings.interaction_constraint_grounding
     assert interaction is not None
@@ -108,7 +108,7 @@ def compose_reasoning_target_v4(
     )
     if not validation.valid:
         raise ValueError(
-            "assembled V4.5 target failed validation: "
+            "assembled V4.6 target failed validation: "
             f"{validation.errors}"
         )
     return ReasoningCompositionResultV4(

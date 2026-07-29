@@ -1,4 +1,4 @@
-"""Resumable six-section annotation runner for Reasoning V4.5."""
+"""Resumable six-section annotation runner for Reasoning V4.6."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from mcp_server.contracts.reasoning_dataset_v4 import (
     REASONING_ANNOTATION_V4_SCHEMA_VERSION,
     ActionReconciliationAuditV4,
     AnnotationStageRecordV4,
-    CompositionRecordV4,
+    CandidateStructureRecordV4,
     GroundingOutputsV4,
     NavObservationV4,
     ReasoningAnnotationV4,
@@ -72,11 +72,14 @@ _LVLM_GROUNDING_SECTION_NAMES = (
 
 @dataclass(frozen=True)
 class ReasoningV4BatchConfig:
-    """Configure bounded, resumable V4.5 annotation.
+    """Configure bounded, resumable V4.6 annotation.
 
     Args:
         max_retries: Repair calls after the initial request.
         image_detail: OpenAI-compatible image detail.
+        navigation_context_image_detail: Higher-detail setting used only for
+            NavigationContextGrounding so thin BEV route overlays survive
+            provider-side image tokenization.
         concurrency: Maximum concurrently processed source rows.
         retry_failed_on_resume: Retry cached incomplete or invalid records.
         raw_answer_max_chars: Maximum raw provider text retained per stage.
@@ -87,6 +90,7 @@ class ReasoningV4BatchConfig:
 
     max_retries: int = 2
     image_detail: str = "low"
+    navigation_context_image_detail: str = "high"
     concurrency: int = 1
     retry_failed_on_resume: bool = False
     raw_answer_max_chars: int = 50000
@@ -263,11 +267,22 @@ async def annotate_reasoning_source_v4(
         task_coordinator: Optional run-wide task deduplication coordinator.
 
     Returns:
-        Immutable completed annotation with independent section, composition,
-        and reconciliation state.
+        Immutable completed annotation with independent section, candidate
+        structure, and reconciliation state.
     """
 
     cfg = config or ReasoningV4BatchConfig()
+    for name, value in (
+        ("image_detail", cfg.image_detail),
+        (
+            "navigation_context_image_detail",
+            cfg.navigation_context_image_detail,
+        ),
+    ):
+        if value not in {"auto", "low", "high"}:
+            raise ValueError(
+                f"{name} must be auto, low, or high: {value!r}"
+            )
     coordinator = (
         task_coordinator or _TaskCanonicalizationCoordinator()
     )
@@ -356,7 +371,7 @@ async def annotate_reasoning_source_v4(
             action_reconciliation=None,
             composer_candidate=None,
             candidate_target=None,
-            composition_record=CompositionRecordV4(
+            candidate_structure_record=CandidateStructureRecordV4(
                 composer_version=REASONING_V4_COMPOSER_VERSION,
                 status="not_available",
                 errors=["incomplete_groundings"],
@@ -397,7 +412,7 @@ async def annotate_reasoning_source_v4(
             action_reconciliation=None,
             composer_candidate=None,
             candidate_target=None,
-            composition_record=CompositionRecordV4(
+            candidate_structure_record=CandidateStructureRecordV4(
                 composer_version=REASONING_V4_COMPOSER_VERSION,
                 status="not_available",
                 errors=["decision_missing"],
@@ -427,8 +442,8 @@ async def annotate_reasoning_source_v4(
             decision_proposal,
         )
     except (TypeError, ValueError) as exc:
-        composition_error = f"composition_failed:{exc}"
-        errors.append(composition_error)
+        candidate_error = f"candidate_construction_failed:{exc}"
+        errors.append(candidate_error)
         unavailable = (
             source.direction_supervision is None
         )
@@ -440,14 +455,14 @@ async def annotate_reasoning_source_v4(
             action_reconciliation=audit,
             composer_candidate=None,
             candidate_target=None,
-            composition_record=CompositionRecordV4(
+            candidate_structure_record=CandidateStructureRecordV4(
                 composer_version=REASONING_V4_COMPOSER_VERSION,
                 status=(
                     "not_available"
                     if unavailable
                     else "invalid"
                 ),
-                errors=[composition_error],
+                errors=[candidate_error],
             ),
             records=records,
             errors=errors,
@@ -465,7 +480,7 @@ async def annotate_reasoning_source_v4(
             composition.candidate_target.reasoning.decision
         ),
         candidate_target=composition.candidate_target,
-        composition_record=CompositionRecordV4(
+        candidate_structure_record=CandidateStructureRecordV4(
             composer_version=REASONING_V4_COMPOSER_VERSION,
             status="valid",
             warnings=composition.warnings,
@@ -510,7 +525,12 @@ async def _run_stage_v4(
                 source.observation,
                 question=question,
                 system_prompt=profile.system_prompt,
-                image_detail=config.image_detail,
+                image_detail=(
+                    config.navigation_context_image_detail
+                    if profile.section_name
+                    == "NavigationContextGrounding"
+                    else config.image_detail
+                ),
             )
         except Exception as exc:
             provider_failures += 1
@@ -574,6 +594,12 @@ async def _run_stage_v4(
         ),
         warnings=list(dict.fromkeys(warnings)),
         telemetry={
+            "image_detail": (
+                config.navigation_context_image_detail
+                if profile.section_name
+                == "NavigationContextGrounding"
+                else config.image_detail
+            ),
             "successful_provider_calls": len(generations),
             "calls": [
                 item.telemetry or {} for item in generations
@@ -673,7 +699,7 @@ def _annotation_v4(
     action_reconciliation: ActionReconciliationAuditV4 | None,
     composer_candidate: DecisionV4 | None,
     candidate_target: Any,
-    composition_record: CompositionRecordV4,
+    candidate_structure_record: CandidateStructureRecordV4,
     records: dict[str, AnnotationStageRecordV4],
     errors: list[str],
     warnings: list[str],
@@ -702,7 +728,7 @@ def _annotation_v4(
         action_reconciliation=action_reconciliation,
         composer_candidate=composer_candidate,
         candidate_target=candidate_target,
-        composition_record=composition_record,
+        candidate_structure_record=candidate_structure_record,
         stage_records=records,
         errors=list(dict.fromkeys(errors)),
         warnings=list(dict.fromkeys(warnings)),
@@ -783,7 +809,8 @@ async def label_reasoning_source_manifest_v4(
             existing is not None
             and (
                 not existing.all_sections_accepted
-                or existing.composition_record.status != "valid"
+                or existing.candidate_structure_record.status
+                != "valid"
             )
         )
         if stale or (cfg.retry_failed_on_resume and retryable):
@@ -888,16 +915,18 @@ async def label_reasoning_source_manifest_v4(
                         ),
                         record_status="error",
                         grounding_outputs=GroundingOutputsV4(),
-                        composition_record=CompositionRecordV4(
-                            composer_version=(
-                                REASONING_V4_COMPOSER_VERSION
-                            ),
-                            status="not_available",
-                            errors=[
-                                "worker_exception:"
-                                f"{type(exc).__name__}:"
-                                f"{str(exc)[:500]}"
-                            ],
+                        candidate_structure_record=(
+                            CandidateStructureRecordV4(
+                                composer_version=(
+                                    REASONING_V4_COMPOSER_VERSION
+                                ),
+                                status="not_available",
+                                errors=[
+                                    "worker_exception:"
+                                    f"{type(exc).__name__}:"
+                                    f"{str(exc)[:500]}"
+                                ],
+                            )
                         ),
                         errors=[
                             "worker_exception:"
@@ -940,7 +969,7 @@ async def label_reasoning_source_manifest_v4(
                 non_formal = (
                     annotation.record_status != "complete"
                     or not annotation.all_sections_accepted
-                    or annotation.composition_record.status
+                    or annotation.candidate_structure_record.status
                     != "valid"
                 )
                 if non_formal and reject_handle is not None:
@@ -976,7 +1005,7 @@ async def label_reasoning_source_manifest_v4(
                     print(
                         json.dumps(
                             {
-                                "reasoning_v4_5_progress": (
+                                "reasoning_v4_6_progress": (
                                     f"{report['processed_rows']}/"
                                     f"{len(pending)}"
                                 ),
@@ -986,8 +1015,8 @@ async def label_reasoning_source_manifest_v4(
                                 "all_sections_accepted": report[
                                     "all_sections_accepted_rows"
                                 ],
-                                "composition_valid": report[
-                                    "composition_valid_rows"
+                                "candidate_structurally_valid": report[
+                                    "candidate_structurally_valid_rows"
                                 ],
                             },
                             ensure_ascii=False,
@@ -1025,6 +1054,10 @@ def _task_cache_from_annotations_v4(
     for source in sources:
         instruction = source.observation.instruction
         if instruction is None:
+            continue
+        if canonicalize_task_instruction_v4(instruction) is not None:
+            # Built-in registry ownership always wins.  Never recover an old
+            # LVLM/cache label for an instruction added by a newer registry.
             continue
         annotation = annotations.get(
             source.observation.source_group_id
@@ -1073,6 +1106,21 @@ def _annotation_is_stale_v4(
         != REASONING_V4_COMPOSER_VERSION
     ):
         return True
+    registered_task = canonicalize_task_instruction_v4(
+        source.observation.instruction
+    )
+    if registered_task is not None:
+        task_record = annotation.stage_records.get("TaskGrounding")
+        if (
+            annotation.grounding_outputs.task_grounding
+            != registered_task.task_grounding
+            or task_record is None
+            or task_record.status != "accepted"
+            or task_record.producer_kind != "deterministic"
+            or task_record.derivation_version
+            != REASONING_V4_TASK_CANONICALIZATION_VERSION
+        ):
+            return True
     for name, profile in REASONING_V4_TEACHER_PROFILES.items():
         record = annotation.stage_records.get(name)
         if record is None:
@@ -1107,6 +1155,11 @@ def _latest_annotation_cache_v4(
         return {}
     cache: dict[str, ReasoningAnnotationV4] = {}
     for row in iter_jsonl(value):
+        if (
+            row.get("schema_version")
+            != REASONING_ANNOTATION_V4_SCHEMA_VERSION
+        ):
+            continue
         annotation = ReasoningAnnotationV4.model_validate(
             row
         )
@@ -1138,7 +1191,7 @@ def _initial_report_v4(
         "record_complete_rows": 0,
         "record_error_rows": 0,
         "all_sections_accepted_rows": 0,
-        "composition_valid_rows": 0,
+        "candidate_structurally_valid_rows": 0,
         "pending_human_rows": 0,
         "concurrency": concurrency,
         "resume_counts": dict(resume_counts),
@@ -1151,7 +1204,11 @@ def _initial_report_v4(
         "warning_counts": {},
         "dataset_counts": {},
         "stage_metrics": {},
-        "composition_counts": {},
+        "candidate_structure_counts": {},
+        "image_detail": config.image_detail,
+        "navigation_context_image_detail": (
+            config.navigation_context_image_detail
+        ),
         "review_trigger_counts": {},
         "telemetry_totals": {
             "provider_calls": 0,
@@ -1194,14 +1251,14 @@ def _accumulate_annotation_metrics_v4(
     report["all_sections_accepted_rows"] += int(
         annotation.all_sections_accepted
     )
-    composition_status = annotation.composition_record.status
-    report["composition_valid_rows"] += int(
-        composition_status == "valid"
+    structure_status = annotation.candidate_structure_record.status
+    report["candidate_structurally_valid_rows"] += int(
+        structure_status == "valid"
     )
-    report["composition_counts"][composition_status] = (
+    report["candidate_structure_counts"][structure_status] = (
         int(
-            report["composition_counts"].get(
-                composition_status,
+            report["candidate_structure_counts"].get(
+                structure_status,
                 0,
             )
         )

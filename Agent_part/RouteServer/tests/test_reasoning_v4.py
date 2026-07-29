@@ -12,6 +12,9 @@ from mcp_server.agent.reasoning_v4_text import (
     parse_reasoning_target_v4,
     render_reasoning_target_v4,
 )
+from mcp_server.agent.reasoning_v4_prompt_policy import (
+    get_prompt_profile_v4,
+)
 from mcp_server.contracts.direction_profile import (
     FPV_DEGREE10_AFFORDANCE7_V1,
     FPV_DEGREE10_TERMINAL_CENTROID_V2,
@@ -20,7 +23,7 @@ from mcp_server.contracts.reasoning_dataset_v4 import (
     REASONING_SOURCE_V4_SCHEMA_VERSION,
     ActionReviewResolutionV4,
     AnnotationStageRecordV4,
-    CompositionRecordV4,
+    CandidateStructureRecordV4,
     DirectionContextV4,
     DirectionSupervisionV4,
     GroundingOutputsV4,
@@ -148,7 +151,7 @@ def _groundings(
     if effect is not None:
         constraints.append(
             InteractionConstraintV4(
-                kind="pedestrian_crossing",
+                kind="crossing_interaction",
                 status="applicable",
                 effect=effect,
                 affected_direction_labels=(
@@ -181,6 +184,7 @@ def _groundings(
         navigation_context_grounding=NavigationContextGroundingV4(
             task_direction=TaskDirectionV4(
                 status="not_visible",
+                source="none",
             )
         ),
         interaction_constraint_grounding=(
@@ -254,7 +258,7 @@ def _annotation(
         action_reconciliation=audit,
         composer_candidate=target.reasoning.decision,
         candidate_target=target,
-        composition_record=CompositionRecordV4(
+        candidate_structure_record=CandidateStructureRecordV4(
             composer_version=REASONING_V4_COMPOSER_VERSION,
             status="valid",
         ),
@@ -262,7 +266,7 @@ def _annotation(
     )
 
 
-def test_v45_wire_has_exact_six_sections_and_no_finish() -> None:
+def test_v46_wire_has_exact_six_sections_and_no_finish() -> None:
     source = _source()
     target = _annotation(source).candidate_target
     assert target is not None
@@ -297,6 +301,48 @@ def test_removed_fields_are_rejected_instead_of_ignored() -> None:
     }
     with pytest.raises(ValidationError):
         SceneGroundingV4.model_validate(payload)
+
+
+def test_task_direction_requires_minimal_visible_provenance() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="aligned task direction requires visible source",
+    ):
+        TaskDirectionV4(
+            status="aligned",
+            source="none",
+            direction="left_20",
+        )
+    with pytest.raises(
+        ValidationError,
+        match="requires source=none",
+    ):
+        TaskDirectionV4(
+            status="not_visible",
+            source="bev_route",
+        )
+
+
+def test_only_avoid_constraint_may_scope_direction_labels() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="yield constraint must be global",
+    ):
+        InteractionConstraintV4(
+            kind="crossing_interaction",
+            status="applicable",
+            effect="yield",
+            affected_direction_labels=["straight"],
+        )
+    avoid = InteractionConstraintV4(
+        kind="static_obstacle_avoidance",
+        status="applicable",
+        effect="avoid",
+        affected_direction_labels=["right_10"],
+    )
+    assert [str(value) for value in avoid.affected_direction_labels] == [
+        "right_10"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -382,6 +428,15 @@ def test_task_canonicalization_is_stable_and_registry_owned() -> None:
     assert [
         str(value) for value in result.task_grounding.requirements
     ] == ["route_adherence"]
+    project_template = canonicalize_task_instruction_v4(
+        "Navigate safely on the sidewalk and follow the visible route."
+    )
+    assert project_template is not None
+    assert project_template.task_grounding == TaskGroundingV4(
+        objective="follow_route",
+        requirements=["route_adherence"],
+        ambiguities=[],
+    )
 
 
 def test_reconciliation_requires_review_without_mutating_strong_action() -> None:
@@ -400,6 +455,49 @@ def test_reconciliation_requires_review_without_mutating_strong_action() -> None
     ) == "left_40"
 
 
+def test_reconciliation_preserves_all_nearest_probe_ties() -> None:
+    source = _source("right_20")
+    groundings = _groundings()
+    groundings = groundings.model_copy(
+        update={
+            "local_traversability": LocalTraversabilityV4(
+                direction_affordances=[
+                    DirectionAffordanceV4(
+                        direction_label="right_10",
+                        affordance="direct",
+                        clearance="sufficient",
+                    ),
+                    DirectionAffordanceV4(
+                        direction_label="right_30",
+                        affordance="blocked",
+                        clearance="insufficient",
+                        limiting_factors=["static_obstacle"],
+                    ),
+                ]
+            )
+        }
+    )
+    audit = build_action_reconciliation_audit_v4(
+        source,
+        groundings,
+        DecisionProposalV4(
+            selected_action_label="right_20",
+            speed="normal",
+            response="proceed",
+        ),
+    )
+
+    assert audit is not None
+    assert [
+        str(item.direction_label)
+        for item in audit.probe_projections
+    ] == ["right_10", "right_30"]
+    assert audit.checks.probe_support == "mixed"
+    assert "strong_action_probe_mixed" in {
+        str(value) for value in audit.review_trigger_codes
+    }
+
+
 def test_preview_and_formal_release_are_separate() -> None:
     source = _source()
     annotation = _annotation(source)
@@ -416,10 +514,14 @@ def test_preview_and_formal_release_are_separate() -> None:
     )
 
     assert len(preview) == 1
-    assert preview[0].training_eligible is False
-    assert preview[0].training_status == "blocked"
+    assert preview[0].release_track == "review_preview"
+    assert preview[0].artifact_status == "preview_only"
+    assert preview[0].artifact_training_eligible is False
+    assert preview[0].formal_training_eligible is True
     assert len(formal) == 1
-    assert formal[0].training_eligible is True
+    assert formal[0].artifact_status == "training_ready"
+    assert formal[0].artifact_training_eligible is True
+    assert formal[0].formal_training_eligible is True
     assert formal[0].review_status == "not_required"
 
 
@@ -437,7 +539,7 @@ def test_triggered_review_blocks_until_resolution_revalidates() -> None:
         annotation,
     )
     assert pending.review_status == "pending_human"
-    assert pending.training_eligible is False
+    assert pending.formal_training_eligible is False
 
     wrong_resolution = ActionReviewResolutionV4(
         audit_id=audit.audit_id,
@@ -452,7 +554,7 @@ def test_triggered_review_blocks_until_resolution_revalidates() -> None:
         annotation,
         resolution=wrong_resolution,
     )
-    assert resolved.training_eligible is False
+    assert resolved.formal_training_eligible is False
     assert (
         "resolution_requires_source_direction_correction"
         in resolved.blockers
@@ -518,15 +620,20 @@ def test_resolution_aware_artifact_audit_reports_six_axes(
         "sources": 1,
         "record_complete": 1,
         "all_sections_accepted": 1,
-        "composition_valid": 1,
+        "candidate_structurally_valid": 1,
         "pending_human": 0,
-        "training_eligible": 1,
+        "formal_training_eligible": 1,
+        "task_canonicalization_drift": 0,
+        "probe_tie_loss": 0,
+        "preview_training_leak": 0,
+        "formal_ineligible_artifact_leak": 0,
     }
 
 
 class _FakeBackend:
     def __init__(self) -> None:
         self.requested_sections: list[str] = []
+        self.image_details: dict[str, str] = {}
 
     async def generate(
         self,
@@ -536,10 +643,11 @@ class _FakeBackend:
         system_prompt: str,
         image_detail: str,
     ) -> TeacherGeneration:
-        del observation, system_prompt, image_detail
+        del observation, system_prompt
         payload = json.loads(question.split("\n\n", 1)[1])
         section = payload["requested_section"]
         self.requested_sections.append(section)
+        self.image_details[section] = image_detail
         answers = {
             "SceneGrounding": {
                 "scene_type": "urban_sidewalk",
@@ -560,6 +668,7 @@ class _FakeBackend:
             "NavigationContextGrounding": {
                 "task_direction": {
                     "status": "not_visible",
+                    "source": "none",
                     "direction": None,
                 }
             },
@@ -592,7 +701,7 @@ def test_known_task_registry_skips_task_teacher_call() -> None:
 
     assert annotation.record_status == "complete"
     assert annotation.all_sections_accepted is True
-    assert annotation.composition_record.status == "valid"
+    assert annotation.candidate_structure_record.status == "valid"
     assert annotation.stage_records[
         "TaskGrounding"
     ].producer_kind == "deterministic"
@@ -604,3 +713,26 @@ def test_known_task_registry_skips_task_teacher_call() -> None:
         "InteractionConstraintGrounding",
         "Decision",
     }
+    assert backend.image_details["NavigationContextGrounding"] == "high"
+    assert all(
+        detail == "low"
+        for section, detail in backend.image_details.items()
+        if section != "NavigationContextGrounding"
+    )
+
+
+def test_v46_system_prompt_preserves_bev_route_authority_boundary() -> None:
+    profile = get_prompt_profile_v4(
+        "urbannav_reasoning_v4_6_compact_full_cot_sft_v1"
+    )
+    prompt = " ".join(profile.system_prompt.split())
+
+    assert (
+        "A prompt-visible BEV route overlay may support route direction "
+        "and upcoming topology when its orientation is clear."
+    ) in prompt
+    assert (
+        "The absence of local safety authority only prevents BEV from "
+        "proving traversability, clearance, or collision safety."
+    ) in prompt
+    assert "Set task_direction.source=bev_route" in prompt

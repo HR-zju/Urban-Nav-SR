@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Append one validated Reasoning V4.5 human-review resolution."""
+"""Append one validated Reasoning V4.6 human-review resolution."""
 
 from __future__ import annotations
 

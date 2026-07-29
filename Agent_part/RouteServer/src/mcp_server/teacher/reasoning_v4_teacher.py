@@ -127,7 +127,7 @@ def build_reasoning_v4_section_question(
             )
         )
     return (
-        "Annotate the requested Reasoning V4.5 section. The ordered images are "
+        "Annotate the requested Reasoning V4.6 section. The ordered images are "
         "attached to this request in image_order. Return exactly one JSON "
         "object matching output_json_schema.\n\n"
         + json.dumps(

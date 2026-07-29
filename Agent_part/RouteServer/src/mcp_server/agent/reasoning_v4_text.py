@@ -1,4 +1,4 @@
-"""Strict tagged-text codec for canonical Reasoning V4.5."""
+"""Strict tagged-text codec for canonical Reasoning V4.6."""
 
 from __future__ import annotations
 
@@ -76,7 +76,7 @@ def render_reasoning_target_v4(target: ReasoningTargetV4) -> str:
     """Render one target in the exact six-section wire order.
 
     Args:
-        target: Typed V4.5 reasoning target.
+        target: Typed V4.6 reasoning target.
 
     Returns:
         Canonical ``<think>`` document with no Finish or free text.
@@ -134,7 +134,7 @@ def render_reasoning_section_v4(
 def parse_reasoning_target_v4(
     text: str,
 ) -> ReasoningTextParseResultV4:
-    """Strictly parse one full six-section V4.5 document.
+    """Strictly parse one full six-section V4.6 document.
 
     Args:
         text: Raw assistant response.
@@ -199,7 +199,7 @@ def parse_reasoning_section_v4(
     text: str,
     section_name: str,
 ) -> ReasoningTextParseResultV4:
-    """Strictly parse one standalone V4.5 section.
+    """Strictly parse one standalone V4.6 section.
 
     Args:
         text: Raw tagged section.

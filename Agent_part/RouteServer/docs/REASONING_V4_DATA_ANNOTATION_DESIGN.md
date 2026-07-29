@@ -1,8 +1,8 @@
-# UrbanNav Reasoning V4.5 数据标注与训练合同
+# UrbanNav Reasoning V4.6 数据标注与训练合同
 
 更新时间：2026-07-29。
 
-本文是 Stage-A 单轮 E2E 导航 FullCoT 的 canonical 合同。V4.5 的目标不是表达一个
+本文是 Stage-A 单轮 E2E 导航 FullCoT 的 canonical 合同。V4.6 的目标不是表达一个
 理论上完备的因果图，而是监督当前输入可回答、当前流水线能稳定构造、并且会影响短时
 导航动作的最小语义集合。
 
@@ -22,13 +22,17 @@
 ## 1. 版本与唯一 wire
 
 ```text
-target:        urbannav_reasoning_trace_v4_5
+target:        urbannav_reasoning_trace_v4_6
 source:        urbannav_reasoning_source_v4_5
-annotation:    urbannav_reasoning_annotation_v4_5
-audit:         urbannav_action_reconciliation_audit_v2
-resolution:    urbannav_action_review_resolution_v1
-training view: urbannav_reasoning_training_view_v4_5_compact_v1
+annotation:    urbannav_reasoning_annotation_v4_6
+audit:         urbannav_action_reconciliation_audit_v3
+resolution:    urbannav_action_review_resolution_v2
+training view: urbannav_reasoning_training_view_v4_6_compact_v1
 ```
+
+source envelope 保持 `v4_5` 是有意的：它与 VQA V2 共用且本轮没有改变 prompt-visible
+输入结构。target、annotation、audit、resolution 和 training view 已整体升级，不能凭
+source 文件名把旧 V4.5 annotation/cache 误当作 V4.6。
 
 assistant target 只有六段：
 
@@ -43,7 +47,7 @@ assistant target 只有六段：
 </think>
 ```
 
-V4.5 没有 `Finish`、readout、semantic ref graph、object ID、route progress 或时序标签。
+V4.6 没有 `Finish`、readout、semantic ref graph、object ID、route progress 或时序标签。
 动作只出现一次：`Decision.selected_action_label`，通过普通 LM loss 学习。`stop` 表示
 本轮短时保持停止，不表示任务完成。
 
@@ -97,7 +101,7 @@ V4.5 没有 `Finish`、readout、semantic ref graph、object ID、route progress
 | `temporal_evidence_eligible` | VQA V2 兼容元数据 | adapter | 不被 FullCoT 使用 | 无 |
 
 `evidence_catalog` 只用于组织输入，不再被六段输出引用。BEV 中保留的 legacy
-route-progress presentation metadata 仅服务共享 VQA source 兼容，Reasoning V4.5 不消费。
+route-progress presentation metadata 仅服务共享 VQA source 兼容，Reasoning V4.6 不消费。
 
 ### 3.2 `DirectionSupervisionV4`
 
@@ -122,7 +126,7 @@ derivation_version
 | `fpv_degree10_terminal_centroid_v2` | existing FPV pixel trajectory terminal centroid | displacement `<0.06` normalized FPV xy |
 | `ego_degree10_12way_terminal_centroid_v2` | existing `trajectory_ego_t`, x-right/y-front terminal centroid | displacement `<0.25m` |
 
-V4.5 不从 row trajectory、BEV、GPS、route、goal 或 LVLM 回答现场补方向。strong label
+V4.6 不从 row trajectory、BEV、GPS、route、goal 或 LVLM 回答现场补方向。strong label
 不进入 teacher/student 输入，只在 composer、audit 和训练 view 中作 identity 校验。
 
 ## 4. 六段字段合同
@@ -150,6 +154,11 @@ V4.5 不从 row trajectory、BEV、GPS、route、goal 或 LVLM 回答现场补�
   "ambiguities": []
 }
 ```
+
+registry v2 将精确常用指令
+`Navigate safely on the sidewalk and follow the visible route.` 规范化为上述结果。恢复
+append-only cache 时，旧 annotation schema 或已进入 registry 的旧 LVLM task 结果均视为
+stale，必须由当前 deterministic canonicalizer 重建。
 
 相同 fingerprint 不能逐样本重复调用 LVLM。不存在 goal object、local objective、
 runtime phase、goal-distance threshold 或 waypoint phase GT。
@@ -192,9 +201,15 @@ clearance、non-walkable surface、curb、wall、vegetation、occlusion 或 unkn
 | --- | --- | --- | --- | --- |
 | `task_direction.status` | aligned/conflict/not_visible/insufficient_evidence | LVLM weak | 是 | LM |
 | `task_direction.direction` | aligned 时唯一 moving action label | 显式方向 instruction 或朝向明确的 visible BEV | 条件可见 | LM |
+| `task_direction.source` | `bev_route`/`instruction`/`none`，记录方向证据来源 | LVLM weak + validator | 是 | LM |
 
-通用 “follow route” 指令不能单独推出左右方向。`direction` 不能为 `stop`。本段没有 goal
-alignment、source alignments、route progress、arrival 或跨视角 route matching。
+通用 “follow route” 指令不能单独推出左右方向。aligned 时必须有 moving `direction`，
+且 source 只能是 `bev_route` 或 `instruction`；其他状态必须为
+`direction=null, source=none`。NavigationContext 是唯一使用 `image_detail=high` 的
+section teacher，避免 prompt-visible BEV route overlay 在 provider 侧缩放后不可辨认。
+这只保留 route direction/upcoming topology 证据，不授予 BEV traversability、clearance
+或 collision-safety 权威。本段没有 goal alignment、source alignments、route progress、
+arrival 或跨视角 route matching。
 
 ### 4.5 `InteractionConstraintGrounding`
 
@@ -207,10 +222,12 @@ alignment、source alignments、route progress、arrival 或跨视角 route matc
 | `kind` | 开放粗约束类别 | LVLM weak | 是 | LM |
 | `status` | applicable/uncertain | LVLM weak | 是 | LM |
 | `effect` | slow/yield/stop/avoid | LVLM weak | 是 | LM |
-| `affected_direction_labels[]` | 空表示全局；avoid 必须给子集 | LVLM weak + validator | 是 | LM |
+| `affected_direction_labels[]` | 仅 avoid 可给非空方向子集 | LVLM weak + validator | 是 | LM |
 
-`constraints=[]` 是合法负判断。全局 stop 必须使用空 affected list；avoid 必须列非空
-受影响子集。这里不做 instance tracking、ego-motion、TTC 或 frozen normative-policy GT。
+`constraints=[]` 是合法负判断。slow/yield/stop 必须使用空 affected list；avoid 必须列
+非空受影响子集。crosswalk 属于 walkable support，不是 entity；需要表达当前过街影响时
+使用 `crossing_interaction`。这里不做 instance tracking、ego-motion、TTC 或 frozen
+normative-policy GT。
 
 ### 4.6 `Decision`
 
@@ -234,7 +251,7 @@ strong stop          -> stop / stop
 ```
 
 strong moving label 与 applicable global stop 冲突时 composition invalid 并进入 review；
-不得把 moving label 静默重写为 stop。V4.5 没有 decision_type、motion、social_action、
+不得把 moving label 静默重写为 stop。V4.6 没有 decision_type、motion、social_action、
 fallback、support refs 或 critical uncertainties。
 
 ## 5. Action Reconciliation
@@ -249,12 +266,15 @@ Action Reconciliation 是独立 annotation-only audit，不是第七段，也不
 | `proposal_digest` | blind proposal digest，不复制 proposal |
 | `groundings_digest` | 五段 grounding digest，不复制五段 |
 | `comparison` | angular delta、stop/move mismatch、sign conflict |
-| `probe_projection` | strong action 最近 probe 的最小物理摘要 |
+| `probe_projections[]` | strong action 的全部等距离最近 probe 及其物理摘要 |
 | `checks` | proposal relation、probe support、constraint consistency、tuple consistency |
 | `review_trigger_codes[]` | 排序、去重的确定性触发原因 |
 
-profile stamp、proposal、strong label 和 candidate 仍由 parent join 读取，不在 audit 中重复。
-review priority/status 是派生值，不持久化在 audit。
+等距离最近 probe 不得任意选一个。例如 `right_20` 同时投影到 `right_10/right_30`。
+聚合 support 只有 `all_supported/all_unsupported/mixed/unknown/not_applicable`；
+`mixed/all_unsupported/unknown` 都触发 review。profile stamp、proposal、strong label 和
+candidate 仍由 parent join 读取，不在 audit 中重复。review priority/status 是派生值，
+不持久化在 audit。
 
 人工处理使用 append-only `ActionReviewResolutionV4`：
 
@@ -272,7 +292,7 @@ note
 direction source、生成新 fingerprint、重新标注和重新审计。resolution 与 frozen strong
 不一致时 training fail closed。
 
-## 6. 五个独立状态轴
+## 6. 独立状态轴
 
 以下状态不得折叠成一个 `accepted`：
 
@@ -280,29 +300,34 @@ direction source、生成新 fingerprint、重新标注和重新审计。resolut
 | --- | --- | --- |
 | record | complete/error | bounded pipeline 是否运行完成 |
 | section | accepted/rejected/error/skipped | 每段是否独立成功 |
-| composition | valid/invalid/not_available | strong-owned candidate 是否可构造 |
+| candidate structure | valid/invalid/not_available | strong-owned candidate 是否可构造 |
 | review | not_required/pending_human/resolved/rejected | 审计是否完成 |
-| training | eligible/blocked | 是否可进入 formal training |
+| formal eligibility | true/false | canonical record 是否满足 formal 条件 |
+| artifact status | preview_only/training_ready | 当前导出物属于 review 还是训练 |
+| artifact eligibility | true/false | 当前导出物是否允许进入 trainer |
 
 正式 eligible 当且仅当：
 
 ```text
 record complete
 AND exact six stages accepted
-AND composition valid
+AND candidate structure valid
 AND action audit exists and reconstructs exactly
 AND review is not_required or resolved
 AND resolved action still equals frozen strong direction
 AND candidate revalidates against source/profile
 ```
 
-`review_preview` 永远 `training_eligible=false`。`formal_training` 只在上述条件全部满足时
-导出；ms-swift 在 Pydantic default 前检查原始 envelope，拒绝 preview、缺失 digest、
-pending review 或 stale schema。
+`review_preview` 永远为
+`artifact_status=preview_only, artifact_training_eligible=false`，但可以显示独立计算出的
+`formal_training_eligible` 供审阅；它不能因此进入训练。`formal_training` 必须为
+`artifact_status=training_ready`，且 artifact/formal eligibility 都为 true。ms-swift 在
+Pydantic default 前检查原始 envelope，拒绝 preview、缺失 digest、pending review 或
+stale schema。
 
 ## 7. Training view 与 loss
 
-V4.5 每个 eligible source 最多产生一个 `full_cot_sft` row。view 保存：
+V4.6 每个 eligible source 最多产生一个 `full_cot_sft` row。view 保存：
 
 - 输入 identity、images/roles、instruction、modalities、direction context；
 - exact six-section `assistant_text` 与 typed target；
@@ -310,9 +335,21 @@ V4.5 每个 eligible source 最多产生一个 `full_cot_sft` row。view 保存�
 - strong direction stamp 与 action audit ID；
 - 可选现有 System1 `trajectory_ego_t/trajectory_policy/action_mask`。
 
-assistant message 使用 `reasoning_v4_5_sections` span strategy，六段均为 LM loss。动作只在
+assistant message 使用 `reasoning_v4_6_sections` span strategy，六段均为 LM loss。动作只在
 Decision 中训练，不增加独立 direction head，也不通过 Finish 重复监督。System1 sidecar
 存在时继续走既有 trajectory loss；它与 FullCoT LM action 是不同训练通道。
+
+带 System1 sidecar 的 view 固定：
+
+```text
+trajectory_ego_t = 16 steps
+action_mask = 16 steps
+prompt-side readout = [TRAJ_0] ... [TRAJ_15]
+```
+
+query block 只放在最后一个 user turn，assistant 中不得出现，LM label 为 `-100`。query
+计数与 trajectory horizon 是两个独立冻结轴，不声称 token-step 一一对应；expanded encode
+找不到完整 16-slot query 时 fail closed。
 
 ## 8. 审计、review 与发布 gate
 
@@ -320,18 +357,19 @@ Decision 中训练，不增加独立 direction head，也不通过 Finish 重复
 
 ```text
 Sources
-Record Complete
+Candidate Structurally Valid
 All Sections Accepted
-Composition Valid
 Pending Human
-Training Eligible
+Formal Training Eligible
+Artifact Training Eligible
 ```
 
 64-row diverse smoke 必须在正式批量标注前完成。runner 的 full gate 要求：
 
-- exact 64 sources/record-complete/all-sections/composition-valid；
+- exact 64 sources/record-complete/all-sections/candidate-structure-valid；
 - `Pending Human = 0`；
-- `Training Eligible = 64`；
+- formal/artifact eligible 均为 64；
+- task canonicalization drift、equal-nearest probe loss、preview training leak 均为 0；
 - 64 条 formal views 通过 schema、prompt、renderer、direction 与 audit 校验；
 - 人工打开 self-contained review HTML 后显式批准。
 
@@ -341,7 +379,7 @@ smoke/optimizer 测试只能证明流水线、格式和容量，不代表语义�
 
 ## 9. 明确删除的历史设计
 
-V4.5 不再生成或兼容以下 Reasoning target 字段：
+V4.6 不再生成或兼容以下 Reasoning target 字段：
 
 ```text
 Finish / readout
@@ -355,6 +393,6 @@ social_action / fallback / critical_uncertainties
 support_refs / evidence_refs
 ```
 
-旧 V4.3/V4.4 artifact 必须通过显式离线迁移或重新标注；不得在 V4.5 parser/model 中添加
+旧 V4.5 及更早 artifact 必须通过显式离线迁移或重新标注；不得在 V4.6 parser/model 中添加
 别名，让旧数据静默进入新训练合同。VQA V2 是独立 answer-only 合同，本次升级不改变其
 task schema、capability gate 或训练 adapter。

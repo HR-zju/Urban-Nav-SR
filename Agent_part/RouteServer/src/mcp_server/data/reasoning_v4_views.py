@@ -1,4 +1,4 @@
-"""Export review-preview and formal-training Reasoning V4.5 views."""
+"""Export review-preview and formal-training Reasoning V4.6 views."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ from mcp_server.data.reasoning_v4_state import (
 
 
 REASONING_V4_TRAINING_POLICY_VERSION = (
-    "urbannav_reasoning_v4_5_language_sft_policy_v1"
+    "urbannav_reasoning_v4_6_language_sft_policy_v1"
 )
 
 
@@ -71,7 +71,7 @@ def build_reasoning_training_views_v4(
         != source.source_fingerprint
     ):
         raise ValueError(
-            "V4.5 annotation/source identity mismatch"
+            "V4.6 annotation/source identity mismatch"
         )
     if (
         annotation.action_reconciliation is not None
@@ -94,7 +94,7 @@ def build_reasoning_training_views_v4(
         return []
     if (
         release_track == "formal_training"
-        and not state.training_eligible
+        and not state.formal_training_eligible
     ):
         return []
     checked = validate_reasoning_target_v4(
@@ -104,7 +104,7 @@ def build_reasoning_training_views_v4(
     )
     if not checked.valid:
         raise ValueError(
-            "V4.5 candidate failed full-view validation: "
+            "V4.6 candidate failed full-view validation: "
             f"{checked.errors}"
         )
     compact = render_compact_full_cot_v4(
@@ -119,7 +119,7 @@ def build_reasoning_training_views_v4(
         ReasoningTrainingViewV4(
             sample_id=(
                 f"{observation.source_group_id}:"
-                f"full_cot:v4_5:{release_track}"
+                f"full_cot:v4_6:{release_track}"
             ),
             source_group_id=observation.source_group_id,
             split_group_id=observation.split_group_id,
@@ -127,11 +127,12 @@ def build_reasoning_training_views_v4(
             release_track=release_track,
             audit_id=state.audit_id,
             review_status=state.review_status,
-            training_status=(
-                state.training_status if formal else "blocked"
+            artifact_status=(
+                "training_ready" if formal else "preview_only"
             ),
-            training_eligible=(
-                state.training_eligible if formal else False
+            artifact_training_eligible=formal,
+            formal_training_eligible=(
+                state.formal_training_eligible
             ),
             images=observation.images,
             image_roles=observation.image_roles,
@@ -163,13 +164,10 @@ def build_reasoning_training_views_v4(
                 "teacher_provider": annotation.teacher_provider,
                 "teacher_model": annotation.teacher_model,
                 "composer_version": (
-                    annotation.composition_record.composer_version
+                    annotation.candidate_structure_record.composer_version
                 ),
                 "training_policy_version": (
                     REASONING_V4_TRAINING_POLICY_VERSION
-                ),
-                "formal_training_eligible": (
-                    state.training_eligible
                 ),
                 "release_blockers": list(state.blockers),
                 "validation_warnings": checked.warnings,
@@ -187,7 +185,7 @@ def build_reasoning_v4_user_prompt(
     """Build the exact prompt-visible student user message.
 
     Args:
-        view: Valid V4.5 training or preview view.
+        view: Valid V4.6 training or preview view.
 
     Returns:
         Ordered image placeholders and visible JSON context.
@@ -225,7 +223,7 @@ def build_reasoning_v4_user_prompt(
     return (
         "<image>" * len(view.images)
         + "\nUse the attached ordered images and visible context to "
-        "produce exactly the requested Reasoning V4.5 output.\n"
+        "produce exactly the requested Reasoning V4.6 output.\n"
         + json.dumps(
             payload,
             ensure_ascii=False,
@@ -322,15 +320,18 @@ def export_reasoning_training_views_v4(
                 f"review_status:{view.review_status}"
             ] += 1
             counters[
-                f"training_status:{view.training_status}"
+                f"artifact_status:{view.artifact_status}"
             ] += 1
+            counters["formal_training_eligible"] += int(
+                view.formal_training_eligible
+            )
             counters["system1_sidecar_views"] += int(
                 view.trajectory_ego_t is not None
             )
     write_jsonl_atomic(output_jsonl, outputs)
     return {
         "schema_version": (
-            "urbannav_reasoning_training_view_v4_5_export_report_v1"
+            "urbannav_reasoning_training_view_v4_6_export_report_v1"
         ),
         "source_jsonl": str(source_jsonl),
         "annotation_jsonl": str(annotation_jsonl),

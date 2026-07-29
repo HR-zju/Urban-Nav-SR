@@ -1,6 +1,6 @@
-"""Deterministic compact FullCoT projection for Reasoning V4.5.
+"""Deterministic compact FullCoT projection for Reasoning V4.6.
 
-The canonical V4.5 trace is already minimal, so the compact projection is an
+The canonical V4.6 trace is already minimal, so the compact projection is an
 exact six-section serialization.  Action supervision appears once, in
 ``Decision``.  There is no Finish, readout, ref graph, or history label.
 """

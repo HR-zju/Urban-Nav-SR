@@ -1,4 +1,4 @@
-"""Build deterministic, annotation-only Reasoning V4.5 action audits."""
+"""Build deterministic, annotation-only Reasoning V4.6 action audits."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ from mcp_server.contracts.reasoning_v4 import DecisionProposalV4
 
 
 ACTION_RECONCILIATION_POLICY_VERSION_V4 = (
-    "urbannav_action_reconciliation_policy_v2"
+    "urbannav_action_reconciliation_policy_v3"
 )
 
 _TRIGGER_POLICY = {
@@ -37,6 +37,7 @@ _TRIGGER_POLICY = {
     "proposal_sign": "proposal_direction_sign_conflict",
     "proposal_stop_move": "proposal_stop_move_mismatch",
     "probe_unsupported": "strong_action_probe_unsupported",
+    "probe_mixed": "strong_action_probe_mixed",
     "probe_unknown": "strong_action_probe_unknown",
     "constraint": "strong_action_constraint_conflict",
     "tuple": "proposal_action_tuple_conflict",
@@ -108,7 +109,7 @@ def build_action_reconciliation_audit_v4(
         stop_move_mismatch=comparison_raw.stop_move_mismatch,
         sign_conflict=comparison_raw.sign_conflict,
     )
-    projection = _probe_projection_v4(
+    projections = _probe_projections_v4(
         profile_id,
         strong_label,
         groundings,
@@ -125,7 +126,7 @@ def build_action_reconciliation_audit_v4(
     )
     checks = ActionReconciliationChecksV4(
         proposal_strong_relation=proposal_relation,
-        probe_support=_probe_support_check_v4(projection),
+        probe_support=_probe_support_check_v4(projections),
         constraint_effect_consistency=constraint_consistency,
         action_tuple_consistency=(
             "passed"
@@ -153,10 +154,13 @@ def build_action_reconciliation_audit_v4(
             "proposal_digest": proposal_digest,
             "groundings_digest": groundings_digest,
             "comparison": comparison.model_dump(mode="json"),
-            "probe_projection": projection.model_dump(
-                mode="json",
-                exclude_none=True,
-            ),
+            "probe_projections": [
+                projection.model_dump(
+                    mode="json",
+                    exclude_none=True,
+                )
+                for projection in projections
+            ],
             "checks": checks.model_dump(mode="json"),
             "review_trigger_codes": trigger_codes,
         }
@@ -167,7 +171,7 @@ def build_action_reconciliation_audit_v4(
         proposal_digest=proposal_digest,
         groundings_digest=groundings_digest,
         comparison=comparison,
-        probe_projection=projection,
+        probe_projections=projections,
         checks=checks,
         review_trigger_codes=trigger_codes,
     )
@@ -242,6 +246,7 @@ def action_reconciliation_review_priority_v4(
         _TRIGGER_POLICY["proposal_stop_move"],
         _TRIGGER_POLICY["proposal_sign"],
         _TRIGGER_POLICY["probe_unsupported"],
+        _TRIGGER_POLICY["probe_mixed"],
         _TRIGGER_POLICY["constraint"],
     }:
         return "critical"
@@ -250,61 +255,83 @@ def action_reconciliation_review_priority_v4(
     return "normal"
 
 
-def _probe_projection_v4(
+def _probe_projections_v4(
     profile_id: str,
     strong_action: str,
     groundings: GroundingOutputsV4,
-) -> ActionProbeProjectionV4:
-    """Project the strong action to one deterministic nearest probe."""
+) -> tuple[ActionProbeProjectionV4, ...]:
+    """Project the strong action to every equally nearest public probe."""
 
     if strong_action == "stop":
-        return ActionProbeProjectionV4()
+        return ()
     candidates = affordance_probe_candidates_for_action(
         profile_id,
         strong_action,
     )
-    candidate = sorted(
-        candidates,
-        key=lambda value: (value.angle_gap_deg, value.label),
-    )[0]
     traversability = groundings.local_traversability
     assert traversability is not None
-    affordance = next(
-        (
-            item
-            for item in traversability.direction_affordances
-            if str(item.direction_label) == candidate.label
-        ),
-        None,
-    )
-    return ActionProbeProjectionV4(
-        direction_label=candidate.label,
-        angle_gap_deg=candidate.angle_gap_deg,
-        affordance=(
-            affordance.affordance
-            if affordance is not None
-            else None
-        ),
-        clearance=(
-            affordance.clearance
-            if affordance is not None
-            else None
-        ),
-        limiting_factors=(
-            tuple(affordance.limiting_factors)
-            if affordance is not None
-            else ()
-        ),
+    affordance_by_label = {
+        str(item.direction_label): item
+        for item in traversability.direction_affordances
+    }
+    return tuple(
+        ActionProbeProjectionV4(
+            direction_label=candidate.label,
+            angle_gap_deg=candidate.angle_gap_deg,
+            affordance=(
+                affordance_by_label[candidate.label].affordance
+                if candidate.label in affordance_by_label
+                else None
+            ),
+            clearance=(
+                affordance_by_label[candidate.label].clearance
+                if candidate.label in affordance_by_label
+                else None
+            ),
+            limiting_factors=(
+                tuple(
+                    affordance_by_label[
+                        candidate.label
+                    ].limiting_factors
+                )
+                if candidate.label in affordance_by_label
+                else ()
+            ),
+        )
+        for candidate in sorted(
+            candidates,
+            key=lambda value: value.label,
+        )
     )
 
 
 def _probe_support_check_v4(
+    projections: tuple[ActionProbeProjectionV4, ...],
+) -> str:
+    """Aggregate physical support without discarding nearest-probe ties."""
+
+    if not projections:
+        return "not_applicable"
+    per_probe = {
+        _single_probe_support_v4(projection)
+        for projection in projections
+    }
+    if per_probe == {"supported"}:
+        return "all_supported"
+    if per_probe == {"unsupported"}:
+        return "all_unsupported"
+    if {"supported", "unsupported"}.issubset(per_probe):
+        return "mixed"
+    return "unknown"
+
+
+def _single_probe_support_v4(
     projection: ActionProbeProjectionV4,
 ) -> str:
-    """Classify physical probe support."""
+    """Classify one nearest physical probe."""
 
-    if projection.direction_label is None:
-        return "not_applicable"
+    if projection.clearance == "insufficient":
+        return "unsupported"
     if projection.affordance in {"direct", "conditional"}:
         return "supported"
     if projection.affordance in {"blocked", "forbidden"}:
@@ -389,8 +416,10 @@ def _review_trigger_codes_v4(
         values.add(_TRIGGER_POLICY["proposal_sign"])
     elif relation == "large_delta":
         values.add(_TRIGGER_POLICY["proposal_delta"])
-    if checks.probe_support == "unsupported":
+    if checks.probe_support == "all_unsupported":
         values.add(_TRIGGER_POLICY["probe_unsupported"])
+    elif checks.probe_support == "mixed":
+        values.add(_TRIGGER_POLICY["probe_mixed"])
     elif checks.probe_support == "unknown":
         values.add(_TRIGGER_POLICY["probe_unknown"])
     if checks.constraint_effect_consistency == "conflict":

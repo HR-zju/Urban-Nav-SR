@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a self-contained Reasoning V4.5 human-review page."""
+"""Build a self-contained Reasoning V4.6 human-review page."""
 
 from __future__ import annotations
 
@@ -60,7 +60,7 @@ def parse_args(
     parser.add_argument(
         "--title",
         default=(
-            "UrbanNav Reasoning V4.5 "
+            "UrbanNav Reasoning V4.6 "
             "Action Reconciliation Review"
         ),
     )
@@ -82,7 +82,7 @@ def build_reasoning_v4_review_html(
     resolution_jsonl: str | Path | None = None,
     report_json: str | Path | None = None,
     title: str = (
-        "UrbanNav Reasoning V4.5 "
+        "UrbanNav Reasoning V4.6 "
         "Action Reconciliation Review"
     ),
     max_samples: int = 100,
@@ -91,7 +91,7 @@ def build_reasoning_v4_review_html(
     """Join sources, annotations, resolutions, and optional views.
 
     Args:
-        source_jsonl: Frozen V4.5 source manifest.
+        source_jsonl: Frozen V4 source manifest.
         annotation_jsonl: Append-only annotation manifest.
         output_html: Self-contained review-page destination.
         views_jsonl: Optional exported preview/formal views.
@@ -157,20 +157,21 @@ def build_reasoning_v4_review_html(
         metrics["all_sections_accepted"] += int(
             state.all_sections_accepted
         )
-        metrics["composition_valid"] += int(
-            state.composition_valid
+        metrics["candidate_structurally_valid"] += int(
+            state.candidate_structurally_valid
         )
         metrics["pending_human"] += int(
             state.review_status == "pending_human"
         )
-        metrics["training_eligible"] += int(
-            state.training_eligible
+        metrics["formal_training_eligible"] += int(
+            state.formal_training_eligible
         )
         counts[
             f"review_status:{state.review_status}"
         ] += 1
         counts[
-            f"composition:{annotation.composition_record.status}"
+            "candidate_structure:"
+            f"{annotation.candidate_structure_record.status}"
         ] += 1
         if audit is not None:
             counts[
@@ -197,7 +198,7 @@ def build_reasoning_v4_review_html(
 
     summary = {
         "schema_version": (
-            "urbannav_reasoning_v4_5_review_report_v1"
+            "urbannav_reasoning_v4_6_review_report_v1"
         ),
         "source_jsonl": str(source_jsonl),
         "annotation_jsonl": str(annotation_jsonl),
@@ -218,9 +219,9 @@ def build_reasoning_v4_review_html(
                 "sources",
                 "record_complete",
                 "all_sections_accepted",
-                "composition_valid",
+                "candidate_structurally_valid",
                 "pending_human",
-                "training_eligible",
+                "formal_training_eligible",
             )
         },
         "counts": dict(counts),
@@ -297,9 +298,12 @@ def _render_document(
         ("Sources", "sources"),
         ("Record Complete", "record_complete"),
         ("All Sections Accepted", "all_sections_accepted"),
-        ("Composition Valid", "composition_valid"),
+        (
+            "Candidate Structurally Valid",
+            "candidate_structurally_valid",
+        ),
         ("Pending Human", "pending_human"),
-        ("Training Eligible", "training_eligible"),
+        ("Formal Training Eligible", "formal_training_eligible"),
     )
     metric_html = "".join(
         "<div class='metric'><span>"
@@ -409,9 +413,15 @@ def _render_sample_card(
             if state.all_sections_accepted
             else "blocked",
         ),
-        ("composition", annotation.composition_record.status),
+        (
+            "candidate_structure",
+            annotation.candidate_structure_record.status,
+        ),
         ("review", state.review_status),
-        ("training", state.training_status),
+        (
+            "formal_training_eligible",
+            state.formal_training_eligible,
+        ),
     )
     badge_html = "".join(
         "<span class='badge'>"
@@ -437,10 +447,10 @@ def _render_sample_card(
         ),
         ("Action audit", audit),
         (
-            "Composition and blockers",
+            "Candidate structure and blockers",
             {
-                "composition_record": (
-                    annotation.composition_record.model_dump(
+                "candidate_structure_record": (
+                    annotation.candidate_structure_record.model_dump(
                         mode="json",
                         exclude_none=True,
                     )

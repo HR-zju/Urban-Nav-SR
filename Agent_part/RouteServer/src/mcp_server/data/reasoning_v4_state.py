@@ -1,4 +1,4 @@
-"""Derived review and training state for Reasoning V4.5 artifacts."""
+"""Derived review and formal-training state for Reasoning V4.6 artifacts."""
 
 from __future__ import annotations
 
@@ -14,7 +14,6 @@ from mcp_server.contracts.reasoning_dataset_v4 import (
     ProjectedReviewStatusV4,
     ReasoningAnnotationV4,
     ReasoningSourceV4,
-    TrainingStatusV4,
 )
 from mcp_server.data.jsonl_io import append_jsonl_row, iter_jsonl
 from mcp_server.data.reasoning_v4_reconciliation import (
@@ -29,21 +28,19 @@ class ReasoningReleaseStateV4:
     Args:
         record_complete: Annotation pipeline completed.
         all_sections_accepted: All six independent stages accepted.
-        composition_valid: Deterministic candidate exists and validates.
+        candidate_structurally_valid: Candidate exists and structurally validates.
         audit_id: Parent action-audit identity.
         review_status: Derived review state.
-        training_status: Derived formal-training state.
-        training_eligible: Exact formal eligibility bit.
+        formal_training_eligible: Exact formal eligibility bit.
         blockers: Stable fail-closed blocker codes.
     """
 
     record_complete: bool
     all_sections_accepted: bool
-    composition_valid: bool
+    candidate_structurally_valid: bool
     audit_id: str | None
     review_status: ProjectedReviewStatusV4
-    training_status: TrainingStatusV4
-    training_eligible: bool
+    formal_training_eligible: bool
     blockers: tuple[str, ...]
 
 
@@ -56,8 +53,9 @@ def derive_reasoning_release_state_v4(
     """Derive review and formal-training eligibility fail closed.
 
     Training is eligible only when the record completed, all six stages were
-    accepted, composition is valid, an action audit exists, review is either
-    not required or resolved, and the candidate revalidates against the source.
+    accepted, the candidate is structurally valid, an action audit exists,
+    review is either not required or resolved, and the candidate revalidates
+    against the source.
     A human-selected action differing from the frozen strong stamp is blocked;
     that case requires upstream source correction and re-annotation.
 
@@ -100,13 +98,13 @@ def derive_reasoning_release_state_v4(
     all_sections_accepted = annotation.all_sections_accepted
     if not all_sections_accepted:
         blockers.append("sections_not_all_accepted")
-    composition_valid = (
-        annotation.composition_record.status == "valid"
+    candidate_structurally_valid = (
+        annotation.candidate_structure_record.status == "valid"
         and annotation.candidate_target is not None
         and annotation.composer_candidate is not None
     )
-    if not composition_valid:
-        blockers.append("composition_not_valid")
+    if not candidate_structurally_valid:
+        blockers.append("candidate_structure_not_valid")
     if audit is None:
         review_status: ProjectedReviewStatusV4 = (
             "not_required"
@@ -158,20 +156,17 @@ def derive_reasoning_release_state_v4(
             for error in validation.errors
         )
 
-    training_eligible = not blockers and review_status in {
+    formal_training_eligible = not blockers and review_status in {
         "not_required",
         "resolved",
     }
     return ReasoningReleaseStateV4(
         record_complete=record_complete,
         all_sections_accepted=all_sections_accepted,
-        composition_valid=composition_valid,
+        candidate_structurally_valid=candidate_structurally_valid,
         audit_id=audit_id,
         review_status=review_status,
-        training_status=(
-            "eligible" if training_eligible else "blocked"
-        ),
-        training_eligible=training_eligible,
+        formal_training_eligible=formal_training_eligible,
         blockers=tuple(dict.fromkeys(blockers)),
     )
 

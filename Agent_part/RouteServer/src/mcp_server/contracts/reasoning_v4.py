@@ -1,11 +1,13 @@
-"""Canonical UrbanNav Reasoning V4.5 semantic contracts.
+"""Canonical UrbanNav Reasoning V4.6 semantic contracts.
 
-V4.5 is a breaking simplification of the six-section FullCoT wire.  It models
+V4.6 keeps the compact six-section FullCoT wire introduced by V4.5.  It models
 only stable scene summaries, physical direction affordances, visible route
 direction, high-level behavior constraints, and one internally consistent
-short-horizon action tuple.  Object-level causal closure, temporal labels,
-route-progress semantics, raw evidence references, and ``Finish`` are outside
-this contract.
+short-horizon action tuple.  The only navigation provenance retained in the
+student target is the minimal source of an aligned task direction, preventing
+a visible BEV route from being compressed into an ungrounded direction label.
+Object-level causal closure, temporal labels, route-progress semantics, raw
+evidence references, and ``Finish`` remain outside this contract.
 """
 
 from __future__ import annotations
@@ -19,22 +21,22 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from mcp_server.contracts.reasoning import ReasonCode
 
 
-REASONING_TRACE_V4_SCHEMA_VERSION = "urbannav_reasoning_trace_v4_5"
+REASONING_TRACE_V4_SCHEMA_VERSION = "urbannav_reasoning_trace_v4_6"
 REASONING_TRAINING_VIEW_V4_SCHEMA_VERSION = (
-    "urbannav_reasoning_training_view_v4_5_compact_v1"
+    "urbannav_reasoning_training_view_v4_6_compact_v1"
 )
-REASONING_V4_WIRE_FORMAT_VERSION = "urbannav_reasoning_v4_wire_v5"
+REASONING_V4_WIRE_FORMAT_VERSION = "urbannav_reasoning_v4_wire_v6"
 REASONING_V4_SECTION_DEFINITION_VERSION = (
-    "urbannav_reasoning_v4_section_definitions_v7"
+    "urbannav_reasoning_v4_section_definitions_v8"
 )
 REASONING_V4_EVIDENCE_POLICY_VERSION = (
-    "urbannav_reasoning_v4_evidence_policy_v7"
+    "urbannav_reasoning_v4_evidence_policy_v8"
 )
-REASONING_V4_RENDERER_ID = "render_reasoning_target_v4_v5"
-REASONING_V4_PARSER_ID = "parse_reasoning_target_v4_v5"
-REASONING_V4_VALIDATOR_ID = "validate_reasoning_target_v4_v7"
+REASONING_V4_RENDERER_ID = "render_reasoning_target_v4_v6"
+REASONING_V4_PARSER_ID = "parse_reasoning_target_v4_v6"
+REASONING_V4_VALIDATOR_ID = "validate_reasoning_target_v4_v8"
 REASONING_V4_COMPACT_FULL_COT_RENDERER_ID = (
-    "reasoning_v4_compact_full_cot_renderer_v2"
+    "reasoning_v4_compact_full_cot_renderer_v3"
 )
 REASONING_V4_SECTION_NAMES = (
     "TaskGrounding",
@@ -59,6 +61,11 @@ TaskDirectionStatusV4 = Literal[
     "conflict",
     "not_visible",
     "insufficient_evidence",
+]
+TaskDirectionSourceV4 = Literal[
+    "bev_route",
+    "instruction",
+    "none",
 ]
 DirectionAffordanceStateV4 = Literal[
     "direct",
@@ -229,12 +236,14 @@ class TaskDirectionV4(BaseModel):
 
     Args:
         status: Whether a prompt-visible direction is usable.
+        source: Minimal visible authority for an aligned direction.
         direction: Public moving direction when status is ``aligned``.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     status: TaskDirectionStatusV4
+    source: TaskDirectionSourceV4
     direction: ReasonCode | None = None
 
     @model_validator(mode="after")
@@ -245,9 +254,17 @@ class TaskDirectionV4(BaseModel):
             raise ValueError("task direction cannot use stop")
         if self.status == "aligned" and self.direction is None:
             raise ValueError("aligned task direction requires direction")
+        if self.status == "aligned" and self.source == "none":
+            raise ValueError(
+                "aligned task direction requires visible source"
+            )
         if self.status != "aligned" and self.direction is not None:
             raise ValueError(
                 f"{self.status} task direction cannot assert direction"
+            )
+        if self.status != "aligned" and self.source != "none":
+            raise ValueError(
+                f"{self.status} task direction requires source=none"
             )
         return self
 
@@ -287,15 +304,15 @@ class InteractionConstraintV4(BaseModel):
 
     @model_validator(mode="after")
     def validate_constraint(self) -> "InteractionConstraintV4":
-        """Validate global stop and direction-subset avoid semantics."""
+        """Keep only avoidance scoped to a direction subset."""
 
         _require_unique(
             [str(value) for value in self.affected_direction_labels],
             "affected_direction_labels",
         )
-        if self.effect == "stop" and self.affected_direction_labels:
+        if self.effect != "avoid" and self.affected_direction_labels:
             raise ValueError(
-                "stop constraint must be global in Stage-A"
+                f"{self.effect} constraint must be global in Stage-A"
             )
         if self.effect == "avoid" and not self.affected_direction_labels:
             raise ValueError(
@@ -351,10 +368,10 @@ class DecisionV4(DecisionProposalV4):
 
 
 class ReasoningTraceV4(BaseModel):
-    """Canonical six-section shared-input Reasoning V4.5 trace.
+    """Canonical six-section shared-input Reasoning V4.6 trace.
 
     Args:
-        schema_version: Exact V4.5 semantic contract stamp.
+        schema_version: Exact V4.6 semantic contract stamp.
         task_grounding: Deterministically normalized task.
         scene_grounding: Coarse visible scene summary.
         local_traversability: Physical direction affordances.
@@ -380,7 +397,7 @@ class ReasoningTargetV4(BaseModel):
     """Wrap the canonical trace used as a training audit sidecar.
 
     Args:
-        reasoning: Exact six-section V4.5 trace.  V4.5 has no Finish object.
+        reasoning: Exact six-section V4.6 trace.  V4.6 has no Finish object.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -389,7 +406,7 @@ class ReasoningTargetV4(BaseModel):
 
 
 def reasoning_v4_contract_schema_digest() -> str:
-    """Return the semantic digest of the canonical V4.5 target schema.
+    """Return the semantic digest of the canonical V4.6 target schema.
 
     Returns:
         SHA256 over a normalized JSON Schema representation.
@@ -490,6 +507,7 @@ __all__ = [
     "SceneGroundingV4",
     "SpeedV4",
     "TaskDirectionStatusV4",
+    "TaskDirectionSourceV4",
     "TaskDirectionV4",
     "TaskGroundingV4",
     "reasoning_v4_contract_schema_digest",

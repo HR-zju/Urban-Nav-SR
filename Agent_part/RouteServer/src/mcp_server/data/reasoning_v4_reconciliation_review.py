@@ -1,4 +1,4 @@
-"""Export Reasoning V4.5 action-audit and human-review projections."""
+"""Export Reasoning V4.6 action-audit and human-review projections."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ from mcp_server.data.reasoning_v4_state import (
 
 
 RECONCILIATION_REVIEW_REPORT_SCHEMA_V4 = (
-    "urbannav_action_reconciliation_review_report_v2"
+    "urbannav_action_reconciliation_review_report_v3"
 )
 
 
@@ -43,7 +43,7 @@ def export_action_reconciliation_review_v4(
     """Export immutable audits and unresolved human-review rows.
 
     Args:
-        source_jsonl: Frozen V4.5 source manifest.
+        source_jsonl: Frozen V4 source manifest.
         annotation_jsonl: Append-only annotation manifest.
         audit_jsonl: Destination joined audit projection.
         queue_jsonl: Destination pending-review projection.
@@ -91,7 +91,8 @@ def export_action_reconciliation_review_v4(
             )
             continue
         counts[
-            f"composition:{annotation.composition_record.status}"
+            "candidate_structure:"
+            f"{annotation.candidate_structure_record.status}"
         ] += 1
         audit = annotation.action_reconciliation
         resolution = (
@@ -108,13 +109,14 @@ def export_action_reconciliation_review_v4(
             f"review_status:{state.review_status}"
         ] += 1
         counts[
-            f"training_status:{state.training_status}"
+            "formal_training_eligible:"
+            f"{state.formal_training_eligible}"
         ] += 1
         counts["all_sections_accepted"] += int(
             state.all_sections_accepted
         )
-        counts["training_eligible"] += int(
-            state.training_eligible
+        counts["formal_training_eligible"] += int(
+            state.formal_training_eligible
         )
         if audit is None:
             if source.direction_supervision is not None:
@@ -179,8 +181,9 @@ def export_action_reconciliation_review_v4(
                     exclude_none=True,
                 ),
                 "review_status": state.review_status,
-                "training_status": state.training_status,
-                "training_eligible": state.training_eligible,
+                "formal_training_eligible": (
+                    state.formal_training_eligible
+                ),
                 "blockers": list(state.blockers),
             }
         )
@@ -224,7 +227,7 @@ def export_action_reconciliation_review_v4(
         "release_track": "review_preview",
         "formal_release_ready": (
             not errors
-            and counts["training_eligible"] > 0
+            and counts["formal_training_eligible"] > 0
             and counts["review_status:pending_human"] == 0
         ),
         "counts": dict(counts),
@@ -305,18 +308,19 @@ def _queue_projection_v4(
         "comparison": audit.comparison.model_dump(
             mode="json"
         ),
-        "probe_projection": (
-            audit.probe_projection.model_dump(
+        "probe_projections": [
+            projection.model_dump(
                 mode="json",
                 exclude_none=True,
             )
-        ),
+            for projection in audit.probe_projections
+        ],
         "checks": audit.checks.model_dump(mode="json"),
         "review_trigger_codes": list(
             audit.review_trigger_codes
         ),
-        "composition_record": (
-            annotation.composition_record.model_dump(
+        "candidate_structure_record": (
+            annotation.candidate_structure_record.model_dump(
                 mode="json",
                 exclude_none=True,
             )

@@ -1,7 +1,7 @@
 {
   "cases": [
     {
-      "canonical_assistant_text": "<think>\n<TaskGrounding>{\"objective\":\"follow_route\",\"requirements\":[\"route_adherence\"],\"ambiguities\":[]}</TaskGrounding>\n<SceneGrounding>{\"scene_type\":\"urban_sidewalk\",\"walkable_support\":\"paved_sidewalk\",\"key_entities\":[],\"traffic_context\":\"no_active_control_visible\"}</SceneGrounding>\n<LocalTraversability>{\"direction_affordances\":[{\"direction_label\":\"straight\",\"affordance\":\"direct\",\"clearance\":\"sufficient\",\"limiting_factors\":[]}]}</LocalTraversability>\n<NavigationContextGrounding>{\"task_direction\":{\"status\":\"aligned\",\"direction\":\"straight\"}}</NavigationContextGrounding>\n<InteractionConstraintGrounding>{\"constraints\":[]}</InteractionConstraintGrounding>\n<Decision>{\"selected_action_label\":\"straight\",\"speed\":\"normal\",\"response\":\"proceed\"}</Decision>\n</think>",
+      "canonical_assistant_text": "<think>\n<TaskGrounding>{\"objective\":\"follow_route\",\"requirements\":[\"route_adherence\"],\"ambiguities\":[]}</TaskGrounding>\n<SceneGrounding>{\"scene_type\":\"urban_sidewalk\",\"walkable_support\":\"paved_sidewalk\",\"key_entities\":[],\"traffic_context\":\"no_active_control_visible\"}</SceneGrounding>\n<LocalTraversability>{\"direction_affordances\":[{\"direction_label\":\"straight\",\"affordance\":\"direct\",\"clearance\":\"sufficient\",\"limiting_factors\":[]}]}</LocalTraversability>\n<NavigationContextGrounding>{\"task_direction\":{\"status\":\"aligned\",\"source\":\"instruction\",\"direction\":\"straight\"}}</NavigationContextGrounding>\n<InteractionConstraintGrounding>{\"constraints\":[]}</InteractionConstraintGrounding>\n<Decision>{\"selected_action_label\":\"straight\",\"speed\":\"normal\",\"response\":\"proceed\"}</Decision>\n</think>",
       "case_id": "minimal_shared_input_navigation",
       "entrypoint": "reasoning_target",
       "value": {
@@ -27,6 +27,7 @@
           "navigation_context_grounding": {
             "task_direction": {
               "direction": "straight",
+              "source": "instruction",
               "status": "aligned"
             }
           },
@@ -36,7 +37,7 @@
             "traffic_context": "no_active_control_visible",
             "walkable_support": "paved_sidewalk"
           },
-          "schema_version": "urbannav_reasoning_trace_v4_5",
+          "schema_version": "urbannav_reasoning_trace_v4_6",
           "task_grounding": {
             "ambiguities": [],
             "objective": "follow_route",
@@ -48,5 +49,5 @@
       }
     }
   ],
-  "schema_version": "urbannav_reasoning_v4_contract_artifacts_v8"
+  "schema_version": "urbannav_reasoning_v4_contract_artifacts_v9"
 }

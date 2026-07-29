@@ -582,11 +582,11 @@ def _direction_context_v4(
     approved = _DIRECTION_DATASET_ALLOWLIST.get(family)
     if approved is None:
         raise ValueError(
-            f"unsupported V4.5 direction policy: {dataset_source}"
+            f"unsupported Reasoning V4 direction policy: {dataset_source}"
         )
     if not approved:
         raise ValueError(
-            f"no approved V4.5 direction profile for dataset: {family}"
+            f"no approved Reasoning V4 direction profile for dataset: {family}"
         )
     raw = _raw_direction_record(row)
     profile_id = (

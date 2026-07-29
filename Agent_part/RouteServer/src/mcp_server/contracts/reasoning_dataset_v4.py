@@ -1,7 +1,7 @@
-"""Dataset, annotation, review, and training contracts for Reasoning V4.5.
+"""Dataset, annotation, review, and training contracts for Reasoning V4.6.
 
 The prompt-visible observation remains a reusable input envelope shared with
-VQA V2.  Reasoning V4.5 itself consumes only the six compact semantic sections,
+VQA V2.  Reasoning V4.6 itself consumes only the six compact semantic sections,
 one profile-stamped strong direction, an immutable action-reconciliation audit,
 and an optional append-only human resolution.  Review and training eligibility
 are derived projections rather than mutable annotation fields.
@@ -47,14 +47,15 @@ from mcp_server.contracts.reasoning_v4 import (
 
 REASONING_SOURCE_V4_SCHEMA_VERSION = "urbannav_reasoning_source_v4_5"
 REASONING_ANNOTATION_V4_SCHEMA_VERSION = (
-    "urbannav_reasoning_annotation_v4_5"
+    "urbannav_reasoning_annotation_v4_6"
 )
 ACTION_RECONCILIATION_AUDIT_V4_SCHEMA_VERSION = (
-    "urbannav_action_reconciliation_audit_v2"
+    "urbannav_action_reconciliation_audit_v3"
 )
 ACTION_REVIEW_RESOLUTION_V4_SCHEMA_VERSION = (
-    "urbannav_action_review_resolution_v1"
+    "urbannav_action_review_resolution_v2"
 )
+REASONING_V4_SYSTEM1_QUERY_COUNT = 16
 
 V4_FORBIDDEN_VISIBLE_CONTEXT_KEY_PARTS = (
     "action_ego",
@@ -114,7 +115,11 @@ AnnotationStageStatusV4 = Literal[
     "skipped",
 ]
 RecordStatusV4 = Literal["complete", "error"]
-CompositionStatusV4 = Literal["valid", "invalid", "not_available"]
+CandidateStructureStatusV4 = Literal[
+    "valid",
+    "invalid",
+    "not_available",
+]
 ProjectedReviewStatusV4 = Literal[
     "not_required",
     "pending_human",
@@ -122,8 +127,8 @@ ProjectedReviewStatusV4 = Literal[
     "rejected",
 ]
 ResolutionStatusV4 = Literal["resolved", "rejected"]
-TrainingStatusV4 = Literal["eligible", "blocked"]
 ReleaseTrackV4 = Literal["review_preview", "formal_training"]
+ArtifactStatusV4 = Literal["preview_only", "training_ready"]
 TrainingViewTypeV4 = Literal["full_cot_sft"]
 
 
@@ -131,7 +136,7 @@ class BevRouteEvidenceV4(BaseModel):
     """Describe presentation properties of one prompt-visible BEV.
 
     These fields are retained at the reusable observation boundary for VQA V2
-    compatibility.  Reasoning V4.5 never treats them as route-progress,
+    compatibility.  Reasoning V4.6 never treats them as route-progress,
     traversability, clearance, or collision-safety supervision.
 
     Args:
@@ -141,11 +146,11 @@ class BevRouteEvidenceV4(BaseModel):
         route_direction_authority: Whether clear orientation may support a
             visible task direction.
         route_progress_authority: Legacy observation metadata ignored by
-            Reasoning V4.5.
+            Reasoning V4.6.
         route_terminal_marker_visible: Legacy presentation metadata ignored by
-            Reasoning V4.5.
+            Reasoning V4.6.
         route_endpoint_semantics: Legacy endpoint provenance ignored by
-            Reasoning V4.5.
+            Reasoning V4.6.
         local_safety_authority: Always false in Stage-A.
         producer_contract_id: Versioned upstream producer identity.
         producer_contract_version: Exact upstream producer version.
@@ -347,7 +352,7 @@ class NavObservationV4(BaseModel):
     """Freeze the single-turn input visible to teacher and student.
 
     ``temporal_evidence_eligible`` is retained only to avoid changing the
-    shared VQA V2 source envelope.  Reasoning V4.5 ignores it and never derives
+    shared VQA V2 source envelope.  Reasoning V4.6 ignores it and never derives
     temporal targets or evidence links from history frames.
 
     Args:
@@ -730,8 +735,7 @@ class ActionReconciliationChecksV4(BaseModel):
 
     Args:
         proposal_strong_relation: Proposal versus strong-label relation.
-        probe_support: Whether local physical evidence supports the strong
-            action's nearest probe.
+        probe_support: Aggregate support across all equally near probes.
         constraint_effect_consistency: Whether the deterministic behavior tuple
             is compatible with active constraints.
         action_tuple_consistency: Whether action, speed, and response agree.
@@ -747,8 +751,9 @@ class ActionReconciliationChecksV4(BaseModel):
         "stop_move_mismatch",
     ]
     probe_support: Literal[
-        "supported",
-        "unsupported",
+        "all_supported",
+        "all_unsupported",
+        "mixed",
         "unknown",
         "not_applicable",
     ]
@@ -770,7 +775,7 @@ class ActionReconciliationAuditV4(BaseModel):
         proposal_digest: Parent Decision proposal digest.
         groundings_digest: Parent grounding-output digest.
         comparison: Proposal-versus-strong direction facts.
-        probe_projection: Nearest physical affordance probe summary.
+        probe_projections: All equally nearest physical probe summaries.
         checks: Four deterministic consistency outcomes.
         review_trigger_codes: Sorted machine-readable review reasons.
     """
@@ -801,7 +806,10 @@ class ActionReconciliationAuditV4(BaseModel):
         pattern=r"^[0-9a-f]{64}$",
     )
     comparison: ActionComparisonFactsV4
-    probe_projection: ActionProbeProjectionV4
+    probe_projections: tuple[ActionProbeProjectionV4, ...] = Field(
+        default_factory=tuple,
+        max_length=4,
+    )
     checks: ActionReconciliationChecksV4
     review_trigger_codes: tuple[ReasonCode, ...] = Field(
         default_factory=tuple,
@@ -810,8 +818,23 @@ class ActionReconciliationAuditV4(BaseModel):
 
     @model_validator(mode="after")
     def validate_triggers(self) -> "ActionReconciliationAuditV4":
-        """Require sorted, duplicate-free trigger codes."""
+        """Require deterministic projections and trigger codes."""
 
+        projection_labels = [
+            str(item.direction_label)
+            for item in self.probe_projections
+        ]
+        if any(
+            item.direction_label is None
+            for item in self.probe_projections
+        ):
+            raise ValueError(
+                "probe_projections cannot contain empty placeholders"
+            )
+        if projection_labels != sorted(set(projection_labels)):
+            raise ValueError(
+                "probe_projections must be label-sorted and unique"
+            )
         values = [str(value) for value in self.review_trigger_codes]
         if values != sorted(set(values)):
             raise ValueError(
@@ -874,12 +897,12 @@ class ActionReviewResolutionV4(BaseModel):
         return self
 
 
-class CompositionRecordV4(BaseModel):
-    """Record deterministic composition independently from annotation.
+class CandidateStructureRecordV4(BaseModel):
+    """Record deterministic candidate construction independently from release.
 
     Args:
         composer_version: Exact composer implementation version.
-        status: Candidate validity.
+        status: Candidate structural validity.
         errors: Candidate construction or validation failures.
         warnings: Non-fatal candidate findings.
     """
@@ -887,35 +910,35 @@ class CompositionRecordV4(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     composer_version: str = Field(min_length=1, max_length=128)
-    status: CompositionStatusV4
+    status: CandidateStructureStatusV4
     errors: list[str] = Field(default_factory=list, max_length=64)
     warnings: list[str] = Field(default_factory=list, max_length=128)
 
     @model_validator(mode="after")
-    def validate_record(self) -> "CompositionRecordV4":
+    def validate_record(self) -> "CandidateStructureRecordV4":
         """Keep status and errors consistent."""
 
         if self.status == "valid" and self.errors:
             raise ValueError(
-                "valid composition cannot carry errors"
+                "valid candidate structure cannot carry errors"
             )
         if self.status == "invalid" and not self.errors:
             raise ValueError(
-                "invalid composition requires at least one error"
+                "invalid candidate structure requires at least one error"
             )
         if self.status == "not_available" and not self.errors:
             raise ValueError(
-                "unavailable composition requires a reason"
+                "unavailable candidate structure requires a reason"
             )
         return self
 
 
 class ReasoningAnnotationV4(BaseModel):
-    """Store one immutable V4.5 annotation record.
+    """Store one immutable V4.6 annotation record.
 
     ``record_status`` only describes whether the bounded pipeline completed.
-    Section acceptance, composition validity, review state, and training
-    eligibility remain independent axes.
+    Section acceptance, candidate structural validity, review state, and
+    formal-training eligibility remain independent axes.
 
     Args:
         schema_version: Exact annotation schema stamp.
@@ -927,7 +950,7 @@ class ReasoningAnnotationV4(BaseModel):
         action_reconciliation: Immutable proposal/strong-label audit.
         composer_candidate: Deterministic final Decision when valid.
         candidate_target: Six-section candidate containing that Decision.
-        composition_record: Independent composer status.
+        candidate_structure_record: Independent candidate-construction status.
         stage_records: One stage record per attempted section.
         errors: Record-level failures.
         warnings: Record-level non-fatal findings.
@@ -953,7 +976,7 @@ class ReasoningAnnotationV4(BaseModel):
     action_reconciliation: ActionReconciliationAuditV4 | None = None
     composer_candidate: DecisionV4 | None = None
     candidate_target: ReasoningTargetV4 | None = None
-    composition_record: CompositionRecordV4
+    candidate_structure_record: CandidateStructureRecordV4
     stage_records: dict[
         ReasoningSectionNameV4,
         AnnotationStageRecordV4,
@@ -1029,9 +1052,11 @@ class ReasoningAnnotationV4(BaseModel):
                 "candidate target Decision must equal composer_candidate"
             )
         has_candidate = self.composer_candidate is not None
-        if (self.composition_record.status == "valid") != has_candidate:
+        if (
+            self.candidate_structure_record.status == "valid"
+        ) != has_candidate:
             raise ValueError(
-                "only valid composition may carry a candidate"
+                "only a structurally valid candidate may be carried"
             )
         return self
 
@@ -1068,7 +1093,7 @@ class ReasoningTrainingViewV4(BaseModel):
     every eligibility axis.
 
     Args:
-        schema_version: Exact V4.5 training-view stamp.
+        schema_version: Exact V4.6 training-view stamp.
         reasoning_contract_schema_digest: Exact canonical contract digest.
         sample_id: Stable view identity.
         source_group_id: Parent source group.
@@ -1078,8 +1103,9 @@ class ReasoningTrainingViewV4(BaseModel):
         release_track: Review-only or formal-training track.
         audit_id: Exact action audit.
         review_status: Derived review state.
-        training_status: Derived training state.
-        training_eligible: Derived eligibility bit.
+        artifact_status: Whether this artifact is preview-only or training-ready.
+        artifact_training_eligible: Whether this exact artifact may be trained.
+        formal_training_eligible: Eligibility of the joined canonical record.
         images: Ordered prompt images.
         image_roles: Addressable image roles.
         instruction: Optional visible instruction.
@@ -1120,8 +1146,9 @@ class ReasoningTrainingViewV4(BaseModel):
         pattern=r"^[0-9a-f]{64}$",
     )
     review_status: ProjectedReviewStatusV4
-    training_status: TrainingStatusV4
-    training_eligible: bool
+    artifact_status: ArtifactStatusV4
+    artifact_training_eligible: bool
+    formal_training_eligible: bool
     images: list[str] = Field(min_length=1, max_length=16)
     image_roles: list[str] = Field(min_length=1, max_length=16)
     instruction: str | None = Field(
@@ -1161,16 +1188,18 @@ class ReasoningTrainingViewV4(BaseModel):
             raise ValueError(
                 "images and image_roles must have equal length"
             )
-        if self.training_eligible != (
-            self.training_status == "eligible"
-        ):
-            raise ValueError(
-                "training_eligible and training_status disagree"
-            )
         if self.release_track == "formal_training":
-            if not self.training_eligible:
+            if self.artifact_status != "training_ready":
                 raise ValueError(
-                    "formal_training requires training_eligible=true"
+                    "formal_training requires artifact_status=training_ready"
+                )
+            if not self.artifact_training_eligible:
+                raise ValueError(
+                    "formal_training artifact must be training eligible"
+                )
+            if not self.formal_training_eligible:
+                raise ValueError(
+                    "formal_training requires formal eligibility"
                 )
             if self.review_status not in {
                 "not_required",
@@ -1183,10 +1212,15 @@ class ReasoningTrainingViewV4(BaseModel):
                 raise ValueError(
                     "formal_training requires action audit_id"
                 )
-        elif self.training_eligible:
-            raise ValueError(
-                "review_preview cannot be training eligible"
-            )
+        else:
+            if self.artifact_status != "preview_only":
+                raise ValueError(
+                    "review_preview requires artifact_status=preview_only"
+                )
+            if self.artifact_training_eligible:
+                raise ValueError(
+                    "review_preview artifact cannot be training eligible"
+                )
         direction = self.direction_supervision
         if (
             direction.profile_id
@@ -1217,8 +1251,19 @@ class ReasoningTrainingViewV4(BaseModel):
         if self.trajectory_ego_t is not None:
             _validate_xyt(self.trajectory_ego_t)
             if (
-                self.action_mask is not None
-                and len(self.action_mask) != len(self.trajectory_ego_t)
+                len(self.trajectory_ego_t)
+                != REASONING_V4_SYSTEM1_QUERY_COUNT
+            ):
+                raise ValueError(
+                    "Reasoning V4.6 System1 trajectory must have "
+                    f"{REASONING_V4_SYSTEM1_QUERY_COUNT} steps"
+                )
+            if self.action_mask is None:
+                raise ValueError(
+                    "Reasoning V4.6 System1 trajectory requires action_mask"
+                )
+            if (
+                len(self.action_mask) != len(self.trajectory_ego_t)
             ):
                 raise ValueError(
                     "action_mask length must match trajectory"
@@ -1353,8 +1398,9 @@ __all__ = [
     "AnnotationStageRecordV4",
     "AnnotationStageStatusV4",
     "BevRouteEvidenceV4",
-    "CompositionRecordV4",
-    "CompositionStatusV4",
+    "ArtifactStatusV4",
+    "CandidateStructureRecordV4",
+    "CandidateStructureStatusV4",
     "DirectionContextV4",
     "DirectionSupervisionV4",
     "EvidenceCatalogEntryV4",
@@ -1366,6 +1412,7 @@ __all__ = [
     "ProjectedReviewStatusV4",
     "REASONING_ANNOTATION_V4_SCHEMA_VERSION",
     "REASONING_SOURCE_V4_SCHEMA_VERSION",
+    "REASONING_V4_SYSTEM1_QUERY_COUNT",
     "ReasoningAnnotationV4",
     "ReasoningSectionNameV4",
     "ReasoningSourceV4",
@@ -1373,7 +1420,6 @@ __all__ = [
     "RecordStatusV4",
     "ReleaseTrackV4",
     "ResolutionStatusV4",
-    "TrainingStatusV4",
     "TrainingViewTypeV4",
     "approved_direction_profiles_v4",
     "reasoning_payload_digest_v4",

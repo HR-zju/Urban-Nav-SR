@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 # Compatibility entrypoint for one OpenAI-compatible Qwen endpoint.
-# The canonical V4.5 orchestration and release gates live in the dual runner;
+# The canonical V4.6 orchestration and release gates live in the dual runner;
 # both worker roles are pointed at the same endpoint here.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -25,7 +25,7 @@ Usage:
   run_reasoning_v4_qwen122b_annotation.sh status-full
   run_reasoning_v4_qwen122b_annotation.sh tail-full
 
-This compatibility wrapper uses one service for both V4.5 worker roles.
+This compatibility wrapper uses one service for both V4.6 worker roles.
 Use run_reasoning_v4_qwen122b_dual_annotation.sh directly when two endpoints
 are available.
 EOF

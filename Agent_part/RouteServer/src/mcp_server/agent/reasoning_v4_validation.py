@@ -1,4 +1,4 @@
-"""Semantic validation for compact shared-input Reasoning V4.5."""
+"""Semantic validation for compact shared-input Reasoning V4.6."""
 
 from __future__ import annotations
 
@@ -117,17 +117,34 @@ def validate_reasoning_section_v4(
                 "task_direction_outside_action_profile:"
                 f"{task_direction.direction}"
             )
-        if task_direction.status == "aligned":
-            has_direction_source = (
-                _instruction_has_explicit_direction(
-                    observation.instruction
-                )
-                or _has_visible_bev_direction_authority(observation)
+        if (
+            task_direction.status == "aligned"
+            and task_direction.source == "bev_route"
+            and not _has_visible_bev_direction_authority(observation)
+        ):
+            errors.append(
+                "bev_route_task_direction_without_visible_authority"
             )
-            if not has_direction_source:
-                errors.append(
-                    "aligned_task_direction_without_visible_authority"
-                )
+        if (
+            task_direction.status == "aligned"
+            and task_direction.source == "instruction"
+            and not _instruction_has_explicit_direction(
+                observation.instruction
+            )
+        ):
+            errors.append(
+                "instruction_task_direction_without_explicit_direction"
+            )
+        if (
+            task_direction.status == "aligned"
+            and task_direction.source not in {
+                "bev_route",
+                "instruction",
+            }
+        ):
+            errors.append(
+                "aligned_task_direction_without_visible_source"
+            )
 
     if isinstance(section, InteractionConstraintGroundingV4):
         for constraint in section.constraints:
@@ -167,9 +184,9 @@ def sanitize_reasoning_section_evidence_v4(
     *,
     observation: NavObservationV4,
 ) -> tuple[BaseModel, list[str]]:
-    """Return the already typed V4.5 section unchanged.
+    """Return the already typed V4.6 section unchanged.
 
-    V4.5 section models contain no evidence refs or temporal claims, so there
+    V4.6 section models contain no evidence refs or temporal claims, so there
     is no lossy repair step.  The function remains as an explicit batch-runner
     boundary and compatibility point.
 
@@ -202,7 +219,7 @@ def validate_reasoning_target_v4(
     """Validate all six sections and optional strong-direction ownership.
 
     Args:
-        target: Typed V4.5 target.
+        target: Typed V4.6 target.
         observation: Complete prompt-visible input.
         direction_supervision: Optional upstream deterministic direction.
 

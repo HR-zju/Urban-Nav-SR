@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Reasoning V4.5 annotation runner for two local Qwen3.5-122B-A10B services.
+# Reasoning V4.6 annotation runner for two local Qwen3.5-122B-A10B services.
 # All generated artifacts live under the shared /lpai volume by default.
 
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-/lpai/volumes/mind-eb-bd-ga/suh/UrbanNavigation}"
@@ -18,18 +18,19 @@ DIRECTION_PROFILE_ID="${DIRECTION_PROFILE_ID:-fpv_degree10_terminal_centroid_v2}
 CONCURRENCY_PER_SERVICE="${CONCURRENCY_PER_SERVICE:-2}"
 MAX_RETRIES="${MAX_RETRIES:-2}"
 IMAGE_DETAIL="${IMAGE_DETAIL:-low}"
+NAVIGATION_CONTEXT_IMAGE_DETAIL="${NAVIGATION_CONTEXT_IMAGE_DETAIL:-high}"
 RETRY_FAILED_ON_RESUME="${RETRY_FAILED_ON_RESUME:-1}"
 LLM_VISION_TIMEOUT_S="${LLM_VISION_TIMEOUT_S:-900}"
 LLM_VISION_MAX_TOKENS="${LLM_VISION_MAX_TOKENS:-4096}"
 POSTPROCESS_FULL="${POSTPROCESS_FULL:-0}"
 
 FULL_INPUT_JSONL_DEFAULT="${DATASET_ROOT}/manifests/train/phase1_cot_teacher_frodobots_foxglove_lite_final/foxglove_yaw_p90_clean/manifests/phase1_cot_foxglove_yaw_p90_clean_lite_cot_final_direction_choice_cot_full_choice.jsonl"
-FULL_RUN_ROOT_DEFAULT="${WORKSPACE_ROOT}/annotation_runs/reasoning_v4_5_qwen122b_foxglove_20way_full_v1"
+FULL_RUN_ROOT_DEFAULT="${WORKSPACE_ROOT}/annotation_runs/reasoning_v4_6_qwen122b_foxglove_20way_full_v1"
 FULL_EXPECTED_ROWS="${FULL_EXPECTED_ROWS:-47249}"
 FULL_TMUX_SESSION="${FULL_TMUX_SESSION:-reasoning-v4-full}"
 
 SMOKE_INPUT_JSONL_DEFAULT="${FULL_INPUT_JSONL_DEFAULT}"
-SMOKE_RUN_ROOT_DEFAULT="${WORKSPACE_ROOT}/annotation_runs/reasoning_v4_5_qwen122b_dual_smoke_v1"
+SMOKE_RUN_ROOT_DEFAULT="${WORKSPACE_ROOT}/annotation_runs/reasoning_v4_6_qwen122b_dual_smoke_v1"
 SMOKE_EXPECTED_ROWS="${SMOKE_EXPECTED_ROWS:-64}"
 SMOKE_TMUX_SESSION="${SMOKE_TMUX_SESSION:-reasoning-v4-smoke}"
 SMOKE_INTERESTING_JSONLS_DEFAULT="${WORKSPACE_ROOT}/runs/qwen35_122b_a10b_20260716/behavior_filter/foxglove/interesting.jsonl:${DATASET_ROOT}/manifests/value_filter/qwen35_retry_unknown_20260713_1415/foxglove/interesting.jsonl:${DATASET_ROOT}/manifests/value_filter/doubao_lite_20260709_184920/foxglove/interesting.jsonl"
@@ -61,6 +62,7 @@ Important overrides:
   SMOKE_CONSENSUS_MIN_VOTES
   FULL_INPUT_JSONL, FULL_RUN_ROOT, FULL_EXPECTED_ROWS
   CONCURRENCY_PER_SERVICE, MAX_RETRIES, IMAGE_DETAIL
+  NAVIGATION_CONTEXT_IMAGE_DETAIL
   POSTPROCESS_FULL=1  # Not recommended until the full exporter is streaming.
 
 Safety:
@@ -69,8 +71,8 @@ Safety:
   - Smoke uses historical interesting labels, a fixed seed, four direction
     buckets, and at most one sample per clip.
   - The 96,986-row legacy 12-way merged manifest is intentionally not a
-    default because it does not satisfy the current Foxglove V4.5 profile.
-  - launch-full requires exact V4.5 machine-readable smoke gates, completed
+    default because it does not satisfy the current Foxglove V4.6 profile.
+  - launch-full requires exact V4.6 machine-readable smoke gates, completed
     append-only resolutions for triggered rows, and SMOKE_APPROVED=1.
 EOF
 }
@@ -131,6 +133,8 @@ preflight() {
   done
   [[ "${IMAGE_DETAIL}" =~ ^(auto|low|high)$ ]] \
     || die "IMAGE_DETAIL must be auto, low, or high"
+  [[ "${NAVIGATION_CONTEXT_IMAGE_DETAIL}" =~ ^(auto|low|high)$ ]] \
+    || die "NAVIGATION_CONTEXT_IMAGE_DETAIL must be auto, low, or high"
   PYTHONPATH="${ROUTESERVER_ROOT}/src:${ROUTESERVER_ROOT}" \
     "${PYTHON_BIN}" -c \
     'import openai, PIL, pydantic; import mcp_server; from mcp_server.contracts.reasoning_dataset_v4 import ReasoningSourceV4'
@@ -165,7 +169,7 @@ record_provenance() {
     git -C "${ROUTESERVER_ROOT}" status --porcelain | wc -l | tr -d ' '
   )"
   {
-    echo "schema_version=urbannav_reasoning_v4_5_qwen122b_run_provenance_v1"
+    echo "schema_version=urbannav_reasoning_v4_6_qwen122b_run_provenance_v1"
     echo "created_at=$(date --iso-8601=seconds)"
     echo "code_root=${ROUTESERVER_ROOT}"
     echo "code_commit=${code_commit}"
@@ -180,6 +184,7 @@ record_provenance() {
     echo "concurrency_per_service=${CONCURRENCY_PER_SERVICE}"
     echo "max_retries=${MAX_RETRIES}"
     echo "image_detail=${IMAGE_DETAIL}"
+    echo "navigation_context_image_detail=${NAVIGATION_CONTEXT_IMAGE_DETAIL}"
     echo "vision_timeout_s=${LLM_VISION_TIMEOUT_S}"
     echo "vision_max_tokens=${LLM_VISION_MAX_TOKENS}"
     echo "smoke_interesting_jsonls=${SMOKE_INTERESTING_JSONLS}"
@@ -304,6 +309,7 @@ run_label_worker() {
     --concurrency "${CONCURRENCY_PER_SERVICE}" \
     --max-retries "${MAX_RETRIES}" \
     --image-detail "${IMAGE_DETAIL}" \
+    --navigation-context-image-detail "${NAVIGATION_CONTEXT_IMAGE_DETAIL}" \
     --progress-interval 10 \
     "${retry_args[@]}"
 }
@@ -329,7 +335,7 @@ label_with_both_services() {
 
 merge_annotations() {
   local run_root="$1"
-  local merged="${run_root}/annotations/reasoning_v4_5_annotations.jsonl"
+  local merged="${run_root}/annotations/reasoning_v4_6_annotations.jsonl"
   local temporary="${merged}.tmp.$$"
   require_file "${run_root}/annotations/service_0.jsonl"
   require_file "${run_root}/annotations/service_1.jsonl"
@@ -343,7 +349,7 @@ merge_annotations() {
 build_review_run() {
   local run_root="$1"
   local sources="${run_root}/sources/reasoning_v4_5_sources.jsonl"
-  local annotations="${run_root}/annotations/reasoning_v4_5_annotations.jsonl"
+  local annotations="${run_root}/annotations/reasoning_v4_6_annotations.jsonl"
   local views="${run_root}/views/reasoning_v4_reconciliation_preview_views.jsonl"
   PYTHONPATH="${ROUTESERVER_ROOT}/src:${ROUTESERVER_ROOT}" \
     "${PYTHON_BIN}" \
@@ -374,14 +380,14 @@ build_review_run() {
     --views-jsonl "${views}" \
     --output-html "${run_root}/review/action_reconciliation_review.complete.html" \
     --report-json "${run_root}/reports/review_report.json" \
-    --title "UrbanNav Reasoning V4.5 Qwen3.5-122B Review" \
+    --title "UrbanNav Reasoning V4.6 Qwen3.5-122B Review" \
     --max-samples 100
 }
 
 audit_postprocessed_run() {
   local run_root="$1"
   local sources="${run_root}/sources/reasoning_v4_5_sources.jsonl"
-  local annotations="${run_root}/annotations/reasoning_v4_5_annotations.jsonl"
+  local annotations="${run_root}/annotations/reasoning_v4_6_annotations.jsonl"
   local views="${run_root}/views/reasoning_v4_reconciliation_preview_views.jsonl"
   PYTHONPATH="${ROUTESERVER_ROOT}/src:${ROUTESERVER_ROOT}" \
     "${PYTHON_BIN}" \
@@ -433,7 +439,7 @@ run_pipeline() {
       --source-jsonl \
       "${run_root}/sources/reasoning_v4_5_sources.jsonl" \
       --annotation-jsonl \
-      "${run_root}/annotations/reasoning_v4_5_annotations.jsonl" \
+      "${run_root}/annotations/reasoning_v4_6_annotations.jsonl" \
       --audit-jsonl \
       "${run_root}/annotations/action_reconciliation_audits.jsonl" \
       --queue-jsonl \
@@ -448,14 +454,14 @@ run_pipeline() {
   fi
   assert_annotation_completeness \
     "${run_root}/sources/reasoning_v4_5_sources.jsonl" \
-    "${run_root}/annotations/reasoning_v4_5_annotations.jsonl" \
+    "${run_root}/annotations/reasoning_v4_6_annotations.jsonl" \
     "${expected_rows}" \
     "${run_root}"
   if [[ "${postprocess}" == "1" ]]; then
     audit_postprocessed_run "${run_root}"
     echo "[run-complete] review=${run_root}/review/action_reconciliation_review.complete.html"
   else
-    echo "[run-complete] annotation=${run_root}/annotations/reasoning_v4_5_annotations.jsonl"
+    echo "[run-complete] annotation=${run_root}/annotations/reasoning_v4_6_annotations.jsonl"
     echo "[run-complete] full view export skipped because the current exporter is not streaming"
   fi
 }
@@ -464,10 +470,10 @@ validate_smoke_gate() {
   local smoke_root="${SMOKE_RUN_ROOT:-${SMOKE_RUN_ROOT_DEFAULT}}"
   local completeness="${smoke_root}/reports/annotation_completeness_report.json"
   local sources="${smoke_root}/sources/reasoning_v4_5_sources.jsonl"
-  local annotations="${smoke_root}/annotations/reasoning_v4_5_annotations.jsonl"
-  local formal_views="${smoke_root}/views/reasoning_v4_5_formal_gate.jsonl"
-  local review_report="${smoke_root}/reports/reasoning_v4_5_release_gate.json"
-  local artifact_report="${smoke_root}/reports/reasoning_v4_5_formal_artifact_gate.json"
+  local annotations="${smoke_root}/annotations/reasoning_v4_6_annotations.jsonl"
+  local formal_views="${smoke_root}/views/reasoning_v4_6_formal_gate.jsonl"
+  local review_report="${smoke_root}/reports/reasoning_v4_6_release_gate.json"
+  local artifact_report="${smoke_root}/reports/reasoning_v4_6_formal_artifact_gate.json"
   local -a resolution_args=()
   [[ "${SMOKE_APPROVED:-0}" == "1" ]] \
     || die "set SMOKE_APPROVED=1 only after manually reviewing the smoke HTML"
@@ -515,7 +521,7 @@ validate_smoke_gate() {
     REVIEW="${review_report}" EXPECTED="${SMOKE_EXPECTED_ROWS}" \
     FORMAL_VIEWS="${formal_views}" \
     "${PYTHON_BIN}" -c \
-    'import json, os, pathlib; expected=int(os.environ["EXPECTED"]); audit=json.load(open(os.environ["ARTIFACT"], encoding="utf-8")); complete=json.load(open(os.environ["COMPLETENESS"], encoding="utf-8")); review=json.load(open(os.environ["REVIEW"], encoding="utf-8")); metrics=audit["metrics"]; required={"sources":expected,"record_complete":expected,"all_sections_accepted":expected,"composition_valid":expected,"pending_human":0,"training_eligible":expected}; assert audit.get("passed") is True, audit; assert complete.get("passed") is True, complete; assert review.get("formal_release_ready") is True, review; assert all(metrics.get(key)==value for key,value in required.items()), (metrics,required); rows=sum(1 for line in pathlib.Path(os.environ["FORMAL_VIEWS"]).open(encoding="utf-8") if line.strip()); assert rows==expected,(rows,expected)'
+    'import json, os, pathlib; expected=int(os.environ["EXPECTED"]); audit=json.load(open(os.environ["ARTIFACT"], encoding="utf-8")); complete=json.load(open(os.environ["COMPLETENESS"], encoding="utf-8")); review=json.load(open(os.environ["REVIEW"], encoding="utf-8")); metrics=audit["metrics"]; required={"sources":expected,"record_complete":expected,"all_sections_accepted":expected,"candidate_structurally_valid":expected,"pending_human":0,"formal_training_eligible":expected,"task_canonicalization_drift":0,"probe_tie_loss":0,"preview_training_leak":0,"formal_ineligible_artifact_leak":0}; assert audit.get("passed") is True, audit; assert complete.get("passed") is True, complete; assert review.get("formal_release_ready") is True, review; assert all(metrics.get(key)==value for key,value in required.items()), (metrics,required); rows=sum(1 for line in pathlib.Path(os.environ["FORMAL_VIEWS"]).open(encoding="utf-8") if line.strip()); assert rows==expected,(rows,expected)'
   echo "[smoke-gate-ok] root=${smoke_root}"
 }
 
@@ -544,6 +550,7 @@ launch_job() {
     "CONCURRENCY_PER_SERVICE=${CONCURRENCY_PER_SERVICE}"
     "MAX_RETRIES=${MAX_RETRIES}"
     "IMAGE_DETAIL=${IMAGE_DETAIL}"
+    "NAVIGATION_CONTEXT_IMAGE_DETAIL=${NAVIGATION_CONTEXT_IMAGE_DETAIL}"
     "RETRY_FAILED_ON_RESUME=${RETRY_FAILED_ON_RESUME}"
     "LLM_VISION_TIMEOUT_S=${LLM_VISION_TIMEOUT_S}"
     "LLM_VISION_MAX_TOKENS=${LLM_VISION_MAX_TOKENS}"
@@ -574,7 +581,7 @@ status_job() {
     "${run_root}/sources/reasoning_v4_5_sources.jsonl" \
     "${run_root}/annotations/service_0.jsonl" \
     "${run_root}/annotations/service_1.jsonl" \
-    "${run_root}/annotations/reasoning_v4_5_annotations.jsonl" \
+    "${run_root}/annotations/reasoning_v4_6_annotations.jsonl" \
     "${run_root}/views/reasoning_v4_reconciliation_preview_views.jsonl"; do
     if [[ -f "${path}" ]]; then
       echo "[rows] $(wc -l <"${path}") ${path}"
@@ -586,7 +593,7 @@ status_job() {
     "${run_root}/reports/annotation_completeness_report.json"; do
     if [[ -f "${report}" ]]; then
       REPORT="${report}" "${PYTHON_BIN}" -c \
-        'import json, os; p=json.load(open(os.environ["REPORT"], encoding="utf-8")); print("[report]", os.environ["REPORT"], {k:p.get(k) for k in ("status","input_rows","pending_rows","processed_rows","record_complete_rows","all_sections_accepted_rows","composition_valid_rows","pending_human_rows","rate_rows_per_hour","passed") if k in p})'
+        'import json, os; p=json.load(open(os.environ["REPORT"], encoding="utf-8")); print("[report]", os.environ["REPORT"], {k:p.get(k) for k in ("status","input_rows","pending_rows","processed_rows","record_complete_rows","all_sections_accepted_rows","candidate_structurally_valid_rows","pending_human_rows","rate_rows_per_hour","passed") if k in p})'
     fi
   done
   echo "[log] ${run_root}/logs/controller.log"

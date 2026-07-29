@@ -47,6 +47,15 @@ def parse_args(
         choices=("auto", "low", "high"),
         default="low",
     )
+    parser.add_argument(
+        "--navigation-context-image-detail",
+        choices=("auto", "low", "high"),
+        default="high",
+        help=(
+            "Provider detail used only for NavigationContextGrounding; "
+            "defaults to high so thin BEV route overlays are preserved."
+        ),
+    )
     parser.add_argument("--progress-interval", type=int, default=100)
     parser.add_argument("--retry-failed-on-resume", action="store_true")
     parser.add_argument("--api-keys-file", type=Path)
@@ -68,6 +77,9 @@ def main(argv: Sequence[str] | None = None) -> None:
             config=ReasoningV4BatchConfig(
                 max_retries=max(0, args.max_retries),
                 image_detail=args.image_detail,
+                navigation_context_image_detail=(
+                    args.navigation_context_image_detail
+                ),
                 concurrency=max(1, args.concurrency),
                 retry_failed_on_resume=(
                     args.retry_failed_on_resume
