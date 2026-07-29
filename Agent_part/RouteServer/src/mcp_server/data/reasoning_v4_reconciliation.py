@@ -1,0 +1,416 @@
+"""Build deterministic, annotation-only Reasoning V4.5 action audits."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from mcp_server.agent.reasoning_v4_validation import (
+    applicable_constraint_effects_v4,
+)
+from mcp_server.contracts.direction_profile import (
+    affordance_probe_candidates_for_action,
+    approved_affordance_probe_profiles,
+    approved_stage_a_direction_profiles,
+    direction_comparison_facts,
+    resolve_stage_a_direction_profile,
+)
+from mcp_server.contracts.reasoning_dataset_v4 import (
+    ActionComparisonFactsV4,
+    ActionProbeProjectionV4,
+    ActionReconciliationAuditV4,
+    ActionReconciliationChecksV4,
+    GroundingOutputsV4,
+    ReasoningSourceV4,
+    reasoning_payload_digest_v4,
+)
+from mcp_server.contracts.reasoning_v4 import DecisionProposalV4
+
+
+ACTION_RECONCILIATION_POLICY_VERSION_V4 = (
+    "urbannav_action_reconciliation_policy_v2"
+)
+
+_TRIGGER_POLICY = {
+    "proposal_delta": (
+        "proposal_direction_delta_exceeds_profile_tolerance"
+    ),
+    "proposal_sign": "proposal_direction_sign_conflict",
+    "proposal_stop_move": "proposal_stop_move_mismatch",
+    "probe_unsupported": "strong_action_probe_unsupported",
+    "probe_unknown": "strong_action_probe_unknown",
+    "constraint": "strong_action_constraint_conflict",
+    "tuple": "proposal_action_tuple_conflict",
+}
+
+
+def action_reconciliation_policy_digest_v4() -> str:
+    """Return the deterministic reconciliation-policy digest.
+
+    Returns:
+        SHA-256 over policy and direction registries.
+    """
+
+    return _canonical_digest(
+        {
+            "policy_version": (
+                ACTION_RECONCILIATION_POLICY_VERSION_V4
+            ),
+            "trigger_policy": _TRIGGER_POLICY,
+            "action_profiles": (
+                approved_stage_a_direction_profiles()
+            ),
+            "affordance_profiles": (
+                approved_affordance_probe_profiles()
+            ),
+        }
+    )
+
+
+def build_action_reconciliation_audit_v4(
+    source: ReasoningSourceV4,
+    groundings: GroundingOutputsV4,
+    decision_proposal: DecisionProposalV4,
+) -> ActionReconciliationAuditV4 | None:
+    """Build one normalized proposal-versus-strong audit.
+
+    Args:
+        source: Frozen observation and optional strong supervision.
+        groundings: Five independent grounding sections.
+        decision_proposal: Blind LVLM Decision proposal.
+
+    Returns:
+        Immutable audit when strong supervision exists, else ``None``.
+
+    Raises:
+        ValueError: If grounding outputs are incomplete.
+    """
+
+    if not groundings.complete:
+        raise ValueError(
+            "action reconciliation requires complete groundings"
+        )
+    direction = source.direction_supervision
+    if direction is None:
+        return None
+    profile_id = source.observation.direction_context.action_profile_id
+    profile = resolve_stage_a_direction_profile(profile_id)
+    proposal_label = str(
+        decision_proposal.selected_action_label
+    )
+    strong_label = str(direction.label_name)
+    comparison_raw = direction_comparison_facts(
+        profile_id,
+        proposal_label,
+        strong_label,
+    )
+    comparison = ActionComparisonFactsV4(
+        angular_delta_deg=comparison_raw.angular_delta_deg,
+        stop_move_mismatch=comparison_raw.stop_move_mismatch,
+        sign_conflict=comparison_raw.sign_conflict,
+    )
+    projection = _probe_projection_v4(
+        profile_id,
+        strong_label,
+        groundings,
+    )
+    proposal_relation = _proposal_relation_v4(
+        comparison,
+        tolerance_deg=float(
+            profile["intent_compatibility_tolerance_deg"]
+        ),
+    )
+    constraint_consistency = _constraint_check_v4(
+        groundings,
+        strong_action=strong_label,
+    )
+    checks = ActionReconciliationChecksV4(
+        proposal_strong_relation=proposal_relation,
+        probe_support=_probe_support_check_v4(projection),
+        constraint_effect_consistency=constraint_consistency,
+        action_tuple_consistency=(
+            "passed"
+            if _proposal_tuple_is_consistent_v4(decision_proposal)
+            else "conflict"
+        ),
+    )
+    trigger_codes = _review_trigger_codes_v4(checks)
+    proposal_digest = _canonical_digest(
+        decision_proposal.model_dump(
+            mode="json",
+            exclude_none=True,
+        )
+    )
+    groundings_digest = _canonical_digest(
+        groundings.model_dump(
+            mode="json",
+            exclude_none=True,
+        )
+    )
+    audit_id = _canonical_digest(
+        {
+            "schema": ACTION_RECONCILIATION_POLICY_VERSION_V4,
+            "source_fingerprint": source.source_fingerprint,
+            "proposal_digest": proposal_digest,
+            "groundings_digest": groundings_digest,
+            "comparison": comparison.model_dump(mode="json"),
+            "probe_projection": projection.model_dump(
+                mode="json",
+                exclude_none=True,
+            ),
+            "checks": checks.model_dump(mode="json"),
+            "review_trigger_codes": trigger_codes,
+        }
+    )
+    return ActionReconciliationAuditV4(
+        audit_id=audit_id,
+        source_fingerprint=source.source_fingerprint,
+        proposal_digest=proposal_digest,
+        groundings_digest=groundings_digest,
+        comparison=comparison,
+        probe_projection=projection,
+        checks=checks,
+        review_trigger_codes=trigger_codes,
+    )
+
+
+def validate_action_reconciliation_audit_v4(
+    source: ReasoningSourceV4,
+    groundings: GroundingOutputsV4,
+    decision_proposal: DecisionProposalV4,
+    audit: ActionReconciliationAuditV4,
+) -> None:
+    """Require a stored audit to equal deterministic reconstruction.
+
+    Args:
+        source: Frozen source joined to annotation.
+        groundings: Parent grounding outputs.
+        decision_proposal: Parent blind Decision proposal.
+        audit: Stored immutable audit.
+
+    Raises:
+        ValueError: If reconstruction is absent or differs.
+    """
+
+    expected = build_action_reconciliation_audit_v4(
+        source,
+        groundings,
+        decision_proposal,
+    )
+    if expected is None:
+        raise ValueError(
+            "audit requires strong direction supervision"
+        )
+    if audit != expected:
+        raise ValueError(
+            "stored action audit does not match inputs"
+        )
+
+
+def action_reconciliation_review_required_v4(
+    audit: ActionReconciliationAuditV4,
+) -> bool:
+    """Return whether deterministic triggers require human review.
+
+    Args:
+        audit: Canonical action audit.
+
+    Returns:
+        True exactly when trigger codes are non-empty.
+    """
+
+    return bool(audit.review_trigger_codes)
+
+
+def action_reconciliation_review_priority_v4(
+    audit: ActionReconciliationAuditV4,
+) -> str:
+    """Derive review priority without persisting mutable state.
+
+    Args:
+        audit: Canonical action audit.
+
+    Returns:
+        ``critical``, ``high``, ``normal``, or ``not_required``.
+    """
+
+    codes = {
+        str(value) for value in audit.review_trigger_codes
+    }
+    if not codes:
+        return "not_required"
+    if codes & {
+        _TRIGGER_POLICY["proposal_stop_move"],
+        _TRIGGER_POLICY["proposal_sign"],
+        _TRIGGER_POLICY["probe_unsupported"],
+        _TRIGGER_POLICY["constraint"],
+    }:
+        return "critical"
+    if _TRIGGER_POLICY["proposal_delta"] in codes:
+        return "high"
+    return "normal"
+
+
+def _probe_projection_v4(
+    profile_id: str,
+    strong_action: str,
+    groundings: GroundingOutputsV4,
+) -> ActionProbeProjectionV4:
+    """Project the strong action to one deterministic nearest probe."""
+
+    if strong_action == "stop":
+        return ActionProbeProjectionV4()
+    candidates = affordance_probe_candidates_for_action(
+        profile_id,
+        strong_action,
+    )
+    candidate = sorted(
+        candidates,
+        key=lambda value: (value.angle_gap_deg, value.label),
+    )[0]
+    traversability = groundings.local_traversability
+    assert traversability is not None
+    affordance = next(
+        (
+            item
+            for item in traversability.direction_affordances
+            if str(item.direction_label) == candidate.label
+        ),
+        None,
+    )
+    return ActionProbeProjectionV4(
+        direction_label=candidate.label,
+        angle_gap_deg=candidate.angle_gap_deg,
+        affordance=(
+            affordance.affordance
+            if affordance is not None
+            else None
+        ),
+        clearance=(
+            affordance.clearance
+            if affordance is not None
+            else None
+        ),
+        limiting_factors=(
+            tuple(affordance.limiting_factors)
+            if affordance is not None
+            else ()
+        ),
+    )
+
+
+def _probe_support_check_v4(
+    projection: ActionProbeProjectionV4,
+) -> str:
+    """Classify physical probe support."""
+
+    if projection.direction_label is None:
+        return "not_applicable"
+    if projection.affordance in {"direct", "conditional"}:
+        return "supported"
+    if projection.affordance in {"blocked", "forbidden"}:
+        return "unsupported"
+    return "unknown"
+
+
+def _constraint_check_v4(
+    groundings: GroundingOutputsV4,
+    *,
+    strong_action: str,
+) -> str:
+    """Check only hard strong-action/constraint contradictions."""
+
+    interaction = groundings.interaction_constraint_grounding
+    assert interaction is not None
+    effects = applicable_constraint_effects_v4(
+        strong_action,
+        interaction,
+    )
+    if not effects:
+        return "not_applicable"
+    if strong_action != "stop" and "stop" in effects:
+        return "conflict"
+    return "passed"
+
+
+def _proposal_relation_v4(
+    comparison: ActionComparisonFactsV4,
+    *,
+    tolerance_deg: float,
+) -> str:
+    """Map low-level direction facts to one relation code."""
+
+    if comparison.stop_move_mismatch:
+        return "stop_move_mismatch"
+    if comparison.sign_conflict:
+        return "sign_conflict"
+    if comparison.angular_delta_deg is None:
+        return "exact"
+    if comparison.angular_delta_deg == 0.0:
+        return "exact"
+    if (
+        comparison.angular_delta_deg is not None
+        and comparison.angular_delta_deg <= tolerance_deg
+    ):
+        return "within_tolerance"
+    return "large_delta"
+
+
+def _proposal_tuple_is_consistent_v4(
+    proposal: DecisionProposalV4,
+) -> bool:
+    """Return whether Pydantic-validated basic tuple rules hold."""
+
+    label = str(proposal.selected_action_label)
+    if label == "stop":
+        return (
+            proposal.speed == "stop"
+            and proposal.response == "stop"
+        )
+    return (
+        proposal.speed != "stop"
+        and proposal.response != "stop"
+        and (
+            proposal.response == "proceed"
+            or proposal.speed == "slow"
+        )
+    )
+
+
+def _review_trigger_codes_v4(
+    checks: ActionReconciliationChecksV4,
+) -> list[str]:
+    """Derive sorted trigger codes from the four checks."""
+
+    values: set[str] = set()
+    relation = checks.proposal_strong_relation
+    if relation == "stop_move_mismatch":
+        values.add(_TRIGGER_POLICY["proposal_stop_move"])
+    elif relation == "sign_conflict":
+        values.add(_TRIGGER_POLICY["proposal_sign"])
+    elif relation == "large_delta":
+        values.add(_TRIGGER_POLICY["proposal_delta"])
+    if checks.probe_support == "unsupported":
+        values.add(_TRIGGER_POLICY["probe_unsupported"])
+    elif checks.probe_support == "unknown":
+        values.add(_TRIGGER_POLICY["probe_unknown"])
+    if checks.constraint_effect_consistency == "conflict":
+        values.add(_TRIGGER_POLICY["constraint"])
+    if checks.action_tuple_consistency == "conflict":
+        values.add(_TRIGGER_POLICY["tuple"])
+    return sorted(values)
+
+
+def _canonical_digest(value: Any) -> str:
+    """Return SHA-256 over deterministic JSON serialization."""
+
+    return reasoning_payload_digest_v4(value)
+
+
+__all__ = [
+    "ACTION_RECONCILIATION_POLICY_VERSION_V4",
+    "action_reconciliation_policy_digest_v4",
+    "action_reconciliation_review_priority_v4",
+    "action_reconciliation_review_required_v4",
+    "build_action_reconciliation_audit_v4",
+    "validate_action_reconciliation_audit_v4",
+]

@@ -12,7 +12,6 @@ from pydantic import BaseModel, ValidationError
 from mcp_server.contracts.reasoning_dataset_v4 import (
     GroundingOutputsV4,
     NavObservationV4,
-    TeacherActionConstraintV4,
 )
 from mcp_server.teacher.reasoning_v4_profiles import (
     ReasoningV4TeacherProfile,
@@ -45,7 +44,6 @@ def build_reasoning_v4_section_question(
     profile: ReasoningV4TeacherProfile,
     *,
     groundings: GroundingOutputsV4 | None = None,
-    teacher_action_constraint: TeacherActionConstraintV4 | None = None,
     previous_answer: str | None = None,
     previous_errors: Iterable[str] = (),
 ) -> str:
@@ -56,8 +54,6 @@ def build_reasoning_v4_section_question(
             sidecars cannot cross this function boundary.
         profile: Requested section profile.
         groundings: Five validated groundings required only for Decision.
-        teacher_action_constraint: Optional private demonstrated direction,
-            legal only in the Decision teacher prompt.
         previous_answer: Optional invalid provider response for repair.
         previous_errors: Deterministic errors from the previous attempt.
 
@@ -79,12 +75,17 @@ def build_reasoning_v4_section_question(
         "input_modalities": observation.input_modalities.model_dump(
             mode="json"
         ),
-        "direction_output_space": (
-            observation.direction_output_space.model_dump(mode="json")
+        "direction_context": observation.direction_context.model_dump(
+            mode="json"
         ),
-        "temporal_evidence_eligible": observation.temporal_evidence_eligible,
+        "action_labels": list(
+            observation.direction_context.action_labels
+        ),
+        "affordance_probe_labels": list(
+            observation.direction_context.affordance_probe_labels
+        ),
         "model_visible_context": observation.model_visible_context,
-        "evidence_catalog": [
+        "visible_input_catalog": [
             item.model_dump(mode="json", exclude_none=True)
             for item in observation.evidence_catalog
         ],
@@ -103,28 +104,9 @@ def build_reasoning_v4_section_question(
             mode="json",
             exclude_none=True,
         )
-        if teacher_action_constraint is not None:
-            demonstrated = str(
-                teacher_action_constraint.demonstrated_direction_label
-            )
-            if demonstrated not in {
-                str(value)
-                for value in observation.direction_output_space.allowed_labels
-            }:
-                raise ValueError(
-                    "teacher demonstrated direction is outside the public "
-                    "direction output space"
-                )
-            payload["teacher_only_action_constraint"] = (
-                teacher_action_constraint.model_dump(mode="json")
-            )
     elif groundings is not None:
         raise ValueError(
             "grounding section prompts must not consume other section outputs"
-        )
-    elif teacher_action_constraint is not None:
-        raise ValueError(
-            "grounding prompts cannot consume teacher action constraint"
         )
 
     repair = ""
@@ -145,7 +127,7 @@ def build_reasoning_v4_section_question(
             )
         )
     return (
-        "Annotate the requested Reasoning V4 section. The ordered images are "
+        "Annotate the requested Reasoning V4.5 section. The ordered images are "
         "attached to this request in image_order. Return exactly one JSON "
         "object matching output_json_schema.\n\n"
         + json.dumps(

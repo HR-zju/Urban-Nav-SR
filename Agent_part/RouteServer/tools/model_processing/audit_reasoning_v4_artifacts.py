@@ -21,6 +21,7 @@ def parse_args(
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-jsonl", required=True, type=Path)
     parser.add_argument("--annotation-jsonl", required=True, type=Path)
+    parser.add_argument("--resolution-jsonl", type=Path)
     parser.add_argument("--view-jsonl", required=True, type=Path)
     parser.add_argument("--report-json", required=True, type=Path)
     parser.add_argument("--require-dataset", action="append", default=[])
@@ -36,6 +37,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         args.source_jsonl,
         args.annotation_jsonl,
         args.view_jsonl,
+        resolution_jsonl=args.resolution_jsonl,
         required_dataset_families=tuple(args.require_dataset),
     )
     args.report_json.parent.mkdir(parents=True, exist_ok=True)

@@ -76,17 +76,50 @@ def render_reasoning_v4_dataset_contract_mirror(
 
 
 def render_reasoning_v4_prompt_policy_mirror(source_text: str) -> str:
-    """Rewrite the canonical contract import for the ms-swift package."""
+    """Rewrite canonical prompt-policy imports for the ms-swift package."""
 
-    expected = "from mcp_server.contracts.reasoning_v4 import ("
-    if source_text.count(expected) != 1:
-        raise ValueError(
-            "canonical prompt-policy contract import is missing or ambiguous"
-        )
-    return _GENERATED_HEADER + source_text.replace(
-        expected,
-        "from ._generated_reasoning_v4_contract import (",
-    )
+    replacements = {
+        "from mcp_server.contracts.direction_profile import (": (
+            "from ._generated_direction_profile import ("
+        ),
+        "from mcp_server.contracts.reasoning_v4 import (": (
+            "from ._generated_reasoning_v4_contract import ("
+        ),
+    }
+    rendered = source_text
+    for expected, replacement in replacements.items():
+        if rendered.count(expected) != 1:
+            raise ValueError(
+                "canonical prompt-policy import is missing or ambiguous: "
+                f"{expected}"
+            )
+        rendered = rendered.replace(expected, replacement)
+    return _GENERATED_HEADER + rendered
+
+
+def render_reasoning_v4_compact_mirror(source_text: str) -> str:
+    """Rewrite compact-projector imports for the ms-swift package."""
+
+    replacements = {
+        "from mcp_server.agent.reasoning_v4_text import (": (
+            "from .reasoning_v4_codec import ("
+        ),
+        "from mcp_server.contracts.direction_profile import (": (
+            "from ._generated_direction_profile import ("
+        ),
+        "from mcp_server.contracts.reasoning_v4 import (": (
+            "from ._generated_reasoning_v4_contract import ("
+        ),
+    }
+    rendered = source_text
+    for expected, replacement in replacements.items():
+        if rendered.count(expected) != 1:
+            raise ValueError(
+                "canonical compact-projector import is missing or ambiguous: "
+                f"{expected}"
+            )
+        rendered = rendered.replace(expected, replacement)
+    return _GENERATED_HEADER + rendered
 
 
 def sync_reasoning_v4_cross_repo(
@@ -126,6 +159,13 @@ def sync_reasoning_v4_cross_repo(
             ms_root
             / "swift/sidewalk_nav/_generated_reasoning_v4_prompt_policy.py",
             render_reasoning_v4_prompt_policy_mirror,
+        ),
+        (
+            route_root
+            / "src/mcp_server/data/reasoning_v4_compact.py",
+            ms_root
+            / "swift/sidewalk_nav/_generated_reasoning_v4_compact.py",
+            render_reasoning_v4_compact_mirror,
         ),
     )
     written: list[str] = []

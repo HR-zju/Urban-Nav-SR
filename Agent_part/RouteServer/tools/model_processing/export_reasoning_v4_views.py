@@ -22,6 +22,12 @@ def parse_args(
     parser.add_argument("--source-jsonl", required=True, type=Path)
     parser.add_argument("--annotation-jsonl", required=True, type=Path)
     parser.add_argument("--output-jsonl", required=True, type=Path)
+    parser.add_argument(
+        "--release-track",
+        choices=("review_preview", "formal_training"),
+        default="review_preview",
+    )
+    parser.add_argument("--resolution-jsonl", type=Path)
     parser.add_argument("--report-json", type=Path)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--skip-errors", action="store_true")
@@ -36,6 +42,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         args.source_jsonl,
         args.annotation_jsonl,
         args.output_jsonl,
+        release_track=args.release_track,
+        resolution_jsonl=args.resolution_jsonl,
         limit=args.limit,
         skip_errors=args.skip_errors,
     )

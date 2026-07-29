@@ -21,12 +21,9 @@ from mcp_server.contracts.reasoning_dataset_v4 import (
 from mcp_server.contracts.reasoning_v4 import (
     DecisionV4,
     DirectionAffordanceV4,
-    FinishDirectionV4,
-    FinishV4,
     InteractionConstraintGroundingV4,
     LocalTraversabilityV4,
     NavigationContextGroundingV4,
-    NavigationSourceAlignmentV4,
     REASONING_V4_CONTRACT_SCHEMA_DIGEST,
     REASONING_V4_EVIDENCE_POLICY_VERSION,
     REASONING_V4_PARSER_ID,
@@ -38,12 +35,11 @@ from mcp_server.contracts.reasoning_v4 import (
     ReasoningTraceV4,
     SceneGroundingV4,
     TaskDirectionV4,
-    TaskGoalV4,
     TaskGroundingV4,
 )
 
 
-ARTIFACT_SCHEMA_VERSION = "urbannav_reasoning_v4_contract_artifacts_v4"
+ARTIFACT_SCHEMA_VERSION = "urbannav_reasoning_v4_contract_artifacts_v8"
 ARTIFACT_FILENAMES = (
     "reasoning_v4.schema.json",
     "reasoning_training_view_v4.schema.json",
@@ -146,7 +142,11 @@ def _canonical_source_hashes() -> dict[str, str]:
         "src/mcp_server/agent/reasoning_v4_text.py",
         "src/mcp_server/agent/reasoning_v4_validation.py",
         "src/mcp_server/data/reasoning_v4_source.py",
+        "src/mcp_server/data/reasoning_v4_task_canonicalization.py",
+        "src/mcp_server/data/reasoning_v4_reconciliation.py",
+        "src/mcp_server/data/reasoning_v4_state.py",
         "src/mcp_server/data/reasoning_v4_composer.py",
+        "src/mcp_server/data/reasoning_v4_compact.py",
         "src/mcp_server/data/reasoning_v4_views.py",
         "src/mcp_server/data/reasoning_v4_audit.py",
         "src/mcp_server/teacher/reasoning_v4_profiles.py",
@@ -227,58 +227,38 @@ def _valid_target() -> ReasoningTargetV4:
     """Build one minimal canonical navigation target."""
 
     task = TaskGroundingV4(
-        objective="follow_instruction",
-        goal=TaskGoalV4(
-            goal_type="none",
-            specification="absent",
-        ),
+        objective="follow_route",
+        requirements=["route_adherence"],
+        ambiguities=[],
     )
     traversability = LocalTraversabilityV4(
         direction_affordances=[
             DirectionAffordanceV4(
                 direction_label="straight",
-                support_type="visible_sidewalk",
                 affordance="direct",
                 clearance="sufficient",
-                evidence_status="supported",
-                evidence_refs=["fpv.current"],
             )
         ]
     )
     navigation = NavigationContextGroundingV4(
-        source_alignments=[
-            NavigationSourceAlignmentV4(
-                alignment_ref="alignment.a01",
-                source_ref="instruction.active",
-                alignment_role="task_intent",
-                supported_direction_labels=["straight"],
-                status="supports",
-                evidence_refs=[
-                    "instruction.active",
-                    "fpv.current",
-                ],
-            )
-        ],
         task_direction=TaskDirectionV4(
-            candidate_direction_labels=["straight"],
             status="aligned",
-            evidence_refs=["instruction.active", "fpv.current"],
+            direction="straight",
         ),
     )
     decision = DecisionV4(
-        decision_type="navigate",
-        navigation_intent_direction_label="straight",
         selected_action_label="straight",
-        motion="go_straight",
         speed="normal",
-        social_action="none",
-        fallback="stop",
-        support_refs=["nav.task_direction", "alignment.a01"],
-        evidence_refs=["instruction.active", "fpv.current"],
+        response="proceed",
     )
     trace = ReasoningTraceV4(
         task_grounding=task,
-        scene_grounding=SceneGroundingV4(),
+        scene_grounding=SceneGroundingV4(
+            scene_type="urban_sidewalk",
+            walkable_support="paved_sidewalk",
+            key_entities=[],
+            traffic_context="no_active_control_visible",
+        ),
         local_traversability=traversability,
         navigation_context_grounding=navigation,
         interaction_constraint_grounding=(
@@ -286,17 +266,7 @@ def _valid_target() -> ReasoningTargetV4:
         ),
         decision=decision,
     )
-    return ReasoningTargetV4(
-        reasoning=trace,
-        finish=FinishV4(
-            decision_type=decision.decision_type,
-            motion=decision.motion,
-            speed=decision.speed,
-            social_action=decision.social_action,
-            selected_action_label=decision.selected_action_label,
-            demonstrated_direction=FinishDirectionV4(label="straight"),
-        ),
-    )
+    return ReasoningTargetV4(reasoning=trace)
 
 
 def _invalid_cases(
@@ -308,34 +278,29 @@ def _invalid_cases(
 
     cases: list[dict[str, Any]] = []
 
-    finish_mismatch = _clone(target_payload)
-    finish_mismatch["finish"]["motion"] = "turn_left"
+    stop_tuple_mismatch = _clone(target_payload)
+    stop_tuple_mismatch["reasoning"]["decision"] = {
+        "selected_action_label": "stop",
+        "speed": "normal",
+        "response": "proceed",
+    }
     cases.append(
         _invalid_target_case(
-            "finish_projection_mismatch",
-            finish_mismatch,
-            "finish must be an exact semantic projection",
+            "stop_tuple_mismatch",
+            stop_tuple_mismatch,
+            "stop action requires speed=stop",
         )
     )
 
-    scene_without_fpv = _clone(target_payload)
-    scene_without_fpv["reasoning"]["scene_grounding"]["entities"] = [
-        {
-            "entity_ref": "entity.e01",
-            "category": "pedestrian",
-            "category_candidates": [],
-            "evidence_status": "supported",
-            "observation_quality": "clear",
-            "lateral_position": "center",
-            "depth_position": "near",
-            "evidence_refs": ["instruction.active"],
-        }
-    ]
+    aligned_without_direction = _clone(target_payload)
+    aligned_without_direction["reasoning"][
+        "navigation_context_grounding"
+    ]["task_direction"].pop("direction")
     cases.append(
         _invalid_target_case(
-            "visual_entity_without_fpv_evidence",
-            scene_without_fpv,
-            "scene entity requires at least one FPV evidence ref",
+            "aligned_without_direction",
+            aligned_without_direction,
+            "aligned task direction requires direction",
         )
     )
 
@@ -344,36 +309,12 @@ def _invalid_cases(
         "local_traversability"
     ]["direction_affordances"][0]
     affordance["affordance"] = "conditional"
-    affordance["limiting_factor_codes"] = []
+    affordance["limiting_factors"] = []
     cases.append(
         _invalid_target_case(
             "conditional_direction_without_limiting_factor",
             conditional_without_reason,
-            "conditional direction requires limiting factors",
-        )
-    )
-
-    dynamic_without_history = _clone(target_payload)
-    dynamic_without_history["reasoning"][
-        "interaction_constraint_grounding"
-    ]["constraints"] = [
-        {
-            "constraint_ref": "constraint.k01",
-            "kind": "social",
-            "source_type": "pedestrian",
-            "source_state": "crossing",
-            "affected_direction_labels": ["straight"],
-            "relation": "crosses_candidate_path",
-            "status": "applicable",
-            "effect": "yield",
-            "evidence_refs": ["fpv.current"],
-        }
-    ]
-    cases.append(
-        _invalid_target_case(
-            "dynamic_relation_without_two_frames",
-            dynamic_without_history,
-            "dynamic interaction requires two distinct FPV refs",
+            "conditional direction requires limiting_factors",
         )
     )
 
@@ -382,22 +323,17 @@ def _invalid_cases(
         "interaction_constraint_grounding"
     ]["constraints"] = [
         {
-            "constraint_ref": "constraint.k01",
-            "kind": "traffic",
-            "source_type": "pedestrian_signal",
-            "source_state": "red_hand",
-            "affected_direction_labels": ["straight"],
-            "relation": "controls_current_path",
+            "kind": "red_pedestrian_signal",
             "status": "applicable",
             "effect": "stop",
-            "evidence_refs": ["fpv.current"],
+            "affected_direction_labels": ["straight"],
         }
     ]
     cases.append(
         _invalid_target_case(
             "global_stop_with_direction_enumeration",
             stop_with_direction_scope,
-            "stop constraint must not enumerate affected directions",
+            "stop constraint must be global",
         )
     )
 
@@ -419,7 +355,7 @@ def _invalid_cases(
                 "case_id": "free_text_after_document",
                 "entrypoint": "assistant_text",
                 "value": assistant_text + "\nfree text",
-                "expected_error_contains": "unexpected_text_outside_document",
+                "expected_error_contains": "invalid_think_document",
             },
             {
                 "case_id": "section_order_mismatch",

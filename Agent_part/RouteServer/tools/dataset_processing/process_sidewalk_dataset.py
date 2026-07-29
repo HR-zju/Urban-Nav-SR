@@ -317,6 +317,8 @@ def _route_path_for_bev_frame(
             "point_count": len(route_points),
             "start_sample_index": 0,
             "end_sample_index": len(route_points) - 1,
+            "route_endpoint_semantics": "recorded_clip_endpoint",
+            "route_progress_authority": "none",
         }
 
     horizon_frames = max(1, int(math.ceil(max(float(lookahead_s), 0.0) * max(float(bev_sample_fps), 1e-6))))
@@ -327,6 +329,8 @@ def _route_path_for_bev_frame(
             "point_count": 0,
             "start_sample_index": safe_pos,
             "end_sample_index": end_pos,
+            "route_endpoint_semantics": "crop_boundary",
+            "route_progress_authority": "none",
         }
     local_path = list(route_points[safe_pos : end_pos + 1])
     return local_path, {
@@ -335,6 +339,45 @@ def _route_path_for_bev_frame(
         "start_sample_index": safe_pos,
         "end_sample_index": end_pos,
         "lookahead_s": float(lookahead_s),
+        "route_endpoint_semantics": "crop_boundary",
+        "route_progress_authority": "none",
+    }
+
+
+def _bev_route_evidence_metadata(
+    route_overlay_meta: dict[str, Any],
+    *,
+    bev_alignment: str,
+) -> dict[str, Any]:
+    """Project renderer metadata into the Reasoning V4 BEV capability contract."""
+
+    alignment = str(bev_alignment)
+    overlay_visible = (
+        str(route_overlay_meta.get("scope") or "none") != "none"
+        and int(route_overlay_meta.get("point_count") or 0) > 0
+    )
+    endpoint_semantics = str(
+        route_overlay_meta.get("route_endpoint_semantics") or "unknown"
+    )
+    return {
+        "frame": "ego" if alignment == "ego_aligned" else "north_up",
+        "ego_forward": "up" if alignment == "ego_aligned" else "unknown",
+        "route_overlay_visible": overlay_visible,
+        "route_direction_authority": (
+            "visual_conditional"
+            if overlay_visible and alignment == "ego_aligned"
+            else "none"
+        ),
+        "route_progress_authority": str(
+            route_overlay_meta.get("route_progress_authority") or "none"
+        ),
+        "route_terminal_marker_visible": (
+            overlay_visible and endpoint_semantics != "unknown"
+        ),
+        "route_endpoint_semantics": endpoint_semantics,
+        "local_safety_authority": False,
+        "producer_contract_id": "sidewalk_bev_route_renderer",
+        "producer_contract_version": "1.0",
     }
 
 
@@ -742,6 +785,11 @@ def process_sidewalk_ride(
                 bev_north_up_path = bev_images_north_up_dir / bev_filename
                 north_up_bev_image.save(bev_north_up_path, quality=int(bev_jpeg_quality))
 
+            bev_route_evidence = _bev_route_evidence_metadata(
+                route_overlay_meta,
+                bev_alignment=str(bev_alignment),
+            )
+
             # Write a small metadata file next to each BEV image with the heading actually used for rendering
             try:
                 meta = {
@@ -756,12 +804,19 @@ def process_sidewalk_ride(
                     "bev_sample_fps": float(bev_sample_fps),
                     "draw_trajectory": bool(draw_bev_trajectory),
                     "bev_route_overlay": route_overlay_meta,
+                    "bev_route_evidence": bev_route_evidence,
                 }
                 meta_path = bev_path.with_suffix(bev_path.suffix + ".bevmeta.json")
                 meta_path.write_text(json.dumps(meta), encoding="utf-8")
                 if bev_north_up_path is not None:
                     north_up_meta = dict(meta)
                     north_up_meta["bev_alignment"] = "north_up"
+                    north_up_meta["bev_route_evidence"] = (
+                        _bev_route_evidence_metadata(
+                            route_overlay_meta,
+                            bev_alignment="north_up",
+                        )
+                    )
                     north_up_meta_path = bev_north_up_path.with_suffix(bev_north_up_path.suffix + ".bevmeta.json")
                     north_up_meta_path.write_text(json.dumps(north_up_meta), encoding="utf-8")
             except Exception:
@@ -778,6 +833,7 @@ def process_sidewalk_ride(
                 "attitude_source": frame.get("attitude_source", "unknown"),
                 "draw_trajectory": bool(draw_bev_trajectory),
                 "bev_route_overlay": route_overlay_meta,
+                "bev_route_evidence": bev_route_evidence,
             }
             bev_index_entries.append(bev_index_entry)
             sample = {
@@ -788,6 +844,7 @@ def process_sidewalk_ride(
                 "fpv_frame_idx": int(frame.get("frame_idx", i)),
                 "bev_image_path": str(bev_path),
                 "bev_image_alignment": str(bev_alignment),
+                "bev_route_evidence": bev_route_evidence,
                 "metadata": {
                     "lat": lat,
                     "lng": lng,
@@ -796,6 +853,7 @@ def process_sidewalk_ride(
                     "position_source": frame.get("position_source", "unknown"),
                     "attitude_source": frame.get("attitude_source", "unknown"),
                     "bev_route_overlay": route_overlay_meta,
+                    "bev_route_evidence": bev_route_evidence,
                     "bev_outputs": {
                         str(bev_alignment): str(bev_path),
                     },

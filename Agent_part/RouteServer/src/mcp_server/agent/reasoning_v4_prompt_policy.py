@@ -1,4 +1,4 @@
-"""Versioned student prompt policies for Reasoning V4.2 SFT views."""
+"""Versioned compact FullCoT student prompt policy for Reasoning V4.5."""
 
 from __future__ import annotations
 
@@ -6,16 +6,16 @@ import hashlib
 import json
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Mapping
 
+from mcp_server.contracts.direction_profile import (
+    approved_affordance_probe_profiles,
+    approved_stage_a_direction_profiles,
+)
 from mcp_server.contracts.reasoning_v4 import (
-    DecisionV4,
-    FinishV4,
-    InteractionConstraintGroundingV4,
-    LocalTraversabilityV4,
-    NavigationContextGroundingV4,
     REASONING_TRAINING_VIEW_V4_SCHEMA_VERSION,
     REASONING_TRACE_V4_SCHEMA_VERSION,
+    REASONING_V4_COMPACT_FULL_COT_RENDERER_ID,
     REASONING_V4_EVIDENCE_POLICY_VERSION,
     REASONING_V4_PARSER_ID,
     REASONING_V4_RENDERER_ID,
@@ -23,192 +23,68 @@ from mcp_server.contracts.reasoning_v4 import (
     REASONING_V4_VALIDATOR_ID,
     REASONING_V4_WIRE_FORMAT_VERSION,
     ReasoningTargetV4,
-    STAGE_A_DECISION_TYPES_V4,
-    SceneGroundingV4,
-    TaskGroundingV4,
     reasoning_v4_contract_schema_digest,
 )
 
 
-_BASE_POLICY = """\
+_SYSTEM_PROMPT = """\
 You are the System2 policy of a single-turn urban pedestrian navigation model.
-Use the complete prompt-visible multimodal observation to produce grounded,
+Read the complete prompt-visible multimodal input and produce compact,
 short-horizon navigation reasoning.
 
-Evidence contract:
-- Use only the instruction, ordered FPV images, optional navigation context,
-  evidence catalog, and public direction_output_space in the current prompt.
-- FPV is the only authority for immediate visibility, occupancy, clearance,
-  local traversability, traffic controls, and interaction risk.
-- Raw evidence_refs must exactly match evidence-catalog refs.
-- Public direction labels define the answer vocabulary, not the selected action.
-- category, support_type, source_type, source_state, uncertainty_code, and other
-  ReasonCode fields are open lower_snake_case descriptions.
-- evidence_status describes support/ambiguity/insufficiency. It is not calibrated
-  confidence, a probability, a loss weight, or a runtime score.
+The six sections independently use the same complete input:
+1. TaskGrounding normalizes the task into objective, explicit requirements, and
+   material ambiguities.
+2. SceneGrounding summarizes scene type, walkable support, key entity
+   categories, and traffic context without object IDs or boxes.
+3. LocalTraversability judges physical FPV executability only for public
+   affordance_probe_labels. limiting_factors contain physical causes only.
+4. NavigationContextGrounding gives only a visible moving task direction, or a
+   fail-closed status.
+5. InteractionConstraintGrounding records current high-level restrictions that
+   require slow, yield, stop, or avoidance.
+6. Decision gives one action tuple: selected_action_label, speed, response.
 
-Grounding contract:
-- The five grounding sections independently read the same complete visible input.
-- A prompt-visible BEV route overlay may support route direction and upcoming
-  topology when its orientation is clear. The absence of local safety authority
-  only prevents BEV from proving traversability, clearance, or collision safety.
-- Do not infer a direction from route matching, route theta, GPS, pose,
-  pixel-goal geometry, or waypoint geometry.
-- Do not invent masks, boxes, tracks, TTC, metric clearance, hidden object IDs,
-  geometric areas, route segments, trajectory corridors, or numeric confidence.
-- Scene refs are neutral counters such as entity.e01 and control.c01; semantics
-  belong in open category fields.
-- supported scene categories use one category and no candidates; ambiguous uses
-  no category and at least two candidates; insufficient uses neither.
-- LocalTraversability judges public direction labels directly. It does not create
-  geometric areas or choose the strong direction target.
-- source_alignments distinguish task_intent, route_intent, and
-  local_safety_bias. task_direction contains only task/route movement labels,
-  never stop.
-- Pixel-goal and waypoint direction alignments remain insufficient until their
-  frame and derivation contracts are frozen.
-- Interaction constraints use open source_type/source_state. An empty
-  affected_direction_labels list means global; only an affected subset is
-  enumerated. Global stop constraints use effect=stop, never all_moving or an
-  expansion of every non-stop label. Dynamic crossing/approach claims require
-  distinct ordered FPV images.
+FPV is authoritative for visible support, obstacles, clearance, controls, and
+immediate interaction risk. History FPV frames are input context only; do not
+output temporal labels, tracks, TTC, or confidence. A prompt-visible BEV route
+overlay may support route direction and upcoming topology when its orientation
+is clear. The absence of local safety authority only prevents BEV from proving
+traversability, clearance, or collision safety. Never derive direction from GPS,
+route matching, route theta, pose, pixel-goal geometry, or waypoint geometry.
 
-Decision contract:
-- Stage-A allows only decision_type=navigate or stop.
-- navigation_intent_direction_label is the non-stop task/route direction.
-- selected_action_label is the immediate action and may be stop.
-- navigate uses speed=normal/slow. selected_action_label=stop requires
-  decision_type=stop, motion=stop, speed=stop, social_action=wait, and
-  fallback=stop.
-- A stop action must cite an applicable global stop/yield constraint, all
-  blocked task-intent directions, or a material stop-policy uncertainty. Do not
-  stop only because a destination is absent when local continuation is visible.
-- Critical uncertainties are ordinary weak language supervision with a closed
-  resolution policy; never emit numeric confidence or cost.
-- Decision.motion is derived only from selected_action_label.
-- Finish.demonstrated_direction.label is the deterministic trajectory-derived
-  label. It is distinct from navigation intent and the immediate safe action.
-- Private direction supervision and continuous trajectories must never appear
-  in the student prompt or reasoning evidence."""
+Use lower_snake_case open codes where the schema uses ReasonCode. Use only the
+provided action_labels and affordance_probe_labels for direction fields. Do not
+output evidence refs, source alignments, object/constraint IDs, geometry,
+route-progress, motion, social_action, fallback, critical uncertainties,
+schema bookkeeping, Finish, or readout tokens.
 
-_FULL_OUTPUT = """\
 Return exactly:
 <think>
-<TaskGrounding>{...}</TaskGrounding>
-<SceneGrounding>{...}</SceneGrounding>
-<LocalTraversability>{...}</LocalTraversability>
-<NavigationContextGrounding>{...}</NavigationContextGrounding>
-<InteractionConstraintGrounding>{...}</InteractionConstraintGrounding>
-<Decision>{...}</Decision>
+<TaskGrounding>{"objective":"...","requirements":[],"ambiguities":[]}</TaskGrounding>
+<SceneGrounding>{"scene_type":"...","walkable_support":"...","key_entities":[],"traffic_context":"..."}</SceneGrounding>
+<LocalTraversability>{"direction_affordances":[]}</LocalTraversability>
+<NavigationContextGrounding>{"task_direction":{"status":"...","direction":"..."}}</NavigationContextGrounding>
+<InteractionConstraintGrounding>{"constraints":[]}</InteractionConstraintGrounding>
+<Decision>{"selected_action_label":"...","speed":"...","response":"..."}</Decision>
 </think>
-<finish>{...}</finish>
 
-Use canonical JSON field names and section order. Finish must project its
-Decision fields exactly and carry demonstrated_direction separately. Do not add
-prose, markdown, comments, or extra tags. Append one
-<readout> block only when the prompt explicitly supplies System1 readout tokens;
-the block must contain exactly those tokens and no natural language."""
-
-_GROUNDING_OUTPUT = """\
-Return exactly one tagged JSON object for the requested grounding section.
-Do not output another section, Decision, finish, readout, markdown, or prose."""
-
-_DECISION_OUTPUT = """\
-The prompt includes the original visible input and five validated grounding
-sections. Return exactly one canonical <Decision>{...}</Decision> object.
-support_refs must resolve to supplied semantic objects; evidence_refs must cite
-raw catalog evidence. Distinguish navigation intent from the immediate selected
-action. The student prompt never contains a private demonstrated direction or
-trajectory target."""
-
-_SECTION_MODEL_TYPES = (
-    ("TaskGrounding", TaskGroundingV4),
-    ("SceneGrounding", SceneGroundingV4),
-    ("LocalTraversability", LocalTraversabilityV4),
-    (
-        "NavigationContextGrounding",
-        NavigationContextGroundingV4,
-    ),
-    (
-        "InteractionConstraintGrounding",
-        InteractionConstraintGroundingV4,
-    ),
-    ("Decision", DecisionV4),
-    ("finish", FinishV4),
-)
-
-_STAGE_A_ENUM_OVERRIDES = {
-    "DecisionV4.decision_type": list(STAGE_A_DECISION_TYPES_V4),
-    "FinishV4.decision_type": list(STAGE_A_DECISION_TYPES_V4),
-}
-
-
-def _canonical_field_contract_text() -> str:
-    """Render exact field names and closed enums from the schema."""
-
-    definitions = ReasoningTargetV4.model_json_schema().get(
-        "$defs",
-        {},
-    )
-    lines = [
-        "Canonical section models:",
-        *(
-            f"- {section_name}: {model_type.__name__}"
-            for section_name, model_type in _SECTION_MODEL_TYPES
-        ),
-        "Canonical nested fields (* is required):",
-    ]
-    for model_name, definition in sorted(definitions.items()):
-        properties = definition.get("properties") or {}
-        required = set(definition.get("required") or ())
-        fields = [
-            f"{name}{'*' if name in required else ''}"
-            for name in properties
-        ]
-        lines.append(f"- {model_name}: {', '.join(fields)}")
-    lines.append(
-        "Closed enums (ReasonCode and description fields remain open):"
-    )
-    for model_name, definition in sorted(definitions.items()):
-        properties = definition.get("properties")
-        if not isinstance(properties, dict):
-            continue
-        for field_name, field_schema in properties.items():
-            qualified = f"{model_name}.{field_name}"
-            values = _STAGE_A_ENUM_OVERRIDES.get(
-                qualified,
-                _schema_enum_values(field_schema),
-            )
-            if values:
-                lines.append(
-                    f"- {qualified}: "
-                    + " | ".join(str(value) for value in values)
-                )
-    return "\n".join(lines)
-
-
-def _schema_enum_values(value: Any) -> list[Any]:
-    """Extract one direct or nullable enum list from JSON Schema."""
-
-    if not isinstance(value, dict):
-        return []
-    if isinstance(value.get("enum"), list):
-        return value["enum"]
-    for branch in value.get("anyOf", []):
-        if (
-            isinstance(branch, dict)
-            and isinstance(branch.get("enum"), list)
-        ):
-            return branch["enum"]
-    return []
-
-
-_FIELD_CONTRACT = _canonical_field_contract_text()
+Preserve this exact order. Omit nullable direction when status is not aligned.
+The stop action uses speed=stop and response=stop. Moving actions never use stop
+speed or response. Add no prose, markdown, comments, or extra tags."""
 
 
 @dataclass(frozen=True)
 class ReasoningV4StudentProfile:
-    """Describe one cross-repository V4.2 student prompt profile."""
+    """Describe one cross-repository V4.5 student policy.
+
+    Args:
+        profile_id: Stable profile identity.
+        view_type: Exact supported view type.
+        section_name: Always ``None`` for compact FullCoT.
+        system_prompt: Exact system prompt.
+        policy_digest: Digest over all behavior-defining components.
+    """
 
     profile_id: str
     view_type: str
@@ -217,104 +93,68 @@ class ReasoningV4StudentProfile:
     policy_digest: str
 
 
-def _student_profile(
-    *,
-    profile_id: str,
-    view_type: str,
-    section_name: str | None,
-    output_policy: str,
-) -> ReasoningV4StudentProfile:
-    """Create one deterministic student profile and parity digest."""
+def _full_cot_profile() -> ReasoningV4StudentProfile:
+    """Build the sole V4.5 student prompt profile."""
 
-    system_prompt = (
-        f"{_BASE_POLICY}\n\n{_FIELD_CONTRACT}\n\n{output_policy}"
-    )
-    components = (
-        profile_id,
-        REASONING_TRACE_V4_SCHEMA_VERSION,
-        REASONING_TRAINING_VIEW_V4_SCHEMA_VERSION,
-        REASONING_V4_WIRE_FORMAT_VERSION,
-        REASONING_V4_SECTION_DEFINITION_VERSION,
-        REASONING_V4_EVIDENCE_POLICY_VERSION,
-        REASONING_V4_RENDERER_ID,
-        REASONING_V4_PARSER_ID,
-        REASONING_V4_VALIDATOR_ID,
-        view_type,
-        section_name or "",
-        system_prompt,
-        reasoning_v4_contract_schema_digest(),
+    profile_id = "urbannav_reasoning_v4_5_compact_full_cot_sft_v1"
+    payload = {
+        "profile_id": profile_id,
+        "trace_schema_version": REASONING_TRACE_V4_SCHEMA_VERSION,
+        "training_view_schema_version": (
+            REASONING_TRAINING_VIEW_V4_SCHEMA_VERSION
+        ),
+        "wire_format_version": REASONING_V4_WIRE_FORMAT_VERSION,
+        "section_definition_version": (
+            REASONING_V4_SECTION_DEFINITION_VERSION
+        ),
+        "evidence_policy_version": (
+            REASONING_V4_EVIDENCE_POLICY_VERSION
+        ),
+        "renderer_id": REASONING_V4_RENDERER_ID,
+        "compact_renderer_id": (
+            REASONING_V4_COMPACT_FULL_COT_RENDERER_ID
+        ),
+        "parser_id": REASONING_V4_PARSER_ID,
+        "validator_id": REASONING_V4_VALIDATOR_ID,
+        "contract_schema_digest": (
+            reasoning_v4_contract_schema_digest()
+        ),
+        "target_schema": ReasoningTargetV4.model_json_schema(),
+        "action_profiles": approved_stage_a_direction_profiles(),
+        "affordance_probe_profiles": (
+            approved_affordance_probe_profiles()
+        ),
+        "view_type": "full_cot_sft",
+        "section_name": None,
+        "system_prompt": _SYSTEM_PROMPT,
+        "user_prompt_builder": "build_reasoning_v4_user_prompt_v4_5",
+    }
+    digest = hashlib.sha256(
         json.dumps(
-            ReasoningTargetV4.model_json_schema(),
+            payload,
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
-        ),
-        "build_reasoning_v4_user_prompt",
-    )
-    digest = hashlib.sha256(
-        "\n".join(components).encode("utf-8")
+        ).encode("utf-8")
     ).hexdigest()
     return ReasoningV4StudentProfile(
         profile_id=profile_id,
-        view_type=view_type,
-        section_name=section_name,
-        system_prompt=system_prompt,
+        view_type="full_cot_sft",
+        section_name=None,
+        system_prompt=_SYSTEM_PROMPT,
         policy_digest=digest,
     )
 
 
-STUDENT_FULL_COT_PROFILE_V4 = _student_profile(
-    profile_id="urbannav_reasoning_v4_2_full_cot_sft_v1",
-    view_type="full_cot_sft",
-    section_name=None,
-    output_policy=_FULL_OUTPUT,
-)
-STUDENT_DECISION_PROFILE_V4 = _student_profile(
-    profile_id="urbannav_reasoning_v4_2_decision_section_sft_v1",
-    view_type="decision_section_sft",
-    section_name="Decision",
-    output_policy=_DECISION_OUTPUT,
-)
-STUDENT_GROUNDING_PROFILES_V4: Mapping[
-    str, ReasoningV4StudentProfile
-] = MappingProxyType(
-    {
-        section_name: _student_profile(
-            profile_id=(
-                "urbannav_reasoning_v4_2_"
-                f"{section_name.lower()}_section_sft_v1"
-            ),
-            view_type="grounding_section_sft",
-            section_name=section_name,
-            output_policy=(
-                f"Requested section: {section_name}.\n"
-                f"{_GROUNDING_OUTPUT}"
-            ),
-        )
-        for section_name in (
-            "TaskGrounding",
-            "SceneGrounding",
-            "LocalTraversability",
-            "NavigationContextGrounding",
-            "InteractionConstraintGrounding",
-        )
-    }
-)
-
+STUDENT_FULL_COT_PROFILE_V4 = _full_cot_profile()
 PROMPT_PROFILE_REGISTRY_V4: Mapping[
-    str, ReasoningV4StudentProfile
+    str,
+    ReasoningV4StudentProfile,
 ] = MappingProxyType(
     {
         STUDENT_FULL_COT_PROFILE_V4.profile_id: (
             STUDENT_FULL_COT_PROFILE_V4
-        ),
-        STUDENT_DECISION_PROFILE_V4.profile_id: (
-            STUDENT_DECISION_PROFILE_V4
-        ),
-        **{
-            profile.profile_id: profile
-            for profile in STUDENT_GROUNDING_PROFILES_V4.values()
-        },
+        )
     }
 )
 
@@ -322,12 +162,30 @@ PROMPT_PROFILE_REGISTRY_V4: Mapping[
 def get_prompt_profile_v4(
     profile_id: str,
 ) -> ReasoningV4StudentProfile:
-    """Resolve one supported V4.2 student prompt profile."""
+    """Resolve the sole supported V4.5 student profile.
+
+    Args:
+        profile_id: Exact profile identity.
+
+    Returns:
+        Immutable student profile.
+
+    Raises:
+        ValueError: If the profile is unsupported.
+    """
 
     try:
         return PROMPT_PROFILE_REGISTRY_V4[str(profile_id)]
     except KeyError as exc:
         raise ValueError(
-            "unsupported Reasoning V4.2 prompt profile: "
+            "unsupported Reasoning V4.5 prompt profile: "
             f"{profile_id!r}"
         ) from exc
+
+
+__all__ = [
+    "PROMPT_PROFILE_REGISTRY_V4",
+    "STUDENT_FULL_COT_PROFILE_V4",
+    "ReasoningV4StudentProfile",
+    "get_prompt_profile_v4",
+]

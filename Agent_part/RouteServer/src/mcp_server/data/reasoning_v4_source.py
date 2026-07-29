@@ -8,13 +8,15 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from mcp_server.contracts.direction_profile import (
-    direction_label_names,
+    affordance_probe_profile_for_action,
+    resolve_affordance_probe_profile,
     resolve_stage_a_direction_profile,
 )
 from mcp_server.contracts.reasoning_dataset_v4 import (
     REASONING_SOURCE_V4_SCHEMA_VERSION,
     V4_FORBIDDEN_VISIBLE_CONTEXT_KEY_PARTS,
-    DirectionOutputSpaceV4,
+    BevRouteEvidenceV4,
+    DirectionContextV4,
     DirectionSupervisionV4,
     EvidenceCatalogEntryV4,
     InputModalitiesV4,
@@ -104,6 +106,8 @@ def build_reasoning_source_v4(
     instruction = _optional_instruction(row)
     visible_context, context_warnings = _visible_context_v4(row)
     evidence_catalog = _evidence_catalog_v4(
+        row=row,
+        dataset_source=dataset_source,
         image_roles=image_roles,
         instruction=instruction,
         visible_context=visible_context,
@@ -125,12 +129,12 @@ def build_reasoning_source_v4(
         for image, role in zip(images, image_roles)
         if role.startswith("fpv.")
     ]
-    temporal_evidence_eligible = len(set(fpv_paths)) >= 2
+    has_distinct_history = len(set(fpv_paths)) >= 2
     direction, direction_warnings = _direction_supervision_v4(
         row,
         dataset_source=dataset_source,
     )
-    direction_output_space = _direction_output_space_v4(
+    direction_context = _direction_context_v4(
         row,
         dataset_source=dataset_source,
         direction=direction,
@@ -151,8 +155,8 @@ def build_reasoning_source_v4(
         model_visible_context=visible_context,
         evidence_catalog=evidence_catalog,
         input_modalities=modalities,
-        direction_output_space=direction_output_space,
-        temporal_evidence_eligible=temporal_evidence_eligible,
+        direction_context=direction_context,
+        temporal_evidence_eligible=False,
     )
 
     trajectory, trajectory_policy, action_mask, trajectory_warning = (
@@ -167,7 +171,7 @@ def build_reasoning_source_v4(
         *direction_warnings,
         *([trajectory_warning] if trajectory_warning else []),
     ]
-    if modalities.history_fpv and not temporal_evidence_eligible:
+    if modalities.history_fpv and not has_distinct_history:
         warnings.append("history_fpv_is_repeated_padding")
 
     payload: dict[str, Any] = {
@@ -334,6 +338,8 @@ def _visible_context_v4(
 
 def _evidence_catalog_v4(
     *,
+    row: Mapping[str, Any],
+    dataset_source: str,
     image_roles: list[str],
     instruction: str | None,
     visible_context: Mapping[str, Any],
@@ -359,17 +365,17 @@ def _evidence_catalog_v4(
                 )
             )
         elif role.startswith("bev."):
+            route_evidence = _bev_route_evidence_v4(
+                row,
+                role=role,
+                dataset_source=dataset_source,
+            )
             entries.append(
                 EvidenceCatalogEntryV4(
                     ref=role,
                     modality="bev",
                     summary="optional route/topology context without local safety authority",
-                    attributes={
-                        "local_safety_authority": False,
-                        "route_direction_authority": (
-                            "conditional_on_clear_visible_orientation"
-                        ),
-                    },
+                    bev_route_evidence=route_evidence,
                 )
             )
         elif role.startswith("goal.image_"):
@@ -415,6 +421,106 @@ def _evidence_catalog_v4(
                 )
             )
     return entries
+
+
+def _bev_route_evidence_v4(
+    row: Mapping[str, Any],
+    *,
+    role: str,
+    dataset_source: str,
+) -> BevRouteEvidenceV4:
+    """Build fail-closed BEV route capability metadata.
+
+    Args:
+        row: Heterogeneous source row.
+        role: Exact BEV evidence ref.
+        dataset_source: Normalized source dataset identifier.
+
+    Returns:
+        Typed route evidence. Existing recorded-clip overlays never gain route
+        progress authority.
+    """
+
+    metadata = row.get("metadata")
+    if not isinstance(metadata, Mapping):
+        metadata = {}
+    raw = row.get("bev_route_evidence") or metadata.get(
+        "bev_route_evidence"
+    )
+    if isinstance(raw, Mapping):
+        selected = raw.get(role)
+        if isinstance(selected, Mapping):
+            return BevRouteEvidenceV4.model_validate(selected)
+        if any(
+            key in raw
+            for key in (
+                "route_overlay_visible",
+                "route_endpoint_semantics",
+                "producer_contract_id",
+            )
+        ):
+            return BevRouteEvidenceV4.model_validate(raw)
+
+    overlay_meta = row.get("bev_route_overlay") or metadata.get(
+        "bev_route_overlay"
+    )
+    if not isinstance(overlay_meta, Mapping):
+        overlay_meta = {}
+    overlay_scope = str(
+        overlay_meta.get("scope")
+        or row.get("bev_route_scope")
+        or "none"
+    )
+    overlay_point_count = int(
+        overlay_meta.get("point_count") or 0
+    )
+    overlay_visible = bool(
+        row.get("bev_patch_meta_path")
+        or row.get("route_context")
+        or row.get("route_overlay_meta")
+        or overlay_scope != "none"
+        or overlay_point_count > 0
+    )
+    family = _dataset_family(dataset_source)
+    if overlay_visible and family in {"sidewalk", "foxglove"}:
+        endpoint_semantics = str(
+            overlay_meta.get("route_endpoint_semantics")
+            or (
+                "crop_boundary"
+                if overlay_scope == "local_future"
+                else "recorded_clip_endpoint"
+            )
+        )
+        alignment = str(
+            row.get("bev_image_alignment")
+            or metadata.get("bev_alignment")
+            or "ego_aligned"
+        )
+        ego_aligned = alignment == "ego_aligned"
+        return BevRouteEvidenceV4(
+            frame="ego" if ego_aligned else "north_up",
+            ego_forward="up" if ego_aligned else "unknown",
+            route_overlay_visible=True,
+            route_direction_authority=(
+                "visual_conditional" if ego_aligned else "none"
+            ),
+            route_progress_authority="none",
+            route_terminal_marker_visible=True,
+            route_endpoint_semantics=endpoint_semantics,
+            producer_contract_id="sidewalk_bev_route_renderer_legacy",
+            producer_contract_version="1.0",
+        )
+    return BevRouteEvidenceV4(
+        route_overlay_visible=overlay_visible,
+        route_direction_authority=(
+            "visual_conditional" if overlay_visible else "none"
+        ),
+        route_progress_authority="none",
+        route_terminal_marker_visible=False,
+        route_endpoint_semantics="unknown",
+        producer_contract_id="legacy_bev_unknown",
+        producer_contract_version="1.0",
+    )
 
 
 def _direction_supervision_v4(
@@ -464,23 +570,23 @@ def _direction_supervision_v4(
     return direction, []
 
 
-def _direction_output_space_v4(
+def _direction_context_v4(
     row: Mapping[str, Any],
     *,
     dataset_source: str,
     direction: DirectionSupervisionV4 | None,
-) -> DirectionOutputSpaceV4:
-    """Build one public profile vocabulary without leaking its target."""
+) -> DirectionContextV4:
+    """Build public action/probe identities without repeating label arrays."""
 
     family = _dataset_family(dataset_source)
     approved = _DIRECTION_DATASET_ALLOWLIST.get(family)
     if approved is None:
         raise ValueError(
-            f"unsupported V4.2 direction policy: {dataset_source}"
+            f"unsupported V4.5 direction policy: {dataset_source}"
         )
     if not approved:
         raise ValueError(
-            f"no approved V4.2 direction profile for dataset: {family}"
+            f"no approved V4.5 direction profile for dataset: {family}"
         )
     raw = _raw_direction_record(row)
     profile_id = (
@@ -500,10 +606,13 @@ def _direction_output_space_v4(
             f"dataset={family}, profile={profile_id}"
         )
     profile = resolve_stage_a_direction_profile(profile_id)
-    return DirectionOutputSpaceV4(
-        profile_id=profile_id,
-        profile_version=str(profile["profile_version"]),
-        allowed_labels=list(direction_label_names(profile_id)),
+    probe_profile_id = affordance_probe_profile_for_action(profile_id)
+    probe = resolve_affordance_probe_profile(probe_profile_id)
+    return DirectionContextV4(
+        action_profile_id=profile_id,
+        action_profile_version=str(profile["profile_version"]),
+        affordance_probe_profile_id=probe_profile_id,
+        affordance_probe_profile_version=str(probe["profile_version"]),
     )
 
 
