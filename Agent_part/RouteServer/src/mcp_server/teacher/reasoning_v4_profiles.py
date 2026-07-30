@@ -66,7 +66,10 @@ Fields: scene_type, walkable_support, key_entities, and traffic_context as
 coarse lower_snake_case categories.
 Boundaries: categories are not instance IDs or boxes; include only entities
 material to local navigation; a crosswalk is walkable_support and must not be
-repeated as an entity; do not decide traversability or action.
+repeated as an entity; do not decide traversability or action. Prefer vehicle,
+micromobility, and bicycle over make/model, parked-state, or plural variants.
+traffic_context must be traffic_control_present, no_active_control_visible, or
+unknown.
 Example:
 {"scene_type":"urban_sidewalk","walkable_support":"paved_sidewalk","key_entities":["pedestrian"],"traffic_context":"no_active_control_visible"}""",
     "LocalTraversability": """\
@@ -95,8 +98,11 @@ Responsibility: record current high-level behavior restrictions that alter the
 short action.
 Fields per constraint: kind, status, effect, affected_direction_labels.
 Boundaries: default to an empty list; slow, yield, and stop are global and use
-an empty affected list; only avoid names a non-empty affected subset; do not
-add generic caution.
+an empty affected list; only avoid names a non-empty subset. That subset means
+directions requiring a local detour, not forbidden directions: selecting one
+requires slow/detour, while stop safely satisfies avoid. Prefer the coarse kinds
+crossing_interaction, social_interaction, local_obstacle, and traffic_control.
+Do not add generic caution.
 Example:
 {"constraints":[{"kind":"crossing_interaction","status":"applicable","effect":"yield","affected_direction_labels":[]}]}""",
     "Decision": """\

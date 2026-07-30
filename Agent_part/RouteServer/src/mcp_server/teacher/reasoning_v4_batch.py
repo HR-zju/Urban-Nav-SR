@@ -6,7 +6,7 @@ import asyncio
 import json
 import time
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Protocol
 
@@ -68,6 +68,9 @@ _LVLM_GROUNDING_SECTION_NAMES = (
     "NavigationContextGrounding",
     "InteractionConstraintGrounding",
 )
+_SOURCE_INPUT_DIAGNOSTIC_CODES = {
+    "history_fpv_is_repeated_padding",
+}
 
 
 @dataclass(frozen=True)
@@ -184,6 +187,7 @@ class _StageOutcome:
     section: BaseModel | None
     record: AnnotationStageRecordV4
     generations: tuple[TeacherGeneration, ...]
+    provenance: dict[str, str] = field(default_factory=dict)
 
 
 class _TaskCanonicalizationCoordinator:
@@ -248,7 +252,14 @@ class _TaskCanonicalizationCoordinator:
             )
             if isinstance(outcome.section, TaskGroundingV4):
                 self.cache[fingerprint] = outcome.section
-            return outcome
+            return _StageOutcome(
+                section=outcome.section,
+                record=outcome.record,
+                generations=outcome.generations,
+                provenance={
+                    "task_canonicalization_source": "lvlm_teacher",
+                },
+            )
 
 
 async def annotate_reasoning_source_v4(
@@ -350,7 +361,11 @@ async def annotate_reasoning_source_v4(
         for error in outcome.record.errors
     ]
     warnings = [
-        *source.warnings,
+        *(
+            warning
+            for warning in source.warnings
+            if warning not in _SOURCE_INPUT_DIAGNOSTIC_CODES
+        ),
         *(
             f"{name}:{warning}"
             for name, outcome in outcomes.items()
@@ -380,6 +395,7 @@ async def annotate_reasoning_source_v4(
             errors=errors or ["incomplete_groundings"],
             warnings=warnings,
             generations=generations,
+            provenance=outcomes["TaskGrounding"].provenance,
         )
 
     decision_outcome = await _run_stage_v4(
@@ -421,6 +437,7 @@ async def annotate_reasoning_source_v4(
             errors=errors or ["decision_missing"],
             warnings=warnings,
             generations=generations,
+            provenance=outcomes["TaskGrounding"].provenance,
         )
 
     try:
@@ -468,6 +485,7 @@ async def annotate_reasoning_source_v4(
             errors=errors,
             warnings=warnings,
             generations=generations,
+            provenance=outcomes["TaskGrounding"].provenance,
         )
 
     return _annotation_v4(
@@ -489,6 +507,7 @@ async def annotate_reasoning_source_v4(
         errors=errors,
         warnings=[*warnings, *composition.warnings],
         generations=generations,
+        provenance=outcomes["TaskGrounding"].provenance,
     )
 
 
@@ -629,7 +648,6 @@ def _deterministic_task_outcome_v4(
         record=AnnotationStageRecordV4(
             status="accepted",
             attempts=0,
-            warnings=[f"task_canonicalization_source:{source}"],
             producer_kind="deterministic",
             producer_profile_id=(
                 "reasoning_v4_task_canonicalizer"
@@ -639,6 +657,9 @@ def _deterministic_task_outcome_v4(
             ),
         ),
         generations=(),
+        provenance={
+            "task_canonicalization_source": source,
+        },
     )
 
 
@@ -704,6 +725,7 @@ def _annotation_v4(
     errors: list[str],
     warnings: list[str],
     generations: list[TeacherGeneration],
+    provenance: dict[str, str],
 ) -> ReasoningAnnotationV4:
     """Build one annotation and aggregate provider identity."""
 
@@ -743,6 +765,12 @@ def _annotation_v4(
             "task_canonicalization_version": (
                 REASONING_V4_TASK_CANONICALIZATION_VERSION
             ),
+            **provenance,
+            "input_diagnostics": [
+                warning
+                for warning in source.warnings
+                if warning in _SOURCE_INPUT_DIAGNOSTIC_CODES
+            ],
         },
     )
 

@@ -118,7 +118,7 @@
     },
     "InteractionConstraintV4": {
       "additionalProperties": false,
-      "description": "Represent one high-level current behavior restriction.\n\nArgs:\n    kind: Open high-level behavior-constraint category.\n    status: Whether the restriction is currently applicable or uncertain.\n    effect: Required behavior response family.\n    affected_direction_labels: Empty for a global constraint, otherwise\n        the affected public action subset.",
+      "description": "Represent one high-level current behavior restriction.\n\nFor ``effect=avoid``, ``affected_direction_labels`` means directions whose\nnominal local corridor requires a continuous detour.  It is not a forbidden\ndirection set.  Selecting one of those coarse directions remains valid only\nwith ``speed=slow`` and ``response=detour``; selecting ``stop`` safely\nsatisfies the constraint.\n\nArgs:\n    kind: Open high-level behavior-constraint category.\n    status: Whether the restriction is currently applicable or uncertain.\n    effect: Required behavior response family.\n    affected_direction_labels: Empty for a global constraint.  For avoid,\n        the public directions requiring local avoidance/detour.",
       "properties": {
         "affected_direction_labels": {
           "items": {

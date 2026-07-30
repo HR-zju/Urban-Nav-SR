@@ -1,6 +1,6 @@
 # UrbanNav Reasoning V4.6 数据标注与训练合同
 
-更新时间：2026-07-29。
+更新时间：2026-07-30。
 
 本文是 Stage-A 单轮 E2E 导航 FullCoT 的 canonical 合同。V4.6 的目标不是表达一个
 理论上完备的因果图，而是监督当前输入可回答、当前流水线能稳定构造、并且会影响短时
@@ -175,6 +175,11 @@ runtime phase、goal-distance threshold 或 waypoint phase GT。
 | `traffic_context` | 当前粗交通控制语境 | LVLM weak FPV | 是 | LM |
 
 本段没有 entity/control ID、位置、mask、bbox、metric depth、tracking 或 confidence。
+进入 validator 前执行确定性小词表归一化：car/sedan/parked vehicle 归为
+`vehicle`，scooter/motorcycle 归为 `micromobility`，parked bicycle 归为
+`bicycle`；`traffic_context` 只保留
+`traffic_control_present/no_active_control_visible/unknown`。原始 provider 回答仍留在
+stage record，归一化结果才进入 typed grounding 和训练目标。
 
 ### 4.3 `LocalTraversability`
 
@@ -225,9 +230,13 @@ arrival 或跨视角 route matching。
 | `affected_direction_labels[]` | 仅 avoid 可给非空方向子集 | LVLM weak + validator | 是 | LM |
 
 `constraints=[]` 是合法负判断。slow/yield/stop 必须使用空 affected list；avoid 必须列
-非空受影响子集。crosswalk 属于 walkable support，不是 entity；需要表达当前过街影响时
-使用 `crossing_interaction`。这里不做 instance tracking、ego-motion、TTC 或 frozen
-normative-policy GT。
+非空受影响子集。该子集表示“选择这些粗方向时需要局部绕行”，不是禁止方向集合：
+命中子集必须为 `slow/detour`，未命中可继续使用其他 applicable effect，`stop` 安全满足
+avoid。constraint kind 至少把 pedestrian interaction/proximity 归为
+`social_interaction`、static/sidewalk obstacle 归为 `local_obstacle`、traffic signal
+归为 `traffic_control`。crosswalk 属于 walkable support，不是 entity；需要表达当前过街
+影响时使用 `crossing_interaction`。这里不做 instance tracking、ego-motion、TTC 或
+frozen normative-policy GT。
 
 ### 4.6 `Decision`
 
@@ -272,9 +281,12 @@ Action Reconciliation 是独立 annotation-only audit，不是第七段，也不
 
 等距离最近 probe 不得任意选一个。例如 `right_20` 同时投影到 `right_10/right_30`。
 聚合 support 只有 `all_supported/all_unsupported/mixed/unknown/not_applicable`；
-`mixed/all_unsupported/unknown` 都触发 review。profile stamp、proposal、strong label 和
-candidate 仍由 parent join 读取，不在 audit 中重复。review priority/status 是派生值，
-不持久化在 audit。
+`mixed/all_unsupported/unknown` 都触发 review。方向 profile 的 10° compatibility
+tolerance 只用于记录 `proposal_strong_relation`；纯移动方向角差必须严格大于 20° 才触发
+人工复核。sign conflict、stop/move mismatch、probe hard failure、constraint conflict 和
+tuple conflict 不受 20° 放宽影响。profile stamp、proposal、strong label 和 candidate
+仍由 parent join 读取，不在 audit 中重复。review priority/status 是派生值，不持久化在
+audit。
 
 人工处理使用 append-only `ActionReviewResolutionV4`：
 
@@ -348,8 +360,11 @@ prompt-side readout = [TRAJ_0] ... [TRAJ_15]
 ```
 
 query block 只放在最后一个 user turn，assistant 中不得出现，LM label 为 `-100`。query
-计数与 trajectory horizon 是两个独立冻结轴，不声称 token-step 一一对应；expanded encode
-找不到完整 16-slot query 时 fail closed。
+合同固定 `query_target_alignment=query_i_to_target_i`：expanded hidden state
+`H[TRAJ_i]` 作为第 i 个连续轨迹 target 的 step-local condition。query count、trajectory
+horizon、action-mask length 和有效 mask 和都必须为 16；expanded encode 找不到完整
+16-slot query 或任一轴不一致时 fail closed。旧实验中 query 数与 horizon 不同的 row 只能
+走显式 legacy pooled compatibility，不得伪装为 V4.6 formal row。
 
 ## 8. 审计、review 与发布 gate
 
@@ -364,13 +379,15 @@ Formal Training Eligible
 Artifact Training Eligible
 ```
 
-64-row diverse smoke 必须在正式批量标注前完成。runner 的 full gate 要求：
+256–512 条自然随机 pilot 必须在正式批量标注前完成，不再使用 historical-interesting
+富集。runner 的 pilot gate 要求：
 
-- exact 64 sources/record-complete/all-sections/candidate-structure-valid；
-- `Pending Human = 0`；
-- formal/artifact eligible 均为 64；
+- exact source/record/all-section/candidate counts 可闭合；
+- 报告真实 pending-human 比例与三个主要 trigger 的自然分布；
+- formal exporter 对 pending/rejected 的泄漏为 0；
 - task canonicalization drift、equal-nearest probe loss、preview training leak 均为 0；
-- 64 条 formal views 通过 schema、prompt、renderer、direction 与 audit 校验；
+- formal views 通过 schema、prompt、renderer、direction 与 audit 校验；
+- 报告 action tuple conflict、词表未归一化和七 probe 同质率；
 - 人工打开 self-contained review HTML 后显式批准。
 
 smoke/optimizer 测试只能证明流水线、格式和容量，不代表语义质量、导航收益或 benchmark

@@ -8,6 +8,9 @@ WORKSPACE_ROOT="${WORKSPACE_ROOT:-/lpai/volumes/mind-eb-bd-ga/suh/UrbanNavigatio
 ROUTESERVER_ROOT="${ROUTESERVER_ROOT:-${WORKSPACE_ROOT}/Urban-Nav-SR/Agent_part/RouteServer}"
 PYTHON_BIN="${PYTHON_BIN:-/lpai/volumes/mind-eb-bd-ga/suh/miniconda3/envs/qwen35_vllm_cuda128/bin/python}"
 DATASET_ROOT="${DATASET_ROOT:-/lpai/volumes/mind-eb-bd-ga/suh/dataset/urbannav-sidewalk-agent-data-v1}"
+DATASET_SOURCE="${DATASET_SOURCE:-foxglove}"
+MEDIA_ROOT="${MEDIA_ROOT:-${DATASET_ROOT}}"
+TRAVEL_MODE="${TRAVEL_MODE:-pedestrian_assist}"
 
 BEHAVIOR_BASE_URL="${BEHAVIOR_BASE_URL:-http://127.0.0.1:18461/v1}"
 BEHAVIOR_MODEL="${BEHAVIOR_MODEL:-qwen3.5-122b-a10b-behavior}"
@@ -23,11 +26,20 @@ RETRY_FAILED_ON_RESUME="${RETRY_FAILED_ON_RESUME:-1}"
 LLM_VISION_TIMEOUT_S="${LLM_VISION_TIMEOUT_S:-900}"
 LLM_VISION_MAX_TOKENS="${LLM_VISION_MAX_TOKENS:-4096}"
 POSTPROCESS_FULL="${POSTPROCESS_FULL:-0}"
+REVIEW_MAX_SAMPLES="${REVIEW_MAX_SAMPLES:-512}"
+SELECTION_RANDOM_SEED="${SELECTION_RANDOM_SEED:-20260730}"
 
 FULL_INPUT_JSONL_DEFAULT="${DATASET_ROOT}/manifests/train/phase1_cot_teacher_frodobots_foxglove_lite_final/foxglove_yaw_p90_clean/manifests/phase1_cot_foxglove_yaw_p90_clean_lite_cot_final_direction_choice_cot_full_choice.jsonl"
 FULL_RUN_ROOT_DEFAULT="${WORKSPACE_ROOT}/annotation_runs/reasoning_v4_6_qwen122b_foxglove_20way_full_v1"
 FULL_EXPECTED_ROWS="${FULL_EXPECTED_ROWS:-47249}"
 FULL_TMUX_SESSION="${FULL_TMUX_SESSION:-reasoning-v4-full}"
+
+PILOT_INPUT_JSONL_DEFAULT="${FULL_INPUT_JSONL_DEFAULT}"
+PILOT_RUN_ROOT_DEFAULT="${WORKSPACE_ROOT}/annotation_runs/reasoning_v4_6_qwen122b_foxglove_natural_pilot_256_v1"
+PILOT_EXPECTED_ROWS="${PILOT_EXPECTED_ROWS:-256}"
+PILOT_TMUX_SESSION="${PILOT_TMUX_SESSION:-reasoning-v4-pilot}"
+PILOT_RANDOM_SEED="${PILOT_RANDOM_SEED:-20260730}"
+PILOT_DATASET_SOURCE="${PILOT_DATASET_SOURCE:-foxglove}"
 
 SMOKE_INPUT_JSONL_DEFAULT="${FULL_INPUT_JSONL_DEFAULT}"
 SMOKE_RUN_ROOT_DEFAULT="${WORKSPACE_ROOT}/annotation_runs/reasoning_v4_6_qwen122b_dual_smoke_v1"
@@ -45,18 +57,27 @@ usage() {
   cat <<'EOF'
 Usage:
   run_reasoning_v4_qwen122b_dual_annotation.sh preflight
+  run_reasoning_v4_qwen122b_dual_annotation.sh pilot
+  run_reasoning_v4_qwen122b_dual_annotation.sh launch-pilot
+  run_reasoning_v4_qwen122b_dual_annotation.sh status-pilot
+  run_reasoning_v4_qwen122b_dual_annotation.sh tail-pilot
+  run_reasoning_v4_qwen122b_dual_annotation.sh gate-pilot
+
   run_reasoning_v4_qwen122b_dual_annotation.sh smoke
   run_reasoning_v4_qwen122b_dual_annotation.sh launch-smoke
   run_reasoning_v4_qwen122b_dual_annotation.sh status-smoke
   run_reasoning_v4_qwen122b_dual_annotation.sh tail-smoke
 
-  SMOKE_APPROVED=1 SMOKE_RESOLUTION_JSONL=/path/to/resolutions.jsonl \
+  PILOT_APPROVED=1 \
     run_reasoning_v4_qwen122b_dual_annotation.sh launch-full
   run_reasoning_v4_qwen122b_dual_annotation.sh status-full
   run_reasoning_v4_qwen122b_dual_annotation.sh tail-full
 
 Important overrides:
   WORKSPACE_ROOT, ROUTESERVER_ROOT, PYTHON_BIN, DATASET_ROOT
+  DATASET_SOURCE, MEDIA_ROOT, TRAVEL_MODE
+  PILOT_INPUT_JSONL, PILOT_RUN_ROOT, PILOT_EXPECTED_ROWS
+  PILOT_RANDOM_SEED, PILOT_DATASET_SOURCE
   SMOKE_INPUT_JSONL, SMOKE_RUN_ROOT, SMOKE_EXPECTED_ROWS
   SMOKE_INTERESTING_JSONLS, SMOKE_RANDOM_SEED
   SMOKE_CONSENSUS_MIN_VOTES
@@ -68,12 +89,16 @@ Important overrides:
 Safety:
   - The default full input is the 47,249-row Foxglove 20-way manifest.
   - The legacy direction is validated and stamped; it is never re-derived.
+  - Pilot uses uniform seeded reservoir sampling over every valid input row;
+    it does not use historical-interesting or direction-stratified labels.
   - Smoke uses historical interesting labels, a fixed seed, four direction
     buckets, and at most one sample per clip.
   - The 96,986-row legacy 12-way merged manifest is intentionally not a
     default because it does not satisfy the current Foxglove V4.6 profile.
-  - launch-full requires exact V4.6 machine-readable smoke gates, completed
-    append-only resolutions for triggered rows, and SMOKE_APPROVED=1.
+  - gate-pilot deterministically materializes the formal dry-run and machine
+    audit without launching a full job.
+  - launch-full requires the exact gate-pilot checks and the explicit
+    PILOT_APPROVED=1 latch after inspecting the pilot report.
 EOF
 }
 
@@ -84,6 +109,12 @@ die() {
 
 require_file() {
   [[ -f "$1" ]] || die "required file is missing: $1"
+}
+
+tmux_session_exists_exact() {
+  local session="$1"
+  tmux list-sessions -F '#S' 2>/dev/null \
+    | grep -Fqx -- "${session}"
 }
 
 validate_positive_integer() {
@@ -111,10 +142,9 @@ strict_chat_smoke() {
 
 preflight() {
   local code_commit
-  local interesting_path
-  local -a interesting_paths
   require_file "${ROUTESERVER_ROOT}/tools/model_processing/label_reasoning_v4.py"
   require_file "${ROUTESERVER_ROOT}/tools/model_processing/audit_reasoning_v4_annotation_completeness.py"
+  require_file "${ROUTESERVER_ROOT}/tools/model_processing/audit_reasoning_v4_pilot.py"
   require_file "${ROUTESERVER_ROOT}/tools/model_processing/stamp_reasoning_v4_directions.py"
   [[ -x "${PYTHON_BIN}" ]] || die "annotation Python is unavailable: ${PYTHON_BIN}"
   command -v curl >/dev/null 2>&1 || die "curl is unavailable"
@@ -122,15 +152,8 @@ preflight() {
   command -v tmux >/dev/null 2>&1 || die "tmux is unavailable"
   validate_positive_integer CONCURRENCY_PER_SERVICE "${CONCURRENCY_PER_SERVICE}"
   validate_positive_integer LLM_VISION_MAX_TOKENS "${LLM_VISION_MAX_TOKENS}"
-  validate_positive_integer SMOKE_RANDOM_SEED "${SMOKE_RANDOM_SEED}"
-  validate_positive_integer \
-    SMOKE_CONSENSUS_MIN_VOTES "${SMOKE_CONSENSUS_MIN_VOTES}"
-  IFS=: read -r -a interesting_paths <<<"${SMOKE_INTERESTING_JSONLS}"
-  ((${#interesting_paths[@]} > 0)) \
-    || die "SMOKE_INTERESTING_JSONLS must not be empty"
-  for interesting_path in "${interesting_paths[@]}"; do
-    require_file "${interesting_path}"
-  done
+  validate_positive_integer REVIEW_MAX_SAMPLES "${REVIEW_MAX_SAMPLES}"
+  [[ -n "${DATASET_SOURCE}" ]] || die "DATASET_SOURCE must not be empty"
   [[ "${IMAGE_DETAIL}" =~ ^(auto|low|high)$ ]] \
     || die "IMAGE_DETAIL must be auto, low, or high"
   [[ "${NAVIGATION_CONTEXT_IMAGE_DETAIL}" =~ ^(auto|low|high)$ ]] \
@@ -160,6 +183,8 @@ prepare_run_dirs() {
 record_provenance() {
   local input_jsonl="$1"
   local run_root="$2"
+  local selection="$3"
+  local random_seed="$4"
   local input_sha
   local code_commit
   local dirty_count
@@ -176,6 +201,11 @@ record_provenance() {
     echo "code_dirty_entry_count=${dirty_count}"
     echo "input_jsonl=${input_jsonl}"
     echo "input_sha256=${input_sha}"
+    echo "dataset_source=${DATASET_SOURCE}"
+    echo "media_root=${MEDIA_ROOT}"
+    echo "travel_mode=${TRAVEL_MODE}"
+    echo "selection=${selection}"
+    echo "selection_random_seed=${random_seed}"
     echo "direction_profile_id=${DIRECTION_PROFILE_ID}"
     echo "behavior_base_url=${BEHAVIOR_BASE_URL}"
     echo "behavior_model=${BEHAVIOR_MODEL}"
@@ -198,6 +228,7 @@ stamp_and_build_sources() {
   local run_root="$2"
   local expected_rows="$3"
   local selection="$4"
+  local random_seed="$5"
   local stamped="${run_root}/inputs/stamped_input.jsonl"
   local sources="${run_root}/sources/reasoning_v4_5_sources.jsonl"
   local interesting_path
@@ -208,7 +239,7 @@ stamp_and_build_sources() {
     --input-jsonl "${input_jsonl}"
     --output-jsonl "${stamped}"
     --report-json "${run_root}/reports/direction_stamp_report.json"
-    --dataset-source foxglove
+    --dataset-source "${DATASET_SOURCE}"
     --profile-id "${DIRECTION_PROFILE_ID}"
     --selection "${selection}"
   )
@@ -216,13 +247,23 @@ stamp_and_build_sources() {
   if [[ "${selection}" != "sequential" ]]; then
     stamp_cmd+=(--limit "${expected_rows}")
   fi
+  if [[ "${selection}" == "random" ]]; then
+    validate_positive_integer SELECTION_RANDOM_SEED "${random_seed}"
+    stamp_cmd+=(--random-seed "${random_seed}")
+  fi
   if [[ "${selection}" == "interesting_diverse" ]]; then
+    validate_positive_integer SELECTION_RANDOM_SEED "${random_seed}"
+    validate_positive_integer \
+      SMOKE_CONSENSUS_MIN_VOTES "${SMOKE_CONSENSUS_MIN_VOTES}"
     stamp_cmd+=(
-      --random-seed "${SMOKE_RANDOM_SEED}"
+      --random-seed "${random_seed}"
       --consensus-min-votes "${SMOKE_CONSENSUS_MIN_VOTES}"
     )
     IFS=: read -r -a interesting_paths <<<"${SMOKE_INTERESTING_JSONLS}"
+    ((${#interesting_paths[@]} > 0)) \
+      || die "SMOKE_INTERESTING_JSONLS must not be empty"
     for interesting_path in "${interesting_paths[@]}"; do
+      require_file "${interesting_path}"
       stamp_cmd+=(--interesting-jsonl "${interesting_path}")
     done
   fi
@@ -234,15 +275,15 @@ stamp_and_build_sources() {
     --input-jsonl "${stamped}" \
     --output-jsonl "${sources}" \
     --report-json "${run_root}/reports/source_build_report.json" \
-    --dataset-source foxglove \
-    --travel-mode pedestrian_assist \
+    --dataset-source "${DATASET_SOURCE}" \
+    --travel-mode "${TRAVEL_MODE}" \
     --max-fpv-frames 5 \
-    --media-root "${DATASET_ROOT}"
+    --media-root "${MEDIA_ROOT}"
   PYTHONPATH="${ROUTESERVER_ROOT}/src:${ROUTESERVER_ROOT}" \
     "${PYTHON_BIN}" \
     "${ROUTESERVER_ROOT}/tools/model_processing/audit_reasoning_v4_source_coverage.py" \
     --source-jsonl "${sources}" \
-    --require-dataset foxglove \
+    --require-dataset "${DATASET_SOURCE}" \
     --min-source-rows "${expected_rows}" \
     --report-json "${run_root}/reports/source_coverage_report.json" \
     --strict
@@ -381,7 +422,7 @@ build_review_run() {
     --output-html "${run_root}/review/action_reconciliation_review.complete.html" \
     --report-json "${run_root}/reports/review_report.json" \
     --title "UrbanNav Reasoning V4.6 Qwen3.5-122B Review" \
-    --max-samples 100
+    --max-samples "${REVIEW_MAX_SAMPLES}"
 }
 
 audit_postprocessed_run() {
@@ -396,7 +437,7 @@ audit_postprocessed_run() {
     --annotation-jsonl "${annotations}" \
     --view-jsonl "${views}" \
     --report-json "${run_root}/reports/artifact_audit_report.json" \
-    --require-dataset foxglove \
+    --require-dataset "${DATASET_SOURCE}" \
     --strict
 }
 
@@ -422,14 +463,17 @@ run_pipeline() {
   local expected_rows="$3"
   local postprocess="$4"
   local selection="$5"
+  local random_seed="$6"
   prepare_run_dirs "${run_root}"
   exec > >(tee -a "${run_root}/logs/controller.log") 2>&1
   echo "[run-start] root=${run_root} input=${input_jsonl}"
   preflight
   require_file "${input_jsonl}"
-  record_provenance "${input_jsonl}" "${run_root}"
+  record_provenance \
+    "${input_jsonl}" "${run_root}" "${selection}" "${random_seed}"
   stamp_and_build_sources \
-    "${input_jsonl}" "${run_root}" "${expected_rows}" "${selection}"
+    "${input_jsonl}" "${run_root}" "${expected_rows}" "${selection}" \
+    "${random_seed}"
   label_with_both_services "${run_root}"
   merge_annotations "${run_root}"
   if [[ "${postprocess}" != "1" ]]; then
@@ -464,6 +508,51 @@ run_pipeline() {
     echo "[run-complete] annotation=${run_root}/annotations/reasoning_v4_6_annotations.jsonl"
     echo "[run-complete] full view export skipped because the current exporter is not streaming"
   fi
+}
+
+validate_pilot_gate() {
+  local pilot_root="${PILOT_RUN_ROOT:-${PILOT_RUN_ROOT_DEFAULT}}"
+  local completeness="${pilot_root}/reports/annotation_completeness_report.json"
+  local sources="${pilot_root}/sources/reasoning_v4_5_sources.jsonl"
+  local annotations="${pilot_root}/annotations/reasoning_v4_6_annotations.jsonl"
+  local formal_views="${pilot_root}/views/reasoning_v4_6_formal_gate.jsonl"
+  local artifact_report="${pilot_root}/reports/reasoning_v4_6_formal_artifact_gate.json"
+  local pilot_report="${pilot_root}/reports/reasoning_v4_6_natural_pilot_audit.json"
+  require_file "${sources}"
+  require_file "${annotations}"
+  require_file "${completeness}"
+  PYTHONPATH="${ROUTESERVER_ROOT}/src:${ROUTESERVER_ROOT}" \
+    "${PYTHON_BIN}" \
+    "${ROUTESERVER_ROOT}/tools/model_processing/export_reasoning_v4_views.py" \
+    --source-jsonl "${sources}" \
+    --annotation-jsonl "${annotations}" \
+    --release-track formal_training \
+    --output-jsonl "${formal_views}" \
+    --report-json "${pilot_root}/reports/formal_view_export_gate.json"
+  PYTHONPATH="${ROUTESERVER_ROOT}/src:${ROUTESERVER_ROOT}" \
+    "${PYTHON_BIN}" \
+    "${ROUTESERVER_ROOT}/tools/model_processing/audit_reasoning_v4_artifacts.py" \
+    --source-jsonl "${sources}" \
+    --annotation-jsonl "${annotations}" \
+    --view-jsonl "${formal_views}" \
+    --report-json "${artifact_report}" \
+    --require-dataset "${PILOT_DATASET_SOURCE}" \
+    --strict
+  PYTHONPATH="${ROUTESERVER_ROOT}/src:${ROUTESERVER_ROOT}" \
+    "${PYTHON_BIN}" \
+    "${ROUTESERVER_ROOT}/tools/model_processing/audit_reasoning_v4_pilot.py" \
+    --source-jsonl "${sources}" \
+    --annotation-jsonl "${annotations}" \
+    --formal-view-jsonl "${formal_views}" \
+    --expected-rows "${PILOT_EXPECTED_ROWS}" \
+    --report-json "${pilot_report}" \
+    --strict
+  PILOT_REPORT="${pilot_report}" \
+    COMPLETENESS="${completeness}" \
+    EXPECTED="${PILOT_EXPECTED_ROWS}" \
+    "${PYTHON_BIN}" -c \
+    'import json, os; expected=int(os.environ["EXPECTED"]); pilot=json.load(open(os.environ["PILOT_REPORT"], encoding="utf-8")); complete=json.load(open(os.environ["COMPLETENESS"], encoding="utf-8")); m=pilot["metrics"]; required={"sources":expected,"record_complete":expected,"all_sections_accepted":expected,"candidate_unexpected_invalid_rows":0,"formal_ineligible_artifact_leak":0,"formal_eligible_missing_from_manifest":0,"action_tuple_conflict_rows":0,"post_normalization_vocab_violation_rows":0,"probe_rows_exactly_seven":expected,"probe_rows_not_exactly_seven":0}; assert complete.get("passed") is True, complete; assert pilot.get("passed") is True, pilot; assert all(m.get(k)==v for k,v in required.items()), (m,required); assert m.get("candidate_structurally_valid",0)+m.get("candidate_fail_closed_review_only",0)==expected,m; print("[pilot-metrics]", json.dumps({"pending_human":m["pending_human"],"pending_human_rate":m["pending_human_rate"],"candidate_structurally_valid":m["candidate_structurally_valid"],"candidate_fail_closed_review_only":m["candidate_fail_closed_review_only"],"constraint_effect_conflict_rows":m["constraint_effect_conflict_rows"],"formal_training_eligible":m["formal_training_eligible"],"vocabulary_normalization_applied_rate":m["vocabulary_normalization_applied_rate"],"all_seven_probes_identical_rate":m["all_seven_probes_identical_rate"],"all_seven_probes_blocked_rate":m["all_seven_probes_blocked_rate"],"all_seven_probes_conditional_rate":m["all_seven_probes_conditional_rate"],"review_trigger_counts":pilot["review_trigger_counts"]}, sort_keys=True))'
+  echo "[pilot-gate-ok] root=${pilot_root} report=${pilot_report}"
 }
 
 validate_smoke_gate() {
@@ -531,10 +620,12 @@ launch_job() {
   local input_jsonl="$3"
   local run_root="$4"
   local expected_rows="$5"
+  local dataset_source="$6"
+  local random_seed="$7"
   local command
   local -a launch
   prepare_run_dirs "${run_root}"
-  tmux has-session -t "${session}" 2>/dev/null \
+  tmux_session_exists_exact "${session}" \
     && die "tmux session already exists: ${session}"
   launch=(
     env
@@ -542,6 +633,9 @@ launch_job() {
     "ROUTESERVER_ROOT=${ROUTESERVER_ROOT}"
     "PYTHON_BIN=${PYTHON_BIN}"
     "DATASET_ROOT=${DATASET_ROOT}"
+    "DATASET_SOURCE=${dataset_source}"
+    "MEDIA_ROOT=${MEDIA_ROOT}"
+    "TRAVEL_MODE=${TRAVEL_MODE}"
     "BEHAVIOR_BASE_URL=${BEHAVIOR_BASE_URL}"
     "BEHAVIOR_MODEL=${BEHAVIOR_MODEL}"
     "INSTRUCTION_BASE_URL=${INSTRUCTION_BASE_URL}"
@@ -555,6 +649,8 @@ launch_job() {
     "LLM_VISION_TIMEOUT_S=${LLM_VISION_TIMEOUT_S}"
     "LLM_VISION_MAX_TOKENS=${LLM_VISION_MAX_TOKENS}"
     "POSTPROCESS_FULL=${POSTPROCESS_FULL}"
+    "REVIEW_MAX_SAMPLES=${REVIEW_MAX_SAMPLES}"
+    "SELECTION_RANDOM_SEED=${random_seed}"
     "SMOKE_INTERESTING_JSONLS=${SMOKE_INTERESTING_JSONLS}"
     "SMOKE_RANDOM_SEED=${SMOKE_RANDOM_SEED}"
     "SMOKE_CONSENSUS_MIN_VOTES=${SMOKE_CONSENSUS_MIN_VOTES}"
@@ -572,7 +668,7 @@ launch_job() {
 status_job() {
   local session="$1"
   local run_root="$2"
-  if tmux has-session -t "${session}" 2>/dev/null; then
+  if tmux_session_exists_exact "${session}"; then
     echo "[tmux] session=${session} state=running"
   else
     echo "[tmux] session=${session} state=not-running"
@@ -611,13 +707,54 @@ case "${action}" in
   preflight)
     preflight
     ;;
+  pilot)
+    DATASET_SOURCE="${PILOT_DATASET_SOURCE}"
+    run_pipeline \
+      "${PILOT_INPUT_JSONL:-${PILOT_INPUT_JSONL_DEFAULT}}" \
+      "${PILOT_RUN_ROOT:-${PILOT_RUN_ROOT_DEFAULT}}" \
+      "${PILOT_EXPECTED_ROWS}" \
+      1 \
+      random \
+      "${PILOT_RANDOM_SEED}"
+    ;;
+  launch-pilot)
+    preflight
+    launch_job \
+      run-pilot "${PILOT_TMUX_SESSION}" \
+      "${PILOT_INPUT_JSONL:-${PILOT_INPUT_JSONL_DEFAULT}}" \
+      "${PILOT_RUN_ROOT:-${PILOT_RUN_ROOT_DEFAULT}}" \
+      "${PILOT_EXPECTED_ROWS}" \
+      "${PILOT_DATASET_SOURCE}" \
+      "${PILOT_RANDOM_SEED}"
+    ;;
+  run-pilot)
+    run_pipeline \
+      "${INPUT_JSONL:?INPUT_JSONL is required}" \
+      "${RUN_ROOT:?RUN_ROOT is required}" \
+      "${EXPECTED_ROWS:?EXPECTED_ROWS is required}" \
+      1 \
+      random \
+      "${SELECTION_RANDOM_SEED}"
+    ;;
+  status-pilot)
+    status_job \
+      "${PILOT_TMUX_SESSION}" \
+      "${PILOT_RUN_ROOT:-${PILOT_RUN_ROOT_DEFAULT}}"
+    ;;
+  tail-pilot)
+    tail_job "${PILOT_RUN_ROOT:-${PILOT_RUN_ROOT_DEFAULT}}"
+    ;;
+  gate-pilot)
+    validate_pilot_gate
+    ;;
   smoke)
     run_pipeline \
       "${SMOKE_INPUT_JSONL:-${SMOKE_INPUT_JSONL_DEFAULT}}" \
       "${SMOKE_RUN_ROOT:-${SMOKE_RUN_ROOT_DEFAULT}}" \
       "${SMOKE_EXPECTED_ROWS}" \
       1 \
-      interesting_diverse
+      interesting_diverse \
+      "${SMOKE_RANDOM_SEED}"
     ;;
   launch-smoke)
     preflight
@@ -625,7 +762,9 @@ case "${action}" in
       run-smoke "${SMOKE_TMUX_SESSION}" \
       "${SMOKE_INPUT_JSONL:-${SMOKE_INPUT_JSONL_DEFAULT}}" \
       "${SMOKE_RUN_ROOT:-${SMOKE_RUN_ROOT_DEFAULT}}" \
-      "${SMOKE_EXPECTED_ROWS}"
+      "${SMOKE_EXPECTED_ROWS}" \
+      foxglove \
+      "${SMOKE_RANDOM_SEED}"
     ;;
   run-smoke)
     run_pipeline \
@@ -633,7 +772,8 @@ case "${action}" in
       "${RUN_ROOT:?RUN_ROOT is required}" \
       "${EXPECTED_ROWS:?EXPECTED_ROWS is required}" \
       1 \
-      interesting_diverse
+      interesting_diverse \
+      "${SELECTION_RANDOM_SEED}"
     ;;
   status-smoke)
     status_job \
@@ -644,13 +784,17 @@ case "${action}" in
     tail_job "${SMOKE_RUN_ROOT:-${SMOKE_RUN_ROOT_DEFAULT}}"
     ;;
   launch-full)
-    validate_smoke_gate
+    [[ "${PILOT_APPROVED:-0}" == "1" ]] \
+      || die "set PILOT_APPROVED=1 only after inspecting the natural pilot report"
+    validate_pilot_gate
     preflight
     launch_job \
       run-full "${FULL_TMUX_SESSION}" \
       "${FULL_INPUT_JSONL:-${FULL_INPUT_JSONL_DEFAULT}}" \
       "${FULL_RUN_ROOT:-${FULL_RUN_ROOT_DEFAULT}}" \
-      "${FULL_EXPECTED_ROWS}"
+      "${FULL_EXPECTED_ROWS}" \
+      "${DATASET_SOURCE}" \
+      "${SELECTION_RANDOM_SEED}"
     ;;
   run-full)
     run_pipeline \
@@ -658,7 +802,8 @@ case "${action}" in
       "${RUN_ROOT:?RUN_ROOT is required}" \
       "${EXPECTED_ROWS:?EXPECTED_ROWS is required}" \
       "${POSTPROCESS_FULL}" \
-      sequential
+      sequential \
+      "${SELECTION_RANDOM_SEED}"
     ;;
   status-full)
     status_job \

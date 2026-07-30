@@ -15,6 +15,9 @@ from mcp_server.agent.reasoning_v4_text import (
 from mcp_server.agent.reasoning_v4_prompt_policy import (
     get_prompt_profile_v4,
 )
+from mcp_server.agent.reasoning_v4_validation import (
+    sanitize_reasoning_section_evidence_v4,
+)
 from mcp_server.contracts.direction_profile import (
     FPV_DEGREE10_AFFORDANCE7_V1,
     FPV_DEGREE10_TERMINAL_CENTROID_V2,
@@ -31,6 +34,7 @@ from mcp_server.contracts.reasoning_dataset_v4 import (
     NavObservationV4,
     ReasoningAnnotationV4,
     ReasoningSourceV4,
+    ReasoningTrainingViewV4,
     reasoning_source_fingerprint_v4,
 )
 from mcp_server.contracts.reasoning_v4 import (
@@ -49,6 +53,7 @@ from mcp_server.data.reasoning_v4_compact import (
 )
 from mcp_server.data.reasoning_v4_audit import (
     audit_reasoning_v4_artifacts,
+    audit_reasoning_v4_pilot,
 )
 from mcp_server.data.reasoning_v4_composer import (
     REASONING_V4_COMPOSER_VERSION,
@@ -57,6 +62,9 @@ from mcp_server.data.reasoning_v4_composer import (
 from mcp_server.data.reasoning_v4_reconciliation import (
     action_reconciliation_review_required_v4,
     build_action_reconciliation_audit_v4,
+)
+from mcp_server.data.reasoning_v4_source import (
+    build_reasoning_source_v4,
 )
 from mcp_server.data.reasoning_v4_state import (
     derive_reasoning_release_state_v4,
@@ -69,6 +77,7 @@ from mcp_server.data.reasoning_v4_task_canonicalization import (
 from mcp_server.data.reasoning_v4_views import (
     build_reasoning_training_views_v4,
 )
+from mcp_server.data.reasoning_source import ReasoningSourceBuildConfig
 from mcp_server.teacher.reasoning_v2_teacher import TeacherGeneration
 from mcp_server.teacher.reasoning_v4_batch import (
     ReasoningV4BatchConfig,
@@ -105,7 +114,11 @@ def _direction(label: str = "straight") -> DirectionSupervisionV4:
     )
 
 
-def _source(label: str = "straight") -> ReasoningSourceV4:
+def _source(
+    label: str = "straight",
+    *,
+    warnings: list[str] | None = None,
+) -> ReasoningSourceV4:
     observation = NavObservationV4(
         source_group_id=f"sidewalk:case-{label}",
         dataset_source="sidewalk",
@@ -135,12 +148,41 @@ def _source(label: str = "straight") -> ReasoningSourceV4:
         "trajectory_ego_t": None,
         "trajectory_policy": None,
         "action_mask": None,
-        "warnings": [],
+        "warnings": list(warnings or []),
     }
     payload["source_fingerprint"] = (
         reasoning_source_fingerprint_v4(payload)
     )
     return ReasoningSourceV4.model_validate(payload)
+
+
+def test_sidewalk_nested_metadata_produces_stable_v4_source_identity() -> None:
+    row = {
+        "fpv_image_path": "/tmp/frame.jpg",
+        "sidewalk_meta": {
+            "clip_id": "sidewalk-clip-a",
+            "frame_idx": 41,
+            "frame_name": "000042",
+        },
+        "direction_supervision": _direction().model_dump(mode="json"),
+    }
+
+    source = build_reasoning_source_v4(
+        row,
+        index=7,
+        config=ReasoningSourceBuildConfig(
+            dataset_source="sidewalk",
+            enable_system1=False,
+        ),
+    )
+
+    assert source.observation.source_record_id == (
+        "sidewalk-clip-a:000042"
+    )
+    assert source.observation.source_group_id == (
+        "sidewalk:sidewalk-clip-a:000042"
+    )
+    assert source.observation.split_group_id == "sidewalk-clip-a"
 
 
 def _groundings(
@@ -345,6 +387,72 @@ def test_only_avoid_constraint_may_scope_direction_labels() -> None:
     ]
 
 
+def test_scene_and_constraint_synonyms_are_deterministically_normalized() -> None:
+    observation = _source().observation
+    scene, scene_warnings = sanitize_reasoning_section_evidence_v4(
+        "SceneGrounding",
+        SceneGroundingV4(
+            scene_type="urban_intersection",
+            walkable_support="crosswalk",
+            key_entities=[
+                "car",
+                "parked_vehicles",
+                "delivery_scooter",
+                "parked_bicycles",
+                "bushes",
+                "hedges",
+                "trees",
+                "signage",
+                "street_lamp",
+                "traffic_cones",
+            ],
+            traffic_context="active_pedestrian_signal",
+        ),
+        observation=observation,
+    )
+    constraints, constraint_warnings = (
+        sanitize_reasoning_section_evidence_v4(
+            "InteractionConstraintGrounding",
+            InteractionConstraintGroundingV4(
+                constraints=[
+                    InteractionConstraintV4(
+                        kind="traffic_signal",
+                        status="applicable",
+                        effect="yield",
+                    ),
+                    InteractionConstraintV4(
+                        kind="sidewalk_obstacle",
+                        status="applicable",
+                        effect="avoid",
+                        affected_direction_labels=["straight"],
+                    ),
+                ]
+            ),
+            observation=observation,
+        )
+    )
+
+    assert isinstance(scene, SceneGroundingV4)
+    assert [str(value) for value in scene.key_entities] == [
+        "vehicle",
+        "micromobility",
+        "bicycle",
+        "bush",
+        "hedge",
+        "tree",
+        "sign",
+        "street_light",
+        "traffic_cone",
+    ]
+    assert str(scene.traffic_context) == "traffic_control_present"
+    assert scene_warnings == ["scene_vocabulary_normalized"]
+    assert isinstance(constraints, InteractionConstraintGroundingV4)
+    assert [
+        str(value.kind) for value in constraints.constraints
+    ] == ["traffic_control", "local_obstacle"]
+    assert constraint_warnings == ["constraint_vocabulary_normalized"]
+
+
 @pytest.mark.parametrize(
     ("effect", "expected_speed", "expected_response"),
     [
@@ -392,6 +500,40 @@ def test_moving_strong_direction_and_global_stop_is_invalid() -> None:
                 response="stop",
             ),
         )
+
+
+def test_avoid_subset_means_detour_required_not_direction_forbidden() -> None:
+    inside = compose_reasoning_target_v4(
+        _source("straight"),
+        _groundings(effect="avoid"),
+        DecisionProposalV4(
+            selected_action_label="straight",
+            speed="slow",
+            response="detour",
+        ),
+    ).candidate_target.reasoning.decision
+    outside = compose_reasoning_target_v4(
+        _source("right_10"),
+        _groundings(effect="avoid"),
+        DecisionProposalV4(
+            selected_action_label="right_10",
+            speed="normal",
+            response="proceed",
+        ),
+    ).candidate_target.reasoning.decision
+    stopped = compose_reasoning_target_v4(
+        _source("stop"),
+        _groundings(effect="avoid"),
+        DecisionProposalV4(
+            selected_action_label="stop",
+            speed="stop",
+            response="stop",
+        ),
+    ).candidate_target.reasoning.decision
+
+    assert (inside.speed, inside.response) == ("slow", "detour")
+    assert (outside.speed, outside.response) == ("normal", "proceed")
+    assert (stopped.speed, stopped.response) == ("stop", "stop")
 
 
 def test_stop_is_valid_short_horizon_action_without_finish() -> None:
@@ -453,6 +595,65 @@ def test_reconciliation_requires_review_without_mutating_strong_action() -> None
         annotation.candidate_target.reasoning.decision
         .selected_action_label
     ) == "left_40"
+
+
+def test_human_review_angle_threshold_is_independent_from_profile_tolerance() -> None:
+    source = _source("straight")
+    supported = _groundings()
+    at_threshold = build_action_reconciliation_audit_v4(
+        source,
+        supported,
+        DecisionProposalV4(
+            selected_action_label="right_20",
+            speed="normal",
+            response="proceed",
+        ),
+    )
+    above_threshold = build_action_reconciliation_audit_v4(
+        source,
+        supported,
+        DecisionProposalV4(
+            selected_action_label="right_30",
+            speed="normal",
+            response="proceed",
+        ),
+    )
+    unsupported = supported.model_copy(
+        update={
+            "local_traversability": LocalTraversabilityV4(
+                direction_affordances=[
+                    DirectionAffordanceV4(
+                        direction_label="straight",
+                        affordance="blocked",
+                        clearance="insufficient",
+                        limiting_factors=["static_obstacle"],
+                    )
+                ]
+            )
+        }
+    )
+    threshold_but_unsupported = build_action_reconciliation_audit_v4(
+        source,
+        unsupported,
+        DecisionProposalV4(
+            selected_action_label="right_20",
+            speed="normal",
+            response="proceed",
+        ),
+    )
+
+    assert at_threshold is not None
+    assert at_threshold.checks.proposal_strong_relation == "large_delta"
+    assert not action_reconciliation_review_required_v4(at_threshold)
+    assert above_threshold is not None
+    assert {
+        str(value) for value in above_threshold.review_trigger_codes
+    } == {"proposal_direction_delta_exceeds_profile_tolerance"}
+    assert threshold_but_unsupported is not None
+    assert {
+        str(value)
+        for value in threshold_but_unsupported.review_trigger_codes
+    } == {"strong_action_probe_unsupported"}
 
 
 def test_reconciliation_preserves_all_nearest_probe_ties() -> None:
@@ -523,6 +724,69 @@ def test_preview_and_formal_release_are_separate() -> None:
     assert formal[0].artifact_training_eligible is True
     assert formal[0].formal_training_eligible is True
     assert formal[0].review_status == "not_required"
+
+
+def test_v46_system1_view_requires_all_sixteen_mask_steps_valid() -> None:
+    source = _source()
+    annotation = _annotation(source)
+    payload = build_reasoning_training_views_v4(
+        source,
+        annotation,
+        release_track="formal_training",
+    )[0].model_dump(mode="json", exclude_none=True)
+    payload["trajectory_ego_t"] = [
+        [0.1 * index, 0.0, 0.0] for index in range(16)
+    ]
+    payload["trajectory_policy"] = {
+        "system1_target_field": "trajectory_ego_t",
+    }
+    payload["action_mask"] = [1] * 15 + [0]
+
+    with pytest.raises(
+        ValidationError,
+        match="must mark all 16 steps valid",
+    ):
+        ReasoningTrainingViewV4.model_validate(payload)
+
+
+def test_post_threshold_formal_gate_keeps_pending_candidates_out() -> None:
+    source = _source("straight")
+    annotations = [
+        *[_annotation(source, proposal_label="straight") for _ in range(6)],
+        _annotation(source, proposal_label="right_20"),
+        *[_annotation(source, proposal_label="right_30") for _ in range(7)],
+    ]
+
+    formal = [
+        view
+        for annotation in annotations
+        for view in build_reasoning_training_views_v4(
+            source,
+            annotation,
+            release_track="formal_training",
+        )
+    ]
+    preview = [
+        view
+        for annotation in annotations
+        for view in build_reasoning_training_views_v4(
+            source,
+            annotation,
+            release_track="review_preview",
+        )
+    ]
+
+    assert len(preview) == 14
+    assert len(formal) == 7
+    assert all(
+        view.formal_training_eligible
+        and view.review_status in {"not_required", "resolved"}
+        for view in formal
+    )
+    assert sum(
+        view.review_status == "pending_human"
+        for view in preview
+    ) == 7
 
 
 def test_triggered_review_blocks_until_resolution_revalidates() -> None:
@@ -615,6 +879,7 @@ def test_resolution_aware_artifact_audit_reports_six_axes(
         required_dataset_families=("sidewalk",),
     )
 
+    assert report["errors"] == []
     assert report["passed"] is True
     assert report["metrics"] == {
         "sources": 1,
@@ -628,6 +893,225 @@ def test_resolution_aware_artifact_audit_reports_six_axes(
         "preview_training_leak": 0,
         "formal_ineligible_artifact_leak": 0,
     }
+
+
+def test_natural_pilot_audit_reports_rates_and_exact_formal_filter(
+    tmp_path: Path,
+) -> None:
+    """Pilot audit accepts pending rates but gates seven probes and leakage."""
+
+    source = _source("straight")
+    groundings = _groundings()
+    groundings = groundings.model_copy(
+        update={
+            "local_traversability": LocalTraversabilityV4(
+                direction_affordances=[
+                    DirectionAffordanceV4(
+                        direction_label=label,
+                        affordance="conditional",
+                        clearance="sufficient",
+                        limiting_factors=["dynamic_occupancy"],
+                    )
+                    for label in (
+                        "left_90",
+                        "left_30",
+                        "left_10",
+                        "straight",
+                        "right_10",
+                        "right_30",
+                        "right_90",
+                    )
+                ]
+            )
+        }
+    )
+    proposal = DecisionProposalV4(
+        selected_action_label="straight",
+        speed="normal",
+        response="proceed",
+    )
+    reconciliation = build_action_reconciliation_audit_v4(
+        source,
+        groundings,
+        proposal,
+    )
+    composition = compose_reasoning_target_v4(
+        source,
+        groundings,
+        proposal,
+    )
+    annotation = ReasoningAnnotationV4(
+        source_group_id=source.observation.source_group_id,
+        source_fingerprint=source.source_fingerprint,
+        record_status="complete",
+        grounding_outputs=groundings,
+        decision_proposal=proposal,
+        action_reconciliation=reconciliation,
+        composer_candidate=(
+            composition.candidate_target.reasoning.decision
+        ),
+        candidate_target=composition.candidate_target,
+        candidate_structure_record=CandidateStructureRecordV4(
+            composer_version=REASONING_V4_COMPOSER_VERSION,
+            status="valid",
+        ),
+        stage_records=_stage_records(),
+    )
+    views = build_reasoning_training_views_v4(
+        source,
+        annotation,
+        release_track="formal_training",
+    )
+    assert len(views) == 1
+    paths = {
+        "source": tmp_path / "sources.jsonl",
+        "annotation": tmp_path / "annotations.jsonl",
+        "view": tmp_path / "views.jsonl",
+    }
+    payloads = {
+        "source": source,
+        "annotation": annotation,
+        "view": views[0],
+    }
+    for name, model in payloads.items():
+        paths[name].write_text(
+            json.dumps(
+                model.model_dump(mode="json", exclude_none=True)
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    report = audit_reasoning_v4_pilot(
+        paths["source"],
+        paths["annotation"],
+        paths["view"],
+        expected_rows=1,
+    )
+
+    assert report["errors"] == []
+    assert report["passed"] is True
+    assert report["metrics"]["pending_human_rate"] == 0.0
+    assert report["metrics"]["formal_view_rows"] == 1
+    assert report["metrics"]["formal_manifest_leakage_rate"] == 0.0
+    assert report["metrics"]["action_tuple_conflict_rate"] == 0.0
+    assert (
+        report["metrics"]["post_normalization_vocab_violation_rate"]
+        == 0.0
+    )
+    assert report["metrics"]["probe_rows_exactly_seven"] == 1
+    assert report["metrics"]["all_seven_probes_identical_rate"] == 1.0
+    assert report["metrics"]["all_seven_probes_blocked_rate"] == 0.0
+    assert report["metrics"]["all_seven_probes_conditional_rate"] == 1.0
+
+
+def test_natural_pilot_audit_accepts_quarantined_stop_conflict(
+    tmp_path: Path,
+) -> None:
+    """A known strong-moving/global-stop collision remains review-only."""
+
+    source = _source("straight")
+    groundings = _groundings(effect="stop").model_copy(
+        update={
+            "local_traversability": LocalTraversabilityV4(
+                direction_affordances=[
+                    DirectionAffordanceV4(
+                        direction_label=label,
+                        affordance="blocked",
+                        clearance="insufficient",
+                        limiting_factors=["dynamic_occupancy"],
+                    )
+                    for label in (
+                        "left_90",
+                        "left_30",
+                        "left_10",
+                        "straight",
+                        "right_10",
+                        "right_30",
+                        "right_90",
+                    )
+                ]
+            )
+        }
+    )
+    proposal = DecisionProposalV4(
+        selected_action_label="stop",
+        speed="stop",
+        response="stop",
+    )
+    reconciliation = build_action_reconciliation_audit_v4(
+        source,
+        groundings,
+        proposal,
+    )
+    candidate_error = (
+        "candidate_construction_failed:"
+        "strong_moving_action_conflicts_with_stop_constraint"
+    )
+    annotation = ReasoningAnnotationV4(
+        source_group_id=source.observation.source_group_id,
+        source_fingerprint=source.source_fingerprint,
+        record_status="complete",
+        grounding_outputs=groundings,
+        decision_proposal=proposal,
+        action_reconciliation=reconciliation,
+        composer_candidate=None,
+        candidate_target=None,
+        candidate_structure_record=CandidateStructureRecordV4(
+            composer_version=REASONING_V4_COMPOSER_VERSION,
+            status="invalid",
+            errors=[candidate_error],
+        ),
+        stage_records=_stage_records(),
+        errors=[candidate_error],
+    )
+    state = derive_reasoning_release_state_v4(
+        source,
+        annotation,
+    )
+    assert state.review_status == "pending_human"
+    assert state.formal_training_eligible is False
+
+    source_path = tmp_path / "sources.jsonl"
+    annotation_path = tmp_path / "annotations.jsonl"
+    formal_path = tmp_path / "formal.jsonl"
+    source_path.write_text(
+        json.dumps(
+            source.model_dump(mode="json", exclude_none=True)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    annotation_path.write_text(
+        json.dumps(
+            annotation.model_dump(mode="json", exclude_none=True)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    formal_path.write_text("", encoding="utf-8")
+
+    report = audit_reasoning_v4_pilot(
+        source_path,
+        annotation_path,
+        formal_path,
+        expected_rows=1,
+    )
+
+    assert report["passed"] is True
+    assert report["errors"] == []
+    assert report["metrics"]["candidate_structurally_valid"] == 0
+    assert (
+        report["metrics"]["candidate_fail_closed_review_only"]
+        == 1
+    )
+    assert report["metrics"]["candidate_unexpected_invalid_rows"] == 0
+    assert report["metrics"]["pending_human"] == 1
+    assert report["metrics"]["formal_training_eligible"] == 0
+    assert report["metrics"]["formal_view_rows"] == 0
+    assert report["metrics"]["constraint_effect_conflict_rows"] == 1
+    assert report["metrics"]["action_tuple_conflict_rows"] == 0
+    assert report["metrics"]["probe_rows_exactly_seven"] == 1
 
 
 class _FakeBackend:
@@ -693,7 +1177,9 @@ def test_known_task_registry_skips_task_teacher_call() -> None:
     backend = _FakeBackend()
     annotation = asyncio.run(
         annotate_reasoning_source_v4(
-            _source(),
+            _source(
+                warnings=["history_fpv_is_repeated_padding"],
+            ),
             backend=backend,
             config=ReasoningV4BatchConfig(max_retries=0),
         )
@@ -705,6 +1191,17 @@ def test_known_task_registry_skips_task_teacher_call() -> None:
     assert annotation.stage_records[
         "TaskGrounding"
     ].producer_kind == "deterministic"
+    assert annotation.metadata["task_canonicalization_source"] == (
+        "versioned_registry"
+    )
+    assert annotation.metadata["input_diagnostics"] == [
+        "history_fpv_is_repeated_padding"
+    ]
+    assert "history_fpv_is_repeated_padding" not in annotation.warnings
+    assert not any(
+        "task_canonicalization_source" in warning
+        for warning in annotation.warnings
+    )
     assert "TaskGrounding" not in backend.requested_sections
     assert set(backend.requested_sections) == {
         "SceneGrounding",

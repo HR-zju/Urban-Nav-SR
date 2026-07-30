@@ -8,6 +8,9 @@ from typing import Any, Mapping, Sequence
 
 from pydantic import ValidationError
 
+from mcp_server.agent.reasoning_v4_validation import (
+    validate_reasoning_section_v4,
+)
 from mcp_server.agent.reasoning_v4_prompt_policy import (
     get_prompt_profile_v4,
 )
@@ -521,6 +524,424 @@ def audit_reasoning_v4_artifacts(
         "counts": dict(counts),
         "errors": errors[:200],
         "warnings": warnings[:200],
+        "passed": not errors,
+    }
+
+
+def audit_reasoning_v4_pilot(
+    source_jsonl: str | Path,
+    annotation_jsonl: str | Path,
+    formal_view_jsonl: str | Path,
+    *,
+    expected_rows: int,
+) -> dict[str, Any]:
+    """Audit a natural-distribution V4.6 pilot before full annotation.
+
+    The audit reports review prevalence instead of requiring zero review
+    rows.  A strong-moving/global-stop collision is an explicitly supported
+    fail-closed review-only outcome: it may carry no candidate, but must stay
+    pending and outside the formal manifest.  Every other invalid candidate
+    remains a hard error.  Other hard gates cover completed records, tuple
+    consistency, canonical vocabularies, exact seven-probe output, and
+    lossless filtering into the formal-training manifest.
+
+    Args:
+        source_jsonl: Frozen natural-random pilot sources.
+        annotation_jsonl: Completed pilot annotations.
+        formal_view_jsonl: Formal-training exporter dry-run output.
+        expected_rows: Exact pilot source count.
+
+    Returns:
+        Pilot metrics, trigger distributions, bounded errors, and pass flag.
+
+    Raises:
+        ValueError: If ``expected_rows`` is not positive.
+    """
+
+    expected = int(expected_rows)
+    if expected <= 0:
+        raise ValueError("expected_rows must be positive")
+    errors: list[str] = []
+    counts: Counter[str] = Counter()
+    trigger_counts: Counter[str] = Counter()
+    normalization_counts: Counter[str] = Counter()
+    probe_affordance_counts: Counter[str] = Counter()
+    sources = _source_index_v4(source_jsonl, errors=errors)
+    annotations, annotation_file_rows = _annotation_index_v4(
+        annotation_jsonl,
+        errors=errors,
+    )
+    source_ids = set(sources)
+    annotation_ids = set(annotations)
+    missing_annotations = sorted(source_ids - annotation_ids)
+    orphan_annotations = sorted(annotation_ids - source_ids)
+    formal_eligible_ids: set[str] = set()
+
+    if len(sources) != expected:
+        errors.append(
+            f"source_row_count_mismatch:{len(sources)}!={expected}"
+        )
+    if missing_annotations:
+        errors.append(
+            f"missing_annotations:{len(missing_annotations)}"
+        )
+    if orphan_annotations:
+        errors.append(
+            f"annotations_without_source:{len(orphan_annotations)}"
+        )
+
+    for source_id in sorted(source_ids & annotation_ids):
+        source = sources[source_id]
+        annotation = annotations[source_id]
+        counts["joined_rows"] += 1
+        if annotation.source_fingerprint != source.source_fingerprint:
+            errors.append(
+                f"source_fingerprint_mismatch:{source_id}"
+            )
+            continue
+        is_complete = annotation.record_status == "complete"
+        all_sections_accepted = annotation.all_sections_accepted
+        candidate_valid = (
+            annotation.candidate_structure_record.status == "valid"
+        )
+        audit = annotation.action_reconciliation
+        structure_errors = set(
+            annotation.candidate_structure_record.errors
+        )
+        fail_closed_stop_conflict = (
+            annotation.candidate_structure_record.status == "invalid"
+            and structure_errors
+            == {
+                "candidate_construction_failed:"
+                "strong_moving_action_conflicts_with_stop_constraint"
+            }
+            and audit is not None
+            and "strong_action_constraint_conflict"
+            in audit.review_trigger_codes
+        )
+        counts["record_complete"] += int(is_complete)
+        counts["all_sections_accepted"] += int(
+            all_sections_accepted
+        )
+        counts["candidate_structurally_valid"] += int(
+            candidate_valid
+        )
+        counts["candidate_fail_closed_review_only"] += int(
+            fail_closed_stop_conflict
+        )
+        if not is_complete:
+            errors.append(f"record_not_complete:{source_id}")
+        if not all_sections_accepted:
+            errors.append(
+                f"sections_not_all_accepted:{source_id}"
+            )
+        if not candidate_valid and not fail_closed_stop_conflict:
+            counts["candidate_unexpected_invalid_rows"] += 1
+            errors.append(
+                f"candidate_not_structurally_valid:{source_id}"
+            )
+
+        if audit is not None:
+            for code in audit.review_trigger_codes:
+                trigger_counts[str(code)] += 1
+            if audit.checks.action_tuple_consistency == "conflict":
+                counts["action_tuple_conflict_rows"] += 1
+                errors.append(
+                    f"action_tuple_conflict:{source_id}"
+                )
+            if (
+                audit.checks.constraint_effect_consistency
+                == "conflict"
+            ):
+                counts["constraint_effect_conflict_rows"] += 1
+
+        try:
+            state = derive_reasoning_release_state_v4(
+                source,
+                annotation,
+            )
+        except ValueError as exc:
+            errors.append(f"release_state:{source_id}:{exc}")
+        else:
+            counts["pending_human"] += int(
+                state.review_status == "pending_human"
+            )
+            counts["formal_training_eligible"] += int(
+                state.formal_training_eligible
+            )
+            if fail_closed_stop_conflict and (
+                state.review_status != "pending_human"
+                or state.formal_training_eligible
+            ):
+                errors.append(
+                    "fail_closed_candidate_not_quarantined:"
+                    f"{source_id}:review={state.review_status}:"
+                    f"formal={state.formal_training_eligible}"
+                )
+            if state.formal_training_eligible:
+                formal_eligible_ids.add(source_id)
+
+        row_vocabulary_normalized = False
+        for stage in annotation.stage_records.values():
+            for warning in stage.warnings:
+                if warning in {
+                    "scene_vocabulary_normalized",
+                    "constraint_vocabulary_normalized",
+                }:
+                    normalization_counts[warning] += 1
+                    row_vocabulary_normalized = True
+                    break
+        counts["vocabulary_normalization_applied_rows"] += int(
+            row_vocabulary_normalized
+        )
+
+        vocabulary_errors: list[str] = []
+        scene = annotation.grounding_outputs.scene_grounding
+        if scene is not None:
+            scene_result = validate_reasoning_section_v4(
+                "SceneGrounding",
+                scene,
+                observation=source.observation,
+            )
+            vocabulary_errors.extend(
+                item
+                for item in scene_result.errors
+                if item.startswith(
+                    (
+                        "noncanonical_scene_entity_labels:",
+                        "noncanonical_traffic_context:",
+                    )
+                )
+            )
+        constraints = (
+            annotation.grounding_outputs
+            .interaction_constraint_grounding
+        )
+        if constraints is not None:
+            constraint_result = validate_reasoning_section_v4(
+                "InteractionConstraintGrounding",
+                constraints,
+                observation=source.observation,
+            )
+            vocabulary_errors.extend(
+                item
+                for item in constraint_result.errors
+                if item.startswith(
+                    "noncanonical_constraint_kind:"
+                )
+            )
+        if vocabulary_errors:
+            counts[
+                "post_normalization_vocab_violation_rows"
+            ] += 1
+            errors.append(
+                "post_normalization_vocab_violation:"
+                f"{source_id}:{vocabulary_errors}"
+            )
+
+        traversability = (
+            annotation.grounding_outputs.local_traversability
+        )
+        probes = (
+            list(traversability.direction_affordances)
+            if traversability is not None
+            else []
+        )
+        if len(probes) != 7:
+            counts["probe_rows_not_exactly_seven"] += 1
+            errors.append(
+                f"probe_count_mismatch:{source_id}:{len(probes)}"
+            )
+            continue
+        counts["probe_rows_exactly_seven"] += 1
+        signatures = {
+            (
+                item.affordance,
+                item.clearance,
+                tuple(str(value) for value in item.limiting_factors),
+            )
+            for item in probes
+        }
+        affordances = [item.affordance for item in probes]
+        counts["all_seven_probes_identical"] += int(
+            len(signatures) == 1
+        )
+        counts["all_seven_probes_blocked"] += int(
+            all(value == "blocked" for value in affordances)
+        )
+        counts["all_seven_probes_conditional"] += int(
+            all(value == "conditional" for value in affordances)
+        )
+        for value in affordances:
+            probe_affordance_counts[value] += 1
+
+    formal_view_ids: set[str] = set()
+    formal_view_sample_ids: set[str] = set()
+    formal_contract_leak_ids: set[str] = set()
+    for row in iter_jsonl(formal_view_jsonl):
+        try:
+            view = ReasoningTrainingViewV4.model_validate(row)
+        except (TypeError, ValueError, ValidationError) as exc:
+            errors.append(f"invalid_formal_view:{str(exc)[:500]}")
+            continue
+        if view.sample_id in formal_view_sample_ids:
+            errors.append(
+                f"duplicate_formal_view_sample_id:{view.sample_id}"
+            )
+            continue
+        formal_view_sample_ids.add(view.sample_id)
+        if view.source_group_id in formal_view_ids:
+            errors.append(
+                "duplicate_formal_view_source_group_id:"
+                f"{view.source_group_id}"
+            )
+            continue
+        formal_view_ids.add(view.source_group_id)
+        counts["formal_view_rows"] += 1
+        if (
+            view.release_track != "formal_training"
+            or not view.formal_training_eligible
+            or not view.artifact_training_eligible
+        ):
+            formal_contract_leak_ids.add(view.source_group_id)
+            errors.append(
+                f"formal_ineligible_artifact_leak:{view.sample_id}"
+            )
+
+    leaked_ids = sorted(
+        (formal_view_ids - formal_eligible_ids)
+        | formal_contract_leak_ids
+    )
+    missing_eligible_ids = sorted(
+        formal_eligible_ids - formal_view_ids
+    )
+    counts["formal_ineligible_artifact_leak"] = len(leaked_ids)
+    counts["formal_eligible_missing_from_manifest"] = len(
+        missing_eligible_ids
+    )
+    if leaked_ids:
+        errors.append(
+            f"formal_manifest_leaked_ids:{leaked_ids[:20]}"
+        )
+    if missing_eligible_ids:
+        errors.append(
+            "formal_manifest_missing_eligible_ids:"
+            f"{missing_eligible_ids[:20]}"
+        )
+
+    denominator = max(1, expected)
+    formal_denominator = max(1, counts["formal_view_rows"])
+    return {
+        "schema_version": (
+            "urbannav_reasoning_v4_6_natural_pilot_audit_v1"
+        ),
+        "source_jsonl": str(source_jsonl),
+        "annotation_jsonl": str(annotation_jsonl),
+        "formal_view_jsonl": str(formal_view_jsonl),
+        "expected_rows": expected,
+        "annotation_file_rows": annotation_file_rows,
+        "metrics": {
+            "sources": len(sources),
+            "record_complete": int(counts["record_complete"]),
+            "all_sections_accepted": int(
+                counts["all_sections_accepted"]
+            ),
+            "candidate_structurally_valid": int(
+                counts["candidate_structurally_valid"]
+            ),
+            "candidate_fail_closed_review_only": int(
+                counts["candidate_fail_closed_review_only"]
+            ),
+            "candidate_fail_closed_review_only_rate": (
+                counts["candidate_fail_closed_review_only"]
+                / denominator
+            ),
+            "candidate_unexpected_invalid_rows": int(
+                counts["candidate_unexpected_invalid_rows"]
+            ),
+            "pending_human": int(counts["pending_human"]),
+            "pending_human_rate": (
+                counts["pending_human"] / denominator
+            ),
+            "formal_training_eligible": int(
+                counts["formal_training_eligible"]
+            ),
+            "formal_view_rows": int(counts["formal_view_rows"]),
+            "formal_ineligible_artifact_leak": int(
+                counts["formal_ineligible_artifact_leak"]
+            ),
+            "formal_eligible_missing_from_manifest": int(
+                counts[
+                    "formal_eligible_missing_from_manifest"
+                ]
+            ),
+            "formal_manifest_leakage_rate": (
+                counts["formal_ineligible_artifact_leak"]
+                / formal_denominator
+            ),
+            "action_tuple_conflict_rows": int(
+                counts["action_tuple_conflict_rows"]
+            ),
+            "action_tuple_conflict_rate": (
+                counts["action_tuple_conflict_rows"]
+                / denominator
+            ),
+            "constraint_effect_conflict_rows": int(
+                counts["constraint_effect_conflict_rows"]
+            ),
+            "constraint_effect_conflict_rate": (
+                counts["constraint_effect_conflict_rows"]
+                / denominator
+            ),
+            "vocabulary_normalization_applied_rows": int(
+                counts["vocabulary_normalization_applied_rows"]
+            ),
+            "vocabulary_normalization_applied_rate": (
+                counts["vocabulary_normalization_applied_rows"]
+                / denominator
+            ),
+            "post_normalization_vocab_violation_rows": int(
+                counts[
+                    "post_normalization_vocab_violation_rows"
+                ]
+            ),
+            "post_normalization_vocab_violation_rate": (
+                counts[
+                    "post_normalization_vocab_violation_rows"
+                ]
+                / denominator
+            ),
+            "probe_rows_exactly_seven": int(
+                counts["probe_rows_exactly_seven"]
+            ),
+            "probe_rows_not_exactly_seven": int(
+                counts["probe_rows_not_exactly_seven"]
+            ),
+            "all_seven_probes_identical_rate": (
+                counts["all_seven_probes_identical"]
+                / denominator
+            ),
+            "all_seven_probes_blocked_rate": (
+                counts["all_seven_probes_blocked"]
+                / denominator
+            ),
+            "all_seven_probes_conditional_rate": (
+                counts["all_seven_probes_conditional"]
+                / denominator
+            ),
+        },
+        "review_trigger_counts": dict(
+            sorted(trigger_counts.items())
+        ),
+        "normalization_warning_counts": dict(
+            sorted(normalization_counts.items())
+        ),
+        "probe_affordance_counts": dict(
+            sorted(probe_affordance_counts.items())
+        ),
+        "missing_annotation_examples": missing_annotations[:50],
+        "orphan_annotation_examples": orphan_annotations[:50],
+        "errors": errors[:200],
         "passed": not errors,
     }
 

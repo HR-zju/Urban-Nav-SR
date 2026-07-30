@@ -30,6 +30,7 @@ from mcp_server.data.jsonl_io import iter_jsonl, write_jsonl_atomic
 
 _SELECTION_MODES = (
     "sequential",
+    "random",
     "coarse_direction",
     "interesting_diverse",
 )
@@ -243,9 +244,10 @@ def stamp_reasoning_v4_direction_manifest(
         report_json: Atomically replaced JSON report.
         dataset_source: Optional explicit V4 dataset family written to rows.
         profile_id: Exact approved direction profile.
-        selection: Sequential full pass, coarse-direction smoke, or
-            historical-interesting diverse smoke selection.
-        limit: Optional maximum input rows.
+        selection: Sequential full pass, natural random pilot,
+            coarse-direction smoke, or historical-interesting diverse smoke.
+        limit: Optional maximum rows.  ``random`` requires an exact positive
+            output size; ``sequential`` treats it as an input prefix.
         interesting_jsonls: Historical VLM-interesting manifests used only
             for diverse smoke selection.
         random_seed: Stable seed for deterministic smoke selection.
@@ -291,6 +293,19 @@ def stamp_reasoning_v4_direction_manifest(
                 errors=errors,
                 skip_errors=skip_errors,
                 limit=limit,
+            )
+            return
+        if selection == "random":
+            yield from _random_rows(
+                input_jsonl,
+                profile_id=profile_id,
+                dataset_source=normalized_dataset,
+                counts=counts,
+                errors=errors,
+                skip_errors=skip_errors,
+                limit=limit,
+                random_seed=int(random_seed),
+                selection_details=selection_details,
             )
             return
         if selection == "interesting_diverse":
@@ -360,7 +375,7 @@ def stamp_reasoning_v4_direction_manifest(
         "limit": limit,
         "random_seed": (
             int(random_seed)
-            if selection == "interesting_diverse"
+            if selection in {"random", "interesting_diverse"}
             else None
         ),
         "consensus_min_votes": (
@@ -388,6 +403,123 @@ def stamp_reasoning_v4_direction_manifest(
     )
     temporary.replace(destination)
     return report
+
+
+def _random_rows(
+    input_jsonl: str | Path,
+    *,
+    profile_id: str,
+    dataset_source: str,
+    counts: Counter[str],
+    errors: list[dict[str, Any]],
+    skip_errors: bool,
+    limit: int | None,
+    random_seed: int,
+    selection_details: list[dict[str, Any]],
+) -> Any:
+    """Yield a seeded uniform sample over all valid input rows.
+
+    Reservoir sampling scans the complete manifest and assigns every valid
+    row the same inclusion probability.  It intentionally does not stratify
+    by direction, clip, or historical-interesting membership, so pilot rates
+    estimate the natural row distribution.
+
+    Args:
+        input_jsonl: Input manifest to scan completely.
+        profile_id: Exact direction profile used for validation/stamping.
+        dataset_source: Explicit dataset family written to selected rows.
+        counts: Mutable conversion and selection counters.
+        errors: Mutable bounded invalid-row records.
+        skip_errors: Continue after invalid rows when true.
+        limit: Exact requested output size.
+        random_seed: Stable reservoir-sampling seed.
+        selection_details: Mutable per-sample provenance records.
+
+    Returns:
+        An iterator of selected stamped rows in original input order.
+
+    Raises:
+        ValueError: If no exact positive limit is provided or the valid input
+            contains fewer rows than requested.
+    """
+
+    if limit is None or int(limit) <= 0:
+        raise ValueError("random selection requires a positive limit")
+    requested = int(limit)
+    rng = random.Random(int(random_seed))
+    reservoir: list[tuple[int, dict[str, Any], bool]] = []
+    valid_rows = 0
+    for index, row in enumerate(iter_jsonl(input_jsonl)):
+        counts["input_rows"] += 1
+        try:
+            stamped, added = stamp_reasoning_v4_direction_row(
+                row,
+                profile_id=profile_id,
+                dataset_source=dataset_source,
+            )
+        except (TypeError, ValueError) as exc:
+            counts["invalid_rows"] += 1
+            if len(errors) < 100:
+                errors.append(
+                    {
+                        "index": index,
+                        "id": row.get("id"),
+                        "error": str(exc),
+                    }
+                )
+            if not skip_errors:
+                raise
+            continue
+        valid_rows += 1
+        candidate = (index, stamped, added)
+        if len(reservoir) < requested:
+            reservoir.append(candidate)
+            continue
+        slot = rng.randrange(valid_rows)
+        if slot < requested:
+            reservoir[slot] = candidate
+    counts["valid_input_rows"] = valid_rows
+    if len(reservoir) != requested:
+        raise ValueError(
+            "random selection cannot satisfy requested rows: "
+            f"{len(reservoir)}/{requested}"
+        )
+
+    selected_clips: set[str] = set()
+    for input_index, stamped, added in sorted(
+        reservoir,
+        key=lambda item: item[0],
+    ):
+        counts["output_rows"] += 1
+        counts[
+            "newly_stamped_rows"
+            if added
+            else "already_stamped_rows"
+        ] += 1
+        counts["selection_group:natural_random"] += 1
+        direction = stamped["direction_supervision"]
+        label_name = str(direction["label_name"])
+        counts[f"label:{label_name}"] += 1
+        counts[f"source:{direction['source']}"] += 1
+        try:
+            clip_id: str | None = _sample_clip_id(stamped)
+        except ValueError:
+            clip_id = None
+        if clip_id is not None:
+            selected_clips.add(clip_id)
+        selection_details.append(
+            {
+                "id": str(stamped["id"]),
+                "clip_id": clip_id,
+                "input_index": input_index,
+                "direction_label": label_name,
+                "coarse_bucket": _coarse_bucket(label_name),
+                "selection_group": "natural_random",
+                "interesting_votes": None,
+            }
+        )
+        yield stamped
+    counts["selected_unique_clips"] = len(selected_clips)
 
 
 def _interesting_diverse_rows(

@@ -787,12 +787,15 @@ registry v2 将
 | `scene_type` | `ReasonCode` | 开放粗场景，例如 `urban_sidewalk` |
 | `walkable_support` | `ReasonCode` | 开放可见支撑面，例如 `paved_sidewalk` |
 | `key_entities` | `list[ReasonCode]` | navigation-relevant 粗类别；唯一，最多 16 |
-| `traffic_context` | `ReasonCode` | 开放粗控制语境 |
+| `traffic_context` | `ReasonCode` | 归一化为 traffic_control_present/no_active_control_visible/unknown |
 
 这些字段是 LVLM weak visual summary，不是 instance-level GT。crosswalk 是
 `walkable_support`，不是 entity；当前过街行为影响由 Interaction 的
 `crossing_interaction` 表达。V4.6 不输出 entity/control ID、位置、mask、bbox、metric
 depth、tracking 或 confidence。
+Scene postprocessor 将 car/sedan/parked vehicle 统一为 `vehicle`，scooter/motorcycle
+统一为 `micromobility`，parked bicycle 统一为 `bicycle`，并折叠单复数。原始回答保留用于
+审计，typed target 只使用归一化值。
 
 #### 5.3.4 LocalTraversability 字段
 
@@ -854,8 +857,12 @@ remaining distance 或 arrival。
 | `affected_direction_labels` | action label list | 只有 avoid 可使用非空子集 |
 
 `constraints=[]` 是正常负判断。slow/yield/stop 必须为空；avoid 必须明确非空受影响
-子集。本段没有 object ID、source state、temporal relation、tracker、ego-motion、TTC
-或 normative-policy GT。
+子集。该子集的合同名称仍为 `affected_direction_labels`，但语义冻结为
+directions-requiring-avoidance，不是 forbidden directions：命中时要求 slow/detour，
+未命中时不施加 avoid tuple，stop 安全满足。kind postprocessor 折叠为
+crossing/social/local-obstacle/traffic-control 等粗类，特别是
+`traffic_signal -> traffic_control`。本段没有 object ID、source state、temporal
+relation、tracker、ego-motion、TTC 或 normative-policy GT。
 
 #### 5.3.7 Decision、strong ownership 与 tuple
 
@@ -958,6 +965,9 @@ review_trigger_codes
 按列表顺序任取一个。聚合结果为
 `all_supported/all_unsupported/mixed/unknown/not_applicable`，
 `mixed/all_unsupported/unknown` 进入 review。
+action profile 的 10° compatibility tolerance 不等于人工阈值：relation 仍可在角差
+超过 10° 时记录 `large_delta`，但纯角度 review 只在移动 action 角差严格 `>20°` 时触发。
+sign、stop/move、probe、constraint 和 tuple hard trigger 不受该阈值影响。
 
 它不复制 profile、proposal、strong label 或 candidate，不持久化 review priority/status。
 expanded review queue 通过 source/annotation join 生成可读对照。
@@ -1014,8 +1024,11 @@ assistant message 的 `loss=true`，`reasoning_v4_6_sections` 对六个 tag 全�
 重复 action target。可选 System1 trajectory 继续走既有 trajectory loss。此类 row 必须
 同时携带 16 步 `trajectory_ego_t`、16 位 `action_mask`，并在最后一个 user turn 放置
 `[TRAJ_0]...[TRAJ_15]`；assistant 不得包含 query，query LM label 为 `-100`。query count
-与 target horizon 独立校验，不声明 token-step 一一对应；expanded encode 找不到完整
-query 时 fail closed。
+、target horizon、action-mask length 和有效 mask 和都必须为 16。V4.6 的
+`system1_query_contract.query_target_alignment=query_i_to_target_i`，因此第 i 个 query
+hidden state 直接作为第 i 个 target step 的局部 condition；expanded encode 找不到完整
+query 或 Q/T 不一致时 fail closed。Q 与 T 不同的历史 row 只允许显式 legacy pooled
+compatibility。
 
 固定审计指标包括 Sources、Record Complete、All Sections Accepted、Candidate
 Structurally Valid、Pending Human、Formal Training Eligible、Artifact Training

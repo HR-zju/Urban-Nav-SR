@@ -284,12 +284,18 @@ class NavigationContextGroundingV4(BaseModel):
 class InteractionConstraintV4(BaseModel):
     """Represent one high-level current behavior restriction.
 
+    For ``effect=avoid``, ``affected_direction_labels`` means directions whose
+    nominal local corridor requires a continuous detour.  It is not a forbidden
+    direction set.  Selecting one of those coarse directions remains valid only
+    with ``speed=slow`` and ``response=detour``; selecting ``stop`` safely
+    satisfies the constraint.
+
     Args:
         kind: Open high-level behavior-constraint category.
         status: Whether the restriction is currently applicable or uncertain.
         effect: Required behavior response family.
-        affected_direction_labels: Empty for a global constraint, otherwise
-            the affected public action subset.
+        affected_direction_labels: Empty for a global constraint.  For avoid,
+            the public directions requiring local avoidance/detour.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)

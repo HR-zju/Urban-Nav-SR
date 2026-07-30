@@ -18,12 +18,116 @@ from mcp_server.contracts.reasoning_v4 import (
     DecisionProposalV4,
     DecisionV4,
     InteractionConstraintGroundingV4,
+    InteractionConstraintV4,
     LocalTraversabilityV4,
     NavigationContextGroundingV4,
     ReasoningTargetV4,
     SceneGroundingV4,
     TaskGroundingV4,
 )
+
+
+_SCENE_ENTITY_ALIASES_V4 = {
+    "barrier": "barrier",
+    "barriers": "barrier",
+    "bollard": "bollard",
+    "bollards": "bollard",
+    "building": "building",
+    "buildings": "building",
+    "bush": "bush",
+    "bushes": "bush",
+    "crosswalk": "crosswalk",
+    "crosswalks": "crosswalk",
+    "fence": "fence",
+    "fences": "fence",
+    "hedge": "hedge",
+    "hedges": "hedge",
+    "pedestrian": "pedestrian",
+    "pedestrians": "pedestrian",
+    "planter": "planter",
+    "planters": "planter",
+    "road": "road",
+    "roads": "road",
+    "sign": "sign",
+    "signs": "sign",
+    "signage": "sign",
+    "street_sign": "sign",
+    "street_signs": "sign",
+    "street_lamp": "street_light",
+    "street_lamps": "street_light",
+    "street_light": "street_light",
+    "street_lights": "street_light",
+    "streetlamp": "street_light",
+    "streetlamps": "street_light",
+    "traffic_cone": "traffic_cone",
+    "traffic_cones": "traffic_cone",
+    "traffic_light": "traffic_light",
+    "traffic_lights": "traffic_light",
+    "traffic_sign": "traffic_sign",
+    "traffic_signs": "traffic_sign",
+    "trash_can": "trash_can",
+    "trash_cans": "trash_can",
+    "tree": "tree",
+    "trees": "tree",
+    "turnstile": "turnstile",
+    "turnstiles": "turnstile",
+    "car": "vehicle",
+    "cars": "vehicle",
+    "sedan": "vehicle",
+    "sedans": "vehicle",
+    "vehicle": "vehicle",
+    "vehicles": "vehicle",
+    "parked_car": "vehicle",
+    "parked_cars": "vehicle",
+    "parked_vehicle": "vehicle",
+    "parked_vehicles": "vehicle",
+    "scooter": "micromobility",
+    "scooters": "micromobility",
+    "parked_scooter": "micromobility",
+    "parked_scooters": "micromobility",
+    "delivery_scooter": "micromobility",
+    "motorcycle": "micromobility",
+    "motorcycles": "micromobility",
+    "micromobility": "micromobility",
+    "parked_bicycle": "bicycle",
+    "parked_bicycles": "bicycle",
+    "bicycles": "bicycle",
+    "bicycle": "bicycle",
+}
+_TRAFFIC_CONTEXT_ALIASES_V4 = {
+    "active_control_visible": "traffic_control_present",
+    "active_pedestrian_signal": "traffic_control_present",
+    "traffic_light_visible": "traffic_control_present",
+    "signalized_intersection": "traffic_control_present",
+    "traffic_control_present": "traffic_control_present",
+    "uncontrolled_intersection": "no_active_control_visible",
+    "no_active_control_visible": "no_active_control_visible",
+    "none_visible": "no_active_control_visible",
+    "none": "no_active_control_visible",
+    "unknown": "unknown",
+    "uncertain": "unknown",
+}
+_CANONICAL_TRAFFIC_CONTEXTS_V4 = {
+    "traffic_control_present",
+    "no_active_control_visible",
+    "unknown",
+}
+_CONSTRAINT_KIND_ALIASES_V4 = {
+    "crossing_interaction": "crossing_interaction",
+    "pedestrian_crossing": "crossing_interaction",
+    "crosswalk_interaction": "crossing_interaction",
+    "pedestrian_interaction": "social_interaction",
+    "pedestrian_proximity": "social_interaction",
+    "cyclist_interaction": "social_interaction",
+    "social_interaction": "social_interaction",
+    "static_obstacle": "local_obstacle",
+    "sidewalk_obstacle": "local_obstacle",
+    "local_obstacle": "local_obstacle",
+    "traffic_signal": "traffic_control",
+    "pedestrian_signal": "traffic_control",
+    "traffic_light": "traffic_control",
+    "traffic_control": "traffic_control",
+}
 
 
 @dataclass(frozen=True)
@@ -107,6 +211,26 @@ def validate_reasoning_section_v4(
                     "local_traversability_cannot_probe_stop"
                 )
 
+    if isinstance(section, SceneGroundingV4):
+        entity_aliases = [
+            str(value)
+            for value in section.key_entities
+            if _SCENE_ENTITY_ALIASES_V4.get(str(value), str(value))
+            != str(value)
+        ]
+        if entity_aliases:
+            errors.append(
+                "noncanonical_scene_entity_labels:"
+                f"{sorted(entity_aliases)}"
+            )
+        if str(section.traffic_context) not in (
+            _CANONICAL_TRAFFIC_CONTEXTS_V4
+        ):
+            errors.append(
+                "noncanonical_traffic_context:"
+                f"{section.traffic_context}"
+            )
+
     if isinstance(section, NavigationContextGroundingV4):
         task_direction = section.task_direction
         if (
@@ -148,6 +272,11 @@ def validate_reasoning_section_v4(
 
     if isinstance(section, InteractionConstraintGroundingV4):
         for constraint in section.constraints:
+            kind = str(constraint.kind)
+            if _CONSTRAINT_KIND_ALIASES_V4.get(kind, kind) != kind:
+                errors.append(
+                    f"noncanonical_constraint_kind:{kind}"
+                )
             unknown = sorted(
                 set(
                     str(label)
@@ -184,11 +313,11 @@ def sanitize_reasoning_section_evidence_v4(
     *,
     observation: NavObservationV4,
 ) -> tuple[BaseModel, list[str]]:
-    """Return the already typed V4.6 section unchanged.
+    """Normalize bounded vocabularies without adding semantic fields.
 
-    V4.6 section models contain no evidence refs or temporal claims, so there
-    is no lossy repair step.  The function remains as an explicit batch-runner
-    boundary and compatibility point.
+    V4.6 section models contain no evidence refs or temporal claims.  This
+    boundary only folds a small frozen set of Scene and Constraint synonyms so
+    teacher wording cannot fragment downstream labels.
 
     Args:
         section_name: Canonical section name.
@@ -196,18 +325,56 @@ def sanitize_reasoning_section_evidence_v4(
         observation: Prompt-visible observation.
 
     Returns:
-        Original section and an empty warning list.
+        Canonical section and bounded normalization warnings.
 
     Raises:
         ValueError: If section name and model type disagree.
     """
 
+    normalized = section
+    warnings: list[str] = []
+    if isinstance(section, SceneGroundingV4):
+        entities = _unique(
+            _SCENE_ENTITY_ALIASES_V4.get(str(value), str(value))
+            for value in section.key_entities
+        )
+        traffic_context = _TRAFFIC_CONTEXT_ALIASES_V4.get(
+            str(section.traffic_context),
+            "unknown",
+        )
+        normalized = SceneGroundingV4(
+            scene_type=section.scene_type,
+            walkable_support=section.walkable_support,
+            key_entities=entities,
+            traffic_context=traffic_context,
+        )
+        if normalized != section:
+            warnings.append("scene_vocabulary_normalized")
+    elif isinstance(section, InteractionConstraintGroundingV4):
+        normalized = InteractionConstraintGroundingV4(
+            constraints=[
+                InteractionConstraintV4(
+                    kind=_CONSTRAINT_KIND_ALIASES_V4.get(
+                        str(item.kind),
+                        str(item.kind),
+                    ),
+                    status=item.status,
+                    effect=item.effect,
+                    affected_direction_labels=(
+                        item.affected_direction_labels
+                    ),
+                )
+                for item in section.constraints
+            ]
+        )
+        if normalized != section:
+            warnings.append("constraint_vocabulary_normalized")
     validate_reasoning_section_v4(
         section_name,
-        section,
+        normalized,
         observation=observation,
     )
-    return section, []
+    return normalized, warnings
 
 
 def validate_reasoning_target_v4(
@@ -304,8 +471,10 @@ def decision_constraint_errors_v4(
     """Return deterministic action/constraint consistency failures.
 
     Only ``applicable`` constraints affect the tuple.  A strong moving action
-    under a global stop, or inside an applicable avoid subset, is a review
-    conflict and must not be silently rewritten.
+    under a global stop is a review conflict and must not be silently rewritten.
+    An applicable avoid subset is not a forbidden-direction set: choosing a
+    direction in that subset is valid exactly with ``slow/detour``.  Choosing
+    stop safely satisfies every avoid constraint.
 
     Args:
         decision: Action tuple to audit.

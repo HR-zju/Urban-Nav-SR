@@ -722,8 +722,22 @@ def _source_record_id(row: Mapping[str, Any], *, index: int) -> str:
         value = str(row.get(key) or "").strip()
         if value:
             return value
-    clip = str(row.get("clip_name") or row.get("clip_id") or "row").strip()
-    frame = row.get("fpv_frame_idx") if row.get("fpv_frame_idx") is not None else row.get("frame_idx")
+    metadata = row.get("sidewalk_meta")
+    if not isinstance(metadata, Mapping):
+        metadata = {}
+    clip = str(
+        row.get("clip_name")
+        or row.get("clip_id")
+        or metadata.get("clip_id")
+        or "row"
+    ).strip()
+    frame = row.get("fpv_frame_idx")
+    if frame is None:
+        frame = row.get("frame_idx")
+    if frame is None:
+        frame = metadata.get("frame_name")
+    if frame is None:
+        frame = metadata.get("frame_idx")
     return f"{clip}:{frame if frame is not None else index}"
 
 
@@ -734,6 +748,11 @@ def _split_group_id(row: Mapping[str, Any], *, source_record_id: str) -> str:
         value = str(row.get(key) or "").strip()
         if value:
             return value
+    metadata = row.get("sidewalk_meta")
+    if isinstance(metadata, Mapping):
+        clip_id = str(metadata.get("clip_id") or "").strip()
+        if clip_id:
+            return clip_id
     return source_record_id
 
 

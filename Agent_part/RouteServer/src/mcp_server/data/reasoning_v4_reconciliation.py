@@ -27,8 +27,9 @@ from mcp_server.contracts.reasoning_v4 import DecisionProposalV4
 
 
 ACTION_RECONCILIATION_POLICY_VERSION_V4 = (
-    "urbannav_action_reconciliation_policy_v3"
+    "urbannav_action_reconciliation_policy_v4"
 )
+ACTION_RECONCILIATION_ANGLE_REVIEW_THRESHOLD_DEG_V4 = 20.0
 
 _TRIGGER_POLICY = {
     "proposal_delta": (
@@ -55,6 +56,9 @@ def action_reconciliation_policy_digest_v4() -> str:
         {
             "policy_version": (
                 ACTION_RECONCILIATION_POLICY_VERSION_V4
+            ),
+            "human_review_angle_threshold_deg": (
+                ACTION_RECONCILIATION_ANGLE_REVIEW_THRESHOLD_DEG_V4
             ),
             "trigger_policy": _TRIGGER_POLICY,
             "action_profiles": (
@@ -134,7 +138,12 @@ def build_action_reconciliation_audit_v4(
             else "conflict"
         ),
     )
-    trigger_codes = _review_trigger_codes_v4(checks)
+    trigger_codes = _review_trigger_codes_v4(
+        checks,
+        comparison=comparison,
+        proposal_action=proposal_label,
+        strong_action=strong_label,
+    )
     proposal_digest = _canonical_digest(
         decision_proposal.model_dump(
             mode="json",
@@ -405,8 +414,19 @@ def _proposal_tuple_is_consistent_v4(
 
 def _review_trigger_codes_v4(
     checks: ActionReconciliationChecksV4,
+    *,
+    comparison: ActionComparisonFactsV4,
+    proposal_action: str,
+    strong_action: str,
 ) -> list[str]:
-    """Derive sorted trigger codes from the four checks."""
+    """Derive review triggers without conflating two angle policies.
+
+    The action profile keeps its 10-degree compatibility tolerance for the
+    descriptive ``proposal_strong_relation`` check.  Human review uses an
+    independent strict ``>20`` degree threshold.  Sign conflicts, stop/move
+    mismatches, unsupported or mixed probes, constraint conflicts, and invalid
+    action tuples remain hard review triggers at every angle.
+    """
 
     values: set[str] = set()
     relation = checks.proposal_strong_relation
@@ -414,7 +434,15 @@ def _review_trigger_codes_v4(
         values.add(_TRIGGER_POLICY["proposal_stop_move"])
     elif relation == "sign_conflict":
         values.add(_TRIGGER_POLICY["proposal_sign"])
-    elif relation == "large_delta":
+    elif (
+        relation == "large_delta"
+        and proposal_action != "stop"
+        and strong_action != "stop"
+        and not comparison.sign_conflict
+        and comparison.angular_delta_deg is not None
+        and comparison.angular_delta_deg
+        > ACTION_RECONCILIATION_ANGLE_REVIEW_THRESHOLD_DEG_V4
+    ):
         values.add(_TRIGGER_POLICY["proposal_delta"])
     if checks.probe_support == "all_unsupported":
         values.add(_TRIGGER_POLICY["probe_unsupported"])
@@ -436,6 +464,7 @@ def _canonical_digest(value: Any) -> str:
 
 
 __all__ = [
+    "ACTION_RECONCILIATION_ANGLE_REVIEW_THRESHOLD_DEG_V4",
     "ACTION_RECONCILIATION_POLICY_VERSION_V4",
     "action_reconciliation_policy_digest_v4",
     "action_reconciliation_review_priority_v4",

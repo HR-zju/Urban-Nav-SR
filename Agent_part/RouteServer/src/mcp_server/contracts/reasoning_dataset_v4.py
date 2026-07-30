@@ -1268,6 +1268,16 @@ class ReasoningTrainingViewV4(BaseModel):
                 raise ValueError(
                     "action_mask length must match trajectory"
                 )
+            mask_values = [int(value) for value in self.action_mask]
+            if (
+                any(value not in {0, 1} for value in mask_values)
+                or sum(mask_values)
+                != REASONING_V4_SYSTEM1_QUERY_COUNT
+            ):
+                raise ValueError(
+                    "Reasoning V4.6 System1 action_mask must mark "
+                    f"all {REASONING_V4_SYSTEM1_QUERY_COUNT} steps valid"
+                )
         if self.action_mask is not None and not has_trajectory:
             raise ValueError(
                 "action_mask requires trajectory_ego_t"
