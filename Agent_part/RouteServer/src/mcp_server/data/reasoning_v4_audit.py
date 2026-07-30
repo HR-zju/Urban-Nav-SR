@@ -33,7 +33,10 @@ from mcp_server.data.reasoning_v4_reconciliation import (
 )
 from mcp_server.data.reasoning_v4_state import (
     derive_reasoning_release_state_v4,
-    load_latest_action_resolutions_v4,
+    load_latest_action_adjudications_v4,
+)
+from mcp_server.data.reasoning_v4_review import (
+    load_latest_action_review_diagnoses_v4,
 )
 from mcp_server.data.reasoning_v4_task_canonicalization import (
     canonicalize_task_instruction_v4,
@@ -295,7 +298,8 @@ def audit_reasoning_v4_artifacts(
     annotation_jsonl: str | Path,
     view_jsonl: str | Path,
     *,
-    resolution_jsonl: str | Path | None = None,
+    diagnosis_jsonl: str | Path | None = None,
+    adjudication_jsonl: str | Path | None = None,
     required_dataset_families: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Audit source, annotation, and view artifacts offline.
@@ -304,7 +308,8 @@ def audit_reasoning_v4_artifacts(
         source_jsonl: Frozen source manifest.
         annotation_jsonl: Append-only annotation manifest.
         view_jsonl: Review-preview or formal-training views.
-        resolution_jsonl: Optional append-only human resolutions.
+        diagnosis_jsonl: Optional append-only LVLM diagnoses.
+        adjudication_jsonl: Optional append-only human adjudications.
         required_dataset_families: Optional required dataset prefixes.
 
     Returns:
@@ -319,8 +324,11 @@ def audit_reasoning_v4_artifacts(
         annotation_jsonl,
         errors=errors,
     )
-    resolutions = load_latest_action_resolutions_v4(
-        resolution_jsonl
+    diagnoses = load_latest_action_review_diagnoses_v4(
+        diagnosis_jsonl
+    )
+    adjudications = load_latest_action_adjudications_v4(
+        adjudication_jsonl
     )
     for source_id, source in sources.items():
         counts["sources"] += 1
@@ -357,8 +365,13 @@ def audit_reasoning_v4_artifacts(
             annotation=annotation,
         )
         audit = annotation.action_reconciliation
-        resolution = (
-            resolutions.get(audit.audit_id)
+        diagnosis = (
+            diagnoses.get(audit.audit_id)
+            if audit is not None
+            else None
+        )
+        adjudication = (
+            adjudications.get(audit.audit_id)
             if audit is not None
             else None
         )
@@ -366,7 +379,8 @@ def audit_reasoning_v4_artifacts(
             state = derive_reasoning_release_state_v4(
                 source,
                 annotation,
-                resolution=resolution,
+                diagnosis=diagnosis,
+                adjudication=adjudication,
             )
         except ValueError as exc:
             errors.append(
@@ -487,9 +501,14 @@ def audit_reasoning_v4_artifacts(
         ),
         "source_jsonl": str(source_jsonl),
         "annotation_jsonl": str(annotation_jsonl),
-        "resolution_jsonl": (
-            str(resolution_jsonl)
-            if resolution_jsonl is not None
+        "diagnosis_jsonl": (
+            str(diagnosis_jsonl)
+            if diagnosis_jsonl is not None
+            else None
+        ),
+        "adjudication_jsonl": (
+            str(adjudication_jsonl)
+            if adjudication_jsonl is not None
             else None
         ),
         "view_jsonl": str(view_jsonl),

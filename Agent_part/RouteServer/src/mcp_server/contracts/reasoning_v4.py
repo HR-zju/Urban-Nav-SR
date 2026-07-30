@@ -343,7 +343,7 @@ class InteractionConstraintGroundingV4(BaseModel):
 
 
 class DecisionProposalV4(BaseModel):
-    """Store the blind LVLM short-horizon action proposal.
+    """Store the visual grounding-conditioned LVLM action proposal.
 
     Args:
         selected_action_label: Immediate action from the public profile.

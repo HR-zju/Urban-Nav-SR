@@ -20,7 +20,9 @@ Usage:
   run_reasoning_v4_qwen122b_annotation.sh smoke
   run_reasoning_v4_qwen122b_annotation.sh status-smoke
   run_reasoning_v4_qwen122b_annotation.sh tail-smoke
-  SMOKE_APPROVED=1 SMOKE_RESOLUTION_JSONL=/path/to/resolutions.jsonl \
+  SMOKE_APPROVED=1 \
+    SMOKE_DIAGNOSIS_JSONL=/path/to/diagnoses.jsonl \
+    SMOKE_ADJUDICATION_JSONL=/path/to/adjudications.jsonl \
     run_reasoning_v4_qwen122b_annotation.sh launch-full
   run_reasoning_v4_qwen122b_annotation.sh status-full
   run_reasoning_v4_qwen122b_annotation.sh tail-full

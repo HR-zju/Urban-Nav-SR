@@ -24,7 +24,11 @@ from mcp_server.contracts.direction_profile import (
 )
 from mcp_server.contracts.reasoning_dataset_v4 import (
     REASONING_SOURCE_V4_SCHEMA_VERSION,
-    ActionReviewResolutionV4,
+    ActionAdjudicationPayloadV4,
+    ActionBlindReviewV4,
+    ActionReviewComponentAssessmentV4,
+    ActionReviewDiagnosisPayloadV4,
+    ActionReviewDiagnosisRecordV4,
     AnnotationStageRecordV4,
     CandidateStructureRecordV4,
     DirectionContextV4,
@@ -63,11 +67,19 @@ from mcp_server.data.reasoning_v4_reconciliation import (
     action_reconciliation_review_required_v4,
     build_action_reconciliation_audit_v4,
 )
+from mcp_server.data.reasoning_v4_reconciliation_review import (
+    export_action_reconciliation_review_v4,
+)
 from mcp_server.data.reasoning_v4_source import (
     build_reasoning_source_v4,
 )
 from mcp_server.data.reasoning_v4_state import (
     derive_reasoning_release_state_v4,
+)
+from mcp_server.data.reasoning_v4_review import (
+    bind_action_adjudication_v4,
+    bind_action_review_diagnosis_v4,
+    build_reasoning_repair_request_v4,
 )
 from mcp_server.data.reasoning_v4_task_canonicalization import (
     canonicalize_task_instruction_v4,
@@ -82,6 +94,29 @@ from mcp_server.teacher.reasoning_v2_teacher import TeacherGeneration
 from mcp_server.teacher.reasoning_v4_batch import (
     ReasoningV4BatchConfig,
     annotate_reasoning_source_v4,
+    repair_reasoning_annotation_v4,
+)
+from mcp_server.teacher.reasoning_v4_image_policy import (
+    REASONING_V4_SECTION_ROUTED_VISUAL_POLICY_ID,
+)
+from mcp_server.teacher.reasoning_v4_review import (
+    build_reasoning_v4_blind_review_question,
+    build_reasoning_v4_comparative_review_question,
+    parse_reasoning_v4_review_answer,
+)
+from mcp_server.teacher.reasoning_v4_review_batch import (
+    ReasoningV4ReviewBatchConfig,
+    diagnose_reasoning_action_review_v4,
+    label_reasoning_review_queue_v4,
+)
+from mcp_server.teacher.reasoning_v4_review_profiles import (
+    REASONING_V4_REVIEW_PROFILES,
+)
+from tools.model_processing.build_reasoning_v4_review_html import (
+    build_reasoning_v4_review_html,
+)
+from tools.model_processing.import_reasoning_v4_adjudications import (
+    import_reasoning_v4_adjudications,
 )
 
 
@@ -305,6 +340,93 @@ def _annotation(
             status="valid",
         ),
         stage_records=_stage_records(),
+    )
+
+
+def _review_diagnosis(
+    source: ReasoningSourceV4,
+    annotation: ReasoningAnnotationV4,
+) -> ActionReviewDiagnosisRecordV4:
+    """Build one completed teacher-proposal-error diagnosis fixture."""
+
+    audit = annotation.action_reconciliation
+    assert audit is not None
+    payload = ActionReviewDiagnosisPayloadV4(
+        verdict="teacher_proposal_error",
+        error_subtype="proposal_direction_error",
+        affected_components=["DecisionProposal"],
+        component_assessment=ActionReviewComponentAssessmentV4(
+            teacher_proposal="likely_wrong",
+            grounding="likely_correct",
+            strong_label="likely_correct",
+        ),
+        reason_codes=["proposal_conflicts_with_visible_direction"],
+        error_analysis=(
+            "Visible context supports the strong direction more than the "
+            "teacher proposal."
+        ),
+        repair_action="keep_without_change",
+        fields_to_inspect=["decision_proposal.selected_action_label"],
+        confidence=0.9,
+    )
+    diagnosis = bind_action_review_diagnosis_v4(
+        source,
+        annotation,
+        payload,
+    )
+    stage_records = {
+        name: AnnotationStageRecordV4(
+            status="accepted",
+            attempts=1,
+            producer_kind="lvlm",
+            producer_profile_id=f"review_{name}",
+            derivation_version=f"review_{name}_v1",
+            prompt_policy_digest="b" * 64,
+        )
+        for name in ("blind_visual", "comparative_diagnosis")
+    }
+    return ActionReviewDiagnosisRecordV4(
+        source_group_id=source.observation.source_group_id,
+        source_fingerprint=source.source_fingerprint,
+        audit_id=audit.audit_id,
+        record_status="complete",
+        blind_assessment=ActionBlindReviewV4(
+            evidence_sufficiency="sufficient",
+            visual_findings=["visible_turn_support"],
+            relevant_components=["NavigationContextGrounding"],
+            evidence_analysis="The route cue visibly bends toward one side.",
+        ),
+        diagnosis=diagnosis,
+        stage_records=stage_records,
+    )
+
+
+def _keep_adjudication(
+    source: ReasoningSourceV4,
+    annotation: ReasoningAnnotationV4,
+    diagnosis: ActionReviewDiagnosisRecordV4,
+):
+    """Build one human keep-without-change adjudication fixture."""
+
+    return bind_action_adjudication_v4(
+        source,
+        annotation,
+        diagnosis,
+        ActionAdjudicationPayloadV4(
+            diagnosis_disposition="confirmed",
+            final_verdict="teacher_proposal_error",
+            error_subtype="proposal_direction_error",
+            affected_components=["DecisionProposal"],
+            reason_codes=[
+                "proposal_conflicts_with_visible_direction"
+            ],
+            repair_action="keep_without_change",
+            fields_to_inspect=[
+                "decision_proposal.selected_action_label"
+            ],
+        ),
+        reviewer="reviewer-1",
+        reviewed_at=datetime.now(timezone.utc),
     )
 
 
@@ -789,7 +911,7 @@ def test_post_threshold_formal_gate_keeps_pending_candidates_out() -> None:
     ) == 7
 
 
-def test_triggered_review_blocks_until_resolution_revalidates() -> None:
+def test_triggered_review_requires_diagnosis_bound_adjudication() -> None:
     source = _source("left_40")
     annotation = _annotation(
         source,
@@ -805,27 +927,33 @@ def test_triggered_review_blocks_until_resolution_revalidates() -> None:
     assert pending.review_status == "pending_human"
     assert pending.formal_training_eligible is False
 
-    wrong_resolution = ActionReviewResolutionV4(
-        audit_id=audit.audit_id,
-        review_status="resolved",
-        resolved_action_label="straight",
-        resolution_code="teacher_proposal_confirmed",
-        reviewer="reviewer-1",
-        resolved_at=datetime.now(timezone.utc),
+    diagnosis = _review_diagnosis(source, annotation)
+    adjudication = _keep_adjudication(
+        source,
+        annotation,
+        diagnosis,
+    )
+    rejected = derive_reasoning_release_state_v4(
+        source,
+        annotation,
+        adjudication=adjudication,
+    )
+    assert rejected.formal_training_eligible is False
+    assert (
+        "adjudication_diagnosis_lineage_invalid"
+        in rejected.blockers
     )
     resolved = derive_reasoning_release_state_v4(
         source,
         annotation,
-        resolution=wrong_resolution,
+        diagnosis=diagnosis,
+        adjudication=adjudication,
     )
-    assert resolved.formal_training_eligible is False
-    assert (
-        "resolution_requires_source_direction_correction"
-        in resolved.blockers
-    )
+    assert resolved.review_status == "resolved"
+    assert resolved.formal_training_eligible is True
 
 
-def test_resolution_aware_artifact_audit_reports_six_axes(
+def test_adjudication_aware_artifact_audit_reports_six_axes(
     tmp_path: Path,
 ) -> None:
     source = _source("left_40")
@@ -835,31 +963,32 @@ def test_resolution_aware_artifact_audit_reports_six_axes(
     )
     audit = annotation.action_reconciliation
     assert audit is not None
-    resolution = ActionReviewResolutionV4(
-        audit_id=audit.audit_id,
-        review_status="resolved",
-        resolved_action_label="left_40",
-        resolution_code="strong_direction_confirmed",
-        reviewer="reviewer-1",
-        resolved_at=datetime.now(timezone.utc),
+    diagnosis = _review_diagnosis(source, annotation)
+    adjudication = _keep_adjudication(
+        source,
+        annotation,
+        diagnosis,
     )
     views = build_reasoning_training_views_v4(
         source,
         annotation,
         release_track="formal_training",
-        resolution=resolution,
+        diagnosis=diagnosis,
+        adjudication=adjudication,
     )
     assert len(views) == 1
     paths = {
         "source": tmp_path / "sources.jsonl",
         "annotation": tmp_path / "annotations.jsonl",
-        "resolution": tmp_path / "resolutions.jsonl",
+        "diagnosis": tmp_path / "diagnoses.jsonl",
+        "adjudication": tmp_path / "adjudications.jsonl",
         "view": tmp_path / "views.jsonl",
     }
     payloads = {
         "source": source,
         "annotation": annotation,
-        "resolution": resolution,
+        "diagnosis": diagnosis,
+        "adjudication": adjudication,
         "view": views[0],
     }
     for name, model in payloads.items():
@@ -875,7 +1004,8 @@ def test_resolution_aware_artifact_audit_reports_six_axes(
         paths["source"],
         paths["annotation"],
         paths["view"],
-        resolution_jsonl=paths["resolution"],
+        diagnosis_jsonl=paths["diagnosis"],
+        adjudication_jsonl=paths["adjudication"],
         required_dataset_families=("sidewalk",),
     )
 
@@ -1115,9 +1245,11 @@ def test_natural_pilot_audit_accepts_quarantined_stop_conflict(
 
 
 class _FakeBackend:
-    def __init__(self) -> None:
+    def __init__(self, *, decision_label: str = "straight") -> None:
         self.requested_sections: list[str] = []
         self.image_details: dict[str, str] = {}
+        self.image_roles: dict[str, tuple[str, ...]] = {}
+        self.decision_label = decision_label
 
     async def generate(
         self,
@@ -1127,11 +1259,12 @@ class _FakeBackend:
         system_prompt: str,
         image_detail: str,
     ) -> TeacherGeneration:
-        del observation, system_prompt
+        del system_prompt
         payload = json.loads(question.split("\n\n", 1)[1])
         section = payload["requested_section"]
         self.requested_sections.append(section)
         self.image_details[section] = image_detail
+        self.image_roles[section] = tuple(observation.image_roles)
         answers = {
             "SceneGrounding": {
                 "scene_type": "urban_sidewalk",
@@ -1160,7 +1293,7 @@ class _FakeBackend:
                 "constraints": []
             },
             "Decision": {
-                "selected_action_label": "straight",
+                "selected_action_label": self.decision_label,
                 "speed": "normal",
                 "response": "proceed",
             },
@@ -1216,6 +1349,456 @@ def test_known_task_registry_skips_task_teacher_call() -> None:
         for section, detail in backend.image_details.items()
         if section != "NavigationContextGrounding"
     )
+
+
+def test_batch_routes_exact_section_images_and_records_policy() -> None:
+    """The runner, provider payload, and provenance use one routed policy."""
+
+    base = _source()
+    roles = [
+        "fpv.history_4",
+        "fpv.history_3",
+        "fpv.history_2",
+        "fpv.history_1",
+        "fpv.current",
+        "bev.current",
+    ]
+    observation_payload = base.observation.model_dump(mode="python")
+    observation_payload.update(
+        {
+            "images": [f"/tmp/{role}.jpg" for role in roles],
+            "image_roles": roles,
+            "evidence_catalog": [
+                {"ref": "instruction.active", "modality": "instruction"},
+                *[
+                    {"ref": role, "modality": "fpv"}
+                    for role in roles
+                    if role.startswith("fpv.")
+                ],
+                {
+                    "ref": "bev.current",
+                    "modality": "bev",
+                    "bev_route_evidence": {
+                        "frame": "north_up",
+                        "ego_forward": "up",
+                        "route_overlay_visible": True,
+                        "route_direction_authority": (
+                            "visual_conditional"
+                        ),
+                        "local_safety_authority": False,
+                    },
+                },
+            ],
+            "input_modalities": {
+                "fpv": True,
+                "history_fpv": True,
+                "instruction": True,
+                "bev": True,
+                "goal_image": False,
+                "pixel_goal": False,
+                "waypoint": False,
+            },
+            "temporal_evidence_eligible": True,
+        }
+    )
+    source_payload = base.model_dump(mode="python")
+    source_payload["observation"] = NavObservationV4.model_validate(
+        observation_payload
+    ).model_dump(mode="python")
+    source_payload.pop("source_fingerprint")
+    source_payload["source_fingerprint"] = (
+        reasoning_source_fingerprint_v4(source_payload)
+    )
+    source = ReasoningSourceV4.model_validate(source_payload)
+    backend = _FakeBackend()
+
+    annotation = asyncio.run(
+        annotate_reasoning_source_v4(
+            source,
+            backend=backend,
+            config=ReasoningV4BatchConfig(
+                max_retries=0,
+                section_image_policy_id=(
+                    REASONING_V4_SECTION_ROUTED_VISUAL_POLICY_ID
+                ),
+            ),
+        )
+    )
+
+    assert annotation.record_status == "complete"
+    assert backend.image_roles == {
+        "SceneGrounding": tuple(roles[:5]),
+        "LocalTraversability": ("fpv.current",),
+        "NavigationContextGrounding": (
+            "fpv.current",
+            "bev.current",
+        ),
+        "InteractionConstraintGrounding": tuple(roles[:5]),
+        "Decision": ("fpv.current", "bev.current"),
+    }
+    assert annotation.metadata["section_image_policy_id"] == (
+        REASONING_V4_SECTION_ROUTED_VISUAL_POLICY_ID
+    )
+    assert annotation.stage_records["Decision"].telemetry[
+        "selected_image_roles"
+    ] == ["fpv.current", "bev.current"]
+    preview = build_reasoning_training_views_v4(
+        source,
+        annotation,
+    )[0]
+    assert preview.images == source.observation.images
+    assert preview.image_roles == source.observation.image_roles
+    assert preview.metadata["section_image_policy_id"] == (
+        REASONING_V4_SECTION_ROUTED_VISUAL_POLICY_ID
+    )
+    assert preview.metadata["section_image_policy_digest"] == (
+        annotation.metadata["section_image_policy_digest"]
+    )
+
+
+class _FakeReviewBackend:
+    """Return valid blind and comparative reviewer payloads."""
+
+    def __init__(self) -> None:
+        self.questions: list[str] = []
+
+    async def generate(
+        self,
+        observation: NavObservationV4,
+        *,
+        question: str,
+        system_prompt: str,
+        image_detail: str,
+    ) -> TeacherGeneration:
+        """Return one deterministic payload selected by review_stage."""
+
+        del observation, system_prompt, image_detail
+        self.questions.append(question)
+        payload = json.loads(question.split("\n\n", 1)[1])
+        if payload["review_stage"] == "blind_visual":
+            answer = {
+                "evidence_sufficiency": "sufficient",
+                "visual_findings": ["visible_turn_support"],
+                "ambiguous_evidence": [],
+                "relevant_components": [
+                    "NavigationContextGrounding"
+                ],
+                "evidence_analysis": "The visible route cue supports a turn.",
+            }
+        else:
+            answer = {
+                "verdict": "teacher_proposal_error",
+                "error_subtype": "proposal_direction_error",
+                "affected_components": ["DecisionProposal"],
+                "component_assessment": {
+                    "teacher_proposal": "likely_wrong",
+                    "grounding": "likely_correct",
+                    "strong_label": "likely_correct",
+                },
+                "reason_codes": [
+                    "proposal_conflicts_with_visible_direction"
+                ],
+                "error_analysis": (
+                    "The proposal conflicts with the visible route cue."
+                ),
+                "repair_action": "keep_without_change",
+                "fields_to_inspect": [
+                    "decision_proposal.selected_action_label"
+                ],
+                "confidence": 0.9,
+            }
+        return TeacherGeneration(
+            answer=json.dumps(answer),
+            provider="fake",
+            model="fake-reviewer",
+            telemetry={"provider": "fake", "model": "fake-reviewer"},
+        )
+
+
+def test_review_prompts_keep_blind_and_comparative_boundaries() -> None:
+    """Blind input excludes private labels; comparison excludes candidate."""
+
+    source = _source("left_40")
+    annotation = _annotation(source, proposal_label="straight")
+    blind_profile = REASONING_V4_REVIEW_PROFILES["blind_visual"]
+    blind_question = build_reasoning_v4_blind_review_question(
+        source.observation,
+        blind_profile,
+    )
+    for forbidden in (
+        "direction_supervision",
+        "decision_proposal",
+        "action_reconciliation",
+        "trajectory_ego_t",
+        "candidate_target",
+    ):
+        assert forbidden not in blind_question
+    blind = ActionBlindReviewV4(
+        evidence_sufficiency="sufficient",
+        visual_findings=["visible_turn_support"],
+        relevant_components=["NavigationContextGrounding"],
+        evidence_analysis="The route cue supports a visible turn.",
+    )
+    comparative = build_reasoning_v4_comparative_review_question(
+        source,
+        annotation,
+        blind,
+        REASONING_V4_REVIEW_PROFILES["comparative_diagnosis"],
+    )
+    assert "strong_direction_stamp" in comparative
+    assert "teacher_decision_proposal" in comparative
+    assert "deterministic_action_audit" in comparative
+    assert "trajectory_ego_t" not in comparative
+    assert "candidate_target" not in comparative
+
+
+def test_review_parser_rejects_corrected_values() -> None:
+    """LVLM filtering may diagnose but cannot output corrections."""
+
+    result = parse_reasoning_v4_review_answer(
+        json.dumps(
+            {
+                "verdict": "strong_label_error",
+                "corrected_label": "left_40",
+            }
+        ),
+        REASONING_V4_REVIEW_PROFILES["comparative_diagnosis"],
+    )
+    assert result.valid is False
+    assert result.errors[0].startswith(
+        "corrected_or_suggested_values_forbidden"
+    )
+
+
+def test_two_stage_review_and_partial_repair_are_append_only() -> None:
+    """Reviewer diagnoses first; repair creates a new audit lineage."""
+
+    source = _source("left_40")
+    original = asyncio.run(
+        annotate_reasoning_source_v4(
+            source,
+            backend=_FakeBackend(decision_label="straight"),
+            config=ReasoningV4BatchConfig(max_retries=0),
+        )
+    )
+    review_backend = _FakeReviewBackend()
+    diagnosis = asyncio.run(
+        diagnose_reasoning_action_review_v4(
+            source,
+            original,
+            backend=review_backend,
+            config=ReasoningV4ReviewBatchConfig(max_retries=0),
+        )
+    )
+    assert diagnosis.record_status == "complete"
+    assert len(review_backend.questions) == 2
+    assert "direction_supervision" not in review_backend.questions[0]
+    adjudication = bind_action_adjudication_v4(
+        source,
+        original,
+        diagnosis,
+        ActionAdjudicationPayloadV4(
+            diagnosis_disposition="overridden",
+            final_verdict="teacher_proposal_error",
+            error_subtype="proposal_direction_error",
+            affected_components=["DecisionProposal"],
+            reason_codes=[
+                "proposal_conflicts_with_visible_direction"
+            ],
+            repair_action="rerun_teacher_proposal",
+            fields_to_inspect=[
+                "decision_proposal.selected_action_label"
+            ],
+        ),
+        reviewer="reviewer-1",
+        reviewed_at=datetime.now(timezone.utc),
+    )
+    request = build_reasoning_repair_request_v4(adjudication)
+    assert request is not None
+    repair_backend = _FakeBackend(decision_label="left_40")
+    repaired = asyncio.run(
+        repair_reasoning_annotation_v4(
+            source,
+            original,
+            request,
+            backend=repair_backend,
+            config=ReasoningV4BatchConfig(max_retries=0),
+        )
+    )
+    assert repair_backend.requested_sections == ["Decision"]
+    assert repaired.action_reconciliation is not None
+    assert original.action_reconciliation is not None
+    assert (
+        repaired.action_reconciliation.audit_id
+        != original.action_reconciliation.audit_id
+    )
+    assert repaired.metadata["repair_request_id"] == (
+        request.repair_request_id
+    )
+
+
+def test_review_html_exports_payload_consumed_by_canonical_importer(
+    tmp_path: Path,
+) -> None:
+    """Self-contained review output binds through exact parent identities."""
+
+    source = _source("left_40")
+    annotation = _annotation(source, proposal_label="straight")
+    diagnosis = _review_diagnosis(source, annotation)
+    paths = {
+        "source": tmp_path / "sources.jsonl",
+        "annotation": tmp_path / "annotations.jsonl",
+        "diagnosis": tmp_path / "diagnoses.jsonl",
+        "input": tmp_path / "human.unbound.jsonl",
+        "output": tmp_path / "adjudications.jsonl",
+        "html": tmp_path / "review.complete.html",
+        "audit": tmp_path / "audits.jsonl",
+        "queue": tmp_path / "queue.jsonl",
+        "report": tmp_path / "review-report.json",
+    }
+    for name, model in (
+        ("source", source),
+        ("annotation", annotation),
+        ("diagnosis", diagnosis),
+    ):
+        paths[name].write_text(
+            json.dumps(
+                model.model_dump(mode="json", exclude_none=True)
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    summary = build_reasoning_v4_review_html(
+        source_jsonl=paths["source"],
+        annotation_jsonl=paths["annotation"],
+        diagnosis_jsonl=paths["diagnosis"],
+        output_html=paths["html"],
+        embed_images=False,
+    )
+    document = paths["html"].read_text(encoding="utf-8")
+    assert summary["metrics"]["pending_human"] == 1
+    assert "Export adjudications JSONL" in document
+    assert diagnosis.diagnosis is not None
+    assert diagnosis.diagnosis.diagnosis_id in document
+    queue_report = export_action_reconciliation_review_v4(
+        paths["source"],
+        paths["annotation"],
+        audit_jsonl=paths["audit"],
+        queue_jsonl=paths["queue"],
+        report_json=paths["report"],
+        diagnosis_jsonl=paths["diagnosis"],
+    )
+    assert queue_report["passed"] is True
+    queue_row = json.loads(
+        paths["queue"].read_text(encoding="utf-8")
+    )
+    assert queue_row["diagnosis_status"] == "complete"
+    assert queue_row["lvlm_diagnosis"]["diagnosis_id"] == (
+        diagnosis.diagnosis.diagnosis_id
+    )
+    audit = annotation.action_reconciliation
+    assert audit is not None
+    paths["input"].write_text(
+        json.dumps(
+            {
+                "source_group_id": source.observation.source_group_id,
+                "audit_id": audit.audit_id,
+                "diagnosis_id": diagnosis.diagnosis.diagnosis_id,
+                "reviewer": "reviewer-1",
+                "reviewed_at": datetime.now(timezone.utc).isoformat(),
+                "diagnosis_disposition": "confirmed",
+                "final_verdict": "teacher_proposal_error",
+                "error_subtype": "proposal_direction_error",
+                "affected_components": ["DecisionProposal"],
+                "reason_codes": [
+                    "proposal_conflicts_with_visible_direction"
+                ],
+                "repair_action": "keep_without_change",
+                "fields_to_inspect": [
+                    "decision_proposal.selected_action_label"
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    report = import_reasoning_v4_adjudications(
+        source_jsonl=paths["source"],
+        annotation_jsonl=paths["annotation"],
+        diagnosis_jsonl=paths["diagnosis"],
+        input_jsonl=paths["input"],
+        output_jsonl=paths["output"],
+    )
+    assert report["appended_rows"] == 1
+    imported = json.loads(
+        paths["output"].read_text(encoding="utf-8")
+    )
+    assert imported["diagnosis_id"] == (
+        diagnosis.diagnosis.diagnosis_id
+    )
+    assert imported["source_fingerprint"] == source.source_fingerprint
+
+
+def test_review_batch_is_resumable_by_audit_identity(
+    tmp_path: Path,
+) -> None:
+    """Completed diagnoses are appended once and reused on resume."""
+
+    source = _source("left_40")
+    annotation = _annotation(source, proposal_label="straight")
+    source_path = tmp_path / "sources.jsonl"
+    annotation_path = tmp_path / "annotations.jsonl"
+    diagnosis_path = tmp_path / "diagnoses.jsonl"
+    source_path.write_text(
+        json.dumps(source.model_dump(mode="json", exclude_none=True))
+        + "\n",
+        encoding="utf-8",
+    )
+    annotation_path.write_text(
+        json.dumps(
+            annotation.model_dump(mode="json", exclude_none=True)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    created: list[_FakeReviewBackend] = []
+
+    def backend_factory(
+        worker_id: int,
+        api_key: str | None,
+    ) -> _FakeReviewBackend:
+        """Create and retain one deterministic review backend."""
+
+        del worker_id, api_key
+        backend = _FakeReviewBackend()
+        created.append(backend)
+        return backend
+
+    first = asyncio.run(
+        label_reasoning_review_queue_v4(
+            source_path,
+            annotation_path,
+            diagnosis_path,
+            config=ReasoningV4ReviewBatchConfig(max_retries=0),
+            backend_factory=backend_factory,
+        )
+    )
+    assert first["passed"] is True
+    assert first["counts"]["record_status:complete"] == 1
+    assert len(created) == 1
+    second = asyncio.run(
+        label_reasoning_review_queue_v4(
+            source_path,
+            annotation_path,
+            diagnosis_path,
+            config=ReasoningV4ReviewBatchConfig(max_retries=0),
+            backend_factory=backend_factory,
+        )
+    )
+    assert second["passed"] is True
+    assert second["pending_rows"] == 0
+    assert second["counts"]["cached:complete"] == 1
+    assert len(created) == 1
 
 
 def test_v46_system_prompt_preserves_bev_route_authority_boundary() -> None:

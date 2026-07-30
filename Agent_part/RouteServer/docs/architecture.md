@@ -687,16 +687,19 @@ Reasoning V4.6 是 Stage-A 单轮 E2E 导航的最小语言推理合同。它与
 route progress 或时序关系包装成训练真值。
 
 ```text
-shared prompt-visible input
+complete frozen prompt-visible source
+  |
+  v
+versioned SectionImagePolicy
   ├─ deterministic Task canonicalizer
   ├─ independent Scene teacher
   ├─ independent LocalTraversability teacher
   ├─ independent NavigationContext teacher
   ├─ independent InteractionConstraint teacher
-  └─ Decision teacher (visible input + five validated groundings)
+  └─ Decision teacher (current FPV + optional BEV + five validated groundings)
                          |
                          v
-           blind DecisionProposalV4
+ visual grounding-conditioned DecisionProposalV4
                          |
 private strong direction + deterministic composer
                          |
@@ -726,9 +729,11 @@ ms-swift 只消费生成的 mirror、formal training view 和 loss payload。
 </think>
 ```
 
-V4.6 没有 `Finish`、readout、refs、route progress 或第七段。六段共享读取完整输入；
-它们不是严格串行的隐变量链。Decision teacher 可读取五段已验证 grounding，但看不到
-private strong label。动作仅在 `Decision.selected_action_label` 出现一次并使用 LM loss。
+V4.6 没有 `Finish`、readout、refs、route progress 或第七段。canonical source/student
+view 保存完整输入；annotation teacher 通过版本化 `SectionImagePolicy` 接收 section 级
+图片子集。五个 grounding 不是严格串行的隐变量链。Decision teacher 接收 current FPV、
+可选 current BEV 和五段已验证 grounding，但看不到 private strong label。动作仅在
+`Decision.selected_action_label` 出现一次并使用 LM loss。
 `stop` 只是短时 hold，不表示 arrival 或 task completion。
 
 六段完整字段和职责如下：
@@ -866,7 +871,8 @@ relation、tracker、ego-motion、TTC 或 normative-policy GT。
 
 #### 5.3.7 Decision、strong ownership 与 tuple
 
-`DecisionProposalV4` 是 blind LVLM proposal，字段与 final Decision 相同，但只作 audit：
+`DecisionProposalV4` 是 visual grounding-conditioned LVLM proposal，字段与 final
+Decision 相同，但只作 audit：
 
 ```text
 selected_action_label
@@ -927,7 +933,7 @@ bin mode 和 derivation version。缺字段、identity 不一致、profile 不�
 source 使用 route theta 时 fail closed。V4.6 不从 row trajectory、BEV、GPS、route、
 goal 或 LVLM 回答重新派生 direction。
 
-#### 5.3.9 Annotation、audit 与 append-only resolution
+#### 5.3.9 Annotation、audit、LVLM diagnosis 与人工 adjudication
 
 `ReasoningAnnotationV4` 的字段：
 
@@ -936,7 +942,7 @@ goal 或 LVLM 回答重新派生 direction。
 | `schema_version/source_group_id/source_fingerprint` | 绑定 source |
 | `record_status` | complete/error，只表示 bounded pipeline 是否完成 |
 | `grounding_outputs` | 五个可独立存在的 typed grounding |
-| `decision_proposal` | blind LVLM proposal |
+| `decision_proposal` | current FPV/optional BEV 与五段 grounding 条件化的 LVLM proposal |
 | `action_reconciliation` | immutable proposal/strong/grounding audit |
 | `composer_candidate/candidate_target` | 未经隐式改写的 strong-owned candidate |
 | `candidate_structure_record` | valid/invalid/not_available 及 composer 诊断 |
@@ -972,10 +978,38 @@ sign、stop/move、probe、constraint 和 tuple hard trigger 不受该阈值影�
 它不复制 profile、proposal、strong label 或 candidate，不持久化 review priority/status。
 expanded review queue 通过 source/annotation join 生成可读对照。
 
-人工裁决写入 append-only `ActionReviewResolutionV4`，包含 audit ID、resolved/rejected、
-resolved action、reason code、reviewer、timezone-aware timestamp 和 note。resolution
-不能偷偷修正 source GT；若 resolved action 不等于 frozen strong label，release gate 要求
-修正上游 direction、生成新 source fingerprint 并重新标注。
+deterministic trigger 之后先运行 annotation-only 两阶段 reviewer。blind stage 只读取
+完整 prompt-visible evidence；comparative stage 再读取 blind assessment、groundings、
+proposal、strong stamp、audit facts 与 stage provenance。它只能输出
+`teacher_proposal_error/grounding_error/strong_label_error/unresolved`，不能输出任何
+corrected value，也不能改变 training eligibility。
+
+两阶段结果写入 append-only `ActionReviewDiagnosisRecordV4`。人工页面先 blind review 再
+reveal comparison，导出的未绑定 JSONL 经 importer 重新 join source fingerprint、audit ID
+和 diagnosis ID 后，写入 `ActionAdjudicationV4`。只有 `keep_without_change` 能 resolve
+当前 audit；rerun proposal、relabel grounding、rebuild strong sidecar 和 quarantine 都
+reject 旧 lineage。前两类 repair append 新 annotation/audit；strong sidecar 必须生成新
+source fingerprint 并完整重标注，禁止偷偷修改 source GT。
+
+review sidecar 的字段职责如下：
+
+| Contract | 字段 | 定义与作用 |
+| --- | --- | --- |
+| `ActionBlindReviewV4` | `evidence_sufficiency` | visible evidence 是否足够做后续比较，不是 calibrated confidence |
+| 同上 | `visual_findings/ambiguous_evidence` | 排序去重的开放 reason codes，只描述可见发现与歧义 |
+| 同上 | `relevant_components` | 可能需要关注的 grounding section，不包含 proposal/strong |
+| 同上 | `evidence_analysis` | evidence-only 简述，禁止修正值 |
+| `ActionReviewDiagnosisV4` | `filter_version/diagnosis_id/source_group_id/audit_id` | 固定 reviewer policy 并绑定 exact audit |
+| 同上 | `verdict/error_subtype` | exact four-way error source 与该类内部 subtype |
+| 同上 | `affected_components/component_assessment` | 人工需要核验的 scope，以及 proposal/grounding/strong 三轴比较 |
+| 同上 | `reason_codes/error_analysis` | 机器可统计原因与可读比较说明 |
+| 同上 | `repair_action/fields_to_inspect` | 非权威 routing 建议和字段路径，不携带 suggested value |
+| 同上 | `confidence` | 仅用于人工队列排序的模型 self-score，不作为阈值真值 |
+| `ActionReviewDiagnosisRecordV4` | `source_fingerprint/stage_records/errors` | 两阶段 provider、prompt、图片 policy、重试和失败证据 |
+| `ActionAdjudicationV4` | `diagnosis_disposition` | 人工 confirmed/overridden/deferred |
+| 同上 | `final_verdict/.../repair_action` | 人工最终四类判断、scope、原因与 lineage disposition |
+| 同上 | `reviewer/reviewed_at/adjudication_id` | append-only 人类责任与 content address |
+| `ReasoningRepairRequestV4` | parent IDs + repair scope | 从 adjudication 确定性投影的上游工作单，不是训练标签 |
 
 #### 5.3.10 独立状态轴与 formal release
 
@@ -993,8 +1027,9 @@ resolved action、reason code、reviewer、timezone-aware timestamp 和 note。r
 
 正式 training eligible 当且仅当 record complete、六段全部 accepted、candidate structure
 valid、
-audit 存在且可重建、review 为 not_required/resolved、resolved action 仍等于 frozen
-strong，并且 candidate 对 source/profile 再验证通过。
+audit 存在且可重建、review 为 not_required/resolved；若由人工 resolve，则 adjudication
+必须绑定 exact completed diagnosis 且 repair action 为 `keep_without_change`。最后
+candidate 仍需对 source/profile 再验证通过。
 
 `review_preview` 固定
 `artifact_status=preview_only, artifact_training_eligible=false`，但可展示独立的
@@ -2431,12 +2466,15 @@ raw sensors/user events/provider state
 
 ### 11.11 Reasoning V4.6 离线标注链
 
-当前主线由 `ReasoningSourceV4 -> deterministic Task + four independent LVLM
-groundings -> blind DecisionProposal -> immutable Action Reconciliation audit ->
+当前主线由 `ReasoningSourceV4 -> versioned SectionImagePolicy -> deterministic Task +
+four independent LVLM groundings -> visual grounding-conditioned DecisionProposal ->
+immutable Action Reconciliation audit ->
 strong-owned composer candidate/CandidateStructureRecord -> ReasoningAnnotationV4 ->
-append-only resolution -> preview/formal ReasoningTrainingViewV4` 构成。source、label、
+two-stage LVLM diagnosis -> append-only human adjudication -> optional repair request ->
+preview/formal ReasoningTrainingViewV4` 构成。source、label、
 review projection 和 view 分别通过
 `build_reasoning_v4_sources.py`、`label_reasoning_v4.py`、
+`label_reasoning_v4_review_diagnoses.py`、
 `export_reasoning_v4_reconciliation_review.py` 和 `export_reasoning_v4_views.py`
 处理。preview artifact 永远不可训练；只有 artifact/formal eligibility 全部通过的
 formal view 才能进入 ms-swift。完整合同和数据集 trust policy 见
@@ -3107,10 +3145,20 @@ src/mcp_server/contracts/reasoning_v4.py
   ReasoningTraceV4 / exact six shared-input FullCoT sections / no Finish
 
 src/mcp_server/contracts/reasoning_dataset_v4.py
-  V4.5 shared source envelope / V4.6 annotation, audit, resolution and training-view contracts
+  V4.5 source / V4.6 annotation, audit, diagnosis, adjudication, repair and view
 
 src/mcp_server/teacher/reasoning_v4_batch.py
-  deterministic Task, four independent groundings, blind Decision, retry
+  deterministic Task, four independent groundings, visual Decision, partial repair
+
+src/mcp_server/teacher/reasoning_v4_review.py
+src/mcp_server/teacher/reasoning_v4_review_batch.py
+  blind visual assessment, comparative four-way diagnosis, retry and resume
+
+src/mcp_server/data/reasoning_v4_review.py
+  diagnosis/adjudication binding, append-only identity and repair requests
+
+src/mcp_server/teacher/reasoning_v4_image_policy.py
+  versioned section image routing, policy digest and visible-observation projection
 
 src/mcp_server/data/reasoning_v4_composer.py
   validated sections + frozen strong direction -> canonical action tuple

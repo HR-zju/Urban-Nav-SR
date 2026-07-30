@@ -14,7 +14,8 @@ from mcp_server.agent.reasoning_v4_validation import (
     validate_reasoning_target_v4,
 )
 from mcp_server.contracts.reasoning_dataset_v4 import (
-    ActionReviewResolutionV4,
+    ActionAdjudicationV4,
+    ActionReviewDiagnosisRecordV4,
     ReasoningAnnotationV4,
     ReasoningSourceV4,
     ReasoningTrainingViewV4,
@@ -29,7 +30,10 @@ from mcp_server.data.reasoning_v4_reconciliation import (
 )
 from mcp_server.data.reasoning_v4_state import (
     derive_reasoning_release_state_v4,
-    load_latest_action_resolutions_v4,
+    load_latest_action_adjudications_v4,
+)
+from mcp_server.data.reasoning_v4_review import (
+    load_latest_action_review_diagnoses_v4,
 )
 
 
@@ -43,7 +47,8 @@ def build_reasoning_training_views_v4(
     annotation: ReasoningAnnotationV4,
     *,
     release_track: ReleaseTrackV4 = "review_preview",
-    resolution: ActionReviewResolutionV4 | None = None,
+    diagnosis: ActionReviewDiagnosisRecordV4 | None = None,
+    adjudication: ActionAdjudicationV4 | None = None,
 ) -> list[ReasoningTrainingViewV4]:
     """Project one joined artifact into at most one compact FullCoT row.
 
@@ -54,7 +59,8 @@ def build_reasoning_training_views_v4(
         source: Frozen visible input and private strong sidecars.
         annotation: Immutable annotation.
         release_track: Review-only or formal-training track.
-        resolution: Latest append-only resolution for the action audit.
+        diagnosis: Latest two-stage LVLM diagnosis for the action audit.
+        adjudication: Latest append-only human adjudication for the audit.
 
     Returns:
         Zero or one compact FullCoT view.
@@ -86,7 +92,8 @@ def build_reasoning_training_views_v4(
     state = derive_reasoning_release_state_v4(
         source,
         annotation,
-        resolution=resolution,
+        diagnosis=diagnosis,
+        adjudication=adjudication,
     )
     target = annotation.candidate_target
     direction = source.direction_supervision
@@ -163,6 +170,16 @@ def build_reasoning_training_views_v4(
                 ),
                 "teacher_provider": annotation.teacher_provider,
                 "teacher_model": annotation.teacher_model,
+                "section_image_policy_id": (
+                    annotation.metadata.get(
+                        "section_image_policy_id"
+                    )
+                ),
+                "section_image_policy_digest": (
+                    annotation.metadata.get(
+                        "section_image_policy_digest"
+                    )
+                ),
                 "composer_version": (
                     annotation.candidate_structure_record.composer_version
                 ),
@@ -239,18 +256,20 @@ def export_reasoning_training_views_v4(
     output_jsonl: str | Path,
     *,
     release_track: ReleaseTrackV4 = "review_preview",
-    resolution_jsonl: str | Path | None = None,
+    diagnosis_jsonl: str | Path | None = None,
+    adjudication_jsonl: str | Path | None = None,
     limit: int | None = None,
     skip_errors: bool = False,
 ) -> dict[str, Any]:
-    """Join sources, annotations, and resolutions into compact views.
+    """Join sources, annotations, diagnoses, and adjudications into views.
 
     Args:
         source_jsonl: Frozen source manifest.
         annotation_jsonl: Append-only annotation manifest.
         output_jsonl: Destination view manifest.
         release_track: Review-only or formal-training export.
-        resolution_jsonl: Optional append-only human resolutions.
+        diagnosis_jsonl: Optional append-only LVLM diagnoses.
+        adjudication_jsonl: Optional append-only human adjudications.
         limit: Optional source-row limit.
         skip_errors: Continue after invalid joins.
 
@@ -259,8 +278,11 @@ def export_reasoning_training_views_v4(
     """
 
     annotations = _latest_annotations_v4(annotation_jsonl)
-    resolutions = load_latest_action_resolutions_v4(
-        resolution_jsonl
+    diagnoses = load_latest_action_review_diagnoses_v4(
+        diagnosis_jsonl
+    )
+    adjudications = load_latest_action_adjudications_v4(
+        adjudication_jsonl
     )
     outputs: list[dict[str, Any]] = []
     counters: Counter[str] = Counter()
@@ -280,8 +302,13 @@ def export_reasoning_training_views_v4(
             f"record_status:{annotation.record_status}"
         ] += 1
         audit = annotation.action_reconciliation
-        resolution = (
-            resolutions.get(audit.audit_id)
+        diagnosis = (
+            diagnoses.get(audit.audit_id)
+            if audit is not None
+            else None
+        )
+        adjudication = (
+            adjudications.get(audit.audit_id)
             if audit is not None
             else None
         )
@@ -290,7 +317,8 @@ def export_reasoning_training_views_v4(
                 source,
                 annotation,
                 release_track=release_track,
-                resolution=resolution,
+                diagnosis=diagnosis,
+                adjudication=adjudication,
             )
         except ValueError as exc:
             counters["invalid_join"] += 1
@@ -335,9 +363,14 @@ def export_reasoning_training_views_v4(
         ),
         "source_jsonl": str(source_jsonl),
         "annotation_jsonl": str(annotation_jsonl),
-        "resolution_jsonl": (
-            str(resolution_jsonl)
-            if resolution_jsonl is not None
+        "diagnosis_jsonl": (
+            str(diagnosis_jsonl)
+            if diagnosis_jsonl is not None
+            else None
+        ),
+        "adjudication_jsonl": (
+            str(adjudication_jsonl)
+            if adjudication_jsonl is not None
             else None
         ),
         "output_jsonl": str(output_jsonl),

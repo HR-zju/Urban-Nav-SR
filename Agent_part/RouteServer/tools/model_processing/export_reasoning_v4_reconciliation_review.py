@@ -20,7 +20,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--audit-jsonl", required=True)
     parser.add_argument("--queue-jsonl", required=True)
     parser.add_argument("--report-json", required=True)
-    parser.add_argument("--resolution-jsonl")
+    parser.add_argument("--diagnosis-jsonl")
+    parser.add_argument("--adjudication-jsonl")
     parser.add_argument(
         "--strict",
         action="store_true",
@@ -39,7 +40,8 @@ def main() -> int:
         audit_jsonl=args.audit_jsonl,
         queue_jsonl=args.queue_jsonl,
         report_json=args.report_json,
-        resolution_jsonl=args.resolution_jsonl,
+        diagnosis_jsonl=args.diagnosis_jsonl,
+        adjudication_jsonl=args.adjudication_jsonl,
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0 if report["passed"] or not args.strict else 1

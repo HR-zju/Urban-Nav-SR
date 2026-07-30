@@ -47,10 +47,10 @@ def build_reasoning_v4_section_question(
     previous_answer: str | None = None,
     previous_errors: Iterable[str] = (),
 ) -> str:
-    """Build a section-specific question from the complete visible input.
+    """Build a question from the exact section-visible input.
 
     Args:
-        observation: Complete prompt-visible V4 input. Private source
+        observation: Section-projected prompt-visible V4 input. Private source
             sidecars cannot cross this function boundary.
         profile: Requested section profile.
         groundings: Five validated groundings required only for Decision.
@@ -92,7 +92,7 @@ def build_reasoning_v4_section_question(
     }
     payload: dict[str, Any] = {
         "requested_section": profile.section_name,
-        "complete_visible_input": visible_input,
+        "section_visible_input": visible_input,
         "output_json_schema": profile.output_json_schema,
     }
     if profile.section_name == "Decision":
@@ -127,9 +127,9 @@ def build_reasoning_v4_section_question(
             )
         )
     return (
-        "Annotate the requested Reasoning V4.6 section. The ordered images are "
-        "attached to this request in image_order. Return exactly one JSON "
-        "object matching output_json_schema.\n\n"
+        "Annotate the requested Reasoning V4.6 section. The ordered images in "
+        "image_order are the exact image evidence visible to this section. "
+        "Return exactly one JSON object matching output_json_schema.\n\n"
         + json.dumps(
             payload,
             ensure_ascii=False,

@@ -22,6 +22,7 @@ CONCURRENCY_PER_SERVICE="${CONCURRENCY_PER_SERVICE:-2}"
 MAX_RETRIES="${MAX_RETRIES:-2}"
 IMAGE_DETAIL="${IMAGE_DETAIL:-low}"
 NAVIGATION_CONTEXT_IMAGE_DETAIL="${NAVIGATION_CONTEXT_IMAGE_DETAIL:-high}"
+SECTION_IMAGE_POLICY_ID="${SECTION_IMAGE_POLICY_ID:-reasoning_v4_section_images_all_visible_v1}"
 RETRY_FAILED_ON_RESUME="${RETRY_FAILED_ON_RESUME:-1}"
 LLM_VISION_TIMEOUT_S="${LLM_VISION_TIMEOUT_S:-900}"
 LLM_VISION_MAX_TOKENS="${LLM_VISION_MAX_TOKENS:-4096}"
@@ -49,7 +50,8 @@ SMOKE_INTERESTING_JSONLS_DEFAULT="${WORKSPACE_ROOT}/runs/qwen35_122b_a10b_202607
 SMOKE_INTERESTING_JSONLS="${SMOKE_INTERESTING_JSONLS:-${SMOKE_INTERESTING_JSONLS_DEFAULT}}"
 SMOKE_RANDOM_SEED="${SMOKE_RANDOM_SEED:-20260728}"
 SMOKE_CONSENSUS_MIN_VOTES="${SMOKE_CONSENSUS_MIN_VOTES:-2}"
-SMOKE_RESOLUTION_JSONL="${SMOKE_RESOLUTION_JSONL:-}"
+SMOKE_DIAGNOSIS_JSONL="${SMOKE_DIAGNOSIS_JSONL:-}"
+SMOKE_ADJUDICATION_JSONL="${SMOKE_ADJUDICATION_JSONL:-}"
 
 SCRIPT_PATH="$(readlink -f "$0")"
 
@@ -83,7 +85,7 @@ Important overrides:
   SMOKE_CONSENSUS_MIN_VOTES
   FULL_INPUT_JSONL, FULL_RUN_ROOT, FULL_EXPECTED_ROWS
   CONCURRENCY_PER_SERVICE, MAX_RETRIES, IMAGE_DETAIL
-  NAVIGATION_CONTEXT_IMAGE_DETAIL
+  NAVIGATION_CONTEXT_IMAGE_DETAIL, SECTION_IMAGE_POLICY_ID
   POSTPROCESS_FULL=1  # Not recommended until the full exporter is streaming.
 
 Safety:
@@ -159,8 +161,9 @@ preflight() {
   [[ "${NAVIGATION_CONTEXT_IMAGE_DETAIL}" =~ ^(auto|low|high)$ ]] \
     || die "NAVIGATION_CONTEXT_IMAGE_DETAIL must be auto, low, or high"
   PYTHONPATH="${ROUTESERVER_ROOT}/src:${ROUTESERVER_ROOT}" \
+    SECTION_IMAGE_POLICY_ID="${SECTION_IMAGE_POLICY_ID}" \
     "${PYTHON_BIN}" -c \
-    'import openai, PIL, pydantic; import mcp_server; from mcp_server.contracts.reasoning_dataset_v4 import ReasoningSourceV4'
+    'import os, openai, PIL, pydantic; import mcp_server; from mcp_server.contracts.reasoning_dataset_v4 import ReasoningSourceV4; from mcp_server.teacher.reasoning_v4_image_policy import get_reasoning_v4_section_image_policy; get_reasoning_v4_section_image_policy(os.environ["SECTION_IMAGE_POLICY_ID"])'
   strict_chat_smoke "${BEHAVIOR_BASE_URL}" "${BEHAVIOR_MODEL}"
   strict_chat_smoke "${INSTRUCTION_BASE_URL}" "${INSTRUCTION_MODEL}"
   code_commit="$(git -C "${ROUTESERVER_ROOT}" rev-parse HEAD)"
@@ -215,6 +218,7 @@ record_provenance() {
     echo "max_retries=${MAX_RETRIES}"
     echo "image_detail=${IMAGE_DETAIL}"
     echo "navigation_context_image_detail=${NAVIGATION_CONTEXT_IMAGE_DETAIL}"
+    echo "section_image_policy_id=${SECTION_IMAGE_POLICY_ID}"
     echo "vision_timeout_s=${LLM_VISION_TIMEOUT_S}"
     echo "vision_max_tokens=${LLM_VISION_MAX_TOKENS}"
     echo "smoke_interesting_jsonls=${SMOKE_INTERESTING_JSONLS}"
@@ -351,6 +355,7 @@ run_label_worker() {
     --max-retries "${MAX_RETRIES}" \
     --image-detail "${IMAGE_DETAIL}" \
     --navigation-context-image-detail "${NAVIGATION_CONTEXT_IMAGE_DETAIL}" \
+    --section-image-policy-id "${SECTION_IMAGE_POLICY_ID}" \
     --progress-interval 10 \
     "${retry_args[@]}"
 }
@@ -563,24 +568,28 @@ validate_smoke_gate() {
   local formal_views="${smoke_root}/views/reasoning_v4_6_formal_gate.jsonl"
   local review_report="${smoke_root}/reports/reasoning_v4_6_release_gate.json"
   local artifact_report="${smoke_root}/reports/reasoning_v4_6_formal_artifact_gate.json"
-  local -a resolution_args=()
+  local -a review_args=()
   [[ "${SMOKE_APPROVED:-0}" == "1" ]] \
     || die "set SMOKE_APPROVED=1 only after manually reviewing the smoke HTML"
   require_file "${sources}"
   require_file "${annotations}"
   require_file "${completeness}"
-  if [[ -n "${SMOKE_RESOLUTION_JSONL}" ]]; then
-    require_file "${SMOKE_RESOLUTION_JSONL}"
-    resolution_args=(
-      --resolution-jsonl "${SMOKE_RESOLUTION_JSONL}"
-    )
+  if [[ -n "${SMOKE_DIAGNOSIS_JSONL}" ]]; then
+    require_file "${SMOKE_DIAGNOSIS_JSONL}"
+    review_args+=(--diagnosis-jsonl "${SMOKE_DIAGNOSIS_JSONL}")
+  fi
+  if [[ -n "${SMOKE_ADJUDICATION_JSONL}" ]]; then
+    require_file "${SMOKE_ADJUDICATION_JSONL}"
+    [[ -n "${SMOKE_DIAGNOSIS_JSONL}" ]] \
+      || die "SMOKE_ADJUDICATION_JSONL requires SMOKE_DIAGNOSIS_JSONL"
+    review_args+=(--adjudication-jsonl "${SMOKE_ADJUDICATION_JSONL}")
   fi
   PYTHONPATH="${ROUTESERVER_ROOT}/src:${ROUTESERVER_ROOT}" \
     "${PYTHON_BIN}" \
     "${ROUTESERVER_ROOT}/tools/model_processing/export_reasoning_v4_reconciliation_review.py" \
     --source-jsonl "${sources}" \
     --annotation-jsonl "${annotations}" \
-    "${resolution_args[@]}" \
+    "${review_args[@]}" \
     --audit-jsonl \
     "${smoke_root}/annotations/action_reconciliation_audits.gate.jsonl" \
     --queue-jsonl \
@@ -592,7 +601,7 @@ validate_smoke_gate() {
     "${ROUTESERVER_ROOT}/tools/model_processing/export_reasoning_v4_views.py" \
     --source-jsonl "${sources}" \
     --annotation-jsonl "${annotations}" \
-    "${resolution_args[@]}" \
+    "${review_args[@]}" \
     --release-track formal_training \
     --output-jsonl "${formal_views}" \
     --report-json "${smoke_root}/reports/formal_view_export_gate.json"
@@ -601,7 +610,7 @@ validate_smoke_gate() {
     "${ROUTESERVER_ROOT}/tools/model_processing/audit_reasoning_v4_artifacts.py" \
     --source-jsonl "${sources}" \
     --annotation-jsonl "${annotations}" \
-    "${resolution_args[@]}" \
+    "${review_args[@]}" \
     --view-jsonl "${formal_views}" \
     --report-json "${artifact_report}" \
     --require-dataset foxglove \
@@ -645,6 +654,7 @@ launch_job() {
     "MAX_RETRIES=${MAX_RETRIES}"
     "IMAGE_DETAIL=${IMAGE_DETAIL}"
     "NAVIGATION_CONTEXT_IMAGE_DETAIL=${NAVIGATION_CONTEXT_IMAGE_DETAIL}"
+    "SECTION_IMAGE_POLICY_ID=${SECTION_IMAGE_POLICY_ID}"
     "RETRY_FAILED_ON_RESUME=${RETRY_FAILED_ON_RESUME}"
     "LLM_VISION_TIMEOUT_S=${LLM_VISION_TIMEOUT_S}"
     "LLM_VISION_MAX_TOKENS=${LLM_VISION_MAX_TOKENS}"

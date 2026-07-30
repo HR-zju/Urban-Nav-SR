@@ -8,7 +8,7 @@ import time
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable, Protocol
+from typing import Any, Callable, Iterable, Mapping, Protocol
 
 from pydantic import BaseModel
 
@@ -24,6 +24,7 @@ from mcp_server.contracts.reasoning_dataset_v4 import (
     GroundingOutputsV4,
     NavObservationV4,
     ReasoningAnnotationV4,
+    ReasoningRepairRequestV4,
     ReasoningSourceV4,
 )
 from mcp_server.contracts.reasoning_v4 import (
@@ -52,9 +53,14 @@ from mcp_server.teacher.reasoning_v2_teacher import (
     TeacherGeneration,
     VisionReasoningTeacherBackend,
 )
+from mcp_server.teacher.reasoning_v4_image_policy import (
+    REASONING_V4_ALL_VISIBLE_IMAGES_POLICY_ID,
+    SectionImagePolicy,
+    get_reasoning_v4_section_image_policy,
+)
 from mcp_server.teacher.reasoning_v4_profiles import (
-    REASONING_V4_TEACHER_PROFILES,
     ReasoningV4TeacherProfile,
+    get_reasoning_v4_teacher_profiles,
 )
 from mcp_server.teacher.reasoning_v4_teacher import (
     build_reasoning_v4_section_question,
@@ -83,6 +89,7 @@ class ReasoningV4BatchConfig:
         navigation_context_image_detail: Higher-detail setting used only for
             NavigationContextGrounding so thin BEV route overlays survive
             provider-side image tokenization.
+        section_image_policy_id: Exact registered image-routing policy.
         concurrency: Maximum concurrently processed source rows.
         retry_failed_on_resume: Retry cached incomplete or invalid records.
         raw_answer_max_chars: Maximum raw provider text retained per stage.
@@ -94,6 +101,9 @@ class ReasoningV4BatchConfig:
     max_retries: int = 2
     image_detail: str = "low"
     navigation_context_image_detail: str = "high"
+    section_image_policy_id: str = (
+        REASONING_V4_ALL_VISIBLE_IMAGES_POLICY_ID
+    )
     concurrency: int = 1
     retry_failed_on_resume: bool = False
     raw_answer_max_chars: int = 50000
@@ -215,6 +225,8 @@ class _TaskCanonicalizationCoordinator:
         *,
         backend: ReasoningV4TeacherBackend,
         config: ReasoningV4BatchConfig,
+        profiles: Mapping[str, ReasoningV4TeacherProfile],
+        image_policy: SectionImagePolicy,
     ) -> _StageOutcome:
         """Resolve known registry entries or annotate one unknown fingerprint."""
 
@@ -244,11 +256,10 @@ class _TaskCanonicalizationCoordinator:
                 )
             outcome = await _run_stage_v4(
                 source,
-                profile=REASONING_V4_TEACHER_PROFILES[
-                    "TaskGrounding"
-                ],
+                profile=profiles["TaskGrounding"],
                 backend=backend,
                 config=config,
+                image_policy=image_policy,
             )
             if isinstance(outcome.section, TaskGroundingV4):
                 self.cache[fingerprint] = outcome.section
@@ -269,7 +280,7 @@ async def annotate_reasoning_source_v4(
     config: ReasoningV4BatchConfig | None = None,
     task_coordinator: _TaskCanonicalizationCoordinator | None = None,
 ) -> ReasoningAnnotationV4:
-    """Annotate five shared-input groundings and one blind Decision.
+    """Annotate routed groundings and one visual conditioned Decision.
 
     Args:
         source: Fingerprinted visible input and private sidecars.
@@ -283,6 +294,12 @@ async def annotate_reasoning_source_v4(
     """
 
     cfg = config or ReasoningV4BatchConfig()
+    image_policy = get_reasoning_v4_section_image_policy(
+        cfg.section_image_policy_id
+    )
+    profiles = get_reasoning_v4_teacher_profiles(
+        image_policy.policy_id
+    )
     for name, value in (
         ("image_detail", cfg.image_detail),
         (
@@ -301,13 +318,16 @@ async def annotate_reasoning_source_v4(
         source,
         backend=backend,
         config=cfg,
+        profiles=profiles,
+        image_policy=image_policy,
     )
     lvlm_futures = [
         _run_stage_v4(
             source,
-            profile=REASONING_V4_TEACHER_PROFILES[name],
+            profile=profiles[name],
             backend=backend,
             config=cfg,
+            image_policy=image_policy,
         )
         for name in _LVLM_GROUNDING_SECTION_NAMES
     ]
@@ -323,6 +343,11 @@ async def annotate_reasoning_source_v4(
                 results[1:],
             )
         ),
+    }
+    annotation_provenance = {
+        **outcomes["TaskGrounding"].provenance,
+        "section_image_policy_id": image_policy.policy_id,
+        "section_image_policy_digest": image_policy.policy_digest,
     }
     groundings = GroundingOutputsV4(
         task_grounding=_typed_section(
@@ -375,7 +400,7 @@ async def annotate_reasoning_source_v4(
 
     if not groundings.complete:
         records["Decision"] = _skipped_record_v4(
-            REASONING_V4_TEACHER_PROFILES["Decision"],
+            profiles["Decision"],
             reason="incomplete_groundings",
         )
         return _annotation_v4(
@@ -395,14 +420,15 @@ async def annotate_reasoning_source_v4(
             errors=errors or ["incomplete_groundings"],
             warnings=warnings,
             generations=generations,
-            provenance=outcomes["TaskGrounding"].provenance,
+            provenance=annotation_provenance,
         )
 
     decision_outcome = await _run_stage_v4(
         source,
-        profile=REASONING_V4_TEACHER_PROFILES["Decision"],
+        profile=profiles["Decision"],
         backend=backend,
         config=cfg,
+        image_policy=image_policy,
         groundings=groundings,
     )
     records["Decision"] = decision_outcome.record
@@ -437,7 +463,7 @@ async def annotate_reasoning_source_v4(
             errors=errors or ["decision_missing"],
             warnings=warnings,
             generations=generations,
-            provenance=outcomes["TaskGrounding"].provenance,
+            provenance=annotation_provenance,
         )
 
     try:
@@ -485,7 +511,7 @@ async def annotate_reasoning_source_v4(
             errors=errors,
             warnings=warnings,
             generations=generations,
-            provenance=outcomes["TaskGrounding"].provenance,
+            provenance=annotation_provenance,
         )
 
     return _annotation_v4(
@@ -507,7 +533,309 @@ async def annotate_reasoning_source_v4(
         errors=errors,
         warnings=[*warnings, *composition.warnings],
         generations=generations,
-        provenance=outcomes["TaskGrounding"].provenance,
+        provenance=annotation_provenance,
+    )
+
+
+async def repair_reasoning_annotation_v4(
+    source: ReasoningSourceV4,
+    annotation: ReasoningAnnotationV4,
+    request: ReasoningRepairRequestV4,
+    *,
+    backend: ReasoningV4TeacherBackend,
+    config: ReasoningV4BatchConfig | None = None,
+) -> ReasoningAnnotationV4:
+    """Produce a new annotation lineage for an authorized repair request.
+
+    ``rerun_teacher_proposal`` reruns only Decision. ``relabel_grounding``
+    reruns the human-selected LVLM grounding sections and then Decision.
+    ``rebuild_strong_sidecar`` always fails closed because it requires a new
+    upstream source fingerprint and full annotation, not an in-place repair.
+
+    Args:
+        source: Exact frozen source revision referenced by the request.
+        annotation: Latest annotation containing the rejected audit.
+        request: Human-authorized immutable repair request.
+        backend: Multimodal section teacher.
+        config: Current prompt, image-routing, and retry configuration.
+
+    Returns:
+        New immutable annotation with repair lineage in metadata.
+
+    Raises:
+        ValueError: If lineage is stale, repair scope is unsupported, or a
+            strong-sidecar rebuild is requested in place.
+    """
+
+    cfg = config or ReasoningV4BatchConfig()
+    audit = annotation.action_reconciliation
+    if (
+        audit is None
+        or source.observation.source_group_id != annotation.source_group_id
+        or source.source_fingerprint != annotation.source_fingerprint
+        or request.source_group_id != annotation.source_group_id
+        or request.source_fingerprint != source.source_fingerprint
+        or request.audit_id != audit.audit_id
+    ):
+        raise ValueError(
+            "repair request does not match source/annotation/audit lineage"
+        )
+    if request.repair_action == "rebuild_strong_sidecar":
+        raise ValueError(
+            "rebuild_strong_sidecar requires a new source fingerprint and "
+            "full reannotation"
+        )
+    image_policy = get_reasoning_v4_section_image_policy(
+        cfg.section_image_policy_id
+    )
+    profiles = get_reasoning_v4_teacher_profiles(
+        image_policy.policy_id
+    )
+    if _annotation_is_stale_v4(
+        source,
+        annotation,
+        profiles=profiles,
+        image_policy=image_policy,
+    ):
+        raise ValueError(
+            "partial repair requires current prompt and image-policy lineage; "
+            "run full reannotation"
+        )
+    component_to_section = {
+        "TaskGrounding": "TaskGrounding",
+        "SceneGrounding": "SceneGrounding",
+        "LocalTraversability": "LocalTraversability",
+        "NavigationContextGrounding": "NavigationContextGrounding",
+        "InteractionConstraintGrounding": (
+            "InteractionConstraintGrounding"
+        ),
+    }
+    selected_sections: list[str] = []
+    if request.repair_action == "relabel_grounding":
+        selected_sections = sorted(
+            {
+                component_to_section[str(component)]
+                for component in request.affected_components
+                if str(component) in component_to_section
+            }
+        )
+        if not selected_sections:
+            raise ValueError(
+                "relabel_grounding requires at least one grounding component"
+            )
+        task_record = annotation.stage_records.get("TaskGrounding")
+        if (
+            "TaskGrounding" in selected_sections
+            and (
+                task_record is None
+                or task_record.producer_kind == "deterministic"
+            )
+        ):
+            raise ValueError(
+                "deterministic TaskGrounding must be repaired in its "
+                "canonicalization registry"
+            )
+    elif request.repair_action != "rerun_teacher_proposal":
+        raise ValueError(
+            f"unsupported partial repair action: {request.repair_action}"
+        )
+
+    outcomes = await asyncio.gather(
+        *(
+            _run_stage_v4(
+                source,
+                profile=profiles[section_name],
+                backend=backend,
+                config=cfg,
+                image_policy=image_policy,
+            )
+            for section_name in selected_sections
+        )
+    )
+    repaired_outcomes = dict(zip(selected_sections, outcomes))
+    previous = annotation.grounding_outputs
+    section_values: dict[str, BaseModel | None] = {
+        "TaskGrounding": previous.task_grounding,
+        "SceneGrounding": previous.scene_grounding,
+        "LocalTraversability": previous.local_traversability,
+        "NavigationContextGrounding": (
+            previous.navigation_context_grounding
+        ),
+        "InteractionConstraintGrounding": (
+            previous.interaction_constraint_grounding
+        ),
+    }
+    for section_name, outcome in repaired_outcomes.items():
+        section_values[section_name] = outcome.section
+    groundings = GroundingOutputsV4(
+        task_grounding=_typed_section(
+            section_values["TaskGrounding"],
+            TaskGroundingV4,
+        ),
+        scene_grounding=_typed_section(
+            section_values["SceneGrounding"],
+            SceneGroundingV4,
+        ),
+        local_traversability=_typed_section(
+            section_values["LocalTraversability"],
+            LocalTraversabilityV4,
+        ),
+        navigation_context_grounding=_typed_section(
+            section_values["NavigationContextGrounding"],
+            NavigationContextGroundingV4,
+        ),
+        interaction_constraint_grounding=_typed_section(
+            section_values["InteractionConstraintGrounding"],
+            InteractionConstraintGroundingV4,
+        ),
+    )
+    records = dict(annotation.stage_records)
+    records.update(
+        {
+            section_name: outcome.record
+            for section_name, outcome in repaired_outcomes.items()
+        }
+    )
+    generations = [
+        generation
+        for outcome in repaired_outcomes.values()
+        for generation in outcome.generations
+    ]
+    errors = [
+        f"{section_name}:{error}"
+        for section_name, outcome in repaired_outcomes.items()
+        for error in outcome.record.errors
+    ]
+    warnings = [
+        f"{section_name}:{warning}"
+        for section_name, outcome in repaired_outcomes.items()
+        for warning in outcome.record.warnings
+    ]
+    provenance = {
+        "section_image_policy_id": image_policy.policy_id,
+        "section_image_policy_digest": image_policy.policy_digest,
+        "repair_request_id": request.repair_request_id,
+        "repair_parent_audit_id": request.audit_id,
+        "repair_adjudication_id": request.adjudication_id,
+        "repair_action": request.repair_action,
+    }
+    if not groundings.complete:
+        records["Decision"] = _skipped_record_v4(
+            profiles["Decision"],
+            reason="incomplete_repaired_groundings",
+        )
+        return _annotation_v4(
+            source,
+            record_status="complete",
+            groundings=groundings,
+            decision_proposal=None,
+            action_reconciliation=None,
+            composer_candidate=None,
+            candidate_target=None,
+            candidate_structure_record=CandidateStructureRecordV4(
+                composer_version=REASONING_V4_COMPOSER_VERSION,
+                status="not_available",
+                errors=["incomplete_repaired_groundings"],
+            ),
+            records=records,
+            errors=errors or ["incomplete_repaired_groundings"],
+            warnings=warnings,
+            generations=generations,
+            provenance=provenance,
+        )
+
+    decision = await _run_stage_v4(
+        source,
+        profile=profiles["Decision"],
+        backend=backend,
+        config=cfg,
+        image_policy=image_policy,
+        groundings=groundings,
+    )
+    records["Decision"] = decision.record
+    generations.extend(decision.generations)
+    errors.extend(
+        f"Decision:{error}" for error in decision.record.errors
+    )
+    warnings.extend(
+        f"Decision:{warning}" for warning in decision.record.warnings
+    )
+    proposal = _typed_section(
+        decision.section,
+        DecisionProposalV4,
+    )
+    if proposal is None:
+        return _annotation_v4(
+            source,
+            record_status="complete",
+            groundings=groundings,
+            decision_proposal=None,
+            action_reconciliation=None,
+            composer_candidate=None,
+            candidate_target=None,
+            candidate_structure_record=CandidateStructureRecordV4(
+                composer_version=REASONING_V4_COMPOSER_VERSION,
+                status="not_available",
+                errors=["repaired_decision_missing"],
+            ),
+            records=records,
+            errors=errors or ["repaired_decision_missing"],
+            warnings=warnings,
+            generations=generations,
+            provenance=provenance,
+        )
+    audit = build_action_reconciliation_audit_v4(
+        source,
+        groundings,
+        proposal,
+    )
+    try:
+        composition = compose_reasoning_target_v4(
+            source,
+            groundings,
+            proposal,
+        )
+    except (TypeError, ValueError) as exc:
+        error = f"candidate_construction_failed:{exc}"
+        return _annotation_v4(
+            source,
+            record_status="complete",
+            groundings=groundings,
+            decision_proposal=proposal,
+            action_reconciliation=audit,
+            composer_candidate=None,
+            candidate_target=None,
+            candidate_structure_record=CandidateStructureRecordV4(
+                composer_version=REASONING_V4_COMPOSER_VERSION,
+                status="invalid",
+                errors=[error],
+            ),
+            records=records,
+            errors=[*errors, error],
+            warnings=warnings,
+            generations=generations,
+            provenance=provenance,
+        )
+    return _annotation_v4(
+        source,
+        record_status="complete",
+        groundings=groundings,
+        decision_proposal=proposal,
+        action_reconciliation=audit,
+        composer_candidate=(
+            composition.candidate_target.reasoning.decision
+        ),
+        candidate_target=composition.candidate_target,
+        candidate_structure_record=CandidateStructureRecordV4(
+            composer_version=REASONING_V4_COMPOSER_VERSION,
+            status="valid",
+            warnings=composition.warnings,
+        ),
+        records=records,
+        errors=errors,
+        warnings=[*warnings, *composition.warnings],
+        generations=generations,
+        provenance=provenance,
     )
 
 
@@ -517,6 +845,7 @@ async def _run_stage_v4(
     profile: ReasoningV4TeacherProfile,
     backend: ReasoningV4TeacherBackend,
     config: ReasoningV4BatchConfig,
+    image_policy: SectionImagePolicy,
     groundings: GroundingOutputsV4 | None = None,
 ) -> _StageOutcome:
     """Generate, parse, validate, and repair one LVLM section."""
@@ -531,9 +860,13 @@ async def _run_stage_v4(
     generations: list[TeacherGeneration] = []
     provider_failures = 0
     section: BaseModel | None = None
+    stage_observation = image_policy.project_observation(
+        source.observation,
+        profile.section_name,
+    )
     for _ in range(max_attempts):
         question = build_reasoning_v4_section_question(
-            source.observation,
+            stage_observation,
             profile,
             groundings=groundings,
             previous_answer=answer,
@@ -541,7 +874,7 @@ async def _run_stage_v4(
         )
         try:
             generation = await backend.generate(
-                source.observation,
+                stage_observation,
                 question=question,
                 system_prompt=profile.system_prompt,
                 image_detail=(
@@ -573,7 +906,7 @@ async def _run_stage_v4(
                 sanitize_reasoning_section_evidence_v4(
                     profile.section_name,
                     parsed.section,
-                    observation=source.observation,
+                    observation=stage_observation,
                 )
             )
         except (TypeError, ValueError) as exc:
@@ -584,7 +917,7 @@ async def _run_stage_v4(
         checked = validate_reasoning_section_v4(
             profile.section_name,
             section,
-            observation=source.observation,
+            observation=stage_observation,
         )
         errors = list(checked.errors)
         warnings = [*warnings, *checked.warnings]
@@ -619,6 +952,13 @@ async def _run_stage_v4(
                 == "NavigationContextGrounding"
                 else config.image_detail
             ),
+            "section_image_policy_id": image_policy.policy_id,
+            "section_image_policy_digest": image_policy.policy_digest,
+            "selected_image_roles": list(
+                stage_observation.image_roles
+            ),
+            "selected_image_count": len(stage_observation.images),
+            "source_image_count": len(source.observation.images),
             "successful_provider_calls": len(generations),
             "calls": [
                 item.telemetry or {} for item in generations
@@ -695,6 +1035,14 @@ def _skipped_record_v4(
         status="skipped",
         attempts=0,
         errors=[reason],
+        telemetry={
+            "section_image_policy_id": (
+                profile.section_image_policy_id
+            ),
+            "section_image_policy_digest": (
+                profile.section_image_policy_digest
+            ),
+        },
         producer_kind="lvlm",
         producer_profile_id=profile.profile_id,
         derivation_version=profile.derivation_version,
@@ -825,6 +1173,12 @@ async def label_reasoning_source_manifest_v4(
     ]
     if limit is not None:
         sources = sources[: int(limit)]
+    image_policy = get_reasoning_v4_section_image_policy(
+        cfg.section_image_policy_id
+    )
+    profiles = get_reasoning_v4_teacher_profiles(
+        image_policy.policy_id
+    )
     cached = _latest_annotation_cache_v4(annotation_jsonl)
     pending: list[ReasoningSourceV4] = []
     resume_counts: Counter[str] = Counter()
@@ -832,7 +1186,12 @@ async def label_reasoning_source_manifest_v4(
         existing = cached.get(
             source.observation.source_group_id
         )
-        stale = _annotation_is_stale_v4(source, existing)
+        stale = _annotation_is_stale_v4(
+            source,
+            existing,
+            profiles=profiles,
+            image_policy=image_policy,
+        )
         retryable = (
             existing is not None
             and (
@@ -902,6 +1261,7 @@ async def label_reasoning_source_manifest_v4(
         _task_cache_from_annotations_v4(
             sources,
             cached,
+            profiles=profiles,
         )
     )
 
@@ -1064,12 +1424,15 @@ async def label_reasoning_source_manifest_v4(
 def _task_cache_from_annotations_v4(
     sources: Iterable[ReasoningSourceV4],
     annotations: dict[str, ReasoningAnnotationV4],
+    *,
+    profiles: Mapping[str, ReasoningV4TeacherProfile],
 ) -> dict[str, TaskGroundingV4]:
     """Recover stable unknown-task labels from compatible annotations.
 
     Args:
         sources: Current frozen source rows.
         annotations: Latest append-only annotations by source group.
+        profiles: Active teacher profiles for cache compatibility.
 
     Returns:
         Instruction-fingerprint cache reused by resumed annotation.
@@ -1104,6 +1467,15 @@ def _task_cache_from_annotations_v4(
             or stage.status != "accepted"
         ):
             continue
+        task_profile = profiles["TaskGrounding"]
+        if stage.producer_kind == "lvlm" and (
+            stage.producer_profile_id != task_profile.profile_id
+            or stage.derivation_version
+            != task_profile.derivation_version
+            or stage.prompt_policy_digest
+            != task_profile.policy_digest
+        ):
+            continue
         fingerprint = task_instruction_fingerprint_v4(
             instruction
         )
@@ -1120,6 +1492,9 @@ def _task_cache_from_annotations_v4(
 def _annotation_is_stale_v4(
     source: ReasoningSourceV4,
     annotation: ReasoningAnnotationV4 | None,
+    *,
+    profiles: Mapping[str, ReasoningV4TeacherProfile],
+    image_policy: SectionImagePolicy,
 ) -> bool:
     """Return whether a cached row cannot be reused."""
 
@@ -1132,6 +1507,10 @@ def _annotation_is_stale_v4(
         != REASONING_ANNOTATION_V4_SCHEMA_VERSION
         or annotation.metadata.get("composer_version")
         != REASONING_V4_COMPOSER_VERSION
+        or annotation.metadata.get("section_image_policy_id")
+        != image_policy.policy_id
+        or annotation.metadata.get("section_image_policy_digest")
+        != image_policy.policy_digest
     ):
         return True
     registered_task = canonicalize_task_instruction_v4(
@@ -1149,7 +1528,7 @@ def _annotation_is_stale_v4(
             != REASONING_V4_TASK_CANONICALIZATION_VERSION
         ):
             return True
-    for name, profile in REASONING_V4_TEACHER_PROFILES.items():
+    for name, profile in profiles.items():
         record = annotation.stage_records.get(name)
         if record is None:
             return True
@@ -1207,6 +1586,9 @@ def _initial_report_v4(
 ) -> dict[str, Any]:
     """Build a stable machine-readable progress report."""
 
+    image_policy = get_reasoning_v4_section_image_policy(
+        config.section_image_policy_id
+    )
     return {
         "schema_version": (
             f"{REASONING_ANNOTATION_V4_SCHEMA_VERSION}_report_v1"
@@ -1237,6 +1619,12 @@ def _initial_report_v4(
         "navigation_context_image_detail": (
             config.navigation_context_image_detail
         ),
+        "section_image_policy_id": image_policy.policy_id,
+        "section_image_policy_digest": image_policy.policy_digest,
+        "section_image_selectors": {
+            section_name: list(selectors)
+            for section_name, selectors in image_policy.selectors.items()
+        },
         "review_trigger_counts": {},
         "telemetry_totals": {
             "provider_calls": 0,
@@ -1495,4 +1883,5 @@ __all__ = [
     "VisionReasoningV4TeacherBackend",
     "annotate_reasoning_source_v4",
     "label_reasoning_source_manifest_v4",
+    "repair_reasoning_annotation_v4",
 ]

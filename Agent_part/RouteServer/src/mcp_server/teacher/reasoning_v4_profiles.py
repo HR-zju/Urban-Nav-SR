@@ -30,12 +30,20 @@ from mcp_server.contracts.reasoning_v4 import (
     TaskGroundingV4,
     reasoning_v4_contract_schema_digest,
 )
+from mcp_server.teacher.reasoning_v4_image_policy import (
+    REASONING_V4_ALL_VISIBLE_IMAGES_POLICY_ID,
+    REASONING_V4_SECTION_IMAGE_POLICIES,
+    SectionImagePolicy,
+    get_reasoning_v4_section_image_policy,
+)
 
 
 _COMMON_POLICY = """\
 You are an offline annotation teacher for a single-turn urban pedestrian
-navigation model. Use the complete prompt-visible multimodal input. Each section
-independently reads the same input and answers only its own responsibility.
+navigation model. Use only the exact section-visible images and structured
+context attached to the current request. Different sections may receive
+different image subsets. Never infer an omitted image modality or cite an image
+role absent from image_order.
 
 FPV is authoritative for visible walkable support, obstacles, clearance,
 traffic controls, and immediate interaction risk. History FPV frames are extra
@@ -106,12 +114,16 @@ Do not add generic caution.
 Example:
 {"constraints":[{"kind":"crossing_interaction","status":"applicable","effect":"yield","affected_direction_labels":[]}]}""",
     "Decision": """\
-Responsibility: make a blind short-horizon proposal from the complete visible
-input and the five validated grounding sections.
+Responsibility: make a visual grounding-conditioned short-horizon proposal from
+the attached current FPV, optional current BEV, and the five validated grounding
+sections.
 Fields: selected_action_label, speed, response.
 Boundaries: use only action_labels; stop requires stop/stop; moving actions
-cannot use stop speed or response. Private strong direction and trajectory
-labels are unavailable and will be audited later.
+cannot use stop speed or response. Images may verify current geometry and route
+alignment, but do not introduce an entity, traversability judgment, navigation
+direction, or interaction constraint absent from the validated groundings.
+Private strong direction and trajectory labels are unavailable and will be
+audited later.
 Example:
 {"selected_action_label":"straight","speed":"slow","response":"yield"}""",
 }
@@ -140,6 +152,8 @@ class ReasoningV4TeacherProfile:
         system_prompt: Exact provider-side policy.
         policy_digest: Digest over all behavior-defining components.
         derivation_version: Exact annotation derivation version.
+        section_image_policy_id: Exact image-routing policy identity.
+        section_image_policy_digest: Digest over image-routing behavior.
     """
 
     profile_id: str
@@ -149,9 +163,15 @@ class ReasoningV4TeacherProfile:
     system_prompt: str
     policy_digest: str
     derivation_version: str
+    section_image_policy_id: str
+    section_image_policy_digest: str
 
 
-def _profile(section_name: str) -> ReasoningV4TeacherProfile:
+def _profile(
+    section_name: str,
+    *,
+    image_policy: SectionImagePolicy,
+) -> ReasoningV4TeacherProfile:
     """Build one immutable section profile."""
 
     model_type = _SECTION_MODELS[section_name]
@@ -165,11 +185,15 @@ def _profile(section_name: str) -> ReasoningV4TeacherProfile:
         f"{_COMMON_POLICY}\n\nSECTION — {section_name}\n"
         f"{_SECTION_POLICIES[section_name]}"
     )
+    policy_slug = image_policy.policy_id.removeprefix(
+        "reasoning_v4_section_images_"
+    ).removesuffix("_v1")
     profile_id = (
-        f"reasoning_v4_teacher_{section_name.lower()}_v9"
+        f"reasoning_v4_teacher_{section_name.lower()}_"
+        f"{policy_slug}_v10"
     )
     derivation_version = (
-        f"reasoning_v4_6_{section_name.lower()}_derivation_v1"
+        f"reasoning_v4_6_{section_name.lower()}_derivation_v2"
     )
     payload = {
         "profile_id": profile_id,
@@ -195,6 +219,11 @@ def _profile(section_name: str) -> ReasoningV4TeacherProfile:
         "section_name": section_name,
         "section_schema": output_json_schema,
         "system_prompt": system_prompt,
+        "section_image_policy_id": image_policy.policy_id,
+        "section_image_policy_digest": image_policy.policy_digest,
+        "section_image_selectors": list(
+            image_policy.selectors[section_name]
+        ),
     }
     digest = hashlib.sha256(
         json.dumps(
@@ -212,27 +241,71 @@ def _profile(section_name: str) -> ReasoningV4TeacherProfile:
         system_prompt=system_prompt,
         policy_digest=digest,
         derivation_version=derivation_version,
+        section_image_policy_id=image_policy.policy_id,
+        section_image_policy_digest=image_policy.policy_digest,
     )
 
 
-REASONING_V4_TEACHER_PROFILES: Mapping[
+REASONING_V4_TEACHER_PROFILE_REGISTRY: Mapping[
     str,
-    ReasoningV4TeacherProfile,
+    Mapping[str, ReasoningV4TeacherProfile],
 ] = MappingProxyType(
     {
-        section_name: _profile(section_name)
-        for section_name in _SECTION_MODELS
+        policy_id: MappingProxyType(
+            {
+                section_name: _profile(
+                    section_name,
+                    image_policy=image_policy,
+                )
+                for section_name in _SECTION_MODELS
+            }
+        )
+        for policy_id, image_policy in (
+            REASONING_V4_SECTION_IMAGE_POLICIES.items()
+        )
     }
 )
+
+REASONING_V4_TEACHER_PROFILES = (
+    REASONING_V4_TEACHER_PROFILE_REGISTRY[
+        REASONING_V4_ALL_VISIBLE_IMAGES_POLICY_ID
+    ]
+)
+
+
+def get_reasoning_v4_teacher_profiles(
+    section_image_policy_id: str,
+) -> Mapping[str, ReasoningV4TeacherProfile]:
+    """Resolve all section profiles for one image policy.
+
+    Args:
+        section_image_policy_id: Exact registered image-policy identity.
+
+    Returns:
+        Immutable section-to-profile mapping.
+
+    Raises:
+        ValueError: If the image policy is unsupported.
+    """
+
+    get_reasoning_v4_section_image_policy(section_image_policy_id)
+    return REASONING_V4_TEACHER_PROFILE_REGISTRY[
+        str(section_image_policy_id)
+    ]
 
 
 def get_reasoning_v4_teacher_profile(
     section_name: str,
+    *,
+    section_image_policy_id: str = (
+        REASONING_V4_ALL_VISIBLE_IMAGES_POLICY_ID
+    ),
 ) -> ReasoningV4TeacherProfile:
     """Resolve the canonical teacher profile.
 
     Args:
         section_name: Canonical six-section name.
+        section_image_policy_id: Registered annotation image policy.
 
     Returns:
         Immutable profile descriptor.
@@ -242,9 +315,9 @@ def get_reasoning_v4_teacher_profile(
     """
 
     try:
-        return REASONING_V4_TEACHER_PROFILES[
-            str(section_name)
-        ]
+        return get_reasoning_v4_teacher_profiles(
+            section_image_policy_id
+        )[str(section_name)]
     except KeyError as exc:
         raise ValueError(
             "unsupported Reasoning V4 teacher section: "
@@ -254,6 +327,8 @@ def get_reasoning_v4_teacher_profile(
 
 __all__ = [
     "REASONING_V4_TEACHER_PROFILES",
+    "REASONING_V4_TEACHER_PROFILE_REGISTRY",
     "ReasoningV4TeacherProfile",
     "get_reasoning_v4_teacher_profile",
+    "get_reasoning_v4_teacher_profiles",
 ]

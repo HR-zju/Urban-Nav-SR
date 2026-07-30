@@ -145,13 +145,18 @@ def _canonical_source_hashes() -> dict[str, str]:
         "src/mcp_server/data/reasoning_v4_task_canonicalization.py",
         "src/mcp_server/data/reasoning_v4_reconciliation.py",
         "src/mcp_server/data/reasoning_v4_state.py",
+        "src/mcp_server/data/reasoning_v4_review.py",
         "src/mcp_server/data/reasoning_v4_composer.py",
         "src/mcp_server/data/reasoning_v4_compact.py",
         "src/mcp_server/data/reasoning_v4_views.py",
         "src/mcp_server/data/reasoning_v4_audit.py",
+        "src/mcp_server/teacher/reasoning_v4_image_policy.py",
         "src/mcp_server/teacher/reasoning_v4_profiles.py",
         "src/mcp_server/teacher/reasoning_v4_teacher.py",
         "src/mcp_server/teacher/reasoning_v4_batch.py",
+        "src/mcp_server/teacher/reasoning_v4_review_profiles.py",
+        "src/mcp_server/teacher/reasoning_v4_review.py",
+        "src/mcp_server/teacher/reasoning_v4_review_batch.py",
     )
     return {
         relative: hashlib.sha256(

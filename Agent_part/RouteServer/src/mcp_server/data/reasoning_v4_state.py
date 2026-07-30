@@ -10,7 +10,8 @@ from mcp_server.agent.reasoning_v4_validation import (
     validate_reasoning_target_v4,
 )
 from mcp_server.contracts.reasoning_dataset_v4 import (
-    ActionReviewResolutionV4,
+    ActionAdjudicationV4,
+    ActionReviewDiagnosisRecordV4,
     ProjectedReviewStatusV4,
     ReasoningAnnotationV4,
     ReasoningSourceV4,
@@ -48,27 +49,30 @@ def derive_reasoning_release_state_v4(
     source: ReasoningSourceV4,
     annotation: ReasoningAnnotationV4,
     *,
-    resolution: ActionReviewResolutionV4 | None = None,
+    diagnosis: ActionReviewDiagnosisRecordV4 | None = None,
+    adjudication: ActionAdjudicationV4 | None = None,
 ) -> ReasoningReleaseStateV4:
     """Derive review and formal-training eligibility fail closed.
 
     Training is eligible only when the record completed, all six stages were
     accepted, the candidate is structurally valid, an action audit exists,
     review is either not required or resolved, and the candidate revalidates
-    against the source.
-    A human-selected action differing from the frozen strong stamp is blocked;
-    that case requires upstream source correction and re-annotation.
+    against the source.  LVLM filtering never changes eligibility.  A human
+    adjudication resolves the current audit only through
+    ``keep_without_change``; every repair or quarantine action rejects the old
+    lineage until a new source/annotation/audit is produced.
 
     Args:
         source: Frozen source row.
         annotation: Immutable annotation row.
-        resolution: Latest append-only resolution for this audit.
+        diagnosis: Latest two-stage LVLM diagnosis for this audit.
+        adjudication: Latest append-only human adjudication for this audit.
 
     Returns:
         Derived release state and blockers.
 
     Raises:
-        ValueError: If joined source, annotation, or resolution identities
+        ValueError: If joined source, annotation, or adjudication identities
             disagree.
     """
 
@@ -83,12 +87,27 @@ def derive_reasoning_release_state_v4(
         )
     audit = annotation.action_reconciliation
     audit_id = audit.audit_id if audit is not None else None
-    if (
-        resolution is not None
-        and resolution.audit_id != audit_id
+    if diagnosis is not None and (
+        diagnosis.audit_id != audit_id
+        or diagnosis.source_group_id
+        != source.observation.source_group_id
+        or diagnosis.source_fingerprint != source.source_fingerprint
     ):
         raise ValueError(
-            "resolution audit_id does not match annotation"
+            "diagnosis identity does not match source/annotation"
+        )
+    if (
+        adjudication is not None
+        and (
+            adjudication.audit_id != audit_id
+            or adjudication.source_group_id
+            != source.observation.source_group_id
+            or adjudication.source_fingerprint
+            != source.source_fingerprint
+        )
+    ):
+        raise ValueError(
+            "adjudication identity does not match source/annotation"
         )
 
     blockers: list[str] = []
@@ -112,38 +131,33 @@ def derive_reasoning_release_state_v4(
         blockers.append("action_audit_missing")
     elif not action_reconciliation_review_required_v4(audit):
         review_status = "not_required"
-        if resolution is not None:
-            blockers.append("unexpected_resolution_without_trigger")
-    elif resolution is None:
+        if diagnosis is not None:
+            blockers.append("unexpected_diagnosis_without_trigger")
+        if adjudication is not None:
+            blockers.append("unexpected_adjudication_without_trigger")
+    elif adjudication is None:
         review_status = "pending_human"
         blockers.append("human_review_pending")
-    elif resolution.review_status == "rejected":
+    elif (
+        diagnosis is None
+        or diagnosis.record_status != "complete"
+        or diagnosis.diagnosis is None
+        or diagnosis.diagnosis.diagnosis_id
+        != adjudication.diagnosis_id
+    ):
         review_status = "rejected"
-        blockers.append("human_review_rejected")
+        blockers.append("adjudication_diagnosis_lineage_invalid")
+    elif adjudication.repair_action != "keep_without_change":
+        review_status = "rejected"
+        if adjudication.repair_action == "quarantine":
+            blockers.append("human_review_quarantined")
+        else:
+            blockers.append(
+                "human_review_repair_required:"
+                f"{adjudication.repair_action}"
+            )
     else:
         review_status = "resolved"
-        assert resolution.resolved_action_label is not None
-        strong = source.direction_supervision
-        if strong is None:
-            blockers.append("strong_direction_missing")
-        elif (
-            str(resolution.resolved_action_label)
-            != str(strong.label_name)
-        ):
-            blockers.append(
-                "resolution_requires_source_direction_correction"
-            )
-        if (
-            annotation.candidate_target is None
-            or str(
-                annotation.candidate_target.reasoning.decision
-                .selected_action_label
-            )
-            != str(resolution.resolved_action_label)
-        ):
-            blockers.append(
-                "resolved_action_candidate_mismatch"
-            )
 
     if annotation.candidate_target is not None:
         validation = validate_reasoning_target_v4(
@@ -171,74 +185,74 @@ def derive_reasoning_release_state_v4(
     )
 
 
-def latest_action_resolutions_v4(
+def latest_action_adjudications_v4(
     rows: Iterable[dict],
-) -> dict[str, ActionReviewResolutionV4]:
-    """Project append-only resolution rows to their latest audit state.
+) -> dict[str, ActionAdjudicationV4]:
+    """Project append-only adjudication rows to their latest audit state.
 
     Args:
-        rows: JSON-compatible resolution rows.
+        rows: JSON-compatible adjudication rows.
 
     Returns:
-        Latest resolution per audit by timezone-aware ``resolved_at``.
+        Latest adjudication per audit by timezone-aware ``reviewed_at``.
 
     Raises:
         ValueError: If duplicate audit/timestamp entries disagree.
     """
 
-    result: dict[str, ActionReviewResolutionV4] = {}
-    seen: dict[tuple[str, str], ActionReviewResolutionV4] = {}
+    result: dict[str, ActionAdjudicationV4] = {}
+    seen: dict[tuple[str, str], ActionAdjudicationV4] = {}
     for row in rows:
-        resolution = ActionReviewResolutionV4.model_validate(row)
+        adjudication = ActionAdjudicationV4.model_validate(row)
         key = (
-            resolution.audit_id,
-            resolution.resolved_at.isoformat(),
+            adjudication.audit_id,
+            adjudication.reviewed_at.isoformat(),
         )
         previous_same = seen.get(key)
         if (
             previous_same is not None
-            and previous_same != resolution
+            and previous_same != adjudication
         ):
             raise ValueError(
-                "conflicting append-only resolution identity: "
+                "conflicting append-only adjudication identity: "
                 f"{key}"
             )
-        seen[key] = resolution
-        previous = result.get(resolution.audit_id)
+        seen[key] = adjudication
+        previous = result.get(adjudication.audit_id)
         if (
             previous is None
-            or resolution.resolved_at > previous.resolved_at
+            or adjudication.reviewed_at > previous.reviewed_at
         ):
-            result[resolution.audit_id] = resolution
+            result[adjudication.audit_id] = adjudication
     return result
 
 
-def load_latest_action_resolutions_v4(
+def load_latest_action_adjudications_v4(
     path: str | Path | None,
-) -> dict[str, ActionReviewResolutionV4]:
-    """Load the latest resolution projection from JSONL.
+) -> dict[str, ActionAdjudicationV4]:
+    """Load the latest human-adjudication projection from JSONL.
 
     Args:
-        path: Optional append-only resolution JSONL.
+        path: Optional append-only adjudication JSONL.
 
     Returns:
-        Empty mapping when omitted, otherwise latest resolution per audit.
+        Empty mapping when omitted, otherwise latest adjudication per audit.
     """
 
     if path is None:
         return {}
-    return latest_action_resolutions_v4(iter_jsonl(path))
+    return latest_action_adjudications_v4(iter_jsonl(path))
 
 
-def append_action_review_resolution_v4(
+def append_action_adjudication_v4(
     path: str | Path,
-    resolution: ActionReviewResolutionV4,
+    adjudication: ActionAdjudicationV4,
 ) -> None:
-    """Append one validated human resolution without rewriting history.
+    """Append one validated human adjudication without rewriting history.
 
     Args:
-        path: Append-only resolution JSONL.
-        resolution: Typed resolution row.
+        path: Append-only adjudication JSONL.
+        adjudication: Typed adjudication row.
 
     Raises:
         ValueError: If the exact audit/timestamp identity already exists.
@@ -247,13 +261,17 @@ def append_action_review_resolution_v4(
     destination = Path(path).expanduser()
     if destination.exists():
         for row in iter_jsonl(destination):
-            current = ActionReviewResolutionV4.model_validate(row)
+            current = ActionAdjudicationV4.model_validate(row)
             if (
-                current.audit_id == resolution.audit_id
-                and current.resolved_at == resolution.resolved_at
+                current.adjudication_id
+                == adjudication.adjudication_id
+                or (
+                    current.audit_id == adjudication.audit_id
+                    and current.reviewed_at == adjudication.reviewed_at
+                )
             ):
                 raise ValueError(
-                    "resolution audit/timestamp identity already exists"
+                    "adjudication identity or audit/timestamp already exists"
                 )
     destination.parent.mkdir(parents=True, exist_ok=True)
     with destination.open(
@@ -263,7 +281,7 @@ def append_action_review_resolution_v4(
     ) as handle:
         append_jsonl_row(
             handle,
-            resolution.model_dump(
+            adjudication.model_dump(
                 mode="json",
                 exclude_none=True,
             ),
@@ -272,8 +290,8 @@ def append_action_review_resolution_v4(
 
 __all__ = [
     "ReasoningReleaseStateV4",
-    "append_action_review_resolution_v4",
+    "append_action_adjudication_v4",
     "derive_reasoning_release_state_v4",
-    "latest_action_resolutions_v4",
-    "load_latest_action_resolutions_v4",
+    "latest_action_adjudications_v4",
+    "load_latest_action_adjudications_v4",
 ]

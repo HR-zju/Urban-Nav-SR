@@ -11,6 +11,7 @@ from mcp_server.contracts.direction_profile import (
     resolve_stage_a_direction_profile,
 )
 from mcp_server.contracts.reasoning_dataset_v4 import (
+    ActionReviewDiagnosisRecordV4,
     ReasoningAnnotationV4,
     ReasoningSourceV4,
 )
@@ -22,12 +23,15 @@ from mcp_server.data.reasoning_v4_reconciliation import (
 )
 from mcp_server.data.reasoning_v4_state import (
     derive_reasoning_release_state_v4,
-    load_latest_action_resolutions_v4,
+    load_latest_action_adjudications_v4,
+)
+from mcp_server.data.reasoning_v4_review import (
+    load_latest_action_review_diagnoses_v4,
 )
 
 
 RECONCILIATION_REVIEW_REPORT_SCHEMA_V4 = (
-    "urbannav_action_reconciliation_review_report_v3"
+    "urbannav_action_reconciliation_review_report_v4"
 )
 
 
@@ -38,7 +42,8 @@ def export_action_reconciliation_review_v4(
     audit_jsonl: str | Path,
     queue_jsonl: str | Path,
     report_json: str | Path,
-    resolution_jsonl: str | Path | None = None,
+    diagnosis_jsonl: str | Path | None = None,
+    adjudication_jsonl: str | Path | None = None,
 ) -> dict[str, Any]:
     """Export immutable audits and unresolved human-review rows.
 
@@ -48,7 +53,8 @@ def export_action_reconciliation_review_v4(
         audit_jsonl: Destination joined audit projection.
         queue_jsonl: Destination pending-review projection.
         report_json: Destination deterministic summary.
-        resolution_jsonl: Optional append-only human-resolution sidecar.
+        diagnosis_jsonl: Optional append-only two-stage LVLM diagnoses.
+        adjudication_jsonl: Optional append-only human adjudications.
 
     Returns:
         Exact report payload written to disk.
@@ -61,8 +67,11 @@ def export_action_reconciliation_review_v4(
     annotations = _latest_annotation_index_v4(
         annotation_jsonl
     )
-    resolutions = load_latest_action_resolutions_v4(
-        resolution_jsonl
+    diagnoses = load_latest_action_review_diagnoses_v4(
+        diagnosis_jsonl
+    )
+    adjudications = load_latest_action_adjudications_v4(
+        adjudication_jsonl
     )
     audit_rows: list[dict[str, Any]] = []
     queue_rows: list[dict[str, Any]] = []
@@ -70,6 +79,7 @@ def export_action_reconciliation_review_v4(
     confusion: Counter[tuple[str, str]] = Counter()
     delta_bins: Counter[str] = Counter()
     errors: list[str] = []
+    warnings: list[str] = []
     seen_audit_ids: set[str] = set()
 
     for source_id, source in sources.items():
@@ -95,15 +105,21 @@ def export_action_reconciliation_review_v4(
             f"{annotation.candidate_structure_record.status}"
         ] += 1
         audit = annotation.action_reconciliation
-        resolution = (
-            resolutions.get(audit.audit_id)
+        diagnosis = (
+            diagnoses.get(audit.audit_id)
+            if audit is not None
+            else None
+        )
+        adjudication = (
+            adjudications.get(audit.audit_id)
             if audit is not None
             else None
         )
         state = derive_reasoning_release_state_v4(
             source,
             annotation,
-            resolution=resolution,
+            diagnosis=diagnosis,
+            adjudication=adjudication,
         )
         counts[
             f"review_status:{state.review_status}"
@@ -185,6 +201,17 @@ def export_action_reconciliation_review_v4(
                     state.formal_training_eligible
                 ),
                 "blockers": list(state.blockers),
+                "diagnosis_id": (
+                    diagnosis.diagnosis.diagnosis_id
+                    if diagnosis is not None
+                    and diagnosis.diagnosis is not None
+                    else None
+                ),
+                "adjudication_id": (
+                    adjudication.adjudication_id
+                    if adjudication is not None
+                    else None
+                ),
             }
         )
         if required and state.review_status == "pending_human":
@@ -193,6 +220,7 @@ def export_action_reconciliation_review_v4(
                     source,
                     annotation,
                     priority=priority,
+                    diagnosis=diagnosis,
                 )
             )
 
@@ -201,13 +229,21 @@ def export_action_reconciliation_review_v4(
         errors.append(
             f"annotations_without_source:{len(orphan_ids)}"
         )
-    orphan_resolutions = sorted(
-        set(resolutions) - seen_audit_ids
+    orphan_diagnoses = sorted(
+        set(diagnoses) - seen_audit_ids
     )
-    if orphan_resolutions:
-        errors.append(
-            "resolutions_without_audit:"
-            f"{len(orphan_resolutions)}"
+    if orphan_diagnoses:
+        warnings.append(
+            "superseded_diagnoses_without_current_audit:"
+            f"{len(orphan_diagnoses)}"
+        )
+    orphan_adjudications = sorted(
+        set(adjudications) - seen_audit_ids
+    )
+    if orphan_adjudications:
+        warnings.append(
+            "superseded_adjudications_without_current_audit:"
+            f"{len(orphan_adjudications)}"
         )
     write_jsonl_atomic(audit_jsonl, audit_rows)
     write_jsonl_atomic(queue_jsonl, queue_rows)
@@ -217,9 +253,14 @@ def export_action_reconciliation_review_v4(
         ),
         "source_jsonl": str(source_jsonl),
         "annotation_jsonl": str(annotation_jsonl),
-        "resolution_jsonl": (
-            str(resolution_jsonl)
-            if resolution_jsonl is not None
+        "diagnosis_jsonl": (
+            str(diagnosis_jsonl)
+            if diagnosis_jsonl is not None
+            else None
+        ),
+        "adjudication_jsonl": (
+            str(adjudication_jsonl)
+            if adjudication_jsonl is not None
             else None
         ),
         "audit_jsonl": str(audit_jsonl),
@@ -239,6 +280,7 @@ def export_action_reconciliation_review_v4(
         },
         "angular_delta_bins": dict(sorted(delta_bins.items())),
         "errors": errors[:200],
+        "warnings": warnings[:200],
         "passed": not errors,
     }
     destination = Path(report_json).expanduser()
@@ -260,6 +302,7 @@ def _queue_projection_v4(
     annotation: ReasoningAnnotationV4,
     *,
     priority: str,
+    diagnosis: ActionReviewDiagnosisRecordV4 | None,
 ) -> dict[str, Any]:
     """Expand an audit into one reviewer-facing queue row."""
 
@@ -324,6 +367,29 @@ def _queue_projection_v4(
                 mode="json",
                 exclude_none=True,
             )
+        ),
+        "diagnosis_status": (
+            diagnosis.record_status
+            if diagnosis is not None
+            else "not_run"
+        ),
+        "blind_assessment": (
+            diagnosis.blind_assessment.model_dump(
+                mode="json",
+                exclude_none=True,
+            )
+            if diagnosis is not None
+            and diagnosis.blind_assessment is not None
+            else None
+        ),
+        "lvlm_diagnosis": (
+            diagnosis.diagnosis.model_dump(
+                mode="json",
+                exclude_none=True,
+            )
+            if diagnosis is not None
+            and diagnosis.diagnosis is not None
+            else None
         ),
     }
 

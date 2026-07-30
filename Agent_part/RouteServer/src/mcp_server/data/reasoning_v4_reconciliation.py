@@ -197,7 +197,7 @@ def validate_action_reconciliation_audit_v4(
     Args:
         source: Frozen source joined to annotation.
         groundings: Parent grounding outputs.
-        decision_proposal: Parent blind Decision proposal.
+        decision_proposal: Parent visual grounding-conditioned proposal.
         audit: Stored immutable audit.
 
     Raises:

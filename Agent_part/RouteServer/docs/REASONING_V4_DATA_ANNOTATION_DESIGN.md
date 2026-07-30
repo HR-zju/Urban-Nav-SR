@@ -11,9 +11,12 @@
 - `src/mcp_server/contracts/reasoning_v4.py`：六段 target；
 - `src/mcp_server/contracts/reasoning_dataset_v4.py`：source、annotation、review 与 view；
 - `src/mcp_server/data/reasoning_v4_task_canonicalization.py`：任务规范化；
+- `src/mcp_server/teacher/reasoning_v4_image_policy.py`：section 级图片路由；
 - `src/mcp_server/teacher/reasoning_v4_profiles.py`：独立 section teacher；
 - `src/mcp_server/data/reasoning_v4_composer.py`：strong direction 与行为 tuple；
 - `src/mcp_server/data/reasoning_v4_reconciliation.py`：不可变动作审计；
+- `src/mcp_server/teacher/reasoning_v4_review*.py`：两阶段 LVLM filtering；
+- `src/mcp_server/data/reasoning_v4_review.py`：diagnosis/adjudication/repair lineage；
 - `src/mcp_server/data/reasoning_v4_state.py`：review/training 派生状态；
 - `src/mcp_server/data/reasoning_v4_views.py`：preview/formal view；
 - `src/mcp_server/agent/reasoning_v4_text.py`：严格六 tag wire；
@@ -26,12 +29,15 @@ target:        urbannav_reasoning_trace_v4_6
 source:        urbannav_reasoning_source_v4_5
 annotation:    urbannav_reasoning_annotation_v4_6
 audit:         urbannav_action_reconciliation_audit_v3
-resolution:    urbannav_action_review_resolution_v2
+blind review:  urbannav_action_blind_review_v1
+diagnosis:     urbannav_action_review_diagnosis_record_v1
+adjudication:  urbannav_action_adjudication_v1
+repair:        urbannav_reasoning_repair_request_v1
 training view: urbannav_reasoning_training_view_v4_6_compact_v1
 ```
 
 source envelope 保持 `v4_5` 是有意的：它与 VQA V2 共用且本轮没有改变 prompt-visible
-输入结构。target、annotation、audit、resolution 和 training view 已整体升级，不能凭
+输入结构。target、annotation、audit、review sidecars 和 training view 已整体升级，不能凭
 source 文件名把旧 V4.5 annotation/cache 误当作 V4.6。
 
 assistant target 只有六段：
@@ -53,8 +59,36 @@ V4.6 没有 `Finish`、readout、semantic ref graph、object ID、route progress
 
 ## 2. 第一性原理边界
 
-六段共享读取同一份完整 prompt-visible 输入，各自独立完成职责。只有 Decision teacher
-额外读取五段已验证 grounding；它仍看不到 private strong direction。
+canonical source 和最终 student training view 始终保存完整 prompt-visible 输入。teacher
+标注阶段则通过版本化 `SectionImagePolicy` 为不同 section 投影图片子集，非图像 instruction、
+goal、waypoint 和可见结构化上下文仍按 source 合同提供。只有 Decision teacher 额外读取
+五段已验证 grounding；它仍看不到 private strong direction。
+
+当前注册两套不能混用缓存的 annotation policy：
+
+| Policy | 用途 |
+| --- | --- |
+| `reasoning_v4_section_images_all_visible_v1` | 既有基线；每个 LVLM section 读取全部 source 图片 |
+| `reasoning_v4_section_images_routed_visual_v1` | 候选优化；按 section 职责只传必要图片 |
+
+`routed_visual_v1` 的图片合同如下：
+
+| Section | teacher 图片输入 | 原因 |
+| --- | --- | --- |
+| `TaskGrounding` | current FPV + optional current BEV | 校验当前任务语境，不消费历史动态 |
+| `SceneGrounding` | 5 FPV | 汇总当前场景并保留短时视觉上下文 |
+| `LocalTraversability` | current FPV | 判断当前局部支撑面、净空与物理可执行性 |
+| `NavigationContextGrounding` | current FPV + optional current BEV | 将显式 instruction/BEV route 映射到当前 FPV 方向 |
+| `InteractionConstraintGrounding` | 5 FPV | 识别影响短动作的人车交互和动态占用 |
+| `Decision` | current FPV + optional current BEV + 五段 validated groundings | 核验当前几何和路线，综合已有事实提出动作 |
+
+图片投影会同步过滤 `image_roles/evidence_catalog/input_modalities`。当 section 不再接收历史
+FPV 时，`history_fpv=false` 且 `temporal_evidence_eligible=false`；未接收 BEV 时
+`bev=false`。因此不存在“图片未发送但 prompt 声称模态可用”的隐式输入。
+
+policy ID、policy digest、section selector、profile ID 和 prompt digest 都进入 report、
+stage telemetry、annotation metadata 与 cache freshness gate。更换 policy 必须新建 run
+root；不能读取旧 policy annotation 作为命中缓存。
 
 允许：
 
@@ -248,8 +282,10 @@ frozen normative-policy GT。
 | `speed` | normal/slow/stop | applicable constraint 确定性映射 | 是 | LM |
 | `response` | proceed/slow/yield/detour/stop | applicable constraint 确定性映射 | 是 | LM |
 
-Decision teacher 先在看不到 strong label 时给出 `DecisionProposalV4`，只用于审计。composer
-绝不让 proposal 覆盖 strong direction：
+Decision teacher 先在看不到 strong label 时，基于 current FPV、可选 current BEV 和五段
+validated groundings 给出 visual grounding-conditioned `DecisionProposalV4`，只用于审计。
+它可以核验当前几何和 route alignment，但不能新增五段中不存在的实体、通行性、路线方向
+或交互约束。composer 绝不让 proposal 覆盖 strong direction：
 
 ```text
 no applicable effect -> normal / proceed
@@ -272,7 +308,7 @@ Action Reconciliation 是独立 annotation-only audit，不是第七段，也不
 | --- | --- |
 | `audit_id` | source/proposal/groundings/checks 的 content address |
 | `source_fingerprint` | parent source identity |
-| `proposal_digest` | blind proposal digest，不复制 proposal |
+| `proposal_digest` | visual grounding-conditioned proposal digest，不复制 proposal |
 | `groundings_digest` | 五段 grounding digest，不复制五段 |
 | `comparison` | angular delta、stop/move mismatch、sign conflict |
 | `probe_projections[]` | strong action 的全部等距离最近 probe 及其物理摘要 |
@@ -288,21 +324,68 @@ tuple conflict 不受 20° 放宽影响。profile stamp、proposal、strong labe
 仍由 parent join 读取，不在 audit 中重复。review priority/status 是派生值，不持久化在
 audit。
 
-人工处理使用 append-only `ActionReviewResolutionV4`：
+### 5.1 LVLM filtering：只诊断，不改 target
+
+deterministic audit 触发后，样本仍为 `pending_human`。LVLM filtering 是 annotation-only
+质量控制层，不是 FullCoT 第七段，不进入 student prompt、assistant target 或 LM loss。
+它固定运行两步：
+
+1. `blind_visual` 只读取完整 prompt-visible observation 与全部可见图片，不读取 proposal、
+   strong direction、trajectory、audit、candidate 或人工结论；
+2. `comparative_diagnosis` 再读取 blind assessment、五段 normalized groundings、
+   Decision proposal、strong direction stamp、deterministic audit 与 stage provenance。
+
+LVLM 顶层 verdict 严格只有四类：
 
 ```text
+teacher_proposal_error
+grounding_error
+strong_label_error
+unresolved
+```
+
+constraint 问题属于 `grounding_error/interaction_constraint_error`；证据不足属于
+`unresolved` reason code；多组件问题写入 `affected_components[]`，不得新增第五类。
+LVLM 输出不得携带 corrected/suggested/replacement/new value，也不能直接改变 release
+状态。blind 与 comparative 的 profile、prompt digest、图片 policy 和 provider telemetry
+均写入 `ActionReviewDiagnosisRecordV4`，与 source fingerprint 和 audit ID 绑定。
+
+### 5.2 人工 adjudication 与 append-only lineage
+
+self-contained review HTML 先展示全部可见图片和 blind assessment，再显式 reveal
+proposal/strong/audit/comparative diagnosis。浏览器只下载未绑定 JSONL；导入 CLI 必须
+重新 join 当前 source、annotation 和 diagnosis，验证所有 identity 后才能 append
+`ActionAdjudicationV4`：
+
+```text
+source_group_id
+source_fingerprint
 audit_id
-review_status = resolved | rejected
-resolved_action_label
-resolution_code
+diagnosis_id
+diagnosis_disposition = confirmed | overridden | deferred
+final_verdict = exact four-way taxonomy
+error_subtype
+affected_components[]
+reason_codes[]
+repair_action
+fields_to_inspect[]
 reviewer
-resolved_at
+reviewed_at
 note
 ```
 
-若 reviewer 认为 strong label 错误，不能在 resolution 中偷偷替换 source；必须修正上游
-direction source、生成新 fingerprint、重新标注和重新审计。resolution 与 frozen strong
-不一致时 training fail closed。
+只有 `repair_action=keep_without_change` 能把当前 audit 变为 `resolved`。其余动作都把
+旧 lineage 标记为 `rejected`：
+
+- `rerun_teacher_proposal`：只重跑 Decision，重新 compose/audit，append 新 annotation；
+- `relabel_grounding`：只重跑人工选中的 LVLM grounding，再重跑 Decision 与
+  compose/audit；deterministic Task 必须回其 registry 修复；
+- `rebuild_strong_sidecar`：禁止原地修改，必须修正上游 direction source、生成新 source
+  fingerprint，并做完整重标注；
+- `quarantine`：保留审计证据但不进入 formal training。
+
+repair request 是 adjudication 的确定性投影。旧 annotation、audit、diagnosis 和
+adjudication 永不覆盖，始终保留完整父子 identity。
 
 ## 6. 独立状态轴
 
@@ -326,7 +409,8 @@ AND exact six stages accepted
 AND candidate structure valid
 AND action audit exists and reconstructs exactly
 AND review is not_required or resolved
-AND resolved action still equals frozen strong direction
+AND any resolving adjudication references the exact completed diagnosis
+AND resolving adjudication is keep_without_change
 AND candidate revalidates against source/profile
 ```
 
@@ -389,6 +473,35 @@ Artifact Training Eligible
 - formal views 通过 schema、prompt、renderer、direction 与 audit 校验；
 - 报告 action tuple conflict、词表未归一化和七 probe 同质率；
 - 人工打开 self-contained review HTML 后显式批准。
+- 对 triggered audit 先运行 blind/comparative LVLM filtering，再导出人工 JSONL；
+- browser 导出的 JSONL 必须经过 canonical importer，不能直接作为 release sidecar；
+- repair/quarantine 后旧 audit 必须保持 rejected，只有新 source/annotation lineage 可重新入 gate。
+
+QC 工具链固定为：
+
+| 步骤 | CLI | 产物 |
+| --- | --- | --- |
+| deterministic projection | `export_reasoning_v4_reconciliation_review.py` | audit + pending queue + report |
+| two-stage LVLM | `label_reasoning_v4_review_diagnoses.py` | append-only diagnosis JSONL |
+| human workspace | `build_reasoning_v4_review_html.py` | self-contained HTML + browser-downloaded unbound JSONL |
+| canonical import | `import_reasoning_v4_adjudications.py` | append-only bound adjudication JSONL |
+| repair routing | `export_reasoning_v4_repair_requests.py` | immutable repair requests |
+| partial repair | `repair_reasoning_v4_annotations.py` | appended annotation revisions；strong rebuild 只报告 upstream-blocked |
+| release | `export_reasoning_v4_views.py` + `audit_reasoning_v4_artifacts.py` | formal views 与 gate report |
+
+修改 section 图片输入属于 annotation policy 变更，必须额外使用同一组 source ID 做配对
+A/B。至少报告：
+
+- BEV route grounding 覆盖率和逐样本一致性；
+- dynamic interaction constraint 非空率、effect 分布和逐样本一致性；
+- all-section accepted、candidate structurally valid；
+- Decision proposal 与 frozen GT action exact agreement；
+- retry row、pending-human 和 review trigger 分布；
+- provider calls、prompt/completion token、stage latency 与 rows/hour。
+
+只有 routed policy 的质量指标未越过预设退化阈值、人工复核变更样本通过，且吞吐收益达到
+目标，才允许在新的全量 run root 中替代 all-visible policy。正在运行的旧 policy 全量任务
+不得原地改 profile、digest 或缓存。
 
 smoke/optimizer 测试只能证明流水线、格式和容量，不代表语义质量、导航收益或 benchmark
 有效。真实实验仍需报告 proposal-vs-strong confusion、trigger 分布、标注延迟/成本、

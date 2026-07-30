@@ -27,7 +27,8 @@ def parse_args(
         choices=("review_preview", "formal_training"),
         default="review_preview",
     )
-    parser.add_argument("--resolution-jsonl", type=Path)
+    parser.add_argument("--diagnosis-jsonl", type=Path)
+    parser.add_argument("--adjudication-jsonl", type=Path)
     parser.add_argument("--report-json", type=Path)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--skip-errors", action="store_true")
@@ -43,7 +44,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         args.annotation_jsonl,
         args.output_jsonl,
         release_track=args.release_track,
-        resolution_jsonl=args.resolution_jsonl,
+        diagnosis_jsonl=args.diagnosis_jsonl,
+        adjudication_jsonl=args.adjudication_jsonl,
         limit=args.limit,
         skip_errors=args.skip_errors,
     )
