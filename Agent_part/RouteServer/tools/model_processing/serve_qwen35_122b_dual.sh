@@ -21,6 +21,7 @@ MAX_NUM_SEQS="${MAX_NUM_SEQS:-64}"
 MAX_BATCHED_TOKENS="${MAX_BATCHED_TOKENS:-32768}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.94}"
 MAX_IMAGES_PER_PROMPT="${MAX_IMAGES_PER_PROMPT:-6}"
+MM_PROCESSOR_CACHE_GB="${MM_PROCESSOR_CACHE_GB:-0}"
 STARTUP_TIMEOUT_SEC="${STARTUP_TIMEOUT_SEC:-1800}"
 STOP_TIMEOUT_SEC="${STOP_TIMEOUT_SEC:-120}"
 HEALTH_INTERVAL_SEC="${HEALTH_INTERVAL_SEC:-10}"
@@ -48,6 +49,7 @@ Important overrides:
   MODEL_DIR, ENV_DIR, WORKSPACE_ROOT, SERVICE_ROOT
   BEHAVIOR_GPUS, INSTRUCTION_GPUS, BEHAVIOR_PORT, INSTRUCTION_PORT
   GPU_MEMORY_UTILIZATION, MAX_MODEL_LEN, MAX_NUM_SEQS, MAX_BATCHED_TOKENS
+  MM_PROCESSOR_CACHE_GB             # Per-process multimodal preprocessing cache.
   FORCE_START=1                    # Bypass only GPU usage thresholds.
   DISABLE_CUSTOM_ALL_REDUCE=0     # Benchmark before changing the stable default.
 EOF
@@ -180,6 +182,8 @@ validate_common() {
   done
   [[ -x "${ENV_DIR}/bin/python" ]] || die "Python environment is unavailable: ${ENV_DIR}"
   [[ -f "${MODEL_DIR}/config.json" ]] || die "model config is unavailable: ${MODEL_DIR}/config.json"
+  [[ "${MM_PROCESSOR_CACHE_GB}" =~ ^[0-9]+([.][0-9]+)?$ ]] \
+    || die "MM_PROCESSOR_CACHE_GB must be a non-negative number"
   "${ENV_DIR}/bin/python" -c 'import torch, vllm' >/dev/null \
     || die "torch/vllm import failed in ${ENV_DIR}"
   validate_gpu_sets
@@ -287,7 +291,7 @@ serve_role() {
     --trust-remote-code
     --attention-config '{"backend":"TRITON_ATTN"}'
     --mm-encoder-attn-backend TORCH_SDPA
-    --mm-processor-cache-gb 0
+    --mm-processor-cache-gb "${MM_PROCESSOR_CACHE_GB}"
     --limit-mm-per-prompt "{\"image\":${MAX_IMAGES_PER_PROMPT}}"
     --default-chat-template-kwargs '{"enable_thinking":false}'
     --generation-config vllm
@@ -322,6 +326,7 @@ tmux_start_role() {
     "MAX_BATCHED_TOKENS=${MAX_BATCHED_TOKENS}"
     "GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION}"
     "MAX_IMAGES_PER_PROMPT=${MAX_IMAGES_PER_PROMPT}"
+    "MM_PROCESSOR_CACHE_GB=${MM_PROCESSOR_CACHE_GB}"
     "DISABLE_CUSTOM_ALL_REDUCE=${DISABLE_CUSTOM_ALL_REDUCE}"
     bash "${SCRIPT_PATH}" serve "${role}"
   )
@@ -475,6 +480,7 @@ MAX_NUM_SEQS=${MAX_NUM_SEQS}
 MAX_BATCHED_TOKENS=${MAX_BATCHED_TOKENS}
 GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION}
 MAX_IMAGES_PER_PROMPT=${MAX_IMAGES_PER_PROMPT}
+MM_PROCESSOR_CACHE_GB=${MM_PROCESSOR_CACHE_GB}
 DISABLE_CUSTOM_ALL_REDUCE=${DISABLE_CUSTOM_ALL_REDUCE}
 EOF
 }
