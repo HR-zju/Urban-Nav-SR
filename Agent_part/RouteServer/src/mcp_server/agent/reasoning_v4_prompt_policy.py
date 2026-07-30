@@ -9,6 +9,8 @@ from types import MappingProxyType
 from typing import Mapping
 
 from mcp_server.contracts.direction_profile import (
+    DIRECTION_PROFILE_REGISTRY_V1,
+    DIRECTION_PROFILE_REGISTRY_V2,
     approved_affordance_probe_profiles,
     approved_stage_a_direction_profiles,
 )
@@ -99,10 +101,26 @@ class ReasoningV4StudentProfile:
     policy_digest: str
 
 
-def _full_cot_profile() -> ReasoningV4StudentProfile:
-    """Build the sole V4.6 student prompt profile."""
+def _full_cot_profile(
+    direction_registry_version: str,
+) -> ReasoningV4StudentProfile:
+    """Build one V4.6 student prompt bound to a direction registry.
 
-    profile_id = "urbannav_reasoning_v4_6_compact_full_cot_sft_v1"
+    Args:
+        direction_registry_version: Exact direction-registry snapshot.
+
+    Returns:
+        Immutable student prompt profile.
+    """
+
+    legacy_registry = (
+        direction_registry_version == DIRECTION_PROFILE_REGISTRY_V1
+    )
+    profile_id = (
+        "urbannav_reasoning_v4_6_compact_full_cot_sft_v1"
+        if legacy_registry
+        else "urbannav_reasoning_v4_6_compact_full_cot_sft_v2"
+    )
     payload = {
         "profile_id": profile_id,
         "trace_schema_version": REASONING_TRACE_V4_SCHEMA_VERSION,
@@ -126,7 +144,9 @@ def _full_cot_profile() -> ReasoningV4StudentProfile:
             reasoning_v4_contract_schema_digest()
         ),
         "target_schema": ReasoningTargetV4.model_json_schema(),
-        "action_profiles": approved_stage_a_direction_profiles(),
+        "action_profiles": approved_stage_a_direction_profiles(
+            direction_registry_version
+        ),
         "affordance_probe_profiles": (
             approved_affordance_probe_profiles()
         ),
@@ -135,6 +155,10 @@ def _full_cot_profile() -> ReasoningV4StudentProfile:
         "system_prompt": _SYSTEM_PROMPT,
         "user_prompt_builder": "build_reasoning_v4_user_prompt_v4_6",
     }
+    if not legacy_registry:
+        payload["direction_registry_version"] = (
+            direction_registry_version
+        )
     digest = hashlib.sha256(
         json.dumps(
             payload,
@@ -152,7 +176,12 @@ def _full_cot_profile() -> ReasoningV4StudentProfile:
     )
 
 
-STUDENT_FULL_COT_PROFILE_V4 = _full_cot_profile()
+STUDENT_FULL_COT_PROFILE_V4 = _full_cot_profile(
+    DIRECTION_PROFILE_REGISTRY_V1
+)
+STUDENT_FULL_COT_PROFILE_V4_REGISTRY_V2 = _full_cot_profile(
+    DIRECTION_PROFILE_REGISTRY_V2
+)
 PROMPT_PROFILE_REGISTRY_V4: Mapping[
     str,
     ReasoningV4StudentProfile,
@@ -160,7 +189,10 @@ PROMPT_PROFILE_REGISTRY_V4: Mapping[
     {
         STUDENT_FULL_COT_PROFILE_V4.profile_id: (
             STUDENT_FULL_COT_PROFILE_V4
-        )
+        ),
+        STUDENT_FULL_COT_PROFILE_V4_REGISTRY_V2.profile_id: (
+            STUDENT_FULL_COT_PROFILE_V4_REGISTRY_V2
+        ),
     }
 )
 
@@ -189,9 +221,41 @@ def get_prompt_profile_v4(
         ) from exc
 
 
+def student_prompt_profile_for_direction_registry_v4(
+    direction_registry_version: str,
+) -> ReasoningV4StudentProfile:
+    """Resolve the student prompt bound to a direction registry.
+
+    Args:
+        direction_registry_version: Exact canonical registry snapshot.
+
+    Returns:
+        Immutable student prompt profile.
+
+    Raises:
+        ValueError: If the registry has no compatible prompt profile.
+    """
+
+    mapping = {
+        DIRECTION_PROFILE_REGISTRY_V1: STUDENT_FULL_COT_PROFILE_V4,
+        DIRECTION_PROFILE_REGISTRY_V2: (
+            STUDENT_FULL_COT_PROFILE_V4_REGISTRY_V2
+        ),
+    }
+    try:
+        return mapping[str(direction_registry_version)]
+    except KeyError as exc:
+        raise ValueError(
+            "unsupported Reasoning V4.6 direction registry: "
+            f"{direction_registry_version!r}"
+        ) from exc
+
+
 __all__ = [
     "PROMPT_PROFILE_REGISTRY_V4",
     "STUDENT_FULL_COT_PROFILE_V4",
+    "STUDENT_FULL_COT_PROFILE_V4_REGISTRY_V2",
     "ReasoningV4StudentProfile",
     "get_prompt_profile_v4",
+    "student_prompt_profile_for_direction_registry_v4",
 ]

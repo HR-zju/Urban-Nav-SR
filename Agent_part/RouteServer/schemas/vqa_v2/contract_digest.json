@@ -16,7 +16,7 @@
     "config/vqa_v2_stage_a_capabilities.json": "5416ba585b4b225a25442f257c7abce555f73f035c7d679a723648481be44ac6",
     "src/mcp_server/agent/vqa_v2_prompt_policy.py": "dcb47487f9157eed57285e7249aac9808a8207b2fbe3b9a979a93ab76a2d95cf",
     "src/mcp_server/agent/vqa_v2_text.py": "cef082a86a83941ec693b8ce107b24bbd43aecc155937bc1dd1a4003f06bc231",
-    "src/mcp_server/contracts/direction_profile.py": "2e47435c54f8d8c63ca0cede70631370de3520656be93e764370a5274e0afa4f",
+    "src/mcp_server/contracts/direction_profile.py": "4b9a330ca170157101b6658178bee80ac2b21c458c4ece85a340c8845c8d9142",
     "src/mcp_server/contracts/vqa_dataset_v2.py": "a912f2af30c157e80b9f4d6e550c7364967426f59883be86c0289f4ebd768e56",
     "src/mcp_server/contracts/vqa_v2.py": "d02e46df48c4c9a84b3c3553bd613690ed7a1d9a12c2c53b95b5b009c040900b",
     "src/mcp_server/data/vqa_v2_audit.py": "d933ae7c5829d5bbb89938d497c8ddfbc958e44b3afbdb3f4f76f3cc920e562e",

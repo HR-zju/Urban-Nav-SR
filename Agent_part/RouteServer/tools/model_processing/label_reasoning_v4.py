@@ -13,6 +13,10 @@ from mcp_server.teacher.reasoning_v4_batch import (
     ReasoningV4BatchConfig,
     label_reasoning_source_manifest_v4,
 )
+from mcp_server.contracts.direction_profile import (
+    DIRECTION_PROFILE_REGISTRY_V1,
+    direction_profile_registry_versions,
+)
 from mcp_server.teacher.reasoning_v4_image_policy import (
     REASONING_V4_ALL_VISIBLE_IMAGES_POLICY_ID,
     REASONING_V4_SECTION_IMAGE_POLICIES,
@@ -70,6 +74,15 @@ def parse_args(
             "Decision visual with current FPV plus optional current BEV."
         ),
     )
+    parser.add_argument(
+        "--direction-registry-version",
+        choices=direction_profile_registry_versions(),
+        default=DIRECTION_PROFILE_REGISTRY_V1,
+        help=(
+            "Direction registry bound to teacher prompt digests. Keep v1 for "
+            "existing V4.6 runs; use v2 only for explicit four-profile runs."
+        ),
+    )
     parser.add_argument("--progress-interval", type=int, default=100)
     parser.add_argument("--retry-failed-on-resume", action="store_true")
     parser.add_argument("--api-keys-file", type=Path)
@@ -96,6 +109,9 @@ def main(argv: Sequence[str] | None = None) -> None:
                 ),
                 section_image_policy_id=(
                     args.section_image_policy_id
+                ),
+                direction_registry_version=(
+                    args.direction_registry_version
                 ),
                 concurrency=max(1, args.concurrency),
                 retry_failed_on_resume=(

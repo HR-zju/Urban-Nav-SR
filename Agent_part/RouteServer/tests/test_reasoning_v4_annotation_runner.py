@@ -7,8 +7,25 @@ from pathlib import Path
 
 import pytest
 
+from mcp_server.agent.reasoning_v4_prompt_policy import (
+    STUDENT_FULL_COT_PROFILE_V4,
+    STUDENT_FULL_COT_PROFILE_V4_REGISTRY_V2,
+)
+from mcp_server.contracts.direction_profile import (
+    DIRECTION_PROFILE_REGISTRY_V1,
+    DIRECTION_PROFILE_REGISTRY_V2,
+    EGO_DEGREE10_12WAY_TERMINAL_CENTROID_V2,
+    EGO_DEGREE10_TERMINAL_CENTROID_V2,
+    FPV_DEGREE10_12WAY_TERMINAL_CENTROID_V2,
+    FPV_DEGREE10_TERMINAL_CENTROID_V2,
+    approved_stage_a_direction_profiles,
+    resolve_stage_a_direction_profile,
+)
 from mcp_server.data.reasoning_source import ReasoningSourceBuildConfig
 from mcp_server.data.reasoning_v4_source import build_reasoning_source_v4
+from mcp_server.teacher.reasoning_v4_profiles import (
+    get_reasoning_v4_teacher_profile,
+)
 from tools.model_processing.project_reasoning_v4_fpv_directions import (
     project_reasoning_v4_fpv_direction_row,
 )
@@ -148,6 +165,94 @@ def test_sidewalk_12way_projection_uses_raw_angle_for_frozen_20way() -> None:
     assert len(projected["direction_candidates"]) == 20
 
 
+def test_registry_v1_is_frozen_and_registry_v2_has_four_profiles() -> None:
+    """The running V4.6 registry remains readable beside the new matrix."""
+
+    assert set(
+        approved_stage_a_direction_profiles(
+            DIRECTION_PROFILE_REGISTRY_V1
+        )
+    ) == {
+        FPV_DEGREE10_TERMINAL_CENTROID_V2,
+        EGO_DEGREE10_12WAY_TERMINAL_CENTROID_V2,
+    }
+    assert set(
+        approved_stage_a_direction_profiles(
+            DIRECTION_PROFILE_REGISTRY_V2
+        )
+    ) == {
+        FPV_DEGREE10_TERMINAL_CENTROID_V2,
+        FPV_DEGREE10_12WAY_TERMINAL_CENTROID_V2,
+        EGO_DEGREE10_TERMINAL_CENTROID_V2,
+        EGO_DEGREE10_12WAY_TERMINAL_CENTROID_V2,
+    }
+    assert STUDENT_FULL_COT_PROFILE_V4.policy_digest == (
+        "09462230ab1439971e39fe1ac957b1d5"
+        "a33c00a6680335ce5fe90f6ef8eeff0c"
+    )
+    assert (
+        STUDENT_FULL_COT_PROFILE_V4_REGISTRY_V2.profile_id
+        == "urbannav_reasoning_v4_6_compact_full_cot_sft_v2"
+    )
+    assert (
+        STUDENT_FULL_COT_PROFILE_V4_REGISTRY_V2.policy_digest
+        != STUDENT_FULL_COT_PROFILE_V4.policy_digest
+    )
+
+
+def test_teacher_profiles_are_versioned_by_direction_registry() -> None:
+    """Registry-v2 annotation cannot hit registry-v1 teacher caches."""
+
+    legacy = get_reasoning_v4_teacher_profile(
+        "Decision",
+        direction_registry_version=DIRECTION_PROFILE_REGISTRY_V1,
+    )
+    expanded = get_reasoning_v4_teacher_profile(
+        "Decision",
+        direction_registry_version=DIRECTION_PROFILE_REGISTRY_V2,
+    )
+
+    assert legacy.profile_id.endswith("_v10")
+    assert expanded.profile_id.endswith("_v11")
+    assert legacy.policy_digest != expanded.policy_digest
+    assert legacy.derivation_version.endswith("_v2")
+    assert expanded.derivation_version.endswith("_v3")
+    assert legacy.policy_digest == (
+        "ddad6e12bfd1e33bc521774a2d6577ba"
+        "6b31daba67213da6f784377da9b66440"
+    )
+    routed_legacy = get_reasoning_v4_teacher_profile(
+        "Decision",
+        section_image_policy_id=(
+            "reasoning_v4_section_images_routed_visual_v1"
+        ),
+        direction_registry_version=DIRECTION_PROFILE_REGISTRY_V1,
+    )
+    assert routed_legacy.policy_digest == (
+        "2c4a5ebafd7b042964b4586b897e06c1"
+        "9b875ed40f0f47c59f255325b9fe7fb2"
+    )
+
+
+def test_each_registry_v2_profile_freezes_geometry_contract() -> None:
+    """Every profile owns geometry, units, stop, and derivation semantics."""
+
+    for profile_id in (
+        FPV_DEGREE10_TERMINAL_CENTROID_V2,
+        FPV_DEGREE10_12WAY_TERMINAL_CENTROID_V2,
+        EGO_DEGREE10_TERMINAL_CENTROID_V2,
+        EGO_DEGREE10_12WAY_TERMINAL_CENTROID_V2,
+    ):
+        profile = resolve_stage_a_direction_profile(profile_id)
+        assert profile["derivation_strategy"]
+        assert profile["coordinate_frame"]
+        assert profile["coordinate_unit"]
+        assert profile["trajectory_fields"]
+        assert profile["derivation_version"]
+        assert profile["stop_threshold"] > 0
+        assert profile["route_theta_fallback"] is False
+
+
 def test_sidewalk_projection_is_consumable_by_v4_source_builder() -> None:
     """A projected row must be a complete canonical V4 flat stamp."""
 
@@ -198,6 +303,43 @@ def test_sidewalk_12way_projection_preserves_stop_semantics() -> None:
     assert projected["direction_source"] == "finish_stop_rule"
 
 
+def test_sidewalk_12way_projection_does_not_require_raw_angle() -> None:
+    """A same-vocabulary projection preserves a moving 12-way GT record."""
+
+    row = _legacy_sidewalk_12way_row(
+        label_index=10,
+        label_name="left_50plus",
+        raw_angle_deg=None,
+    )
+    projected = project_reasoning_v4_fpv_direction_row(
+        row,
+        target_profile_id=FPV_DEGREE10_12WAY_TERMINAL_CENTROID_V2,
+    )
+
+    assert projected["direction_name"] == "left_50plus"
+    assert projected["direction_label_index"] == 10
+    assert projected["direction_raw_angle_deg"] is None
+
+
+def test_sidewalk_12way_to_20way_requires_raw_angle() -> None:
+    """A collapsed 50-plus class cannot be invented as an exact 20-way bin."""
+
+    row = _legacy_sidewalk_12way_row(
+        label_index=10,
+        label_name="left_50plus",
+        raw_angle_deg=None,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="direction_raw_angle_deg",
+    ):
+        project_reasoning_v4_fpv_direction_row(
+            row,
+            target_profile_id=FPV_DEGREE10_TERMINAL_CENTROID_V2,
+        )
+
+
 def test_sidewalk_12way_projection_rejects_inconsistent_source_label() -> None:
     """Projection fails closed when the stored 12-way tuple disagrees."""
 
@@ -213,6 +355,175 @@ def test_sidewalk_12way_projection_rejects_inconsistent_source_label() -> None:
         match="source direction choice/index mismatch",
     ):
         project_reasoning_v4_fpv_direction_row(row)
+
+
+def _projected_fpv_source(
+    *,
+    dataset_source: str,
+    target_profile_id: str,
+) -> dict[str, object]:
+    """Build one explicit FPV-profile source without data-family defaults."""
+
+    row = _legacy_sidewalk_12way_row(
+        label_index=1,
+        label_name="straight",
+        raw_angle_deg=0.0,
+    )
+    row.update({
+        "id": f"{dataset_source}-{target_profile_id}",
+        "fpv_image_path": "/tmp/current.jpg",
+    })
+    return project_reasoning_v4_fpv_direction_row(
+        row,
+        dataset_source=dataset_source,
+        target_profile_id=target_profile_id,
+    )
+
+
+def test_same_dataset_accepts_two_explicit_fpv_profiles() -> None:
+    """Dataset identity no longer chooses a single output vocabulary."""
+
+    sources = [
+        build_reasoning_source_v4(
+            _projected_fpv_source(
+                dataset_source="sidewalk",
+                target_profile_id=profile_id,
+            ),
+            index=index,
+            config=ReasoningSourceBuildConfig(
+                dataset_source="sidewalk",
+                enable_system1=False,
+            ),
+        )
+        for index, profile_id in enumerate(
+            (
+                FPV_DEGREE10_12WAY_TERMINAL_CENTROID_V2,
+                FPV_DEGREE10_TERMINAL_CENTROID_V2,
+            )
+        )
+    ]
+
+    assert {
+        source.direction_supervision.profile_id
+        for source in sources
+        if source.direction_supervision is not None
+    } == {
+        FPV_DEGREE10_12WAY_TERMINAL_CENTROID_V2,
+        FPV_DEGREE10_TERMINAL_CENTROID_V2,
+    }
+
+
+def test_different_datasets_accept_the_same_explicit_profile() -> None:
+    """A registered profile is selected per row, not per dataset family."""
+
+    profile_id = FPV_DEGREE10_12WAY_TERMINAL_CENTROID_V2
+    sources = [
+        build_reasoning_source_v4(
+            _projected_fpv_source(
+                dataset_source=dataset_source,
+                target_profile_id=profile_id,
+            ),
+            index=index,
+            config=ReasoningSourceBuildConfig(
+                dataset_source=dataset_source,
+                enable_system1=False,
+            ),
+        )
+        for index, dataset_source in enumerate(
+            ("sidewalk", "foxglove")
+        )
+    ]
+
+    assert {
+        source.observation.dataset_source for source in sources
+    } == {"sidewalk", "foxglove"}
+    assert all(
+        source.direction_supervision is not None
+        and source.direction_supervision.profile_id == profile_id
+        for source in sources
+    )
+
+
+def test_egowalk_accepts_explicit_12way_and_20way_profiles() -> None:
+    """Both ego output vocabularies share the same frozen geometry producer."""
+
+    specifications = (
+        (
+            EGO_DEGREE10_12WAY_TERMINAL_CENTROID_V2,
+            1,
+            "B",
+            "degree10_12way_with_stop",
+        ),
+        (
+            EGO_DEGREE10_TERMINAL_CENTROID_V2,
+            9,
+            "J",
+            "degree10_with_stop",
+        ),
+    )
+    sources = []
+    for index, (
+        profile_id,
+        label_index,
+        choice,
+        bin_mode,
+    ) in enumerate(specifications):
+        row = {
+            "id": f"egowalk-{index}",
+            "fpv_image_path": "/tmp/current.jpg",
+            "direction_profile_id": profile_id,
+            "direction_profile_version": "2.0",
+            "direction_label_index": label_index,
+            "direction_label_name": "straight",
+            "direction_choice": choice,
+            "direction_angle_deg": 0.0,
+            "direction_source": "trajectory_ego_t",
+            "direction_bin_mode": bin_mode,
+            "direction_derivation_version": (
+                "ego_x_right_y_front_terminal_centroid_rule_v2"
+            ),
+        }
+        sources.append(
+            build_reasoning_source_v4(
+                row,
+                index=index,
+                config=ReasoningSourceBuildConfig(
+                    dataset_source="egowalk",
+                    enable_system1=False,
+                ),
+            )
+        )
+
+    assert {
+        source.direction_supervision.profile_id
+        for source in sources
+        if source.direction_supervision is not None
+    } == {
+        EGO_DEGREE10_12WAY_TERMINAL_CENTROID_V2,
+        EGO_DEGREE10_TERMINAL_CENTROID_V2,
+    }
+
+
+def test_frodobots_remains_direction_gt_fail_closed() -> None:
+    """Framework profile flexibility does not invent FrodoBots GT."""
+
+    row = _projected_fpv_source(
+        dataset_source="frodobots",
+        target_profile_id=FPV_DEGREE10_12WAY_TERMINAL_CENTROID_V2,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="no approved Reasoning V4 direction GT",
+    ):
+        build_reasoning_source_v4(
+            row,
+            index=0,
+            config=ReasoningSourceBuildConfig(
+                dataset_source="frodobots",
+                enable_system1=False,
+            ),
+        )
 
 
 def test_direction_stamper_selects_four_coarse_smoke_buckets(

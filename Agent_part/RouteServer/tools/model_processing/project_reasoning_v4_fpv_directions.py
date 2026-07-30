@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Project legacy FPV direction rows onto the frozen V4.6 20-way profile.
+"""Project legacy FPV direction rows onto an explicit V4.6 FPV profile.
 
 The projection consumes the already recorded continuous
 ``direction_raw_angle_deg`` produced by the canonical terminal-centroid rule.
@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from mcp_server.contracts.direction_profile import (
+    FPV_DEGREE10_12WAY_TERMINAL_CENTROID_V2,
     FPV_DEGREE10_TERMINAL_CENTROID_V2,
     canonical_direction_derivation_version,
     resolve_stage_a_direction_profile,
@@ -23,7 +24,7 @@ from mcp_server.contracts.direction_profile import (
 from mcp_server.data.jsonl_io import iter_jsonl, write_jsonl_atomic
 
 
-_PROJECTION_SCHEMA_VERSION = "reasoning_v4_fpv_direction_projection_v1"
+_PROJECTION_SCHEMA_VERSION = "reasoning_v4_fpv_direction_projection_v2"
 _SOURCE_BIN_MODE = "degree10_12way_with_stop"
 _SOURCE_LABELS = (
     "stop",
@@ -79,20 +80,20 @@ def project_reasoning_v4_fpv_direction_row(
         row: Legacy row containing a consistent 12-way direction label and
             canonical continuous raw angle.
         dataset_source: Dataset identity written to the projected row.
-        target_profile_id: Exact frozen target profile.
+        target_profile_id: Exact registered FPV target profile.
 
     Returns:
         Copied row with a complete target-profile flat direction contract.
 
     Raises:
-        ValueError: If the source contract is inconsistent, a moving row lacks
-            a finite raw angle, or the target is not the frozen FPV profile.
+        ValueError: If the source contract is inconsistent, a 20-way projection
+            lacks a finite raw angle, or the target is not an FPV profile.
     """
 
     profile = resolve_stage_a_direction_profile(target_profile_id)
-    if target_profile_id != FPV_DEGREE10_TERMINAL_CENTROID_V2:
+    if profile.get("derivation_strategy") != "fpv_terminal_centroid":
         raise ValueError(
-            "only the frozen FPV degree10 profile is supported"
+            "target profile must use the FPV terminal-centroid producer"
         )
     source_bin_mode = str(row.get("direction_bin_mode") or "").strip()
     if source_bin_mode != _SOURCE_BIN_MODE:
@@ -137,27 +138,41 @@ def project_reasoning_v4_fpv_direction_row(
         )
     if source_name == "stop":
         target_name = "stop"
-        target_angle = None
         target_source = "finish_stop_rule"
         raw_angle = None
+    elif (
+        target_profile_id
+        == FPV_DEGREE10_12WAY_TERMINAL_CENTROID_V2
+    ):
+        target_name = source_name
+        target_source = derivation_version
+        raw_value = row.get("direction_raw_angle_deg")
+        raw_angle = (
+            _required_finite_float(row, "direction_raw_angle_deg")
+            if raw_value is not None
+            else None
+        )
     else:
         raw_angle = _required_finite_float(
             row,
             "direction_raw_angle_deg",
         )
         candidates = [
-            (index, float((index - 9) * 10))
-            for index, name in enumerate(labels)
-            if name != "stop"
+            (index, float(angle))
+            for index, (name, angle) in enumerate(
+                zip(labels, profile["angles"])
+            )
+            if name != "stop" and angle is not None
         ]
-        target_index, target_angle = min(
+        target_index, _ = min(
             candidates,
             key=lambda item: abs(item[1] - raw_angle),
         )
         target_name = labels[target_index]
         target_source = derivation_version
     target_index = labels.index(target_name)
-    target_choice = chr(ord("A") + target_index)
+    target_choice = str(profile["choices"][target_index])
+    target_angle = profile["angles"][target_index]
 
     projected = dict(row)
     projected.pop("direction_supervision", None)
@@ -185,11 +200,9 @@ def project_reasoning_v4_fpv_direction_row(
     projected["direction_candidates"] = [
         {
             "index": index,
-            "choice": chr(ord("A") + index),
+            "choice": str(profile["choices"][index]),
             "name": name,
-            "angle_deg": (
-                None if name == "stop" else float((index - 9) * 10)
-            ),
+            "angle_deg": profile["angles"][index],
         }
         for index, name in enumerate(labels)
     ]

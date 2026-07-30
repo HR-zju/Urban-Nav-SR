@@ -14,11 +14,23 @@ from mcp_server.contracts.reasoning import ReasonCode
 FPV_DEGREE10_TERMINAL_CENTROID_V2 = (
     "fpv_degree10_terminal_centroid_v2"
 )
+FPV_DEGREE10_12WAY_TERMINAL_CENTROID_V2 = (
+    "fpv_degree10_12way_terminal_centroid_v2"
+)
+EGO_DEGREE10_TERMINAL_CENTROID_V2 = (
+    "ego_degree10_terminal_centroid_v2"
+)
 EGO_DEGREE10_12WAY_TERMINAL_CENTROID_V2 = (
     "ego_degree10_12way_terminal_centroid_v2"
 )
 FPV_DEGREE10_AFFORDANCE7_V1 = "fpv_degree10_affordance7_v1"
 EGO_12WAY_AFFORDANCE7_V1 = "ego_12way_affordance7_v1"
+DIRECTION_PROFILE_REGISTRY_V1 = (
+    "urbannav_direction_profile_registry_v1"
+)
+DIRECTION_PROFILE_REGISTRY_V2 = (
+    "urbannav_direction_profile_registry_v2"
+)
 
 _FORBIDDEN_DIRECTION_SOURCE_PARTS = (
     "gps",
@@ -27,7 +39,7 @@ _FORBIDDEN_DIRECTION_SOURCE_PARTS = (
     "route_theta",
 )
 
-_APPROVED_STAGE_A_DIRECTION_PROFILES: dict[str, dict[str, Any]] = {
+_DIRECTION_PROFILE_REGISTRY_V1: dict[str, dict[str, Any]] = {
     FPV_DEGREE10_TERMINAL_CENTROID_V2: {
         "profile_version": "2.0",
         "bin_mode": "degree10_with_stop",
@@ -121,6 +133,228 @@ _APPROVED_STAGE_A_DIRECTION_PROFILES: dict[str, dict[str, Any]] = {
     },
 }
 
+
+def _profile_v2(
+    base: dict[str, Any],
+    *,
+    derivation_strategy: str,
+    coordinate_frame: str,
+    coordinate_unit: str,
+    trajectory_fields: tuple[str, ...],
+    stop_threshold: float,
+    allowed_sources: tuple[str, ...],
+) -> dict[str, Any]:
+    """Add frozen geometry-producer semantics to one output vocabulary.
+
+    Args:
+        base: Label, choice, angle, and motion vocabulary.
+        derivation_strategy: Registered deterministic geometry producer.
+        coordinate_frame: Exact trajectory coordinate frame.
+        coordinate_unit: Unit used by trajectory displacement.
+        trajectory_fields: Ordered accepted trajectory source fields.
+        stop_threshold: Displacement below which the action is ``stop``.
+        allowed_sources: Auditable source codes accepted for this producer.
+
+    Returns:
+        Complete registry-v2 direction profile.
+    """
+
+    return {
+        **base,
+        "derivation_strategy": derivation_strategy,
+        "coordinate_frame": coordinate_frame,
+        "coordinate_unit": coordinate_unit,
+        "trajectory_fields": trajectory_fields,
+        "reference_method": "terminal_centroid",
+        "lookahead_ratio": 0.75,
+        "stop_threshold": stop_threshold,
+        "stop_threshold_unit": coordinate_unit,
+        "route_theta_fallback": False,
+        "allowed_sources": allowed_sources,
+    }
+
+
+_DEGREE10_LABELS = tuple(
+    (
+        f"left_{abs(angle)}"
+        if angle < 0
+        else f"right_{angle}"
+        if angle > 0
+        else "straight"
+    )
+    for angle in range(-90, 91, 10)
+) + ("stop",)
+_DEGREE10_CHOICES = tuple(
+    chr(ord("A") + index) for index in range(19)
+) + ("T",)
+_DEGREE10_ANGLES = tuple(
+    float(angle) for angle in range(-90, 91, 10)
+) + (None,)
+_DEGREE10_COARSE_MOTIONS = tuple(
+    "go_straight"
+    if abs(angle) <= 10
+    else "turn_left"
+    if angle < 0
+    else "turn_right"
+    for angle in range(-90, 91, 10)
+) + ("stop",)
+_DEGREE10_12WAY_LABELS = (
+    "stop",
+    "straight",
+    "left_10",
+    "right_10",
+    "left_20",
+    "right_20",
+    "left_30",
+    "right_30",
+    "left_40",
+    "right_40",
+    "left_50plus",
+    "right_50plus",
+)
+_DEGREE10_12WAY_CHOICES = tuple(
+    chr(ord("A") + index) for index in range(12)
+)
+_DEGREE10_12WAY_ANGLES = (
+    None,
+    0.0,
+    -10.0,
+    10.0,
+    -20.0,
+    20.0,
+    -30.0,
+    30.0,
+    -40.0,
+    40.0,
+    -50.0,
+    50.0,
+)
+_DEGREE10_12WAY_COARSE_MOTIONS = (
+    "stop",
+    "go_straight",
+    "go_straight",
+    "go_straight",
+    "turn_left",
+    "turn_right",
+    "turn_left",
+    "turn_right",
+    "turn_left",
+    "turn_right",
+    "turn_left",
+    "turn_right",
+)
+_FPV_GEOMETRY = {
+    "derivation_strategy": "fpv_terminal_centroid",
+    "coordinate_frame": "fpv_image_xy_top_left",
+    "coordinate_unit": "normalized_fpv_xy",
+    "trajectory_fields": (
+        "pixel_trajectory",
+        "trajectory_norm",
+        "trajectory_pixel",
+        "points",
+        "trajectory",
+    ),
+    "stop_threshold": 0.06,
+    "allowed_sources": (
+        "pixel_trajectory_terminal_centroid_rule_v2",
+        "pixel_trajectory",
+    ),
+}
+_EGO_GEOMETRY = {
+    "derivation_strategy": "ego_terminal_centroid",
+    "coordinate_frame": "ego_x_right_y_front",
+    "coordinate_unit": "meter",
+    "trajectory_fields": (
+        "trajectory_ego_t",
+        "gt_trajectory_ego_t",
+    ),
+    "stop_threshold": 0.25,
+    "allowed_sources": (
+        "ego_x_right_y_front_terminal_centroid_rule_v2",
+        "trajectory_ego_t",
+        "gt_trajectory_ego_t",
+    ),
+}
+
+
+def _output_profile(
+    *,
+    bin_mode: str,
+    derivation_version: str,
+    labels: tuple[str, ...],
+    choices: tuple[str, ...],
+    angles: tuple[float | None, ...],
+    coarse_motions: tuple[str, ...],
+    geometry: dict[str, Any],
+) -> dict[str, Any]:
+    """Build one registry-v2 geometry and output contract."""
+
+    return _profile_v2(
+        {
+            "profile_version": "2.0",
+            "bin_mode": bin_mode,
+            "intent_compatibility_tolerance_deg": 10.0,
+            "derivation_version": derivation_version,
+            "labels": labels,
+            "choices": choices,
+            "angles": angles,
+            "coarse_motions": coarse_motions,
+        },
+        **geometry,
+    )
+
+
+_DIRECTION_PROFILE_REGISTRY_V2: dict[str, dict[str, Any]] = {
+    FPV_DEGREE10_TERMINAL_CENTROID_V2: _output_profile(
+        bin_mode="degree10_with_stop",
+        derivation_version=(
+            "pixel_trajectory_terminal_centroid_rule_v2"
+        ),
+        labels=_DEGREE10_LABELS,
+        choices=_DEGREE10_CHOICES,
+        angles=_DEGREE10_ANGLES,
+        coarse_motions=_DEGREE10_COARSE_MOTIONS,
+        geometry=_FPV_GEOMETRY,
+    ),
+    FPV_DEGREE10_12WAY_TERMINAL_CENTROID_V2: _output_profile(
+        bin_mode="degree10_12way_with_stop",
+        derivation_version=(
+            "pixel_trajectory_terminal_centroid_rule_v2"
+        ),
+        labels=_DEGREE10_12WAY_LABELS,
+        choices=_DEGREE10_12WAY_CHOICES,
+        angles=_DEGREE10_12WAY_ANGLES,
+        coarse_motions=_DEGREE10_12WAY_COARSE_MOTIONS,
+        geometry=_FPV_GEOMETRY,
+    ),
+    EGO_DEGREE10_TERMINAL_CENTROID_V2: _output_profile(
+        bin_mode="degree10_with_stop",
+        derivation_version=(
+            "ego_x_right_y_front_terminal_centroid_rule_v2"
+        ),
+        labels=_DEGREE10_LABELS,
+        choices=_DEGREE10_CHOICES,
+        angles=_DEGREE10_ANGLES,
+        coarse_motions=_DEGREE10_COARSE_MOTIONS,
+        geometry=_EGO_GEOMETRY,
+    ),
+    EGO_DEGREE10_12WAY_TERMINAL_CENTROID_V2: _output_profile(
+        bin_mode="degree10_12way_with_stop",
+        derivation_version=(
+            "ego_x_right_y_front_terminal_centroid_rule_v2"
+        ),
+        labels=_DEGREE10_12WAY_LABELS,
+        choices=_DEGREE10_12WAY_CHOICES,
+        angles=_DEGREE10_12WAY_ANGLES,
+        coarse_motions=_DEGREE10_12WAY_COARSE_MOTIONS,
+        geometry=_EGO_GEOMETRY,
+    ),
+}
+_DIRECTION_PROFILE_REGISTRIES = {
+    DIRECTION_PROFILE_REGISTRY_V1: _DIRECTION_PROFILE_REGISTRY_V1,
+    DIRECTION_PROFILE_REGISTRY_V2: _DIRECTION_PROFILE_REGISTRY_V2,
+}
+
 _APPROVED_AFFORDANCE_PROBE_PROFILES: dict[str, dict[str, Any]] = {
     FPV_DEGREE10_AFFORDANCE7_V1: {
         "profile_version": "1.0",
@@ -151,8 +385,10 @@ _APPROVED_AFFORDANCE_PROBE_PROFILES: dict[str, dict[str, Any]] = {
 }
 
 _ACTION_TO_AFFORDANCE_PROBE_PROFILE = {
-    str(value["action_profile_id"]): profile_id
-    for profile_id, value in _APPROVED_AFFORDANCE_PROBE_PROFILES.items()
+    FPV_DEGREE10_TERMINAL_CENTROID_V2: FPV_DEGREE10_AFFORDANCE7_V1,
+    FPV_DEGREE10_12WAY_TERMINAL_CENTROID_V2: EGO_12WAY_AFFORDANCE7_V1,
+    EGO_DEGREE10_TERMINAL_CENTROID_V2: FPV_DEGREE10_AFFORDANCE7_V1,
+    EGO_DEGREE10_12WAY_TERMINAL_CENTROID_V2: EGO_12WAY_AFFORDANCE7_V1,
 }
 
 
@@ -242,11 +478,14 @@ class DirectionLabelStamp(BaseModel):
 
 def resolve_stage_a_direction_profile(
     profile_id: str,
+    *,
+    registry_version: str = DIRECTION_PROFILE_REGISTRY_V2,
 ) -> dict[str, Any]:
     """Return one approved Stage-A profile.
 
     Args:
         profile_id: Exact versioned profile identifier.
+        registry_version: Exact canonical registry snapshot.
 
     Returns:
         Immutable-by-convention profile mapping.
@@ -256,25 +495,43 @@ def resolve_stage_a_direction_profile(
     """
 
     try:
-        return _APPROVED_STAGE_A_DIRECTION_PROFILES[
-            str(profile_id)
-        ]
+        registry = _DIRECTION_PROFILE_REGISTRIES[str(registry_version)]
+        return registry[str(profile_id)]
     except KeyError as exc:
         raise ValueError(
-            f"unapproved Stage-A direction profile: {profile_id}"
+            "unapproved Stage-A direction profile: "
+            f"registry={registry_version}, profile={profile_id}"
         ) from exc
 
 
-def approved_stage_a_direction_profiles() -> dict[str, dict[str, Any]]:
+def approved_stage_a_direction_profiles(
+    registry_version: str = DIRECTION_PROFILE_REGISTRY_V2,
+) -> dict[str, dict[str, Any]]:
     """Return a JSON-compatible copy of the Stage-A profile registry.
 
     Returns:
         Profile mapping detached from the canonical in-memory registry.
+
+    Args:
+        registry_version: Exact canonical registry snapshot.
+
+    Raises:
+        ValueError: If the registry version is unknown.
     """
 
-    return json.loads(
-        json.dumps(_APPROVED_STAGE_A_DIRECTION_PROFILES)
-    )
+    try:
+        registry = _DIRECTION_PROFILE_REGISTRIES[str(registry_version)]
+    except KeyError as exc:
+        raise ValueError(
+            f"unknown direction profile registry: {registry_version}"
+        ) from exc
+    return json.loads(json.dumps(registry))
+
+
+def direction_profile_registry_versions() -> tuple[str, ...]:
+    """Return supported canonical registry snapshots in version order."""
+
+    return tuple(_DIRECTION_PROFILE_REGISTRIES)
 
 
 def resolve_affordance_probe_profile(profile_id: str) -> dict[str, Any]:
@@ -616,13 +873,50 @@ def canonical_direction_derivation_version(profile_id: str) -> str:
     )
 
 
+def canonical_direction_source_codes(
+    profile_id: str,
+    *,
+    include_stop_rule: bool = False,
+) -> tuple[str, ...]:
+    """Return source codes approved for canonical GT supervision.
+
+    A generic :class:`DirectionLabelStamp` may describe an independently
+    derived prompt-visible proposal, such as a dormant VQA interface. Canonical
+    training supervision is narrower: its source must belong to the frozen
+    trajectory producer selected by the profile.
+
+    Args:
+        profile_id: Exact approved profile identifier.
+        include_stop_rule: Include the deterministic finish stop code.
+
+    Returns:
+        Ordered approved source codes.
+    """
+
+    profile = resolve_stage_a_direction_profile(profile_id)
+    sources = tuple(
+        str(value)
+        for value in profile.get(
+            "allowed_sources",
+            (profile["derivation_version"],),
+        )
+    )
+    if include_stop_rule and "finish_stop_rule" not in sources:
+        return (*sources, "finish_stop_rule")
+    return sources
+
+
 __all__ = [
     "AffordanceProbeCandidate",
     "DirectionComparisonFacts",
     "DirectionLabelStamp",
+    "DIRECTION_PROFILE_REGISTRY_V1",
+    "DIRECTION_PROFILE_REGISTRY_V2",
+    "EGO_DEGREE10_TERMINAL_CENTROID_V2",
     "EGO_12WAY_AFFORDANCE7_V1",
     "EGO_DEGREE10_12WAY_TERMINAL_CENTROID_V2",
     "FPV_DEGREE10_AFFORDANCE7_V1",
+    "FPV_DEGREE10_12WAY_TERMINAL_CENTROID_V2",
     "FPV_DEGREE10_TERMINAL_CENTROID_V2",
     "affordance_probe_candidates_for_action",
     "affordance_probe_label_for_action",
@@ -631,9 +925,11 @@ __all__ = [
     "approved_affordance_probe_profiles",
     "approved_stage_a_direction_profiles",
     "canonical_direction_derivation_version",
+    "canonical_direction_source_codes",
     "coarse_motion_for_direction_label",
     "direction_comparison_facts",
     "direction_compatibility_class",
+    "direction_profile_registry_versions",
     "direction_labels_are_intent_compatible",
     "direction_label_names",
     "resolve_affordance_probe_profile",

@@ -8,10 +8,14 @@ from pathlib import Path
 from typing import Any
 
 from mcp_server.agent.reasoning_v4_prompt_policy import (
-    STUDENT_FULL_COT_PROFILE_V4,
+    student_prompt_profile_for_direction_registry_v4,
 )
 from mcp_server.agent.reasoning_v4_validation import (
     validate_reasoning_target_v4,
+)
+from mcp_server.contracts.direction_profile import (
+    DIRECTION_PROFILE_REGISTRY_V1,
+    resolve_stage_a_direction_profile,
 )
 from mcp_server.contracts.reasoning_dataset_v4 import (
     ActionAdjudicationV4,
@@ -49,6 +53,7 @@ def build_reasoning_training_views_v4(
     release_track: ReleaseTrackV4 = "review_preview",
     diagnosis: ActionReviewDiagnosisRecordV4 | None = None,
     adjudication: ActionAdjudicationV4 | None = None,
+    direction_registry_version: str = DIRECTION_PROFILE_REGISTRY_V1,
 ) -> list[ReasoningTrainingViewV4]:
     """Project one joined artifact into at most one compact FullCoT row.
 
@@ -61,6 +66,8 @@ def build_reasoning_training_views_v4(
         release_track: Review-only or formal-training track.
         diagnosis: Latest two-stage LVLM diagnosis for the action audit.
         adjudication: Latest append-only human adjudication for the audit.
+        direction_registry_version: Exact direction registry bound to the
+            student prompt profile.
 
     Returns:
         Zero or one compact FullCoT view.
@@ -70,6 +77,25 @@ def build_reasoning_training_views_v4(
             fail.
     """
 
+    profile_id = source.observation.direction_context.action_profile_id
+    resolve_stage_a_direction_profile(
+        profile_id,
+        registry_version=direction_registry_version,
+    )
+    annotation_registry = annotation.metadata.get(
+        "direction_registry_version",
+        DIRECTION_PROFILE_REGISTRY_V1,
+    )
+    if annotation_registry != direction_registry_version:
+        raise ValueError(
+            "annotation direction registry does not match view export: "
+            f"{annotation_registry}!={direction_registry_version}"
+        )
+    student_profile = (
+        student_prompt_profile_for_direction_registry_v4(
+            direction_registry_version
+        )
+    )
     if (
         annotation.source_group_id
         != source.observation.source_group_id
@@ -154,10 +180,10 @@ def build_reasoning_training_views_v4(
             reasoning_target=target,
             full_cot_renderer_id=compact.renderer_id,
             prompt_profile_id=(
-                STUDENT_FULL_COT_PROFILE_V4.profile_id
+                student_profile.profile_id
             ),
             prompt_policy_digest=(
-                STUDENT_FULL_COT_PROFILE_V4.policy_digest
+                student_profile.policy_digest
             ),
             direction_supervision=direction,
             trajectory_ego_t=source.trajectory_ego_t,
@@ -185,6 +211,9 @@ def build_reasoning_training_views_v4(
                 ),
                 "training_policy_version": (
                     REASONING_V4_TRAINING_POLICY_VERSION
+                ),
+                "direction_registry_version": (
+                    direction_registry_version
                 ),
                 "release_blockers": list(state.blockers),
                 "validation_warnings": checked.warnings,
@@ -258,6 +287,7 @@ def export_reasoning_training_views_v4(
     release_track: ReleaseTrackV4 = "review_preview",
     diagnosis_jsonl: str | Path | None = None,
     adjudication_jsonl: str | Path | None = None,
+    direction_registry_version: str = DIRECTION_PROFILE_REGISTRY_V1,
     limit: int | None = None,
     skip_errors: bool = False,
 ) -> dict[str, Any]:
@@ -270,6 +300,7 @@ def export_reasoning_training_views_v4(
         release_track: Review-only or formal-training export.
         diagnosis_jsonl: Optional append-only LVLM diagnoses.
         adjudication_jsonl: Optional append-only human adjudications.
+        direction_registry_version: Exact direction registry bound to views.
         limit: Optional source-row limit.
         skip_errors: Continue after invalid joins.
 
@@ -319,6 +350,7 @@ def export_reasoning_training_views_v4(
                 release_track=release_track,
                 diagnosis=diagnosis,
                 adjudication=adjudication,
+                direction_registry_version=direction_registry_version,
             )
         except ValueError as exc:
             counters["invalid_join"] += 1
@@ -378,6 +410,7 @@ def export_reasoning_training_views_v4(
             REASONING_V4_TRAINING_POLICY_VERSION
         ),
         "release_track": release_track,
+        "direction_registry_version": direction_registry_version,
         "formal_release_ready": (
             release_track == "formal_training"
             and not errors

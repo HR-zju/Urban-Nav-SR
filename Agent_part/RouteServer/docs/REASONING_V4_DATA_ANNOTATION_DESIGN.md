@@ -40,6 +40,17 @@ source envelope 保持 `v4_5` 是有意的：它与 VQA V2 共用且本轮没有
 输入结构。target、annotation、audit、review sidecars 和 training view 已整体升级，不能凭
 source 文件名把旧 V4.5 annotation/cache 误当作 V4.6。
 
+方向合同独立版本化，不能从 V4.6 wire 版本猜测：
+
+```text
+urbannav_direction_profile_registry_v1  # 已有正式标注：FPV-20 + Ego-12
+urbannav_direction_profile_registry_v2  # 新实验：FPV/Ego × 20/12-way
+```
+
+registry-v1、对应 student prompt-v1 和 teacher profile digest 保持冻结，已有 V4.6 标注
+继续按原 stamp 读取。registry-v2 使用独立的 student prompt-v2、teacher profile 和 cache
+freshness stamp；不得用 v2 代码原地续写 v1 run root。
+
 assistant target 只有六段：
 
 ```text
@@ -153,15 +164,26 @@ bin_mode
 derivation_version
 ```
 
-当前 allowlist：
+registry-v2 allowlist：
 
-| Profile | Geometry source | Stop rule |
-| --- | --- | --- |
-| `fpv_degree10_terminal_centroid_v2` | existing FPV pixel trajectory terminal centroid | displacement `<0.06` normalized FPV xy |
-| `ego_degree10_12way_terminal_centroid_v2` | existing `trajectory_ego_t`, x-right/y-front terminal centroid | displacement `<0.25m` |
+| Profile | Output | Geometry source | Frame/unit | Stop rule |
+| --- | --- | --- | --- | --- |
+| `fpv_degree10_terminal_centroid_v2` | 20-way | existing FPV pixel trajectory terminal centroid | FPV top-left, normalized xy | displacement `<0.06` |
+| `fpv_degree10_12way_terminal_centroid_v2` | 12-way | same FPV producer | FPV top-left, normalized xy | displacement `<0.06` |
+| `ego_degree10_terminal_centroid_v2` | 20-way | existing `trajectory_ego_t` terminal centroid | x-right/y-front, meter | displacement `<0.25m` |
+| `ego_degree10_12way_terminal_centroid_v2` | 12-way | same ego producer | x-right/y-front, meter | displacement `<0.25m` |
 
-V4.6 不从 row trajectory、BEV、GPS、route、goal 或 LVLM 回答现场补方向。strong label
-不进入 teacher/student 输入，只在 composer、audit 和训练 view 中作 identity 校验。
+`direction_profile_id` 必须逐 row 显式提供。dataset family 不再选择 profile；
+SideWalk、Foxglove、EgoWalk 在框架层都可使用任一已注册 profile，但只有上游确实存在对应
+frame/unit/producer 的 GT 时才能启用。FrodoBots 在没有获准 direction GT 前始终
+fail-closed。
+
+V4.6 source builder 不从 row trajectory、BEV、GPS、route、goal 或 LVLM 回答现场补方向。
+FPV 12-way 到 FPV 20-way 只允许使用已保存的有限
+`direction_raw_angle_deg`（或未来另行批准的原始 trajectory producer）；不能从
+`left_50plus/right_50plus` 猜精确角度。同一 FPV 12-way profile 的 identity 投影不要求
+raw angle。strong label 不进入 teacher/student 输入，只在 composer、audit 和 training
+view 中作 identity 校验。
 
 ## 4. 六段字段合同
 
@@ -435,6 +457,20 @@ assistant message 使用 `reasoning_v4_6_sections` span strategy，六段均为 
 Decision 中训练，不增加独立 direction head，也不通过 Finish 重复监督。System1 sidecar
 存在时继续走既有 trajectory loss；它与 FullCoT LM action 是不同训练通道。
 
+导出的 ms-swift row 同时显式写入：
+
+```text
+reasoning_mode = reasoning_v4_6
+response_contract = reasoning_v4_6_compact
+required_loss_scale_strategy = reasoning_v4_6_sections
+action_supervision_location = decision.selected_action_label
+direction_profile_id = per-row profile
+```
+
+这组字段是一个不可交叉拼装的实验合同。Legacy FullCoT 使用另一组
+`legacy_full_cot / legacy_think_finish / ignore_empty_think /
+finish.direction`；它不是 V4.6 wire 的兼容别名。
+
 带 System1 sidecar 的 view 固定：
 
 ```text
@@ -498,6 +534,11 @@ A/B。至少报告：
 - Decision proposal 与 frozen GT action exact agreement；
 - retry row、pending-human 和 review trigger 分布；
 - provider calls、prompt/completion token、stage latency 与 rows/hour。
+- strict raw-response parse、stable sample-ID 顺序与集合；
+- direction accuracy、macro-F1、balanced accuracy、stop/non-stop、
+  speed/response，以及按 dataset/profile/response-contract 分片；
+- 20-way 到 12-way 的显式 common-space accuracy；包含 `50plus` 的 12-way 记录不报告为
+  精确角误差。
 
 只有 routed policy 的质量指标未越过预设退化阈值、人工复核变更样本通过，且吞吐收益达到
 目标，才允许在新的全量 run root 中替代 all-visible policy。正在运行的旧 policy 全量任务

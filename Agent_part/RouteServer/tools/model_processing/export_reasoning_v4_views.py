@@ -8,6 +8,10 @@ import json
 from pathlib import Path
 from typing import Sequence
 
+from mcp_server.contracts.direction_profile import (
+    DIRECTION_PROFILE_REGISTRY_V1,
+    direction_profile_registry_versions,
+)
 from mcp_server.data.reasoning_v4_views import (
     export_reasoning_training_views_v4,
 )
@@ -29,6 +33,11 @@ def parse_args(
     )
     parser.add_argument("--diagnosis-jsonl", type=Path)
     parser.add_argument("--adjudication-jsonl", type=Path)
+    parser.add_argument(
+        "--direction-registry-version",
+        choices=direction_profile_registry_versions(),
+        default=DIRECTION_PROFILE_REGISTRY_V1,
+    )
     parser.add_argument("--report-json", type=Path)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--skip-errors", action="store_true")
@@ -46,6 +55,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         release_track=args.release_track,
         diagnosis_jsonl=args.diagnosis_jsonl,
         adjudication_jsonl=args.adjudication_jsonl,
+        direction_registry_version=args.direction_registry_version,
         limit=args.limit,
         skip_errors=args.skip_errors,
     )

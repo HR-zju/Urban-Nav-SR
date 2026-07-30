@@ -11,6 +11,8 @@ from typing import Any, Mapping
 from pydantic import BaseModel
 
 from mcp_server.contracts.direction_profile import (
+    DIRECTION_PROFILE_REGISTRY_V1,
+    DIRECTION_PROFILE_REGISTRY_V2,
     approved_affordance_probe_profiles,
     approved_stage_a_direction_profiles,
 )
@@ -171,6 +173,7 @@ def _profile(
     section_name: str,
     *,
     image_policy: SectionImagePolicy,
+    direction_registry_version: str,
 ) -> ReasoningV4TeacherProfile:
     """Build one immutable section profile."""
 
@@ -188,12 +191,16 @@ def _profile(
     policy_slug = image_policy.policy_id.removeprefix(
         "reasoning_v4_section_images_"
     ).removesuffix("_v1")
+    legacy_registry = (
+        direction_registry_version == DIRECTION_PROFILE_REGISTRY_V1
+    )
     profile_id = (
         f"reasoning_v4_teacher_{section_name.lower()}_"
-        f"{policy_slug}_v10"
+        f"{policy_slug}_v{'10' if legacy_registry else '11'}"
     )
     derivation_version = (
-        f"reasoning_v4_6_{section_name.lower()}_derivation_v2"
+        f"reasoning_v4_6_{section_name.lower()}_derivation_"
+        f"v{'2' if legacy_registry else '3'}"
     )
     payload = {
         "profile_id": profile_id,
@@ -202,7 +209,9 @@ def _profile(
         "contract_schema_digest": (
             reasoning_v4_contract_schema_digest()
         ),
-        "action_profiles": approved_stage_a_direction_profiles(),
+        "action_profiles": approved_stage_a_direction_profiles(
+            direction_registry_version
+        ),
         "affordance_probe_profiles": (
             approved_affordance_probe_profiles()
         ),
@@ -225,6 +234,10 @@ def _profile(
             image_policy.selectors[section_name]
         ),
     }
+    if not legacy_registry:
+        payload["direction_registry_version"] = (
+            direction_registry_version
+        )
     digest = hashlib.sha256(
         json.dumps(
             payload,
@@ -246,25 +259,42 @@ def _profile(
     )
 
 
-REASONING_V4_TEACHER_PROFILE_REGISTRY: Mapping[
+REASONING_V4_TEACHER_PROFILE_REGISTRY_BY_DIRECTION: Mapping[
     str,
-    Mapping[str, ReasoningV4TeacherProfile],
+    Mapping[str, Mapping[str, ReasoningV4TeacherProfile]],
 ] = MappingProxyType(
     {
-        policy_id: MappingProxyType(
+        registry_version: MappingProxyType(
             {
-                section_name: _profile(
-                    section_name,
-                    image_policy=image_policy,
+                policy_id: MappingProxyType(
+                    {
+                        section_name: _profile(
+                            section_name,
+                            image_policy=image_policy,
+                            direction_registry_version=(
+                                registry_version
+                            ),
+                        )
+                        for section_name in _SECTION_MODELS
+                    }
                 )
-                for section_name in _SECTION_MODELS
+                for policy_id, image_policy in (
+                    REASONING_V4_SECTION_IMAGE_POLICIES.items()
+                )
             }
         )
-        for policy_id, image_policy in (
-            REASONING_V4_SECTION_IMAGE_POLICIES.items()
+        for registry_version in (
+            DIRECTION_PROFILE_REGISTRY_V1,
+            DIRECTION_PROFILE_REGISTRY_V2,
         )
     }
 )
+REASONING_V4_TEACHER_PROFILE_REGISTRY: Mapping[
+    str,
+    Mapping[str, ReasoningV4TeacherProfile],
+] = REASONING_V4_TEACHER_PROFILE_REGISTRY_BY_DIRECTION[
+    DIRECTION_PROFILE_REGISTRY_V1
+]
 
 REASONING_V4_TEACHER_PROFILES = (
     REASONING_V4_TEACHER_PROFILE_REGISTRY[
@@ -275,23 +305,32 @@ REASONING_V4_TEACHER_PROFILES = (
 
 def get_reasoning_v4_teacher_profiles(
     section_image_policy_id: str,
+    *,
+    direction_registry_version: str = DIRECTION_PROFILE_REGISTRY_V1,
 ) -> Mapping[str, ReasoningV4TeacherProfile]:
-    """Resolve all section profiles for one image policy.
+    """Resolve section profiles for image and direction policies.
 
     Args:
         section_image_policy_id: Exact registered image-policy identity.
+        direction_registry_version: Exact direction-registry snapshot.
 
     Returns:
         Immutable section-to-profile mapping.
 
     Raises:
-        ValueError: If the image policy is unsupported.
+        ValueError: If either policy is unsupported.
     """
 
     get_reasoning_v4_section_image_policy(section_image_policy_id)
-    return REASONING_V4_TEACHER_PROFILE_REGISTRY[
-        str(section_image_policy_id)
-    ]
+    try:
+        return REASONING_V4_TEACHER_PROFILE_REGISTRY_BY_DIRECTION[
+            str(direction_registry_version)
+        ][str(section_image_policy_id)]
+    except KeyError as exc:
+        raise ValueError(
+            "unsupported Reasoning V4.6 direction registry: "
+            f"{direction_registry_version!r}"
+        ) from exc
 
 
 def get_reasoning_v4_teacher_profile(
@@ -300,12 +339,14 @@ def get_reasoning_v4_teacher_profile(
     section_image_policy_id: str = (
         REASONING_V4_ALL_VISIBLE_IMAGES_POLICY_ID
     ),
+    direction_registry_version: str = DIRECTION_PROFILE_REGISTRY_V1,
 ) -> ReasoningV4TeacherProfile:
     """Resolve the canonical teacher profile.
 
     Args:
         section_name: Canonical six-section name.
         section_image_policy_id: Registered annotation image policy.
+        direction_registry_version: Exact direction-registry snapshot.
 
     Returns:
         Immutable profile descriptor.
@@ -316,7 +357,8 @@ def get_reasoning_v4_teacher_profile(
 
     try:
         return get_reasoning_v4_teacher_profiles(
-            section_image_policy_id
+            section_image_policy_id,
+            direction_registry_version=direction_registry_version,
         )[str(section_name)]
     except KeyError as exc:
         raise ValueError(
@@ -328,6 +370,7 @@ def get_reasoning_v4_teacher_profile(
 __all__ = [
     "REASONING_V4_TEACHER_PROFILES",
     "REASONING_V4_TEACHER_PROFILE_REGISTRY",
+    "REASONING_V4_TEACHER_PROFILE_REGISTRY_BY_DIRECTION",
     "ReasoningV4TeacherProfile",
     "get_reasoning_v4_teacher_profile",
     "get_reasoning_v4_teacher_profiles",

@@ -27,6 +27,10 @@ from mcp_server.contracts.reasoning_dataset_v4 import (
     ReasoningRepairRequestV4,
     ReasoningSourceV4,
 )
+from mcp_server.contracts.direction_profile import (
+    DIRECTION_PROFILE_REGISTRY_V1,
+    resolve_stage_a_direction_profile,
+)
 from mcp_server.contracts.reasoning_v4 import (
     DecisionProposalV4,
     DecisionV4,
@@ -90,6 +94,8 @@ class ReasoningV4BatchConfig:
             NavigationContextGrounding so thin BEV route overlays survive
             provider-side image tokenization.
         section_image_policy_id: Exact registered image-routing policy.
+        direction_registry_version: Exact direction registry used by teacher
+            prompt profiles.
         concurrency: Maximum concurrently processed source rows.
         retry_failed_on_resume: Retry cached incomplete or invalid records.
         raw_answer_max_chars: Maximum raw provider text retained per stage.
@@ -104,6 +110,7 @@ class ReasoningV4BatchConfig:
     section_image_policy_id: str = (
         REASONING_V4_ALL_VISIBLE_IMAGES_POLICY_ID
     )
+    direction_registry_version: str = DIRECTION_PROFILE_REGISTRY_V1
     concurrency: int = 1
     retry_failed_on_resume: bool = False
     raw_answer_max_chars: int = 50000
@@ -294,11 +301,16 @@ async def annotate_reasoning_source_v4(
     """
 
     cfg = config or ReasoningV4BatchConfig()
+    resolve_stage_a_direction_profile(
+        source.observation.direction_context.action_profile_id,
+        registry_version=cfg.direction_registry_version,
+    )
     image_policy = get_reasoning_v4_section_image_policy(
         cfg.section_image_policy_id
     )
     profiles = get_reasoning_v4_teacher_profiles(
-        image_policy.policy_id
+        image_policy.policy_id,
+        direction_registry_version=cfg.direction_registry_version,
     )
     for name, value in (
         ("image_detail", cfg.image_detail),
@@ -348,6 +360,7 @@ async def annotate_reasoning_source_v4(
         **outcomes["TaskGrounding"].provenance,
         "section_image_policy_id": image_policy.policy_id,
         "section_image_policy_digest": image_policy.policy_digest,
+        "direction_registry_version": cfg.direction_registry_version,
     }
     groundings = GroundingOutputsV4(
         task_grounding=_typed_section(
@@ -588,14 +601,20 @@ async def repair_reasoning_annotation_v4(
     image_policy = get_reasoning_v4_section_image_policy(
         cfg.section_image_policy_id
     )
+    resolve_stage_a_direction_profile(
+        source.observation.direction_context.action_profile_id,
+        registry_version=cfg.direction_registry_version,
+    )
     profiles = get_reasoning_v4_teacher_profiles(
-        image_policy.policy_id
+        image_policy.policy_id,
+        direction_registry_version=cfg.direction_registry_version,
     )
     if _annotation_is_stale_v4(
         source,
         annotation,
         profiles=profiles,
         image_policy=image_policy,
+        direction_registry_version=cfg.direction_registry_version,
     ):
         raise ValueError(
             "partial repair requires current prompt and image-policy lineage; "
@@ -1176,8 +1195,14 @@ async def label_reasoning_source_manifest_v4(
     image_policy = get_reasoning_v4_section_image_policy(
         cfg.section_image_policy_id
     )
+    for source in sources:
+        resolve_stage_a_direction_profile(
+            source.observation.direction_context.action_profile_id,
+            registry_version=cfg.direction_registry_version,
+        )
     profiles = get_reasoning_v4_teacher_profiles(
-        image_policy.policy_id
+        image_policy.policy_id,
+        direction_registry_version=cfg.direction_registry_version,
     )
     cached = _latest_annotation_cache_v4(annotation_jsonl)
     pending: list[ReasoningSourceV4] = []
@@ -1191,6 +1216,7 @@ async def label_reasoning_source_manifest_v4(
             existing,
             profiles=profiles,
             image_policy=image_policy,
+            direction_registry_version=cfg.direction_registry_version,
         )
         retryable = (
             existing is not None
@@ -1495,6 +1521,7 @@ def _annotation_is_stale_v4(
     *,
     profiles: Mapping[str, ReasoningV4TeacherProfile],
     image_policy: SectionImagePolicy,
+    direction_registry_version: str,
 ) -> bool:
     """Return whether a cached row cannot be reused."""
 
@@ -1511,6 +1538,11 @@ def _annotation_is_stale_v4(
         != image_policy.policy_id
         or annotation.metadata.get("section_image_policy_digest")
         != image_policy.policy_digest
+        or annotation.metadata.get(
+            "direction_registry_version",
+            DIRECTION_PROFILE_REGISTRY_V1,
+        )
+        != direction_registry_version
     ):
         return True
     registered_task = canonicalize_task_instruction_v4(
@@ -1621,6 +1653,7 @@ def _initial_report_v4(
         ),
         "section_image_policy_id": image_policy.policy_id,
         "section_image_policy_digest": image_policy.policy_digest,
+        "direction_registry_version": config.direction_registry_version,
         "section_image_selectors": {
             section_name: list(selectors)
             for section_name, selectors in image_policy.selectors.items()

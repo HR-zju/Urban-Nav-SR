@@ -60,12 +60,13 @@ _DIRECTION_V4_FLAT_FIELDS = {
     "bin_mode": "direction_bin_mode",
     "derivation_version": "direction_derivation_version",
 }
-_DIRECTION_DATASET_ALLOWLIST = {
-    "sidewalk": frozenset({"fpv_degree10_terminal_centroid_v2"}),
-    "foxglove": frozenset({"fpv_degree10_terminal_centroid_v2"}),
-    "egowalk": frozenset({"ego_degree10_12way_terminal_centroid_v2"}),
-    "frodobots": frozenset(),
-}
+_SUPPORTED_DATASET_FAMILIES = (
+    "sidewalk",
+    "foxglove",
+    "egowalk",
+    "frodobots",
+)
+_DIRECTION_GT_DISABLED_DATASET_FAMILIES = frozenset({"frodobots"})
 
 
 def build_reasoning_source_v4(
@@ -532,15 +533,13 @@ def _direction_supervision_v4(
 
     raw = _raw_direction_record(row)
     family = _dataset_family(dataset_source)
-    approved = _DIRECTION_DATASET_ALLOWLIST.get(family)
-    if approved is None:
+    if family in _DIRECTION_GT_DISABLED_DATASET_FAMILIES:
         raise ValueError(
-            f"unsupported V4 dataset direction policy: {dataset_source}"
+            "dataset has no approved Reasoning V4 direction GT: "
+            f"{family}"
         )
     if raw is None:
         return None, ["canonical_direction_missing"]
-    if not approved:
-        return None, [f"{family}_direction_ignored_by_policy"]
     core_fields = (
         "profile_id",
         "profile_version",
@@ -562,11 +561,6 @@ def _direction_supervision_v4(
             + ",".join(missing)
         ]
     direction = DirectionSupervisionV4.model_validate(raw)
-    if direction.profile_id not in approved:
-        raise ValueError(
-            "direction profile is not approved for dataset: "
-            f"dataset={family}, profile={direction.profile_id}"
-        )
     return direction, []
 
 
@@ -579,14 +573,10 @@ def _direction_context_v4(
     """Build public action/probe identities without repeating label arrays."""
 
     family = _dataset_family(dataset_source)
-    approved = _DIRECTION_DATASET_ALLOWLIST.get(family)
-    if approved is None:
+    if family in _DIRECTION_GT_DISABLED_DATASET_FAMILIES:
         raise ValueError(
-            f"unsupported Reasoning V4 direction policy: {dataset_source}"
-        )
-    if not approved:
-        raise ValueError(
-            f"no approved Reasoning V4 direction profile for dataset: {family}"
+            "dataset has no approved Reasoning V4 direction GT: "
+            f"{family}"
         )
     raw = _raw_direction_record(row)
     profile_id = (
@@ -595,15 +585,8 @@ def _direction_context_v4(
         else str((raw or {}).get("profile_id") or "").strip()
     )
     if not profile_id:
-        if len(approved) != 1:
-            raise ValueError(
-                "direction output profile is ambiguous for dataset"
-            )
-        profile_id = next(iter(approved))
-    if profile_id not in approved:
         raise ValueError(
-            "direction output profile is not approved for dataset: "
-            f"dataset={family}, profile={profile_id}"
+            "Reasoning V4 source requires explicit direction_profile_id"
         )
     profile = resolve_stage_a_direction_profile(profile_id)
     probe_profile_id = affordance_probe_profile_for_action(profile_id)
@@ -828,7 +811,9 @@ def _dataset_family(value: str) -> str:
     """Normalize one dataset id to a V4 supervision family."""
 
     normalized = str(value).strip().lower().replace("_", "-")
-    for family in _DIRECTION_DATASET_ALLOWLIST:
+    for family in _SUPPORTED_DATASET_FAMILIES:
         if normalized.startswith(family):
             return family
-    return normalized
+    raise ValueError(
+        f"unsupported Reasoning V4 dataset family: {value!r}"
+    )

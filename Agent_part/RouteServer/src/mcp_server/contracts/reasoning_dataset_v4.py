@@ -24,6 +24,7 @@ from mcp_server.contracts.direction_profile import (
     affordance_probe_profile_for_action,
     approved_stage_a_direction_profiles,
     canonical_direction_derivation_version,
+    canonical_direction_source_codes,
     coarse_motion_for_direction_label,
     direction_label_names,
     resolve_affordance_probe_profile,
@@ -555,6 +556,15 @@ class DirectionSupervisionV4(DirectionLabelStamp):
         )
         if self.derivation_version != expected:
             raise ValueError("direction derivation_version mismatch")
+        allowed_sources = canonical_direction_source_codes(
+            self.profile_id,
+            include_stop_rule=str(self.label_name) == "stop",
+        )
+        if str(self.source) not in allowed_sources:
+            raise ValueError(
+                "direction source is incompatible with selected profile: "
+                f"{self.source}"
+            )
         coarse_motion_for_direction_label(
             self.profile_id,
             str(self.label_name),
