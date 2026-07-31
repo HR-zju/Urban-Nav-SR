@@ -1,0 +1,105 @@
+{
+  "additionalProperties": false,
+  "description": "Record one deterministic Stage I projection rejection outside training.\n\nArgs:\n    schema_version: Exact drop-audit schema stamp.\n    task_type: Requested physical task.\n    parent_artifact_kind: Requested parent artifact family.\n    parent_sample_id: Best available parent identity.\n    source_group_id: Best available source-group identity.\n    split_group_id: Best available leakage-safe split identity.\n    dataset_source: Best available dataset family.\n    requested_modality_profile_id: Requested profile before validation.\n    reason_code: Stable bounded rejection category.\n    detail: Bounded diagnostic detail for engineering review.\n    projection_policy_id: Exact projection policy.\n    projection_policy_version: Exact projection policy version.\n    drop_digest: SHA-256 over all other drop fields.",
+  "properties": {
+    "dataset_source": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Dataset Source",
+      "type": "string"
+    },
+    "detail": {
+      "maxLength": 1000,
+      "minLength": 1,
+      "title": "Detail",
+      "type": "string"
+    },
+    "drop_digest": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Drop Digest",
+      "type": "string"
+    },
+    "parent_artifact_kind": {
+      "enum": [
+        "reasoning_v4_6",
+        "vqa_v2_0"
+      ],
+      "title": "Parent Artifact Kind",
+      "type": "string"
+    },
+    "parent_sample_id": {
+      "maxLength": 480,
+      "minLength": 1,
+      "title": "Parent Sample Id",
+      "type": "string"
+    },
+    "projection_policy_id": {
+      "const": "urbannav_stage_i_safe_projection_v1",
+      "default": "urbannav_stage_i_safe_projection_v1",
+      "title": "Projection Policy Id",
+      "type": "string"
+    },
+    "projection_policy_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Projection Policy Version",
+      "type": "string"
+    },
+    "reason_code": {
+      "maxLength": 96,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "title": "Reason Code",
+      "type": "string"
+    },
+    "requested_modality_profile_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Requested Modality Profile Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "urbannav_stage_i_projection_drop_v1",
+      "default": "urbannav_stage_i_projection_drop_v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_group_id": {
+      "maxLength": 240,
+      "minLength": 1,
+      "title": "Source Group Id",
+      "type": "string"
+    },
+    "split_group_id": {
+      "maxLength": 240,
+      "minLength": 1,
+      "title": "Split Group Id",
+      "type": "string"
+    },
+    "task_type": {
+      "enum": [
+        "full_cot",
+        "vqa",
+        "decision"
+      ],
+      "title": "Task Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "task_type",
+    "parent_artifact_kind",
+    "parent_sample_id",
+    "source_group_id",
+    "split_group_id",
+    "dataset_source",
+    "requested_modality_profile_id",
+    "reason_code",
+    "detail",
+    "drop_digest"
+  ],
+  "title": "StageIProjectionDropV1",
+  "type": "object"
+}

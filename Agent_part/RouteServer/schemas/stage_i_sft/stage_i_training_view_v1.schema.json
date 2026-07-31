@@ -1,0 +1,1986 @@
+{
+  "$defs": {
+    "BevRouteEvidenceV4": {
+      "additionalProperties": false,
+      "description": "Describe presentation properties of one prompt-visible BEV.\n\nThese fields are retained at the reusable observation boundary for VQA V2\ncompatibility.  Reasoning V4.6 never treats them as route-progress,\ntraversability, clearance, or collision-safety supervision.\n\nArgs:\n    frame: Declared BEV presentation frame.\n    ego_forward: Display direction corresponding to ego forward.\n    route_overlay_visible: Whether a route overlay is rendered.\n    route_direction_authority: Whether clear orientation may support a\n        visible task direction.\n    route_progress_authority: Legacy observation metadata ignored by\n        Reasoning V4.6.\n    route_terminal_marker_visible: Legacy presentation metadata ignored by\n        Reasoning V4.6.\n    route_endpoint_semantics: Legacy endpoint provenance ignored by\n        Reasoning V4.6.\n    local_safety_authority: Always false in Stage-A.\n    producer_contract_id: Versioned upstream producer identity.\n    producer_contract_version: Exact upstream producer version.",
+      "properties": {
+        "ego_forward": {
+          "default": "unknown",
+          "enum": [
+            "up",
+            "right",
+            "down",
+            "left",
+            "unknown"
+          ],
+          "title": "Ego Forward",
+          "type": "string"
+        },
+        "frame": {
+          "default": "unknown",
+          "enum": [
+            "ego",
+            "north_up",
+            "unknown"
+          ],
+          "title": "Frame",
+          "type": "string"
+        },
+        "local_safety_authority": {
+          "const": false,
+          "default": false,
+          "title": "Local Safety Authority",
+          "type": "boolean"
+        },
+        "producer_contract_id": {
+          "default": "unknown",
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Producer Contract Id",
+          "type": "string"
+        },
+        "producer_contract_version": {
+          "default": "unknown",
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Producer Contract Version",
+          "type": "string"
+        },
+        "route_direction_authority": {
+          "default": "none",
+          "enum": [
+            "none",
+            "visual_conditional"
+          ],
+          "title": "Route Direction Authority",
+          "type": "string"
+        },
+        "route_endpoint_semantics": {
+          "default": "unknown",
+          "enum": [
+            "planned_navigation_goal",
+            "recorded_clip_endpoint",
+            "crop_boundary",
+            "unknown"
+          ],
+          "title": "Route Endpoint Semantics",
+          "type": "string"
+        },
+        "route_overlay_visible": {
+          "default": false,
+          "title": "Route Overlay Visible",
+          "type": "boolean"
+        },
+        "route_progress_authority": {
+          "default": "none",
+          "enum": [
+            "none",
+            "visual_conditional"
+          ],
+          "title": "Route Progress Authority",
+          "type": "string"
+        },
+        "route_terminal_marker_visible": {
+          "default": false,
+          "title": "Route Terminal Marker Visible",
+          "type": "boolean"
+        }
+      },
+      "title": "BevRouteEvidenceV4",
+      "type": "object"
+    },
+    "DecisionV4": {
+      "additionalProperties": false,
+      "description": "Canonical deterministic short-horizon action tuple.",
+      "properties": {
+        "response": {
+          "enum": [
+            "proceed",
+            "slow",
+            "yield",
+            "detour",
+            "stop"
+          ],
+          "title": "Response",
+          "type": "string"
+        },
+        "selected_action_label": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Selected Action Label",
+          "type": "string"
+        },
+        "speed": {
+          "enum": [
+            "normal",
+            "slow",
+            "stop"
+          ],
+          "title": "Speed",
+          "type": "string"
+        }
+      },
+      "required": [
+        "selected_action_label",
+        "speed",
+        "response"
+      ],
+      "title": "DecisionV4",
+      "type": "object"
+    },
+    "DirectionAffordanceV4": {
+      "additionalProperties": false,
+      "description": "Describe physical FPV executability for one public probe direction.\n\nArgs:\n    direction_label: Direction from the active affordance-probe profile.\n    affordance: Coarse physical executability state.\n    clearance: Coarse visible physical clearance.\n    limiting_factors: Physical factors only; traffic rules are forbidden.",
+      "properties": {
+        "affordance": {
+          "enum": [
+            "direct",
+            "conditional",
+            "blocked",
+            "forbidden",
+            "unknown"
+          ],
+          "title": "Affordance",
+          "type": "string"
+        },
+        "clearance": {
+          "default": "unknown",
+          "enum": [
+            "sufficient",
+            "narrow",
+            "insufficient",
+            "unknown"
+          ],
+          "title": "Clearance",
+          "type": "string"
+        },
+        "direction_label": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Direction Label",
+          "type": "string"
+        },
+        "limiting_factors": {
+          "items": {
+            "enum": [
+              "static_obstacle",
+              "dynamic_occupancy",
+              "narrow_clearance",
+              "non_walkable_surface",
+              "curb",
+              "wall",
+              "vegetation",
+              "occlusion",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "maxItems": 12,
+          "title": "Limiting Factors",
+          "type": "array"
+        }
+      },
+      "required": [
+        "direction_label",
+        "affordance"
+      ],
+      "title": "DirectionAffordanceV4",
+      "type": "object"
+    },
+    "DirectionContextV4": {
+      "additionalProperties": false,
+      "description": "Select approved action and affordance-probe profiles.\n\nArgs:\n    action_profile_id: Canonical fine action-profile identifier.\n    action_profile_version: Exact action-profile version.\n    affordance_probe_profile_id: Canonical probe identifier.\n    affordance_probe_profile_version: Exact probe version.",
+      "properties": {
+        "action_profile_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Action Profile Id",
+          "type": "string"
+        },
+        "action_profile_version": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Action Profile Version",
+          "type": "string"
+        },
+        "affordance_probe_profile_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Affordance Probe Profile Id",
+          "type": "string"
+        },
+        "affordance_probe_profile_version": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Affordance Probe Profile Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action_profile_id",
+        "action_profile_version",
+        "affordance_probe_profile_id",
+        "affordance_probe_profile_version"
+      ],
+      "title": "DirectionContextV4",
+      "type": "object"
+    },
+    "DirectionSupervisionV4": {
+      "additionalProperties": false,
+      "description": "Carry one complete deterministic direction label.",
+      "properties": {
+        "angle_deg": {
+          "anyOf": [
+            {
+              "maximum": 180.0,
+              "minimum": -180.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Angle Deg"
+        },
+        "bin_mode": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Bin Mode",
+          "type": "string"
+        },
+        "choice": {
+          "maxLength": 32,
+          "minLength": 1,
+          "title": "Choice",
+          "type": "string"
+        },
+        "derivation_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Derivation Version",
+          "type": "string"
+        },
+        "label_index": {
+          "minimum": 0,
+          "title": "Label Index",
+          "type": "integer"
+        },
+        "label_name": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Label Name",
+          "type": "string"
+        },
+        "profile_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Profile Id",
+          "type": "string"
+        },
+        "profile_version": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Profile Version",
+          "type": "string"
+        },
+        "source": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile_id",
+        "profile_version",
+        "label_index",
+        "label_name",
+        "choice",
+        "source",
+        "bin_mode",
+        "derivation_version"
+      ],
+      "title": "DirectionSupervisionV4",
+      "type": "object"
+    },
+    "EvidenceCatalogEntryV4": {
+      "additionalProperties": false,
+      "description": "Describe one prompt-visible raw input item.\n\nArgs:\n    ref: Stable input-envelope reference.\n    modality: Input modality.\n    summary: Optional prompt-visible summary.\n    attributes: Prompt-visible producer metadata.\n    bev_route_evidence: Optional BEV presentation declaration.",
+      "properties": {
+        "attributes": {
+          "additionalProperties": true,
+          "title": "Attributes",
+          "type": "object"
+        },
+        "bev_route_evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BevRouteEvidenceV4"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "modality": {
+          "enum": [
+            "instruction",
+            "fpv",
+            "bev",
+            "goal",
+            "goal_image",
+            "pixel_goal",
+            "waypoint"
+          ],
+          "title": "Modality",
+          "type": "string"
+        },
+        "ref": {
+          "maxLength": 160,
+          "minLength": 5,
+          "pattern": "^(instruction|fpv|bev|goal|waypoint)\\.[a-z0-9_]+$",
+          "title": "Ref",
+          "type": "string"
+        },
+        "summary": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Summary"
+        }
+      },
+      "required": [
+        "ref",
+        "modality"
+      ],
+      "title": "EvidenceCatalogEntryV4",
+      "type": "object"
+    },
+    "InputModalitiesV4": {
+      "additionalProperties": false,
+      "description": "Record which Stage-A inputs are present.\n\nArgs:\n    fpv: Current FPV is mandatory.\n    history_fpv: One or more history FPV images are input only.\n    instruction: An instruction is visible.\n    bev: A BEV image is visible.\n    goal_image: A goal image is visible.\n    pixel_goal: A pixel goal is visible.\n    waypoint: A waypoint is visible.",
+      "properties": {
+        "bev": {
+          "default": false,
+          "title": "Bev",
+          "type": "boolean"
+        },
+        "fpv": {
+          "const": true,
+          "default": true,
+          "title": "Fpv",
+          "type": "boolean"
+        },
+        "goal_image": {
+          "default": false,
+          "title": "Goal Image",
+          "type": "boolean"
+        },
+        "history_fpv": {
+          "default": false,
+          "title": "History Fpv",
+          "type": "boolean"
+        },
+        "instruction": {
+          "default": false,
+          "title": "Instruction",
+          "type": "boolean"
+        },
+        "pixel_goal": {
+          "default": false,
+          "title": "Pixel Goal",
+          "type": "boolean"
+        },
+        "waypoint": {
+          "default": false,
+          "title": "Waypoint",
+          "type": "boolean"
+        }
+      },
+      "title": "InputModalitiesV4",
+      "type": "object"
+    },
+    "InteractionConstraintGroundingV4": {
+      "additionalProperties": false,
+      "description": "Collect high-level behavior constraints without source binding.\n\nArgs:\n    constraints: Current restrictions that can alter the short action.",
+      "properties": {
+        "constraints": {
+          "items": {
+            "$ref": "#/$defs/InteractionConstraintV4"
+          },
+          "maxItems": 24,
+          "title": "Constraints",
+          "type": "array"
+        }
+      },
+      "title": "InteractionConstraintGroundingV4",
+      "type": "object"
+    },
+    "InteractionConstraintV4": {
+      "additionalProperties": false,
+      "description": "Represent one high-level current behavior restriction.\n\nFor ``effect=avoid``, ``affected_direction_labels`` means directions whose\nnominal local corridor requires a continuous detour.  It is not a forbidden\ndirection set.  Selecting one of those coarse directions remains valid only\nwith ``speed=slow`` and ``response=detour``; selecting ``stop`` safely\nsatisfies the constraint.\n\nArgs:\n    kind: Open high-level behavior-constraint category.\n    status: Whether the restriction is currently applicable or uncertain.\n    effect: Required behavior response family.\n    affected_direction_labels: Empty for a global constraint.  For avoid,\n        the public directions requiring local avoidance/detour.",
+      "properties": {
+        "affected_direction_labels": {
+          "items": {
+            "maxLength": 96,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "maxItems": 24,
+          "title": "Affected Direction Labels",
+          "type": "array"
+        },
+        "effect": {
+          "enum": [
+            "slow",
+            "yield",
+            "stop",
+            "avoid"
+          ],
+          "title": "Effect",
+          "type": "string"
+        },
+        "kind": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Kind",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "applicable",
+            "uncertain"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "status",
+        "effect"
+      ],
+      "title": "InteractionConstraintV4",
+      "type": "object"
+    },
+    "LocalTraversabilityV4": {
+      "additionalProperties": false,
+      "description": "Collect physical affordances for the public probe vocabulary.\n\nArgs:\n    direction_affordances: At most one record per probe direction.",
+      "properties": {
+        "direction_affordances": {
+          "items": {
+            "$ref": "#/$defs/DirectionAffordanceV4"
+          },
+          "maxItems": 24,
+          "title": "Direction Affordances",
+          "type": "array"
+        }
+      },
+      "title": "LocalTraversabilityV4",
+      "type": "object"
+    },
+    "NavigationContextGroundingV4": {
+      "additionalProperties": false,
+      "description": "Store only the visible Stage-A route direction context.\n\nArgs:\n    task_direction: Nullable prompt-visible movement direction.",
+      "properties": {
+        "task_direction": {
+          "$ref": "#/$defs/TaskDirectionV4"
+        }
+      },
+      "required": [
+        "task_direction"
+      ],
+      "title": "NavigationContextGroundingV4",
+      "type": "object"
+    },
+    "ReasoningTargetV4": {
+      "additionalProperties": false,
+      "description": "Wrap the canonical trace used as a training audit sidecar.\n\nArgs:\n    reasoning: Exact six-section V4.6 trace.  V4.6 has no Finish object.",
+      "properties": {
+        "reasoning": {
+          "$ref": "#/$defs/ReasoningTraceV4"
+        }
+      },
+      "required": [
+        "reasoning"
+      ],
+      "title": "ReasoningTargetV4",
+      "type": "object"
+    },
+    "ReasoningTraceV4": {
+      "additionalProperties": false,
+      "description": "Canonical six-section shared-input Reasoning V4.6 trace.\n\nArgs:\n    schema_version: Exact V4.6 semantic contract stamp.\n    task_grounding: Deterministically normalized task.\n    scene_grounding: Coarse visible scene summary.\n    local_traversability: Physical direction affordances.\n    navigation_context_grounding: Visible task direction.\n    interaction_constraint_grounding: High-level behavior restrictions.\n    decision: One consistent short-horizon action tuple.",
+      "properties": {
+        "decision": {
+          "$ref": "#/$defs/DecisionV4"
+        },
+        "interaction_constraint_grounding": {
+          "$ref": "#/$defs/InteractionConstraintGroundingV4"
+        },
+        "local_traversability": {
+          "$ref": "#/$defs/LocalTraversabilityV4"
+        },
+        "navigation_context_grounding": {
+          "$ref": "#/$defs/NavigationContextGroundingV4"
+        },
+        "scene_grounding": {
+          "$ref": "#/$defs/SceneGroundingV4"
+        },
+        "schema_version": {
+          "const": "urbannav_reasoning_trace_v4_6",
+          "default": "urbannav_reasoning_trace_v4_6",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "task_grounding": {
+          "$ref": "#/$defs/TaskGroundingV4"
+        }
+      },
+      "required": [
+        "task_grounding",
+        "scene_grounding",
+        "local_traversability",
+        "navigation_context_grounding",
+        "interaction_constraint_grounding",
+        "decision"
+      ],
+      "title": "ReasoningTraceV4",
+      "type": "object"
+    },
+    "SceneGroundingV4": {
+      "additionalProperties": false,
+      "description": "Summarize the visible navigation environment without object binding.\n\nArgs:\n    scene_type: Open coarse scene code such as ``urban_sidewalk``.\n    walkable_support: Open visible support code such as ``crosswalk``.\n    key_entities: Open categories that materially affect local navigation.\n    traffic_context: Open coarse traffic-control context code.",
+      "properties": {
+        "key_entities": {
+          "items": {
+            "maxLength": 96,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Key Entities",
+          "type": "array"
+        },
+        "scene_type": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Scene Type",
+          "type": "string"
+        },
+        "traffic_context": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Traffic Context",
+          "type": "string"
+        },
+        "walkable_support": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Walkable Support",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scene_type",
+        "walkable_support",
+        "traffic_context"
+      ],
+      "title": "SceneGroundingV4",
+      "type": "object"
+    },
+    "StageIAnswerabilityV1": {
+      "additionalProperties": false,
+      "description": "Store task-specific safe-projection gates.\n\nArgs:\n    full_cot: The complete six-section target remains answerable.\n    vqa: The atomic question retains all required visible evidence.\n    decision: The Decision target has an approved visible authority.\n    reasons: Deterministic admission facts, never free-form rationale.",
+      "properties": {
+        "decision": {
+          "default": false,
+          "title": "Decision",
+          "type": "boolean"
+        },
+        "full_cot": {
+          "default": false,
+          "title": "Full Cot",
+          "type": "boolean"
+        },
+        "reasons": {
+          "items": {
+            "maxLength": 96,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Reasons",
+          "type": "array"
+        },
+        "vqa": {
+          "default": false,
+          "title": "Vqa",
+          "type": "boolean"
+        }
+      },
+      "title": "StageIAnswerabilityV1",
+      "type": "object"
+    },
+    "StageIDecisionViewV1": {
+      "additionalProperties": false,
+      "description": "Carry one Decision-only LM target without a FullCoT teacher prefix.\n\nArgs:\n    task_type: Always ``decision``.\n    decision: Exact canonical V4.6 Decision tuple.\n    direction_context: Public direction profiles.\n    direction_supervision: Complete strong direction stamp.\n    decision_authority: Visible authority admitted by the projector.",
+      "properties": {
+        "answerability": {
+          "$ref": "#/$defs/StageIAnswerabilityV1"
+        },
+        "assistant_text": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Assistant Text",
+          "type": "string"
+        },
+        "dataset_source": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Dataset Source",
+          "type": "string"
+        },
+        "decision": {
+          "$ref": "#/$defs/DecisionV4"
+        },
+        "decision_authority": {
+          "enum": [
+            "explicit_direction_instruction",
+            "visible_bev_route",
+            "fpv_behavior_cloning"
+          ],
+          "title": "Decision Authority",
+          "type": "string"
+        },
+        "direction_context": {
+          "$ref": "#/$defs/DirectionContextV4"
+        },
+        "direction_supervision": {
+          "$ref": "#/$defs/DirectionSupervisionV4"
+        },
+        "evidence_catalog": {
+          "items": {
+            "$ref": "#/$defs/EvidenceCatalogEntryV4"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Evidence Catalog",
+          "type": "array"
+        },
+        "image_roles": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Image Roles",
+          "type": "array"
+        },
+        "images": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Images",
+          "type": "array"
+        },
+        "input_modalities": {
+          "$ref": "#/$defs/InputModalitiesV4"
+        },
+        "instruction": {
+          "anyOf": [
+            {
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Instruction"
+        },
+        "instruction_training_role": {
+          "enum": [
+            "primary",
+            "audit_only",
+            "unknown",
+            "not_present"
+          ],
+          "title": "Instruction Training Role",
+          "type": "string"
+        },
+        "loss_span_policy_id": {
+          "const": "urbannav_stage_i_char_spans_v1",
+          "default": "urbannav_stage_i_char_spans_v1",
+          "title": "Loss Span Policy Id",
+          "type": "string"
+        },
+        "loss_spans": {
+          "items": {
+            "$ref": "#/$defs/StageILossSpanV1"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "title": "Loss Spans",
+          "type": "array"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "modality_profile_id": {
+          "enum": [
+            "fpv_current_v1",
+            "fpv_temporal_v1",
+            "fpv_instruction_v1",
+            "fpv_bev_v1",
+            "fpv_instruction_bev_v1",
+            "fpv_temporal_instruction_v1",
+            "fpv_temporal_bev_v1",
+            "fpv_temporal_instruction_bev_v1"
+          ],
+          "title": "Modality Profile Id",
+          "type": "string"
+        },
+        "modality_state": {
+          "$ref": "#/$defs/StageIModalityStateV1"
+        },
+        "model_visible_context": {
+          "additionalProperties": true,
+          "title": "Model Visible Context",
+          "type": "object"
+        },
+        "native_availability": {
+          "$ref": "#/$defs/StageIModalityAvailabilityV1"
+        },
+        "parent_annotation_id": {
+          "anyOf": [
+            {
+              "maxLength": 400,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Annotation Id"
+        },
+        "parent_artifact_kind": {
+          "enum": [
+            "reasoning_v4_6",
+            "vqa_v2_0"
+          ],
+          "title": "Parent Artifact Kind",
+          "type": "string"
+        },
+        "parent_audit_id": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 64,
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Audit Id"
+        },
+        "parent_sample_id": {
+          "maxLength": 480,
+          "minLength": 1,
+          "title": "Parent Sample Id",
+          "type": "string"
+        },
+        "parent_source_fingerprint": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Parent Source Fingerprint",
+          "type": "string"
+        },
+        "projection_digest": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Projection Digest",
+          "type": "string"
+        },
+        "projection_policy_id": {
+          "const": "urbannav_stage_i_safe_projection_v1",
+          "default": "urbannav_stage_i_safe_projection_v1",
+          "title": "Projection Policy Id",
+          "type": "string"
+        },
+        "projection_policy_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Projection Policy Version",
+          "type": "string"
+        },
+        "sample_id": {
+          "maxLength": 480,
+          "minLength": 1,
+          "title": "Sample Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "urbannav_stage_i_training_view_v1",
+          "default": "urbannav_stage_i_training_view_v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_group_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Group Id",
+          "type": "string"
+        },
+        "split_group_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Split Group Id",
+          "type": "string"
+        },
+        "task_type": {
+          "const": "decision",
+          "default": "decision",
+          "title": "Task Type",
+          "type": "string"
+        },
+        "training_selection": {
+          "$ref": "#/$defs/StageIModalitySelectionV1"
+        }
+      },
+      "required": [
+        "sample_id",
+        "source_group_id",
+        "split_group_id",
+        "dataset_source",
+        "modality_profile_id",
+        "native_availability",
+        "training_selection",
+        "modality_state",
+        "instruction_training_role",
+        "answerability",
+        "images",
+        "image_roles",
+        "evidence_catalog",
+        "input_modalities",
+        "assistant_text",
+        "loss_spans",
+        "parent_artifact_kind",
+        "parent_sample_id",
+        "parent_source_fingerprint",
+        "projection_digest",
+        "decision",
+        "direction_context",
+        "direction_supervision",
+        "decision_authority"
+      ],
+      "title": "StageIDecisionViewV1",
+      "type": "object"
+    },
+    "StageIFullCoTViewV1": {
+      "additionalProperties": false,
+      "description": "Carry one safe complete Reasoning V4.6 FullCoT view.\n\nArgs:\n    task_type: Always ``full_cot``.\n    reasoning_target: Exact canonical six-section target.\n    direction_context: Public direction profiles.\n    direction_supervision: Private strong stamp retained only as audit sidecar.\n    prompt_profile_id: Canonical Reasoning V4.6 student prompt.\n    prompt_policy_digest: Exact prompt-policy digest.",
+      "properties": {
+        "answerability": {
+          "$ref": "#/$defs/StageIAnswerabilityV1"
+        },
+        "assistant_text": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Assistant Text",
+          "type": "string"
+        },
+        "dataset_source": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Dataset Source",
+          "type": "string"
+        },
+        "direction_context": {
+          "$ref": "#/$defs/DirectionContextV4"
+        },
+        "direction_supervision": {
+          "$ref": "#/$defs/DirectionSupervisionV4"
+        },
+        "evidence_catalog": {
+          "items": {
+            "$ref": "#/$defs/EvidenceCatalogEntryV4"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Evidence Catalog",
+          "type": "array"
+        },
+        "image_roles": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Image Roles",
+          "type": "array"
+        },
+        "images": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Images",
+          "type": "array"
+        },
+        "input_modalities": {
+          "$ref": "#/$defs/InputModalitiesV4"
+        },
+        "instruction": {
+          "anyOf": [
+            {
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Instruction"
+        },
+        "instruction_training_role": {
+          "enum": [
+            "primary",
+            "audit_only",
+            "unknown",
+            "not_present"
+          ],
+          "title": "Instruction Training Role",
+          "type": "string"
+        },
+        "loss_span_policy_id": {
+          "const": "urbannav_stage_i_char_spans_v1",
+          "default": "urbannav_stage_i_char_spans_v1",
+          "title": "Loss Span Policy Id",
+          "type": "string"
+        },
+        "loss_spans": {
+          "items": {
+            "$ref": "#/$defs/StageILossSpanV1"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "title": "Loss Spans",
+          "type": "array"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "modality_profile_id": {
+          "enum": [
+            "fpv_current_v1",
+            "fpv_temporal_v1",
+            "fpv_instruction_v1",
+            "fpv_bev_v1",
+            "fpv_instruction_bev_v1",
+            "fpv_temporal_instruction_v1",
+            "fpv_temporal_bev_v1",
+            "fpv_temporal_instruction_bev_v1"
+          ],
+          "title": "Modality Profile Id",
+          "type": "string"
+        },
+        "modality_state": {
+          "$ref": "#/$defs/StageIModalityStateV1"
+        },
+        "model_visible_context": {
+          "additionalProperties": true,
+          "title": "Model Visible Context",
+          "type": "object"
+        },
+        "native_availability": {
+          "$ref": "#/$defs/StageIModalityAvailabilityV1"
+        },
+        "parent_annotation_id": {
+          "anyOf": [
+            {
+              "maxLength": 400,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Annotation Id"
+        },
+        "parent_artifact_kind": {
+          "enum": [
+            "reasoning_v4_6",
+            "vqa_v2_0"
+          ],
+          "title": "Parent Artifact Kind",
+          "type": "string"
+        },
+        "parent_audit_id": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 64,
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Audit Id"
+        },
+        "parent_sample_id": {
+          "maxLength": 480,
+          "minLength": 1,
+          "title": "Parent Sample Id",
+          "type": "string"
+        },
+        "parent_source_fingerprint": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Parent Source Fingerprint",
+          "type": "string"
+        },
+        "projection_digest": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Projection Digest",
+          "type": "string"
+        },
+        "projection_policy_id": {
+          "const": "urbannav_stage_i_safe_projection_v1",
+          "default": "urbannav_stage_i_safe_projection_v1",
+          "title": "Projection Policy Id",
+          "type": "string"
+        },
+        "projection_policy_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Projection Policy Version",
+          "type": "string"
+        },
+        "prompt_policy_digest": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Prompt Policy Digest",
+          "type": "string"
+        },
+        "prompt_profile_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Prompt Profile Id",
+          "type": "string"
+        },
+        "reasoning_target": {
+          "$ref": "#/$defs/ReasoningTargetV4"
+        },
+        "sample_id": {
+          "maxLength": 480,
+          "minLength": 1,
+          "title": "Sample Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "urbannav_stage_i_training_view_v1",
+          "default": "urbannav_stage_i_training_view_v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_group_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Group Id",
+          "type": "string"
+        },
+        "split_group_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Split Group Id",
+          "type": "string"
+        },
+        "task_type": {
+          "const": "full_cot",
+          "default": "full_cot",
+          "title": "Task Type",
+          "type": "string"
+        },
+        "training_selection": {
+          "$ref": "#/$defs/StageIModalitySelectionV1"
+        }
+      },
+      "required": [
+        "sample_id",
+        "source_group_id",
+        "split_group_id",
+        "dataset_source",
+        "modality_profile_id",
+        "native_availability",
+        "training_selection",
+        "modality_state",
+        "instruction_training_role",
+        "answerability",
+        "images",
+        "image_roles",
+        "evidence_catalog",
+        "input_modalities",
+        "assistant_text",
+        "loss_spans",
+        "parent_artifact_kind",
+        "parent_sample_id",
+        "parent_source_fingerprint",
+        "projection_digest",
+        "reasoning_target",
+        "direction_context",
+        "direction_supervision",
+        "prompt_profile_id",
+        "prompt_policy_digest"
+      ],
+      "title": "StageIFullCoTViewV1",
+      "type": "object"
+    },
+    "StageILossSpanV1": {
+      "additionalProperties": false,
+      "description": "Assign one binary LM-loss channel to a character interval.\n\nThe interval is half-open: ``[start, end)``.\n\nArgs:\n    start: Inclusive Unicode character offset.\n    end: Exclusive Unicode character offset.\n    scale: Binary Stage I token-loss scale.\n    channel: Semantic loss channel for audit and metrics.",
+      "properties": {
+        "channel": {
+          "enum": [
+            "full_cot",
+            "vqa",
+            "decision"
+          ],
+          "title": "Channel",
+          "type": "string"
+        },
+        "end": {
+          "exclusiveMinimum": 0,
+          "title": "End",
+          "type": "integer"
+        },
+        "scale": {
+          "enum": [
+            0.0,
+            1.0
+          ],
+          "title": "Scale",
+          "type": "number"
+        },
+        "start": {
+          "minimum": 0,
+          "title": "Start",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "scale",
+        "channel"
+      ],
+      "title": "StageILossSpanV1",
+      "type": "object"
+    },
+    "StageIModalityAvailabilityV1": {
+      "additionalProperties": false,
+      "description": "Record native optional-modality availability before training dropout.\n\nArgs:\n    current_fpv: Current FPV is mandatory for every Stage I view.\n    history_fpv: At least one history FPV image is native input.\n    instruction: A prompt-visible instruction is native input.\n    bev: A prompt-visible BEV image is native input.\n    goal_image: A goal image exists but is unsupported in Stage I v1.\n    pixel_goal: A pixel goal exists but is unsupported in Stage I v1.\n    waypoint: A waypoint exists but is dormant in Stage I v1.",
+      "properties": {
+        "bev": {
+          "default": false,
+          "title": "Bev",
+          "type": "boolean"
+        },
+        "current_fpv": {
+          "const": true,
+          "default": true,
+          "title": "Current Fpv",
+          "type": "boolean"
+        },
+        "goal_image": {
+          "default": false,
+          "title": "Goal Image",
+          "type": "boolean"
+        },
+        "history_fpv": {
+          "default": false,
+          "title": "History Fpv",
+          "type": "boolean"
+        },
+        "instruction": {
+          "default": false,
+          "title": "Instruction",
+          "type": "boolean"
+        },
+        "pixel_goal": {
+          "default": false,
+          "title": "Pixel Goal",
+          "type": "boolean"
+        },
+        "waypoint": {
+          "default": false,
+          "title": "Waypoint",
+          "type": "boolean"
+        }
+      },
+      "title": "StageIModalityAvailabilityV1",
+      "type": "object"
+    },
+    "StageIModalitySelectionV1": {
+      "additionalProperties": false,
+      "description": "Record the optional modalities retained by one training view.\n\nArgs:\n    current_fpv: Current FPV is always retained.\n    history_fpv: Retain native history FPV images.\n    instruction: Retain the native instruction.\n    bev: Retain native BEV images.\n    goal_image: Always false in Stage I v1.\n    pixel_goal: Always false in Stage I v1.\n    waypoint: Always false in Stage I v1.",
+      "properties": {
+        "bev": {
+          "default": false,
+          "title": "Bev",
+          "type": "boolean"
+        },
+        "current_fpv": {
+          "const": true,
+          "default": true,
+          "title": "Current Fpv",
+          "type": "boolean"
+        },
+        "goal_image": {
+          "const": false,
+          "default": false,
+          "title": "Goal Image",
+          "type": "boolean"
+        },
+        "history_fpv": {
+          "default": false,
+          "title": "History Fpv",
+          "type": "boolean"
+        },
+        "instruction": {
+          "default": false,
+          "title": "Instruction",
+          "type": "boolean"
+        },
+        "pixel_goal": {
+          "const": false,
+          "default": false,
+          "title": "Pixel Goal",
+          "type": "boolean"
+        },
+        "waypoint": {
+          "const": false,
+          "default": false,
+          "title": "Waypoint",
+          "type": "boolean"
+        }
+      },
+      "title": "StageIModalitySelectionV1",
+      "type": "object"
+    },
+    "StageIModalityStateV1": {
+      "additionalProperties": false,
+      "description": "Expose whether each optional modality is present, absent, or dropped.\n\nArgs:\n    history_fpv: State of history FPV.\n    instruction: State of the instruction.\n    bev: State of BEV.\n    goal_image: State of goal-image input.\n    pixel_goal: State of pixel-goal input.\n    waypoint: State of waypoint input.",
+      "properties": {
+        "bev": {
+          "enum": [
+            "present",
+            "native_missing",
+            "training_dropout"
+          ],
+          "title": "Bev",
+          "type": "string"
+        },
+        "goal_image": {
+          "enum": [
+            "present",
+            "native_missing",
+            "training_dropout"
+          ],
+          "title": "Goal Image",
+          "type": "string"
+        },
+        "history_fpv": {
+          "enum": [
+            "present",
+            "native_missing",
+            "training_dropout"
+          ],
+          "title": "History Fpv",
+          "type": "string"
+        },
+        "instruction": {
+          "enum": [
+            "present",
+            "native_missing",
+            "training_dropout"
+          ],
+          "title": "Instruction",
+          "type": "string"
+        },
+        "pixel_goal": {
+          "enum": [
+            "present",
+            "native_missing",
+            "training_dropout"
+          ],
+          "title": "Pixel Goal",
+          "type": "string"
+        },
+        "waypoint": {
+          "enum": [
+            "present",
+            "native_missing",
+            "training_dropout"
+          ],
+          "title": "Waypoint",
+          "type": "string"
+        }
+      },
+      "required": [
+        "history_fpv",
+        "instruction",
+        "bev",
+        "goal_image",
+        "pixel_goal",
+        "waypoint"
+      ],
+      "title": "StageIModalityStateV1",
+      "type": "object"
+    },
+    "StageIVQAViewV1": {
+      "additionalProperties": false,
+      "description": "Carry one evidence-preserving answer-only VQA view.\n\nArgs:\n    task_type: Always ``vqa``.\n    question: Exact answer-independent VQA V2 question.\n    annotation_id: Parent VQA annotation identity.\n    annotation_evidence_refs: Exact evidence used by the annotation.\n    label_source: Derived, weak, or external label source.\n    source_kind: Open source-kind code.\n    producer_id: Label producer identity.\n    producer_version: Label producer version.\n    prompt_profile_id: Exact VQA V2 student prompt.\n    prompt_policy_digest: Exact VQA prompt-policy digest.\n    capability_config_digest: Exact VQA activation snapshot.",
+      "properties": {
+        "annotation_evidence_refs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Annotation Evidence Refs",
+          "type": "array"
+        },
+        "annotation_id": {
+          "maxLength": 400,
+          "minLength": 1,
+          "title": "Annotation Id",
+          "type": "string"
+        },
+        "answerability": {
+          "$ref": "#/$defs/StageIAnswerabilityV1"
+        },
+        "assistant_text": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Assistant Text",
+          "type": "string"
+        },
+        "capability_config_digest": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Capability Config Digest",
+          "type": "string"
+        },
+        "dataset_source": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Dataset Source",
+          "type": "string"
+        },
+        "evidence_catalog": {
+          "items": {
+            "$ref": "#/$defs/EvidenceCatalogEntryV4"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Evidence Catalog",
+          "type": "array"
+        },
+        "image_roles": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Image Roles",
+          "type": "array"
+        },
+        "images": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Images",
+          "type": "array"
+        },
+        "input_modalities": {
+          "$ref": "#/$defs/InputModalitiesV4"
+        },
+        "instruction": {
+          "anyOf": [
+            {
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Instruction"
+        },
+        "instruction_training_role": {
+          "enum": [
+            "primary",
+            "audit_only",
+            "unknown",
+            "not_present"
+          ],
+          "title": "Instruction Training Role",
+          "type": "string"
+        },
+        "label_source": {
+          "enum": [
+            "derived_gt",
+            "lvlm_weak",
+            "external_gt"
+          ],
+          "title": "Label Source",
+          "type": "string"
+        },
+        "loss_span_policy_id": {
+          "const": "urbannav_stage_i_char_spans_v1",
+          "default": "urbannav_stage_i_char_spans_v1",
+          "title": "Loss Span Policy Id",
+          "type": "string"
+        },
+        "loss_spans": {
+          "items": {
+            "$ref": "#/$defs/StageILossSpanV1"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "title": "Loss Spans",
+          "type": "array"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "modality_profile_id": {
+          "enum": [
+            "fpv_current_v1",
+            "fpv_temporal_v1",
+            "fpv_instruction_v1",
+            "fpv_bev_v1",
+            "fpv_instruction_bev_v1",
+            "fpv_temporal_instruction_v1",
+            "fpv_temporal_bev_v1",
+            "fpv_temporal_instruction_bev_v1"
+          ],
+          "title": "Modality Profile Id",
+          "type": "string"
+        },
+        "modality_state": {
+          "$ref": "#/$defs/StageIModalityStateV1"
+        },
+        "model_visible_context": {
+          "additionalProperties": true,
+          "title": "Model Visible Context",
+          "type": "object"
+        },
+        "native_availability": {
+          "$ref": "#/$defs/StageIModalityAvailabilityV1"
+        },
+        "parent_annotation_id": {
+          "anyOf": [
+            {
+              "maxLength": 400,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Annotation Id"
+        },
+        "parent_artifact_kind": {
+          "enum": [
+            "reasoning_v4_6",
+            "vqa_v2_0"
+          ],
+          "title": "Parent Artifact Kind",
+          "type": "string"
+        },
+        "parent_audit_id": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 64,
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Audit Id"
+        },
+        "parent_sample_id": {
+          "maxLength": 480,
+          "minLength": 1,
+          "title": "Parent Sample Id",
+          "type": "string"
+        },
+        "parent_source_fingerprint": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Parent Source Fingerprint",
+          "type": "string"
+        },
+        "producer_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Producer Id",
+          "type": "string"
+        },
+        "producer_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Producer Version",
+          "type": "string"
+        },
+        "projection_digest": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Projection Digest",
+          "type": "string"
+        },
+        "projection_policy_id": {
+          "const": "urbannav_stage_i_safe_projection_v1",
+          "default": "urbannav_stage_i_safe_projection_v1",
+          "title": "Projection Policy Id",
+          "type": "string"
+        },
+        "projection_policy_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Projection Policy Version",
+          "type": "string"
+        },
+        "prompt_policy_digest": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Prompt Policy Digest",
+          "type": "string"
+        },
+        "prompt_profile_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Prompt Profile Id",
+          "type": "string"
+        },
+        "question": {
+          "$ref": "#/$defs/VQAQuestionV2"
+        },
+        "sample_id": {
+          "maxLength": 480,
+          "minLength": 1,
+          "title": "Sample Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "urbannav_stage_i_training_view_v1",
+          "default": "urbannav_stage_i_training_view_v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_group_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Group Id",
+          "type": "string"
+        },
+        "source_kind": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Source Kind",
+          "type": "string"
+        },
+        "split_group_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Split Group Id",
+          "type": "string"
+        },
+        "task_type": {
+          "const": "vqa",
+          "default": "vqa",
+          "title": "Task Type",
+          "type": "string"
+        },
+        "training_selection": {
+          "$ref": "#/$defs/StageIModalitySelectionV1"
+        }
+      },
+      "required": [
+        "sample_id",
+        "source_group_id",
+        "split_group_id",
+        "dataset_source",
+        "modality_profile_id",
+        "native_availability",
+        "training_selection",
+        "modality_state",
+        "instruction_training_role",
+        "answerability",
+        "images",
+        "image_roles",
+        "evidence_catalog",
+        "input_modalities",
+        "assistant_text",
+        "loss_spans",
+        "parent_artifact_kind",
+        "parent_sample_id",
+        "parent_source_fingerprint",
+        "projection_digest",
+        "question",
+        "annotation_id",
+        "annotation_evidence_refs",
+        "label_source",
+        "source_kind",
+        "producer_id",
+        "producer_version",
+        "prompt_profile_id",
+        "prompt_policy_digest",
+        "capability_config_digest"
+      ],
+      "title": "StageIVQAViewV1",
+      "type": "object"
+    },
+    "TaskDirectionV4": {
+      "additionalProperties": false,
+      "description": "Store the visible short-horizon route direction.\n\nArgs:\n    status: Whether a prompt-visible direction is usable.\n    source: Minimal visible authority for an aligned direction.\n    direction: Public moving direction when status is ``aligned``.",
+      "properties": {
+        "direction": {
+          "anyOf": [
+            {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Direction"
+        },
+        "source": {
+          "enum": [
+            "bev_route",
+            "instruction",
+            "none"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "aligned",
+            "conflict",
+            "not_visible",
+            "insufficient_evidence"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "source"
+      ],
+      "title": "TaskDirectionV4",
+      "type": "object"
+    },
+    "TaskGroundingV4": {
+      "additionalProperties": false,
+      "description": "Store a canonical task taxonomy derived from the instruction.\n\nArgs:\n    objective: Versioned normalized task objective.\n    requirements: Explicit task-specific requirements only.\n    ambiguities: Material task ambiguities, empty for the common template.",
+      "properties": {
+        "ambiguities": {
+          "items": {
+            "maxLength": 96,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "maxItems": 12,
+          "title": "Ambiguities",
+          "type": "array"
+        },
+        "objective": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Objective",
+          "type": "string"
+        },
+        "requirements": {
+          "items": {
+            "maxLength": 96,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "maxItems": 12,
+          "title": "Requirements",
+          "type": "array"
+        }
+      },
+      "required": [
+        "objective"
+      ],
+      "title": "TaskGroundingV4",
+      "type": "object"
+    },
+    "VQAQuestionV2": {
+      "additionalProperties": false,
+      "description": "Represent one answer-independent atomic navigation question.",
+      "properties": {
+        "candidate_direction_labels": {
+          "items": {
+            "maxLength": 96,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Candidate Direction Labels",
+          "type": "array"
+        },
+        "candidate_set_id": {
+          "anyOf": [
+            {
+              "maxLength": 160,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Set Id"
+        },
+        "conditioned_direction_label": {
+          "anyOf": [
+            {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Conditioned Direction Label"
+        },
+        "direction_profile_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Direction Profile Id"
+        },
+        "evidence_refs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "question_text": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Question Text",
+          "type": "string"
+        },
+        "target_candidate_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Candidate Id"
+        },
+        "target_refs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Target Refs",
+          "type": "array"
+        },
+        "task_id": {
+          "enum": [
+            "a1_goal_understanding",
+            "a2_explicit_requirement",
+            "a3_task_ambiguity",
+            "b1_direction_affordance",
+            "b2_direction_clearance",
+            "b3_direction_surface_effect",
+            "b4_conditional_affordance",
+            "b5_direction_comparison",
+            "b6_unavailable_directions",
+            "c1_goal_to_direction",
+            "c2_pixel_goal_to_direction",
+            "c2_waypoint_to_direction",
+            "c3_bev_route_alignment",
+            "c4_bev_object_anchoring",
+            "c5_outside_view_direction",
+            "c6_bev_fpv_executability",
+            "d1_agent_relevance",
+            "d2_static_interaction_relation",
+            "d3_temporal_interaction_relation",
+            "d4_applicable_constraint",
+            "d5_appropriate_response",
+            "d6_traffic_control_applicability",
+            "e0_demonstrated_direction_selection",
+            "e1_candidate_trajectory_preference",
+            "e2_candidate_direction_classification",
+            "e3_trajectory_compatibility",
+            "e4_alternative_direction"
+          ],
+          "title": "Task Id",
+          "type": "string"
+        },
+        "template_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Template Id",
+          "type": "string"
+        },
+        "visible_candidates": {
+          "items": {
+            "$ref": "#/$defs/VQAVisibleCandidateV2"
+          },
+          "maxItems": 16,
+          "title": "Visible Candidates",
+          "type": "array"
+        }
+      },
+      "required": [
+        "task_id",
+        "template_id",
+        "question_text"
+      ],
+      "title": "VQAQuestionV2",
+      "type": "object"
+    },
+    "VQAVisibleCandidateV2": {
+      "additionalProperties": false,
+      "description": "Bind a candidate ID to its prompt-visible representation.",
+      "properties": {
+        "candidate_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "prompt_visible_representation_ref": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Prompt Visible Representation Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "prompt_visible_representation_ref"
+      ],
+      "title": "VQAVisibleCandidateV2",
+      "type": "object"
+    }
+  },
+  "discriminator": {
+    "mapping": {
+      "decision": "#/$defs/StageIDecisionViewV1",
+      "full_cot": "#/$defs/StageIFullCoTViewV1",
+      "vqa": "#/$defs/StageIVQAViewV1"
+    },
+    "propertyName": "task_type"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/StageIFullCoTViewV1"
+    },
+    {
+      "$ref": "#/$defs/StageIVQAViewV1"
+    },
+    {
+      "$ref": "#/$defs/StageIDecisionViewV1"
+    }
+  ]
+}

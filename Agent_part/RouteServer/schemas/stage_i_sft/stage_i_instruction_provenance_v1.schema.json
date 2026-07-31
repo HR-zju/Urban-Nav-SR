@@ -1,0 +1,87 @@
+{
+  "additionalProperties": false,
+  "description": "Bind one source revision to an explicit instruction training role.",
+  "properties": {
+    "entry_digest": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Entry Digest",
+      "type": "string"
+    },
+    "instruction_sha256": {
+      "anyOf": [
+        {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Instruction Sha256"
+    },
+    "policy_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Policy Id",
+      "type": "string"
+    },
+    "policy_version": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Policy Version",
+      "type": "string"
+    },
+    "provenance_source": {
+      "maxLength": 96,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "title": "Provenance Source",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "urbannav_stage_i_instruction_provenance_v1",
+      "default": "urbannav_stage_i_instruction_provenance_v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_fingerprint": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Fingerprint",
+      "type": "string"
+    },
+    "source_group_id": {
+      "maxLength": 240,
+      "minLength": 1,
+      "title": "Source Group Id",
+      "type": "string"
+    },
+    "training_role": {
+      "enum": [
+        "primary",
+        "audit_only",
+        "unknown",
+        "not_present"
+      ],
+      "title": "Training Role",
+      "type": "string"
+    }
+  },
+  "required": [
+    "source_group_id",
+    "source_fingerprint",
+    "training_role",
+    "provenance_source",
+    "policy_id",
+    "policy_version",
+    "entry_digest"
+  ],
+  "title": "StageIInstructionProvenanceV1",
+  "type": "object"
+}

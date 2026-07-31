@@ -1,0 +1,17 @@
+{
+  "artifact_sha256": {
+    "stage_i_instruction_provenance_v1.schema.json": "e6abb7c208d7e9e863f4bdb6830adb60de32b44014d1461e66b4e6ef62a33cc7",
+    "stage_i_projection_drop_v1.schema.json": "e8157de6ebe28d9ae75922594df3233af013c3b5afa58fe01375f6bb779a1efc",
+    "stage_i_training_view_v1.schema.json": "97b4d07431be97f2f07ed6d06788d28263934269c2d0ea2fc52ec699ffd0dd59"
+  },
+  "canonical_source_sha256": {
+    "src/mcp_server/contracts/stage_i_sft.py": "3b306d4ea0574787edd83637bcf7e611fbce3fd14b9f9ed8c6654ad99f38791c",
+    "src/mcp_server/data/stage_i_views.py": "60b0610d773f5f1e29b72dbda5d14f87942563d57c1e672788cb29740bab4d2c"
+  },
+  "instruction_provenance_schema_version": "urbannav_stage_i_instruction_provenance_v1",
+  "loss_span_policy_id": "urbannav_stage_i_char_spans_v1",
+  "projection_policy_id": "urbannav_stage_i_safe_projection_v1",
+  "projection_policy_version": "1.0",
+  "schema_version": "urbannav_stage_i_contract_artifacts_v1",
+  "training_view_schema_version": "urbannav_stage_i_training_view_v1"
+}
