@@ -48,6 +48,8 @@ from mcp_server.contracts.reasoning_v4 import (
     InteractionConstraintV4,
     LocalTraversabilityV4,
     NavigationContextGroundingV4,
+    ReasoningTargetV4,
+    ReasoningTraceV4,
     SceneGroundingV4,
     TaskDirectionV4,
     TaskGroundingV4,
@@ -66,6 +68,9 @@ from mcp_server.data.reasoning_v4_composer import (
 from mcp_server.data.reasoning_v4_reconciliation import (
     action_reconciliation_review_required_v4,
     build_action_reconciliation_audit_v4,
+)
+from mcp_server.data.reasoning_v4_migration import (
+    migrate_reasoning_annotation_v4,
 )
 from mcp_server.data.reasoning_v4_reconciliation_review import (
     export_action_reconciliation_review_v4,
@@ -573,6 +578,65 @@ def test_scene_and_constraint_synonyms_are_deterministically_normalized() -> Non
         str(value.kind) for value in constraints.constraints
     ] == ["traffic_control", "local_obstacle"]
     assert constraint_warnings == ["constraint_vocabulary_normalized"]
+
+
+def test_reasoning_migration_updates_groundings_candidate_and_audit() -> None:
+    source = _source()
+    annotation = _annotation(source)
+    alias_scene = SceneGroundingV4(
+        scene_type="urban_sidewalk",
+        walkable_support="sidewalk",
+        key_entities=["scooter"],
+        traffic_context="traffic_light_visible",
+    )
+    groundings = annotation.grounding_outputs.model_copy(
+        update={"scene_grounding": alias_scene}
+    )
+    assert annotation.candidate_target is not None
+    old_trace = annotation.candidate_target.reasoning
+    target = ReasoningTargetV4(
+        reasoning=ReasoningTraceV4(
+            task_grounding=old_trace.task_grounding,
+            scene_grounding=alias_scene,
+            local_traversability=old_trace.local_traversability,
+            navigation_context_grounding=(
+                old_trace.navigation_context_grounding
+            ),
+            interaction_constraint_grounding=(
+                old_trace.interaction_constraint_grounding
+            ),
+            decision=old_trace.decision,
+        )
+    )
+    assert annotation.decision_proposal is not None
+    legacy = ReasoningAnnotationV4.model_validate(
+        annotation.model_copy(
+            update={
+                "grounding_outputs": groundings,
+                "candidate_target": target,
+                "action_reconciliation": (
+                    build_action_reconciliation_audit_v4(
+                        source,
+                        groundings,
+                        annotation.decision_proposal,
+                    )
+                ),
+            }
+        ).model_dump(mode="json", exclude_none=True)
+    )
+
+    migrated, warnings = migrate_reasoning_annotation_v4(source, legacy)
+
+    scene = migrated.grounding_outputs.scene_grounding
+    assert scene is not None
+    assert [str(value) for value in scene.key_entities] == [
+        "micromobility"
+    ]
+    assert str(scene.traffic_context) == "traffic_control_present"
+    assert migrated.candidate_target is not None
+    assert migrated.candidate_target.reasoning.scene_grounding == scene
+    assert migrated.action_reconciliation != legacy.action_reconciliation
+    assert warnings == ("scene_vocabulary_normalized",)
 
 
 @pytest.mark.parametrize(

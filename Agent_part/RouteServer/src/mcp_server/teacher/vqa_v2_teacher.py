@@ -38,24 +38,58 @@ def build_vqa_teacher_question_v2(
     if profile.task_id != question.task_id:
         raise ValueError("VQA teacher profile/question task mismatch")
     observation = source.observation
+    evidence_refs = set(question.evidence_refs)
+    scoped_catalog = [
+        item
+        for item in observation.evidence_catalog
+        if str(item.ref) in evidence_refs
+    ]
+    scoped_roles = [
+        role
+        for role in observation.image_roles
+        if role in evidence_refs
+    ]
+    has_instruction = any(
+        str(item.modality) == "instruction"
+        for item in scoped_catalog
+    )
+    has_history = any(
+        role.startswith("fpv.history_") for role in scoped_roles
+    )
     visible_input = {
         "source_group_id": observation.source_group_id,
         "image_order": [
             {"ordinal": index + 1, "role": role}
-            for index, role in enumerate(observation.image_roles)
+            for index, role in enumerate(scoped_roles)
         ],
-        "instruction": observation.instruction,
-        "travel_mode": observation.travel_mode,
-        "model_visible_context": observation.model_visible_context,
-        "input_modalities": observation.input_modalities.model_dump(
-            mode="json"
+        "instruction": (
+            observation.instruction if has_instruction else None
         ),
+        "travel_mode": observation.travel_mode,
+        "model_visible_context": {},
+        "input_modalities": {
+            "fpv": any(role.startswith("fpv.") for role in scoped_roles),
+            "history_fpv": has_history,
+            "instruction": has_instruction,
+            "bev": any(role.startswith("bev.") for role in scoped_roles),
+            "goal_image": any(
+                role.startswith("goal.image_") for role in scoped_roles
+            ),
+            "pixel_goal": any(
+                str(item.modality) == "pixel_goal"
+                for item in scoped_catalog
+            ),
+            "waypoint": any(
+                str(item.modality) == "waypoint"
+                for item in scoped_catalog
+            ),
+        },
         "temporal_evidence_eligible": (
-            observation.temporal_evidence_eligible
+            observation.temporal_evidence_eligible and has_history
         ),
         "evidence_catalog": [
             item.model_dump(mode="json", exclude_none=True)
-            for item in observation.evidence_catalog
+            for item in scoped_catalog
         ],
     }
     payload = {

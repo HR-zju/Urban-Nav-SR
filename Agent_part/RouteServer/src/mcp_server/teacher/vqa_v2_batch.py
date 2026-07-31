@@ -67,7 +67,7 @@ class VQATeacherBackendV2(Protocol):
 
     async def generate(
         self,
-        source: VQASourceV2,
+        source: Any,
         *,
         question: str,
         system_prompt: str,
@@ -90,7 +90,7 @@ class VisionVQATeacherBackendV2:
 
     async def generate(
         self,
-        source: VQASourceV2,
+        source: Any,
         *,
         question: str,
         system_prompt: str,
@@ -126,6 +126,21 @@ class _VisibleVQASource:
 
     images: list[str]
     image_roles: list[str]
+
+
+@dataclass(frozen=True)
+class _QuestionScopedObservation:
+    """Carry only question-required media into the provider boundary."""
+
+    images: list[str]
+    image_roles: list[str]
+
+
+@dataclass(frozen=True)
+class _QuestionScopedTeacherSource:
+    """Expose the observation shape expected by VQA teacher backends."""
+
+    observation: _QuestionScopedObservation
 
 
 class LVLMWeakLabelProducerV2:
@@ -245,7 +260,7 @@ async def annotate_vqa_question_v2(
         )
         try:
             generation = await backend.generate(
-                source,
+                _question_scoped_teacher_source(source, question),
                 question=provider_question,
                 system_prompt=profile.system_prompt,
                 image_detail=cfg.image_detail,
@@ -311,6 +326,33 @@ async def annotate_vqa_question_v2(
         )
         return annotation, []
     return None, errors or ["teacher_validation_failed"]
+
+
+def _question_scoped_teacher_source(
+    source: VQASourceV2,
+    question: VQAQuestionV2,
+) -> _QuestionScopedTeacherSource:
+    """Drop all images not declared as necessary question evidence."""
+
+    allowed = set(question.evidence_refs)
+    pairs = [
+        (image, role)
+        for image, role in zip(
+            source.observation.images,
+            source.observation.image_roles,
+        )
+        if role in allowed
+    ]
+    if not pairs:
+        raise ValueError(
+            "weak VQA question has no attached image evidence"
+        )
+    return _QuestionScopedTeacherSource(
+        observation=_QuestionScopedObservation(
+            images=[image for image, _role in pairs],
+            image_roles=[role for _image, role in pairs],
+        )
+    )
 
 
 async def label_vqa_source_manifest_v2(

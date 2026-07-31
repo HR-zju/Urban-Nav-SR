@@ -267,9 +267,7 @@ def _question_for_task(
                     direction_label_names(profile_id)
                 )
 
-    evidence_refs = [
-        entry.ref for entry in source.observation.evidence_catalog
-    ]
+    evidence_refs = minimal_vqa_evidence_refs_v2(source, task_id)
     target_refs = [
         ref
         for ref in evidence_refs
@@ -282,7 +280,7 @@ def _question_for_task(
         ]
     return VQAQuestionV2(
         task_id=task_id,
-        template_id=f"{task_id}_question_v1",
+        template_id=f"{task_id}_question_v2_minimal_evidence",
         question_text=_QUESTION_TEXT[task_id],
         direction_profile_id=profile_id,
         conditioned_direction_label=conditioned,
@@ -293,6 +291,88 @@ def _question_for_task(
         visible_candidates=visible_candidates,
         target_candidate_id=target_candidate_id,
     )
+
+
+def minimal_vqa_evidence_refs_v2(
+    source: VQASourceV2,
+    task_id: str,
+) -> list[str]:
+    """Return the smallest prompt-visible evidence set for one VQA task.
+
+    Required modalities come from the frozen task registry.  Task-language
+    questions additionally require instruction evidence, visible-goal
+    grounding requires explicit goal/task evidence, and external-GT tasks
+    inherit their interface's exact evidence declaration.
+    """
+
+    spec = get_vqa_task_spec_v2(task_id)
+    catalog = source.observation.evidence_catalog
+    refs: list[str] = []
+
+    def add_matching(predicate) -> None:
+        for entry in catalog:
+            ref = str(entry.ref)
+            if predicate(entry, ref) and ref not in refs:
+                refs.append(ref)
+
+    for modality in spec.required_modalities:
+        if modality == "fpv":
+            add_matching(lambda _entry, ref: ref == "fpv.current")
+        elif modality == "history_fpv":
+            add_matching(
+                lambda _entry, ref: ref.startswith("fpv.history_")
+            )
+        else:
+            add_matching(
+                lambda entry, _ref, expected=modality: (
+                    str(entry.modality) == expected
+                )
+            )
+
+    if task_id.startswith("a"):
+        add_matching(
+            lambda entry, ref: (
+                str(entry.modality) == "instruction"
+                or ref.startswith("instruction.")
+            )
+        )
+    if task_id == "c1_goal_to_direction":
+        add_matching(
+            lambda entry, ref: (
+                str(entry.modality) in {
+                    "goal",
+                    "goal_image",
+                    "pixel_goal",
+                    "instruction",
+                }
+                or ref.startswith(("goal.", "instruction."))
+            )
+        )
+
+    interface = _interface_for_task(source, task_id)
+    if interface is not None:
+        for ref in interface.evidence_refs:
+            value = str(ref)
+            if value not in refs:
+                refs.append(value)
+        candidate_set = getattr(interface, "candidate_set", None)
+        if candidate_set is not None:
+            for candidate in candidate_set.candidates:
+                value = str(candidate.prompt_visible_representation_ref)
+                if value not in refs:
+                    refs.append(value)
+
+    available = {str(entry.ref) for entry in catalog}
+    missing = sorted(set(refs) - available)
+    if missing:
+        raise ValueError(
+            f"minimal VQA evidence refs are unavailable: {missing}"
+        )
+    if not refs:
+        raise ValueError(
+            f"VQA task has no prompt-visible minimal evidence: {task_id}"
+        )
+    return refs
 
 
 def _local_candidate_labels(
@@ -360,4 +440,5 @@ def _interface_for_task(source: VQASourceV2, task_id: str):
 __all__ = [
     "VQAQuestionBuildResultV2",
     "build_vqa_questions_v2",
+    "minimal_vqa_evidence_refs_v2",
 ]

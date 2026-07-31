@@ -18,7 +18,7 @@ from mcp_server.contracts.vqa_v2 import (
 
 
 LVLM_VQA_PRODUCER_ID = "lvlm_visible_vqa_teacher"
-LVLM_VQA_PRODUCER_VERSION = "lvlm_visible_vqa_teacher_v2_0"
+LVLM_VQA_PRODUCER_VERSION = "lvlm_visible_vqa_teacher_v2_1_minimal_evidence"
 
 VQA_V2_WEAK_TASK_IDS = (
     "a1_goal_understanding",
@@ -42,9 +42,9 @@ VQA_V2_WEAK_TASK_IDS = (
 
 _COMMON_POLICY = """\
 You are an offline weak-label teacher for atomic visual questions in an
-assistive urban navigation model. Use only the complete prompt-visible images,
-instruction, goal, waypoint, BEV context, question direction, and candidate
-list supplied by the request. FPV is authoritative for immediate visible
+assistive urban navigation model. Use only the task-required prompt-visible
+evidence, question direction, and candidate list supplied by the request.
+Omitted modalities are unavailable, not negative evidence. FPV is authoritative for immediate visible
 safety. A direction label is a short-horizon motion candidate under the named
 DirectionProfile, not a polygon or semantic region.
 
@@ -153,7 +153,7 @@ def _profile(task_id: str) -> VQATeacherProfileV2:
         + "\n\nTASK RESPONSIBILITY\n"
         + _TASK_POLICY[task_id]
     )
-    profile_id = f"urbannav_vqa_teacher_{task_id}_v2_0"
+    profile_id = f"urbannav_vqa_teacher_{task_id}_v2_1_minimal_evidence"
     payload = {
         "profile_id": profile_id,
         "task_id": task_id,

@@ -48,6 +48,10 @@ from mcp_server.data.vqa_v2_questions import (
     build_vqa_questions_v2,
 )
 from mcp_server.data.vqa_v2_source import build_vqa_source_v2
+from mcp_server.data.vqa_v2_migration import (
+    migrate_vqa_annotation_payload_v2,
+    migrate_vqa_source_payload_v2,
+)
 from mcp_server.data.vqa_v2_views import (
     build_vqa_training_view_v2,
 )
@@ -232,6 +236,73 @@ def test_questions_skip_dormant_tasks_and_gate_temporal_task() -> None:
     assert "d3_temporal_interaction_relation" in {
         question.task_id for question in temporal.questions
     }
+
+
+def test_active_questions_use_task_minimal_evidence() -> None:
+    capabilities = load_vqa_capabilities_v2()
+    questions = {
+        item.task_id: item
+        for item in build_vqa_questions_v2(
+            _source(temporal=True, visible_goal=True),
+            capabilities,
+        ).questions
+    }
+
+    assert questions["a1_goal_understanding"].evidence_refs == [
+        "fpv.current",
+        "instruction.active",
+    ]
+    assert questions["b1_direction_affordance"].evidence_refs == [
+        "fpv.current"
+    ]
+    assert questions["c1_goal_to_direction"].evidence_refs == [
+        "fpv.current",
+        "instruction.active",
+    ]
+    assert questions["d3_temporal_interaction_relation"].evidence_refs == [
+        "fpv.current",
+        "fpv.history_01",
+    ]
+    assert questions["e0_demonstrated_direction_selection"].evidence_refs == [
+        "fpv.current"
+    ]
+
+
+def test_vqa_direction_context_migration_preserves_question_and_answer() -> None:
+    source = _source()
+    raw_source = source.model_dump(mode="json")
+    context = raw_source["observation"].pop("direction_context")
+    raw_source["observation"]["direction_output_space"] = {
+        "profile_id": context["action_profile_id"],
+        "profile_version": context["action_profile_version"],
+        "allowed_labels": list(
+            source.observation.direction_context.action_labels
+        ),
+    }
+    migrated_source, changed = migrate_vqa_source_payload_v2(raw_source)
+    capabilities = load_vqa_capabilities_v2()
+    question = next(
+        item
+        for item in build_vqa_questions_v2(source, capabilities).questions
+        if item.task_id == "e0_demonstrated_direction_selection"
+    )
+    produced = CanonicalDemonstratedDirectionProducerV2().produce(
+        source,
+        question,
+        capabilities,
+    )
+    assert produced.annotation is not None
+
+    migrated_annotation = migrate_vqa_annotation_payload_v2(
+        produced.annotation.model_dump(mode="json"),
+        migrated_source,
+    )
+
+    assert changed
+    assert migrated_source.source_fingerprint != source.source_fingerprint
+    assert migrated_annotation.question == produced.annotation.question
+    assert migrated_annotation.answer == produced.annotation.answer
+    assert migrated_annotation.annotation_id != produced.annotation.annotation_id
 
 
 def test_dormant_interfaces_are_question_ready_when_activated() -> None:
@@ -546,6 +617,28 @@ class _GoldenFixtureBackend:
         )
 
 
+class _EvidenceCaptureBackend:
+    def __init__(self) -> None:
+        self.image_roles: list[str] = []
+        self.request: dict = {}
+
+    async def generate(
+        self,
+        source,
+        *,
+        question: str,
+        system_prompt: str,
+        image_detail: str,
+    ) -> TeacherGeneration:
+        self.image_roles = list(source.observation.image_roles)
+        self.request = json.loads(question.split("\n\n", maxsplit=1)[1])
+        return TeacherGeneration(
+            answer='<VQAAnswer>{"affordance":"blocked"}</VQAAnswer>',
+            provider="fake",
+            model="fake-vlm",
+        )
+
+
 def test_weak_teacher_returns_typed_weak_annotation() -> None:
     source = _source()
     capabilities = load_vqa_capabilities_v2()
@@ -574,6 +667,36 @@ def test_weak_teacher_returns_typed_weak_annotation() -> None:
         "lvlm_direction_affordance_weak"
     )
     assert annotation.teacher_model == "fake-vlm"
+
+
+def test_weak_teacher_receives_only_question_required_evidence() -> None:
+    source = _source(temporal=True)
+    capabilities = load_vqa_capabilities_v2()
+    question = next(
+        item
+        for item in build_vqa_questions_v2(source, capabilities).questions
+        if item.task_id == "b1_direction_affordance"
+    )
+    backend = _EvidenceCaptureBackend()
+
+    annotation, errors = asyncio.run(
+        annotate_vqa_question_v2(
+            source,
+            question,
+            backend=backend,
+            config=VQABatchConfigV2(max_retries=0),
+        )
+    )
+
+    assert errors == []
+    assert annotation is not None
+    assert question.evidence_refs == ["fpv.current"]
+    assert backend.image_roles == ["fpv.current"]
+    visible = backend.request["complete_visible_input"]
+    assert visible["instruction"] is None
+    assert [item["ref"] for item in visible["evidence_catalog"]] == [
+        "fpv.current"
+    ]
 
 
 def test_weak_teacher_implements_producer_result_protocol() -> None:
