@@ -25,7 +25,8 @@ Core synchronization:
 
 Frames whose nearest GPS or heading sample is farther than
 ``--max-sync-delta-s`` are skipped. The resulting ``trajectory.json`` can be
-passed directly to ``tools/run_sidewalk_images_visual_prompt_pipeline.py``.
+passed directly to
+``tools/model_processing/run_sidewalk_images_visual_prompt_pipeline.py``.
 """
 
 from __future__ import annotations

@@ -136,9 +136,14 @@ class SidewalkPhase1DatasetTest(unittest.TestCase):
             self.assertEqual(row["sidewalk_meta"]["trajectory_source"], "calibrated_pose_projection")
             trajectory = row["pixel_trajectory"]
             self.assertAlmostEqual(trajectory[0][0], 0.5, places=5)
-            self.assertAlmostEqual(trajectory[0][1], 0.9, places=5)
+            self.assertAlmostEqual(trajectory[0][1], 280.0 / 360.0, places=5)
             self.assertAlmostEqual(trajectory[1][0], 0.5, places=5)
-            self.assertAlmostEqual(trajectory[1][1], 230.0 / 360.0, places=5)
+            self.assertAlmostEqual(trajectory[1][1], (180.0 + 100.0 / (7.0 / 3.0)) / 360.0, places=5)
+            self.assertTrue(all(trajectory[idx][1] > trajectory[idx + 1][1] for idx in range(len(trajectory) - 1)))
+            self.assertEqual(
+                row["sidewalk_meta"]["projection"]["postprocess"]["anchor_policy"],
+                "first_stable_visible_projection",
+            )
             self.assertAlmostEqual(row["route_context"]["route_theta_deg"], 0.0, places=3)
             self.assertEqual(row["route_context"]["intent_gt"], "go_straight")
             self.assertEqual(row["trajectory_fpv_t"][0][2], 0.0)

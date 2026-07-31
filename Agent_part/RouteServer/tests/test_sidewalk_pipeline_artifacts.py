@@ -8,7 +8,12 @@ import tempfile
 import unittest
 
 
-_MODULE_PATH = Path(__file__).resolve().parents[1] / "tools" / "run_sidewalk_images_visual_prompt_pipeline.py"
+_MODULE_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "tools"
+    / "model_processing"
+    / "run_sidewalk_images_visual_prompt_pipeline.py"
+)
 _SPEC = importlib.util.spec_from_file_location("run_sidewalk_images_visual_prompt_pipeline", _MODULE_PATH)
 if _SPEC is None or _SPEC.loader is None:
     raise RuntimeError(f"Unable to load module spec from {_MODULE_PATH}")

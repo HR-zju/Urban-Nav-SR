@@ -273,7 +273,7 @@ SAM3_DIR=/home/ubuntu/WorkSpace/dataset/sidewalk_he4_adapter_sam3
 
 cd /home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer
 
-python tools/run_sidewalk_images_visual_prompt_pipeline.py \
+python tools/model_processing/run_sidewalk_images_visual_prompt_pipeline.py \
   --images-dir "$WORK_DIR/images" \
   --trajectory-json "$WORK_DIR/trajectory.json" \
   --output-dir "$OUT_DIR" \
@@ -347,7 +347,7 @@ python tools/run_sequence_visual_prompt_pipeline.py \
   --client-args --destination-name 浙江大学玉泉校区北门 杭州 --mode foot
 ```
 ```bash
-conda run -n UrbanNav python tools/run_sidewalk_images_visual_prompt_pipeline.py \
+conda run -n UrbanNav python tools/model_processing/run_sidewalk_images_visual_prompt_pipeline.py \
   --images-dir /home/ubuntu/WorkSpace/dataset/sidewalk_he4_adapter/images \
   --trajectory-json /home/ubuntu/WorkSpace/dataset/sidewalk_he4_adapter/trajectory.json \
   --sequence-name sidewalk_he4_adapter \

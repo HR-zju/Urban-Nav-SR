@@ -768,7 +768,7 @@ def build_phase1_targets(
                     "camera_left_offset_m": record.camera_params.camera_left_offset_m,
                     "camera_image_size": [record.camera_params.image_width, record.camera_params.image_height],
                     "postprocess": {
-                        "anchor_norm": [0.5, 0.9],
+                        "anchor_policy": "first_stable_visible_projection",
                         "monotonic_forward_y": True,
                         "min_fpv_projection_forward_m": float(config.min_fpv_projection_forward_m),
                         "min_y_step": float(config.trajectory_min_y_step),

@@ -8,7 +8,8 @@ cd /home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer
 
 ## 从 MCAP 抽取 Sidewalk Pipeline 输入
 
-用途：把单个 ROS2 MCAP 数据包转换成 `tools/run_sidewalk_images_visual_prompt_pipeline.py` 可直接消费的最小输入格式：
+用途：把单个 ROS2 MCAP 数据包转换成
+`tools/model_processing/run_sidewalk_images_visual_prompt_pipeline.py` 可直接消费的最小输入格式：
 
 ```text
 <WORK_DIR>/
@@ -142,7 +143,7 @@ export LVLM_MINIMAL_OUTPUT=1
 如果要减少 TTFT / vision prefill 压力，优先使用 SoM + BEV 两图模式，并保持 prompt 前缀稳定：
 
 ```bash
-python tools/run_sidewalk_images_visual_prompt_pipeline.py \
+python tools/model_processing/run_sidewalk_images_visual_prompt_pipeline.py \
   --images-dir "$WORK_DIR/images" \
   --trajectory-json "$WORK_DIR/trajectory.json" \
   --output-dir "$WORK_DIR/output_fast_som_bev" \
@@ -169,7 +170,7 @@ python tools/run_sidewalk_images_visual_prompt_pipeline.py \
 ```bash
 WORK_DIR=/tmp/viobot_sidewalk_zju_081025_15_1fps
 
-python tools/run_sidewalk_images_visual_prompt_pipeline.py \
+python tools/model_processing/run_sidewalk_images_visual_prompt_pipeline.py \
   --images-dir "$WORK_DIR/images" \
   --trajectory-json "$WORK_DIR/trajectory.json" \
   --output-dir "$WORK_DIR/output_all" \
@@ -182,7 +183,7 @@ python tools/run_sidewalk_images_visual_prompt_pipeline.py \
   --enforce-alignment \
   --mode foot
 
-python tools/run_sidewalk_images_visual_prompt_pipeline.py \
+python tools/model_processing/run_sidewalk_images_visual_prompt_pipeline.py \
   --images-dir "$WORK_DIR/images" \
   --trajectory-json "$WORK_DIR/trajectory.json" \
   --output-dir "$WORK_DIR/output_all" \
@@ -205,7 +206,7 @@ python tools/run_sidewalk_images_visual_prompt_pipeline.py \
 如果 API rate limit 允许，可以打开 LVLM 并发。推荐先从 `2` 开始，观察失败率、限流和平均耗时：
 
 ```bash
-python tools/run_sidewalk_images_visual_prompt_pipeline.py \
+python tools/model_processing/run_sidewalk_images_visual_prompt_pipeline.py \
   --images-dir "$WORK_DIR/images" \
   --trajectory-json "$WORK_DIR/trajectory.json" \
   --output-dir "$WORK_DIR/output_all_concurrency2" \
@@ -218,7 +219,7 @@ python tools/run_sidewalk_images_visual_prompt_pipeline.py \
   --enforce-alignment \
   --mode foot
 
-python tools/run_sidewalk_images_visual_prompt_pipeline.py \
+python tools/model_processing/run_sidewalk_images_visual_prompt_pipeline.py \
   --images-dir "$WORK_DIR/images" \
   --trajectory-json "$WORK_DIR/trajectory.json" \
   --output-dir "$WORK_DIR/output_debug_one" \

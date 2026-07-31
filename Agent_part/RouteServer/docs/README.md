@@ -31,8 +31,6 @@
 
 | 文档 | 状态 |
 | --- | --- |
-| [FRODOBOT_SYSTEM2_PLAN.md](FRODOBOT_SYSTEM2_PLAN.md) | FrodoBot System2 计划。 |
-| [BEV_GENERATOR_FINAL_SUMMARY.md](BEV_GENERATOR_FINAL_SUMMARY.md) | BEV 生成器阶段总结。 |
 | [SIDEWALK_AGENTIC_STAGE2_CHECKLIST.md](SIDEWALK_AGENTIC_STAGE2_CHECKLIST.md) | Stage2 实现 checklist；长期协议以 `SIDEWALK_AGENT_EVAL_PROTOCOL.md` 为准。 |
 | [change_log.md](change_log.md) | 历史变更记录。 |
 
@@ -44,3 +42,7 @@
 - `URBANNAV_FAKE_EVAL_REVIEW.md`：fake evaluator smoke 记录，核心指标语义已合并到 `EVALUATION.md`。
 - `URBANNAV_COMPLEX_EVAL_EXAMPLES.md`：复杂样例记录，multi-stop 与 route-update 语义已合并到正式评测文档。
 - `URBANNAV_REAL_API_REVIEW.md`：真实 API review 命令草稿，当前正式采集流程以 `EVALUATION.md` 和工具脚本为准。
+- `FRODOBOT_SYSTEM2_PLAN.md`：早期计划错误地把近似 FPV trajectory 当作可训练监督，已由当前 FrodoBots trust policy 取代。
+- `BEV_GENERATOR_FINAL_SUMMARY.md`：一次性 BEV 生成阶段报告，现行转换链路由 `SIDEWALK_PHASE1_DATA_PIPELINE.md` 和代码维护。
+- `UrbanNav Reasoning V4 Canonical Contract.pdf`：`REASONING_V4_DATA_ANNOTATION_DESIGN.md` 的重复导出，已删除以避免双源漂移。
+- `coco script.pdf`：与 RouteServer 当前合同无直接关系的二进制附件，已删除。
