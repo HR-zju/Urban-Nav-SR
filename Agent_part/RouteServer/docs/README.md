@@ -16,6 +16,7 @@
 | [SIDEWALK_PHASE1_DATA_PIPELINE.md](SIDEWALK_PHASE1_DATA_PIPELINE.md) | SideWalk Phase1 数据生成与标注流水线。 |
 | [REASONING_V4_DATA_ANNOTATION_DESIGN.md](REASONING_V4_DATA_ANNOTATION_DESIGN.md) | Reasoning V4 共享输入六段合同、独立 section teacher、强 sidecar 边界与 LM/System1 loss 路由。 |
 | [VQA_V2_DATA_ANNOTATION_DESIGN.md](VQA_V2_DATA_ANNOTATION_DESIGN.md) | Navigation VQA V2 的 27-task typed contract、18/9 capability gate、标签来源、可见性、LM loss、审阅与评测边界。 |
+| [STAGE_II_CFM_DATA_CONTRACT.md](STAGE_II_CFM_DATA_CONTRACT.md) | Stage II 的 2.0 秒/16 步 metric FLU trajectory、严格 mask/QC、predicted context cache 与 exchange-view 边界。 |
 
 ## 工程运行
 
