@@ -1,0 +1,259 @@
+{
+  "$defs": {
+    "StageIIContextProducerV1": {
+      "additionalProperties": false,
+      "description": "Identify the exact producer of one cached reasoning context.\n\nArgs:\n    source: Oracle or frozen-model provenance.\n    base_model_id: Base LVLM identity.\n    checkpoint_id: Exact Stage I checkpoint identity.\n    checkpoint_digest: Immutable checkpoint digest.\n    adapter_id: Optional adapter identity.\n    prompt_profile_id: Pass-specific prompt profile.\n    prompt_digest: Exact prompt-policy digest.\n    parser_contract_id: Strict parser identity.\n    parser_contract_digest: Exact parser-contract digest.\n    generation_config: Frozen decoding configuration.\n    generation_config_digest: SHA-256 of ``generation_config``.",
+      "properties": {
+        "adapter_id": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Adapter Id"
+        },
+        "base_model_id": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Base Model Id",
+          "type": "string"
+        },
+        "checkpoint_digest": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Checkpoint Digest",
+          "type": "string"
+        },
+        "checkpoint_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Checkpoint Id",
+          "type": "string"
+        },
+        "generation_config": {
+          "additionalProperties": true,
+          "title": "Generation Config",
+          "type": "object"
+        },
+        "generation_config_digest": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Generation Config Digest",
+          "type": "string"
+        },
+        "parser_contract_digest": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Parser Contract Digest",
+          "type": "string"
+        },
+        "parser_contract_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Parser Contract Id",
+          "type": "string"
+        },
+        "prompt_digest": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Prompt Digest",
+          "type": "string"
+        },
+        "prompt_profile_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Prompt Profile Id",
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "ground_truth",
+            "model_prediction"
+          ],
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "base_model_id",
+        "checkpoint_id",
+        "checkpoint_digest",
+        "prompt_profile_id",
+        "prompt_digest",
+        "parser_contract_id",
+        "parser_contract_digest",
+        "generation_config_digest"
+      ],
+      "title": "StageIIContextProducerV1",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Store one strict Pass-R or Pass-D result for an exact input projection.\n\nArgs:\n    schema_version: Exact cache schema stamp.\n    cache_id: Stable context-kind-specific cache identity.\n    sample_id: Parent Stage I FullCoT sample identity.\n    source_group_id: Parent source group.\n    split_group_id: Leakage-safe split group.\n    dataset_source: Dataset family.\n    modality_profile_id: Exact projected modality combination.\n    parent_source_fingerprint: Immutable parent source digest.\n    projected_input_digest: Digest of every model-visible input.\n    context_kind: Independent reasoning-grounding or Decision pass.\n    section_names: Exact canonical section sequence.\n    producer: Frozen model/prompt/parser/generation identity.\n    raw_generation: Original output retained for audit only.\n    canonical_text: Strict parsed text exposed to Pass T.\n    parse_status: Accepted or rejected parser state.\n    errors: Bounded parser error codes.\n    cache_digest: SHA-256 over all other cache fields.",
+  "properties": {
+    "cache_digest": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Cache Digest",
+      "type": "string"
+    },
+    "cache_id": {
+      "maxLength": 480,
+      "minLength": 1,
+      "title": "Cache Id",
+      "type": "string"
+    },
+    "canonical_text": {
+      "anyOf": [
+        {
+          "maxLength": 20000,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Canonical Text"
+    },
+    "context_kind": {
+      "enum": [
+        "reasoning_grounding",
+        "decision"
+      ],
+      "title": "Context Kind",
+      "type": "string"
+    },
+    "dataset_source": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Dataset Source",
+      "type": "string"
+    },
+    "errors": {
+      "items": {
+        "maxLength": 96,
+        "minLength": 1,
+        "pattern": "^[a-z][a-z0-9_]*$",
+        "type": "string"
+      },
+      "maxItems": 16,
+      "title": "Errors",
+      "type": "array"
+    },
+    "modality_profile_id": {
+      "enum": [
+        "fpv_current_v1",
+        "fpv_temporal_v1",
+        "fpv_instruction_v1",
+        "fpv_bev_v1",
+        "fpv_instruction_bev_v1",
+        "fpv_temporal_instruction_v1",
+        "fpv_temporal_bev_v1",
+        "fpv_temporal_instruction_bev_v1"
+      ],
+      "title": "Modality Profile Id",
+      "type": "string"
+    },
+    "parent_source_fingerprint": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Parent Source Fingerprint",
+      "type": "string"
+    },
+    "parse_status": {
+      "enum": [
+        "accepted",
+        "rejected"
+      ],
+      "title": "Parse Status",
+      "type": "string"
+    },
+    "producer": {
+      "$ref": "#/$defs/StageIIContextProducerV1"
+    },
+    "projected_input_digest": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Projected Input Digest",
+      "type": "string"
+    },
+    "raw_generation": {
+      "anyOf": [
+        {
+          "maxLength": 30000,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Raw Generation"
+    },
+    "sample_id": {
+      "maxLength": 480,
+      "minLength": 1,
+      "title": "Sample Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "urbannav_stage_ii_context_cache_v1",
+      "default": "urbannav_stage_ii_context_cache_v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "section_names": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 5,
+      "minItems": 1,
+      "title": "Section Names",
+      "type": "array"
+    },
+    "source_group_id": {
+      "maxLength": 240,
+      "minLength": 1,
+      "title": "Source Group Id",
+      "type": "string"
+    },
+    "split_group_id": {
+      "maxLength": 240,
+      "minLength": 1,
+      "title": "Split Group Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "cache_id",
+    "sample_id",
+    "source_group_id",
+    "split_group_id",
+    "dataset_source",
+    "modality_profile_id",
+    "parent_source_fingerprint",
+    "projected_input_digest",
+    "context_kind",
+    "section_names",
+    "producer",
+    "parse_status",
+    "cache_digest"
+  ],
+  "title": "StageIIContextCacheV1",
+  "type": "object"
+}

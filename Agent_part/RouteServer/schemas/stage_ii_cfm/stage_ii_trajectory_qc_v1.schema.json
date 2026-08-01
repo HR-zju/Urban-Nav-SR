@@ -1,0 +1,93 @@
+{
+  "additionalProperties": false,
+  "description": "Record deterministic target construction acceptance or rejection.\n\nArgs:\n    schema_version: Exact QC schema stamp.\n    sample_id: Audited parent identity.\n    dataset_source: Dataset family.\n    trajectory_source: Declared dataset trajectory source.\n    source_format: Declared timed-row format.\n    status: Accepted or rejected construction state.\n    reason_codes: Stable bounded QC outcomes.\n    raw_step_count: Number of supplied source rows.\n    source_valid_step_count: Valid source-prefix length.\n    target_valid_step_count: Valid fixed-grid prefix length.\n    qc_digest: SHA-256 over all other QC fields.",
+  "properties": {
+    "dataset_source": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Dataset Source",
+      "type": "string"
+    },
+    "qc_digest": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Qc Digest",
+      "type": "string"
+    },
+    "raw_step_count": {
+      "minimum": 0,
+      "title": "Raw Step Count",
+      "type": "integer"
+    },
+    "reason_codes": {
+      "items": {
+        "maxLength": 96,
+        "minLength": 1,
+        "pattern": "^[a-z][a-z0-9_]*$",
+        "type": "string"
+      },
+      "maxItems": 16,
+      "minItems": 1,
+      "title": "Reason Codes",
+      "type": "array"
+    },
+    "sample_id": {
+      "maxLength": 480,
+      "minLength": 1,
+      "title": "Sample Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "urbannav_stage_ii_trajectory_qc_v1",
+      "default": "urbannav_stage_ii_trajectory_qc_v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_format": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Source Format",
+      "type": "string"
+    },
+    "source_valid_step_count": {
+      "minimum": 0,
+      "title": "Source Valid Step Count",
+      "type": "integer"
+    },
+    "status": {
+      "enum": [
+        "accepted",
+        "rejected"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "target_valid_step_count": {
+      "maximum": 16,
+      "minimum": 0,
+      "title": "Target Valid Step Count",
+      "type": "integer"
+    },
+    "trajectory_source": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Trajectory Source",
+      "type": "string"
+    }
+  },
+  "required": [
+    "sample_id",
+    "dataset_source",
+    "trajectory_source",
+    "source_format",
+    "status",
+    "reason_codes",
+    "raw_step_count",
+    "source_valid_step_count",
+    "target_valid_step_count",
+    "qc_digest"
+  ],
+  "title": "StageIITrajectoryQCReportV1",
+  "type": "object"
+}

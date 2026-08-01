@@ -1,0 +1,220 @@
+{
+  "$defs": {
+    "StageIITrajectoryPolicyV1": {
+      "additionalProperties": false,
+      "description": "Freeze metric target geometry and temporal resampling semantics.\n\nArgs:\n    policy_id: Canonical trajectory-policy identity.\n    policy_version: Exact policy version.\n    target_field: Physical target sidecar name.\n    target_format: Metric cumulative FLU pose format.\n    representation: Cumulative relative-pose representation.\n    coordinate_frame: Current-ego FLU frame.\n    axis_names: Ordered target axes.\n    units: Ordered target units.\n    horizon_steps: Fixed 16-step horizon.\n    horizon_seconds: Fixed two-second horizon.\n    target_dt_sec: Fixed 0.125-second grid interval.\n    temporal_resampling_id: Deterministic resampler stamp.\n    source_format: Exact supported timed source format.\n    trajectory_source: Dataset-owned source code.\n    yaw_source: Odometry or deterministic path tangent.\n    normalized: Always false at the canonical exchange boundary.",
+      "properties": {
+        "axis_names": {
+          "default": [
+            "x_forward_m",
+            "y_left_m",
+            "yaw_rel_ccw_rad"
+          ],
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "const": "x_forward_m",
+              "type": "string"
+            },
+            {
+              "const": "y_left_m",
+              "type": "string"
+            },
+            {
+              "const": "yaw_rel_ccw_rad",
+              "type": "string"
+            }
+          ],
+          "title": "Axis Names",
+          "type": "array"
+        },
+        "coordinate_frame": {
+          "const": "current_ego_flu",
+          "default": "current_ego_flu",
+          "title": "Coordinate Frame",
+          "type": "string"
+        },
+        "horizon_seconds": {
+          "const": 2.0,
+          "default": 2.0,
+          "title": "Horizon Seconds",
+          "type": "number"
+        },
+        "horizon_steps": {
+          "const": 16,
+          "default": 16,
+          "title": "Horizon Steps",
+          "type": "integer"
+        },
+        "normalized": {
+          "const": false,
+          "default": false,
+          "title": "Normalized",
+          "type": "boolean"
+        },
+        "policy_id": {
+          "const": "urbannav_stage_ii_metric_flu_2s_16_v1",
+          "default": "urbannav_stage_ii_metric_flu_2s_16_v1",
+          "title": "Policy Id",
+          "type": "string"
+        },
+        "policy_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Policy Version",
+          "type": "string"
+        },
+        "representation": {
+          "const": "cumulative_relative_pose",
+          "default": "cumulative_relative_pose",
+          "title": "Representation",
+          "type": "string"
+        },
+        "source_format": {
+          "enum": [
+            "ego_xy_t_speed_right_front_v1",
+            "ego_pose_xyt_flu_timed_v1"
+          ],
+          "title": "Source Format",
+          "type": "string"
+        },
+        "target_dt_sec": {
+          "const": 0.125,
+          "default": 0.125,
+          "title": "Target Dt Sec",
+          "type": "number"
+        },
+        "target_field": {
+          "const": "trajectory_ego_t",
+          "default": "trajectory_ego_t",
+          "title": "Target Field",
+          "type": "string"
+        },
+        "target_format": {
+          "const": "ego_pose_xyt_flu_v1",
+          "default": "ego_pose_xyt_flu_v1",
+          "title": "Target Format",
+          "type": "string"
+        },
+        "temporal_resampling_id": {
+          "const": "linear_time_grid_2s_16_v1",
+          "default": "linear_time_grid_2s_16_v1",
+          "title": "Temporal Resampling Id",
+          "type": "string"
+        },
+        "trajectory_source": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Trajectory Source",
+          "type": "string"
+        },
+        "units": {
+          "default": [
+            "meter",
+            "meter",
+            "radian"
+          ],
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "const": "meter",
+              "type": "string"
+            },
+            {
+              "const": "meter",
+              "type": "string"
+            },
+            {
+              "const": "radian",
+              "type": "string"
+            }
+          ],
+          "title": "Units",
+          "type": "array"
+        },
+        "yaw_source": {
+          "enum": [
+            "odometry",
+            "path_tangent"
+          ],
+          "title": "Yaw Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_format",
+        "trajectory_source",
+        "yaw_source"
+      ],
+      "title": "StageIITrajectoryPolicyV1",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Carry one metric FLU trajectory and its prefix-contiguous valid mask.\n\nArgs:\n    schema_version: Exact target schema stamp.\n    trajectory_ego_t: Metric cumulative FLU poses shaped ``[16,3]``.\n    action_mask: Non-empty valid prefix followed by optional padding.\n    valid_step_count: Number of true mask entries.\n    policy: Frozen source/frame/time contract.\n    source_target_digest: Digest of raw source rows and declarations.\n    target_digest: SHA-256 over all other target fields.",
+  "properties": {
+    "action_mask": {
+      "items": {
+        "type": "boolean"
+      },
+      "maxItems": 16,
+      "minItems": 16,
+      "title": "Action Mask",
+      "type": "array"
+    },
+    "policy": {
+      "$ref": "#/$defs/StageIITrajectoryPolicyV1"
+    },
+    "schema_version": {
+      "const": "urbannav_stage_ii_trajectory_target_v1",
+      "default": "urbannav_stage_ii_trajectory_target_v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_target_digest": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Target Digest",
+      "type": "string"
+    },
+    "target_digest": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Target Digest",
+      "type": "string"
+    },
+    "trajectory_ego_t": {
+      "items": {
+        "items": {
+          "type": "number"
+        },
+        "type": "array"
+      },
+      "maxItems": 16,
+      "minItems": 16,
+      "title": "Trajectory Ego T",
+      "type": "array"
+    },
+    "valid_step_count": {
+      "maximum": 16,
+      "minimum": 1,
+      "title": "Valid Step Count",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "trajectory_ego_t",
+    "action_mask",
+    "valid_step_count",
+    "policy",
+    "source_target_digest",
+    "target_digest"
+  ],
+  "title": "StageIITrajectoryTargetV1",
+  "type": "object"
+}

@@ -1,0 +1,240 @@
+{
+  "$defs": {
+    "StageIITrajectorySourceSpecV1": {
+      "additionalProperties": false,
+      "description": "Describe one dataset-owned trajectory source without runtime guessing.\n\nArgs:\n    dataset_source: Canonical dataset family.\n    status: Whether the dataset is admitted for Stage II target building.\n    sample_identity_fields: Ordered row paths forming a unique parent ID.\n    split_group_fields: Ordered row paths forming the leakage-safe group.\n    trajectory_field: Row path containing timed trajectory coordinates.\n    source_format: Exact coordinate/time row layout.\n    trajectory_source_fields: Ordered equivalent provenance paths.\n    allowed_trajectory_sources: Closed source-code allowlist.\n    yaw_source: Deterministic yaw construction authority.\n    mask_policy: Explicit mask or registry-authorized timed-row validation.\n    action_mask_field: Row path used by the explicit mask policy.\n    origin_policy: Require or deterministically prepend current ego origin.\n    required_values: Exact row-path stamps required before adaptation.\n    disabled_reason: Stable reason when this dataset is not admitted.",
+      "properties": {
+        "action_mask_field": {
+          "anyOf": [
+            {
+              "maxLength": 160,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Action Mask Field"
+        },
+        "allowed_trajectory_sources": {
+          "items": {
+            "maxLength": 96,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Allowed Trajectory Sources",
+          "type": "array"
+        },
+        "dataset_source": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Dataset Source",
+          "type": "string"
+        },
+        "disabled_reason": {
+          "anyOf": [
+            {
+              "maxLength": 96,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Disabled Reason"
+        },
+        "mask_policy": {
+          "enum": [
+            "explicit_field_v1",
+            "validated_timed_rows_v1"
+          ],
+          "title": "Mask Policy",
+          "type": "string"
+        },
+        "origin_policy": {
+          "enum": [
+            "require_explicit_origin_v1",
+            "prepend_current_origin_v1"
+          ],
+          "title": "Origin Policy",
+          "type": "string"
+        },
+        "required_values": {
+          "additionalProperties": true,
+          "title": "Required Values",
+          "type": "object"
+        },
+        "sample_identity_fields": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "title": "Sample Identity Fields",
+          "type": "array"
+        },
+        "source_format": {
+          "enum": [
+            "ego_xy_t_speed_right_front_v1",
+            "ego_pose_xyt_flu_timed_v1"
+          ],
+          "title": "Source Format",
+          "type": "string"
+        },
+        "split_group_fields": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "title": "Split Group Fields",
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "enabled",
+            "disabled"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "trajectory_field": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Trajectory Field",
+          "type": "string"
+        },
+        "trajectory_source_fields": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "title": "Trajectory Source Fields",
+          "type": "array"
+        },
+        "yaw_source": {
+          "enum": [
+            "odometry",
+            "path_tangent"
+          ],
+          "title": "Yaw Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dataset_source",
+        "status",
+        "sample_identity_fields",
+        "split_group_fields",
+        "trajectory_field",
+        "source_format",
+        "trajectory_source_fields",
+        "allowed_trajectory_sources",
+        "yaw_source",
+        "mask_policy",
+        "origin_policy"
+      ],
+      "title": "StageIITrajectorySourceSpecV1",
+      "type": "object"
+    },
+    "StageIITrajectorySplitPolicyV1": {
+      "additionalProperties": false,
+      "description": "Freeze the leakage-safe group split used by Stage I and Stage II.\n\nArgs:\n    policy_id: Exact deterministic split implementation identity.\n    seed: Integer seed included in the SHA-256 input.\n    train: Fraction assigned to train groups.\n    validation: Fraction assigned to validation groups.\n    test: Fraction assigned to held-out test groups.",
+      "properties": {
+        "policy_id": {
+          "const": "stage_i_group_sha256_colon_v1",
+          "default": "stage_i_group_sha256_colon_v1",
+          "title": "Policy Id",
+          "type": "string"
+        },
+        "seed": {
+          "title": "Seed",
+          "type": "integer"
+        },
+        "test": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Test",
+          "type": "number"
+        },
+        "train": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Train",
+          "type": "number"
+        },
+        "validation": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Validation",
+          "type": "number"
+        }
+      },
+      "required": [
+        "seed",
+        "train",
+        "validation",
+        "test"
+      ],
+      "title": "StageIITrajectorySplitPolicyV1",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Freeze all admitted and explicitly disabled Stage II dataset sources.\n\nArgs:\n    schema_version: Exact source-registry schema stamp.\n    registry_id: Stable registry family identity.\n    registry_version: Exact immutable instance version.\n    split_policy: Leakage-safe group split contract.\n    datasets: One source specification per supported dataset family.\n    registry_digest: SHA-256 over every other registry field.",
+  "properties": {
+    "datasets": {
+      "items": {
+        "$ref": "#/$defs/StageIITrajectorySourceSpecV1"
+      },
+      "maxItems": 32,
+      "minItems": 1,
+      "title": "Datasets",
+      "type": "array"
+    },
+    "registry_digest": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Registry Digest",
+      "type": "string"
+    },
+    "registry_id": {
+      "const": "urbannav_stage_ii_trajectory_sources_v1",
+      "default": "urbannav_stage_ii_trajectory_sources_v1",
+      "title": "Registry Id",
+      "type": "string"
+    },
+    "registry_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Registry Version",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "urbannav_stage_ii_trajectory_source_registry_v1",
+      "default": "urbannav_stage_ii_trajectory_source_registry_v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "split_policy": {
+      "$ref": "#/$defs/StageIITrajectorySplitPolicyV1"
+    }
+  },
+  "required": [
+    "split_policy",
+    "datasets",
+    "registry_digest"
+  ],
+  "title": "StageIITrajectorySourceRegistryV1",
+  "type": "object"
+}

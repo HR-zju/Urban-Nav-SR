@@ -1,0 +1,86 @@
+{
+  "additionalProperties": false,
+  "description": "Record one fail-closed Stage II projection rejection.\n\nArgs:\n    schema_version: Exact drop schema stamp.\n    parent_sample_id: Best available parent identity.\n    source_group_id: Best available source group.\n    split_group_id: Best available leakage-safe split group.\n    dataset_source: Dataset family.\n    modality_profile_id: Requested modality profile.\n    reason_code: Stable bounded rejection category.\n    detail: Bounded engineering diagnostic.\n    projection_policy_id: Exact projection policy.\n    projection_policy_version: Exact projection-policy version.\n    drop_digest: SHA-256 over all other drop fields.",
+  "properties": {
+    "dataset_source": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Dataset Source",
+      "type": "string"
+    },
+    "detail": {
+      "maxLength": 1000,
+      "minLength": 1,
+      "title": "Detail",
+      "type": "string"
+    },
+    "drop_digest": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Drop Digest",
+      "type": "string"
+    },
+    "modality_profile_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Modality Profile Id",
+      "type": "string"
+    },
+    "parent_sample_id": {
+      "maxLength": 480,
+      "minLength": 1,
+      "title": "Parent Sample Id",
+      "type": "string"
+    },
+    "projection_policy_id": {
+      "const": "urbannav_stage_ii_safe_projection_v1",
+      "default": "urbannav_stage_ii_safe_projection_v1",
+      "title": "Projection Policy Id",
+      "type": "string"
+    },
+    "projection_policy_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Projection Policy Version",
+      "type": "string"
+    },
+    "reason_code": {
+      "maxLength": 96,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "title": "Reason Code",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "urbannav_stage_ii_projection_drop_v1",
+      "default": "urbannav_stage_ii_projection_drop_v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_group_id": {
+      "maxLength": 240,
+      "minLength": 1,
+      "title": "Source Group Id",
+      "type": "string"
+    },
+    "split_group_id": {
+      "maxLength": 240,
+      "minLength": 1,
+      "title": "Split Group Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "parent_sample_id",
+    "source_group_id",
+    "split_group_id",
+    "dataset_source",
+    "modality_profile_id",
+    "reason_code",
+    "detail",
+    "drop_digest"
+  ],
+  "title": "StageIIProjectionDropV1",
+  "type": "object"
+}

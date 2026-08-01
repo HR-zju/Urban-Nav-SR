@@ -1,0 +1,126 @@
+{
+  "schema_version": "urbannav_stage_ii_trajectory_source_registry_v1",
+  "registry_id": "urbannav_stage_ii_trajectory_sources_v1",
+  "registry_version": "1.0",
+  "split_policy": {
+    "policy_id": "stage_i_group_sha256_colon_v1",
+    "seed": 20260731,
+    "train": 0.9,
+    "validation": 0.05,
+    "test": 0.05
+  },
+  "datasets": [
+    {
+      "dataset_source": "sidewalk",
+      "status": "enabled",
+      "sample_identity_fields": [
+        "sidewalk_meta.clip_id",
+        "sidewalk_meta.frame_idx"
+      ],
+      "split_group_fields": [
+        "sidewalk_meta.clip_id"
+      ],
+      "trajectory_field": "trajectory_ego_t",
+      "source_format": "ego_xy_t_speed_right_front_v1",
+      "trajectory_source_fields": [
+        "trajectory_policy.trajectory_source",
+        "sidewalk_meta.trajectory_source"
+      ],
+      "allowed_trajectory_sources": [
+        "calibrated_pose_projection",
+        "stationary_pose_hold"
+      ],
+      "yaw_source": "path_tangent",
+      "mask_policy": "validated_timed_rows_v1",
+      "action_mask_field": null,
+      "origin_policy": "require_explicit_origin_v1",
+      "required_values": {
+        "trajectory_policy.schema_version": "sidewalk_time_conditioned_policy_v1",
+        "trajectory_policy.time_unit": "seconds"
+      },
+      "disabled_reason": null
+    },
+    {
+      "dataset_source": "foxglove",
+      "status": "enabled",
+      "sample_identity_fields": [
+        "sidewalk_meta.clip_id",
+        "sidewalk_meta.frame_idx"
+      ],
+      "split_group_fields": [
+        "sidewalk_meta.clip_id"
+      ],
+      "trajectory_field": "trajectory_ego_t",
+      "source_format": "ego_xy_t_speed_right_front_v1",
+      "trajectory_source_fields": [
+        "trajectory_policy.trajectory_source",
+        "sidewalk_meta.trajectory_source"
+      ],
+      "allowed_trajectory_sources": [
+        "calibrated_pose_projection",
+        "stationary_pose_hold"
+      ],
+      "yaw_source": "path_tangent",
+      "mask_policy": "validated_timed_rows_v1",
+      "action_mask_field": null,
+      "origin_policy": "require_explicit_origin_v1",
+      "required_values": {
+        "trajectory_policy.schema_version": "sidewalk_time_conditioned_policy_v1",
+        "trajectory_policy.time_unit": "seconds"
+      },
+      "disabled_reason": null
+    },
+    {
+      "dataset_source": "egowalk",
+      "status": "enabled",
+      "sample_identity_fields": [
+        "id"
+      ],
+      "split_group_fields": [
+        "clip_id"
+      ],
+      "trajectory_field": "trajectory_ego_t",
+      "source_format": "ego_xy_t_speed_right_front_v1",
+      "trajectory_source_fields": [
+        "trajectory_policy.source"
+      ],
+      "allowed_trajectory_sources": [
+        "egowalk_odometry"
+      ],
+      "yaw_source": "path_tangent",
+      "mask_policy": "explicit_field_v1",
+      "action_mask_field": "action_mask",
+      "origin_policy": "prepend_current_origin_v1",
+      "required_values": {
+        "source_dataset": "egowalk",
+        "trajectory_policy.source": "egowalk_odometry"
+      },
+      "disabled_reason": null
+    },
+    {
+      "dataset_source": "frodobots",
+      "status": "disabled",
+      "sample_identity_fields": [
+        "sidewalk_meta.clip_id",
+        "sidewalk_meta.frame_idx"
+      ],
+      "split_group_fields": [
+        "sidewalk_meta.clip_id"
+      ],
+      "trajectory_field": "trajectory_ego_t",
+      "source_format": "ego_xy_t_speed_right_front_v1",
+      "trajectory_source_fields": [
+        "trajectory_policy.trajectory_source",
+        "sidewalk_meta.trajectory_source"
+      ],
+      "allowed_trajectory_sources": [],
+      "yaw_source": "path_tangent",
+      "mask_policy": "validated_timed_rows_v1",
+      "action_mask_field": null,
+      "origin_policy": "require_explicit_origin_v1",
+      "required_values": {},
+      "disabled_reason": "untrusted_approximate_camera_trajectory"
+    }
+  ],
+  "registry_digest": "e332451a0f0972f029c5c70436d618981530ee910e6687a87cd69e70143e77f1"
+}

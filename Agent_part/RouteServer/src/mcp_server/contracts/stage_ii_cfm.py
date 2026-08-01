@@ -1,0 +1,889 @@
+"""Canonical exchange contracts for UrbanNav Stage II trajectory CFM.
+
+The RouteServer boundary owns metric trajectory truth and immutable input/cache
+identity.  Model tokenization, trajectory normalization, latent-query positions,
+and tensors remain ms-swift implementation details.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from mcp_server.contracts.reasoning import ReasonCode
+from mcp_server.contracts.reasoning_dataset_v4 import (
+    DirectionContextV4,
+    DirectionSupervisionV4,
+    EvidenceCatalogEntryV4,
+    InputModalitiesV4,
+)
+from mcp_server.contracts.stage_i_sft import (
+    StageIInstructionTrainingRoleV1,
+    StageIModalityAvailabilityV1,
+    StageIModalityProfileIdV1,
+    StageIModalitySelectionV1,
+    StageIModalityStateV1,
+)
+
+
+STAGE_II_TRAINING_CONTRACT_ID = "stage_ii_cfm_v1"
+STAGE_II_CONTEXT_CACHE_SCHEMA_VERSION = (
+    "urbannav_stage_ii_context_cache_v1"
+)
+STAGE_II_TRAJECTORY_TARGET_SCHEMA_VERSION = (
+    "urbannav_stage_ii_trajectory_target_v1"
+)
+STAGE_II_TRAJECTORY_SOURCE_REGISTRY_SCHEMA_VERSION = (
+    "urbannav_stage_ii_trajectory_source_registry_v1"
+)
+STAGE_II_TRAJECTORY_SOURCE_REGISTRY_ID = (
+    "urbannav_stage_ii_trajectory_sources_v1"
+)
+STAGE_II_TRAJECTORY_SOURCE_REGISTRY_VERSION = "1.0"
+STAGE_II_SPLIT_POLICY_ID = "stage_i_group_sha256_colon_v1"
+STAGE_II_TRAJECTORY_QC_SCHEMA_VERSION = (
+    "urbannav_stage_ii_trajectory_qc_v1"
+)
+STAGE_II_CFM_TRAINING_VIEW_SCHEMA_VERSION = (
+    "urbannav_stage_ii_cfm_training_view_v1"
+)
+STAGE_II_PROJECTION_DROP_SCHEMA_VERSION = (
+    "urbannav_stage_ii_projection_drop_v1"
+)
+STAGE_II_PROJECTION_POLICY_ID = "urbannav_stage_ii_safe_projection_v1"
+STAGE_II_PROJECTION_POLICY_VERSION = "1.0"
+STAGE_II_TRAJECTORY_POLICY_ID = "urbannav_stage_ii_metric_flu_2s_16_v1"
+STAGE_II_TRAJECTORY_POLICY_VERSION = "1.0"
+STAGE_II_TEMPORAL_RESAMPLING_ID = "linear_time_grid_2s_16_v1"
+STAGE_II_HORIZON_STEPS = 16
+STAGE_II_HORIZON_SECONDS = 2.0
+STAGE_II_TARGET_FORMAT = "ego_pose_xyt_flu_v1"
+STAGE_II_GROUNDING_SECTION_NAMES = (
+    "TaskGrounding",
+    "SceneGrounding",
+    "LocalTraversability",
+    "NavigationContextGrounding",
+    "InteractionConstraintGrounding",
+)
+
+StageIIContextKindV1 = Literal["reasoning_grounding", "decision"]
+StageIIContextSourceV1 = Literal["ground_truth", "model_prediction"]
+StageIIContextParseStatusV1 = Literal["accepted", "rejected"]
+StageIITrajectoryQCStatusV1 = Literal["accepted", "rejected"]
+StageIITrajectoryDatasetStatusV1 = Literal["enabled", "disabled"]
+StageIITrajectoryMaskPolicyV1 = Literal[
+    "explicit_field_v1",
+    "validated_timed_rows_v1",
+]
+StageIITrajectoryOriginPolicyV1 = Literal[
+    "require_explicit_origin_v1",
+    "prepend_current_origin_v1",
+]
+
+
+class StageIIContextProducerV1(BaseModel):
+    """Identify the exact producer of one cached reasoning context.
+
+    Args:
+        source: Oracle or frozen-model provenance.
+        base_model_id: Base LVLM identity.
+        checkpoint_id: Exact Stage I checkpoint identity.
+        checkpoint_digest: Immutable checkpoint digest.
+        adapter_id: Optional adapter identity.
+        prompt_profile_id: Pass-specific prompt profile.
+        prompt_digest: Exact prompt-policy digest.
+        parser_contract_id: Strict parser identity.
+        parser_contract_digest: Exact parser-contract digest.
+        generation_config: Frozen decoding configuration.
+        generation_config_digest: SHA-256 of ``generation_config``.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source: StageIIContextSourceV1
+    base_model_id: str = Field(min_length=1, max_length=300)
+    checkpoint_id: str = Field(min_length=1, max_length=500)
+    checkpoint_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    adapter_id: str | None = Field(default=None, min_length=1, max_length=500)
+    prompt_profile_id: str = Field(min_length=1, max_length=160)
+    prompt_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    parser_contract_id: str = Field(min_length=1, max_length=160)
+    parser_contract_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    generation_config: dict[str, Any] = Field(default_factory=dict)
+    generation_config_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+    @model_validator(mode="after")
+    def validate_generation_digest(self) -> "StageIIContextProducerV1":
+        """Require the generation configuration to be immutable."""
+
+        expected = stage_ii_digest_v1(self.generation_config)
+        if self.generation_config_digest != expected:
+            raise ValueError("Stage II generation_config_digest mismatch")
+        return self
+
+
+class StageIIContextCacheV1(BaseModel):
+    """Store one strict Pass-R or Pass-D result for an exact input projection.
+
+    Args:
+        schema_version: Exact cache schema stamp.
+        cache_id: Stable context-kind-specific cache identity.
+        sample_id: Parent Stage I FullCoT sample identity.
+        source_group_id: Parent source group.
+        split_group_id: Leakage-safe split group.
+        dataset_source: Dataset family.
+        modality_profile_id: Exact projected modality combination.
+        parent_source_fingerprint: Immutable parent source digest.
+        projected_input_digest: Digest of every model-visible input.
+        context_kind: Independent reasoning-grounding or Decision pass.
+        section_names: Exact canonical section sequence.
+        producer: Frozen model/prompt/parser/generation identity.
+        raw_generation: Original output retained for audit only.
+        canonical_text: Strict parsed text exposed to Pass T.
+        parse_status: Accepted or rejected parser state.
+        errors: Bounded parser error codes.
+        cache_digest: SHA-256 over all other cache fields.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[STAGE_II_CONTEXT_CACHE_SCHEMA_VERSION] = (
+        STAGE_II_CONTEXT_CACHE_SCHEMA_VERSION
+    )
+    cache_id: str = Field(min_length=1, max_length=480)
+    sample_id: str = Field(min_length=1, max_length=480)
+    source_group_id: str = Field(min_length=1, max_length=240)
+    split_group_id: str = Field(min_length=1, max_length=240)
+    dataset_source: str = Field(min_length=1, max_length=128)
+    modality_profile_id: StageIModalityProfileIdV1
+    parent_source_fingerprint: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    projected_input_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    context_kind: StageIIContextKindV1
+    section_names: tuple[str, ...] = Field(min_length=1, max_length=5)
+    producer: StageIIContextProducerV1
+    raw_generation: str | None = Field(default=None, max_length=30000)
+    canonical_text: str | None = Field(default=None, max_length=20000)
+    parse_status: StageIIContextParseStatusV1
+    errors: tuple[ReasonCode, ...] = Field(default_factory=tuple, max_length=16)
+    cache_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+    @model_validator(mode="after")
+    def validate_cache(self) -> "StageIIContextCacheV1":
+        """Require exact section family, parse state, and immutable identity."""
+
+        expected_sections = (
+            STAGE_II_GROUNDING_SECTION_NAMES
+            if self.context_kind == "reasoning_grounding"
+            else ("Decision",)
+        )
+        if tuple(self.section_names) != tuple(expected_sections):
+            raise ValueError("Stage II context section_names mismatch")
+        if self.parse_status == "accepted":
+            if not self.canonical_text or self.errors:
+                raise ValueError("accepted Stage II context requires text and no errors")
+        elif self.canonical_text is not None or not self.errors:
+            raise ValueError("rejected Stage II context requires errors and no canonical text")
+        if self.producer.source == "model_prediction" and self.raw_generation is None:
+            raise ValueError("predicted Stage II context requires raw_generation audit")
+        expected = stage_ii_digest_v1(
+            self.model_dump(mode="json", exclude={"cache_digest"})
+        )
+        if self.cache_digest != expected:
+            raise ValueError("Stage II context cache_digest mismatch")
+        return self
+
+
+class StageIITrajectorySplitPolicyV1(BaseModel):
+    """Freeze the leakage-safe group split used by Stage I and Stage II.
+
+    Args:
+        policy_id: Exact deterministic split implementation identity.
+        seed: Integer seed included in the SHA-256 input.
+        train: Fraction assigned to train groups.
+        validation: Fraction assigned to validation groups.
+        test: Fraction assigned to held-out test groups.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    policy_id: Literal[STAGE_II_SPLIT_POLICY_ID] = STAGE_II_SPLIT_POLICY_ID
+    seed: int
+    train: float = Field(ge=0.0, le=1.0)
+    validation: float = Field(ge=0.0, le=1.0)
+    test: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_ratios(self) -> "StageIITrajectorySplitPolicyV1":
+        """Require one complete, non-overlapping split partition."""
+
+        if not math.isclose(
+            self.train + self.validation + self.test,
+            1.0,
+            abs_tol=1e-9,
+        ):
+            raise ValueError("Stage II split ratios must sum to one")
+        return self
+
+
+class StageIITrajectorySourceSpecV1(BaseModel):
+    """Describe one dataset-owned trajectory source without runtime guessing.
+
+    Args:
+        dataset_source: Canonical dataset family.
+        status: Whether the dataset is admitted for Stage II target building.
+        sample_identity_fields: Ordered row paths forming a unique parent ID.
+        split_group_fields: Ordered row paths forming the leakage-safe group.
+        trajectory_field: Row path containing timed trajectory coordinates.
+        source_format: Exact coordinate/time row layout.
+        trajectory_source_fields: Ordered equivalent provenance paths.
+        allowed_trajectory_sources: Closed source-code allowlist.
+        yaw_source: Deterministic yaw construction authority.
+        mask_policy: Explicit mask or registry-authorized timed-row validation.
+        action_mask_field: Row path used by the explicit mask policy.
+        origin_policy: Require or deterministically prepend current ego origin.
+        required_values: Exact row-path stamps required before adaptation.
+        disabled_reason: Stable reason when this dataset is not admitted.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    dataset_source: ReasonCode
+    status: StageIITrajectoryDatasetStatusV1
+    sample_identity_fields: tuple[str, ...] = Field(min_length=1, max_length=8)
+    split_group_fields: tuple[str, ...] = Field(min_length=1, max_length=8)
+    trajectory_field: str = Field(min_length=1, max_length=160)
+    source_format: Literal[
+        "ego_xy_t_speed_right_front_v1",
+        "ego_pose_xyt_flu_timed_v1",
+    ]
+    trajectory_source_fields: tuple[str, ...] = Field(min_length=1, max_length=8)
+    allowed_trajectory_sources: tuple[ReasonCode, ...] = Field(max_length=16)
+    yaw_source: Literal["odometry", "path_tangent"]
+    mask_policy: StageIITrajectoryMaskPolicyV1
+    action_mask_field: str | None = Field(default=None, min_length=1, max_length=160)
+    origin_policy: StageIITrajectoryOriginPolicyV1
+    required_values: dict[str, Any] = Field(default_factory=dict)
+    disabled_reason: ReasonCode | None = None
+
+    @model_validator(mode="after")
+    def validate_source_spec(self) -> "StageIITrajectorySourceSpecV1":
+        """Require coherent admission, mask, yaw, and provenance policies."""
+
+        if self.status == "enabled":
+            if not self.allowed_trajectory_sources or self.disabled_reason is not None:
+                raise ValueError("enabled Stage II source requires an allowlist and no disabled_reason")
+        elif self.allowed_trajectory_sources or self.disabled_reason is None:
+            raise ValueError("disabled Stage II source requires no allowlist and one disabled_reason")
+        if self.mask_policy == "explicit_field_v1" and self.action_mask_field is None:
+            raise ValueError("explicit Stage II mask policy requires action_mask_field")
+        if self.mask_policy == "validated_timed_rows_v1" and self.action_mask_field is not None:
+            raise ValueError("timed-row Stage II mask policy cannot name action_mask_field")
+        expected_yaw = (
+            "path_tangent"
+            if self.source_format == "ego_xy_t_speed_right_front_v1"
+            else "odometry"
+        )
+        if self.yaw_source != expected_yaw:
+            raise ValueError("Stage II source format and yaw_source disagree")
+        return self
+
+
+class StageIITrajectorySourceRegistryV1(BaseModel):
+    """Freeze all admitted and explicitly disabled Stage II dataset sources.
+
+    Args:
+        schema_version: Exact source-registry schema stamp.
+        registry_id: Stable registry family identity.
+        registry_version: Exact immutable instance version.
+        split_policy: Leakage-safe group split contract.
+        datasets: One source specification per supported dataset family.
+        registry_digest: SHA-256 over every other registry field.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[STAGE_II_TRAJECTORY_SOURCE_REGISTRY_SCHEMA_VERSION] = (
+        STAGE_II_TRAJECTORY_SOURCE_REGISTRY_SCHEMA_VERSION
+    )
+    registry_id: Literal[STAGE_II_TRAJECTORY_SOURCE_REGISTRY_ID] = (
+        STAGE_II_TRAJECTORY_SOURCE_REGISTRY_ID
+    )
+    registry_version: Literal[STAGE_II_TRAJECTORY_SOURCE_REGISTRY_VERSION] = (
+        STAGE_II_TRAJECTORY_SOURCE_REGISTRY_VERSION
+    )
+    split_policy: StageIITrajectorySplitPolicyV1
+    datasets: tuple[StageIITrajectorySourceSpecV1, ...] = Field(
+        min_length=1,
+        max_length=32,
+    )
+    registry_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+    @model_validator(mode="after")
+    def validate_registry(self) -> "StageIITrajectorySourceRegistryV1":
+        """Require unique complete dataset coverage and an immutable digest."""
+
+        names = [item.dataset_source for item in self.datasets]
+        if len(names) != len(set(names)):
+            raise ValueError("Stage II trajectory registry contains duplicate datasets")
+        required = {"sidewalk", "foxglove", "egowalk", "frodobots"}
+        if set(names) != required:
+            raise ValueError(
+                "Stage II trajectory registry must freeze sidewalk, foxglove, "
+                "egowalk, and frodobots"
+            )
+        expected = stage_ii_digest_v1(
+            self.model_dump(mode="json", exclude={"registry_digest"})
+        )
+        if self.registry_digest != expected:
+            raise ValueError("Stage II trajectory source registry_digest mismatch")
+        return self
+
+    def dataset(self, dataset_source: str) -> StageIITrajectorySourceSpecV1:
+        """Return one exact dataset source specification.
+
+        Args:
+            dataset_source: Canonical dataset family to resolve.
+
+        Returns:
+            Frozen source specification.
+
+        Raises:
+            KeyError: If the dataset is not registered.
+        """
+
+        for item in self.datasets:
+            if item.dataset_source == dataset_source:
+                return item
+        raise KeyError(dataset_source)
+
+
+class StageIITrajectoryPolicyV1(BaseModel):
+    """Freeze metric target geometry and temporal resampling semantics.
+
+    Args:
+        policy_id: Canonical trajectory-policy identity.
+        policy_version: Exact policy version.
+        target_field: Physical target sidecar name.
+        target_format: Metric cumulative FLU pose format.
+        representation: Cumulative relative-pose representation.
+        coordinate_frame: Current-ego FLU frame.
+        axis_names: Ordered target axes.
+        units: Ordered target units.
+        horizon_steps: Fixed 16-step horizon.
+        horizon_seconds: Fixed two-second horizon.
+        target_dt_sec: Fixed 0.125-second grid interval.
+        temporal_resampling_id: Deterministic resampler stamp.
+        source_format: Exact supported timed source format.
+        trajectory_source: Dataset-owned source code.
+        yaw_source: Odometry or deterministic path tangent.
+        normalized: Always false at the canonical exchange boundary.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    policy_id: Literal[STAGE_II_TRAJECTORY_POLICY_ID] = (
+        STAGE_II_TRAJECTORY_POLICY_ID
+    )
+    policy_version: Literal[STAGE_II_TRAJECTORY_POLICY_VERSION] = (
+        STAGE_II_TRAJECTORY_POLICY_VERSION
+    )
+    target_field: Literal["trajectory_ego_t"] = "trajectory_ego_t"
+    target_format: Literal[STAGE_II_TARGET_FORMAT] = STAGE_II_TARGET_FORMAT
+    representation: Literal["cumulative_relative_pose"] = (
+        "cumulative_relative_pose"
+    )
+    coordinate_frame: Literal["current_ego_flu"] = "current_ego_flu"
+    axis_names: tuple[
+        Literal["x_forward_m"],
+        Literal["y_left_m"],
+        Literal["yaw_rel_ccw_rad"],
+    ] = ("x_forward_m", "y_left_m", "yaw_rel_ccw_rad")
+    units: tuple[Literal["meter"], Literal["meter"], Literal["radian"]] = (
+        "meter",
+        "meter",
+        "radian",
+    )
+    horizon_steps: Literal[STAGE_II_HORIZON_STEPS] = STAGE_II_HORIZON_STEPS
+    horizon_seconds: Literal[STAGE_II_HORIZON_SECONDS] = STAGE_II_HORIZON_SECONDS
+    target_dt_sec: Literal[0.125] = 0.125
+    temporal_resampling_id: Literal[STAGE_II_TEMPORAL_RESAMPLING_ID] = (
+        STAGE_II_TEMPORAL_RESAMPLING_ID
+    )
+    source_format: Literal[
+        "ego_xy_t_speed_right_front_v1",
+        "ego_pose_xyt_flu_timed_v1",
+    ]
+    trajectory_source: ReasonCode
+    yaw_source: Literal["odometry", "path_tangent"]
+    normalized: Literal[False] = False
+
+
+class StageIITrajectoryTargetV1(BaseModel):
+    """Carry one metric FLU trajectory and its prefix-contiguous valid mask.
+
+    Args:
+        schema_version: Exact target schema stamp.
+        trajectory_ego_t: Metric cumulative FLU poses shaped ``[16,3]``.
+        action_mask: Non-empty valid prefix followed by optional padding.
+        valid_step_count: Number of true mask entries.
+        policy: Frozen source/frame/time contract.
+        source_target_digest: Digest of raw source rows and declarations.
+        target_digest: SHA-256 over all other target fields.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[STAGE_II_TRAJECTORY_TARGET_SCHEMA_VERSION] = (
+        STAGE_II_TRAJECTORY_TARGET_SCHEMA_VERSION
+    )
+    trajectory_ego_t: list[list[float]] = Field(
+        min_length=STAGE_II_HORIZON_STEPS,
+        max_length=STAGE_II_HORIZON_STEPS,
+    )
+    action_mask: list[bool] = Field(
+        min_length=STAGE_II_HORIZON_STEPS,
+        max_length=STAGE_II_HORIZON_STEPS,
+    )
+    valid_step_count: int = Field(ge=1, le=STAGE_II_HORIZON_STEPS)
+    policy: StageIITrajectoryPolicyV1
+    source_target_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    target_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+    @model_validator(mode="after")
+    def validate_target(self) -> "StageIITrajectoryTargetV1":
+        """Reject malformed coordinates, non-prefix masks, and repeated padding."""
+
+        seen_padding = False
+        valid_count = 0
+        for index, (row, valid) in enumerate(
+            zip(self.trajectory_ego_t, self.action_mask)
+        ):
+            if len(row) != 3 or not all(math.isfinite(float(item)) for item in row):
+                raise ValueError(f"Stage II trajectory row {index} must be finite [3]")
+            if seen_padding and valid:
+                raise ValueError("Stage II action_mask must be prefix-contiguous")
+            if valid:
+                valid_count += 1
+            else:
+                seen_padding = True
+                if any(abs(float(item)) > 1e-12 for item in row):
+                    raise ValueError("Stage II padded trajectory rows must be zeros")
+        if valid_count != self.valid_step_count:
+            raise ValueError("Stage II valid_step_count mismatch")
+        expected = stage_ii_digest_v1(
+            self.model_dump(mode="json", exclude={"target_digest"})
+        )
+        if self.target_digest != expected:
+            raise ValueError("Stage II target_digest mismatch")
+        return self
+
+
+class StageIITrajectoryQCReportV1(BaseModel):
+    """Record deterministic target construction acceptance or rejection.
+
+    Args:
+        schema_version: Exact QC schema stamp.
+        sample_id: Audited parent identity.
+        dataset_source: Dataset family.
+        trajectory_source: Declared dataset trajectory source.
+        source_format: Declared timed-row format.
+        status: Accepted or rejected construction state.
+        reason_codes: Stable bounded QC outcomes.
+        raw_step_count: Number of supplied source rows.
+        source_valid_step_count: Valid source-prefix length.
+        target_valid_step_count: Valid fixed-grid prefix length.
+        qc_digest: SHA-256 over all other QC fields.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[STAGE_II_TRAJECTORY_QC_SCHEMA_VERSION] = (
+        STAGE_II_TRAJECTORY_QC_SCHEMA_VERSION
+    )
+    sample_id: str = Field(min_length=1, max_length=480)
+    dataset_source: str = Field(min_length=1, max_length=128)
+    trajectory_source: str = Field(min_length=1, max_length=160)
+    source_format: str = Field(min_length=1, max_length=160)
+    status: StageIITrajectoryQCStatusV1
+    reason_codes: tuple[ReasonCode, ...] = Field(min_length=1, max_length=16)
+    raw_step_count: int = Field(ge=0)
+    source_valid_step_count: int = Field(ge=0)
+    target_valid_step_count: int = Field(ge=0, le=STAGE_II_HORIZON_STEPS)
+    qc_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+    @model_validator(mode="after")
+    def validate_qc(self) -> "StageIITrajectoryQCReportV1":
+        """Require status/count coherence and immutable audit content."""
+
+        if self.status == "accepted" and self.target_valid_step_count < 1:
+            raise ValueError("accepted Stage II QC requires at least one target step")
+        if self.status == "rejected" and self.target_valid_step_count != 0:
+            raise ValueError("rejected Stage II QC cannot claim target steps")
+        expected = stage_ii_digest_v1(
+            self.model_dump(mode="json", exclude={"qc_digest"})
+        )
+        if self.qc_digest != expected:
+            raise ValueError("Stage II qc_digest mismatch")
+        return self
+
+
+class StageIILossMaskV1(BaseModel):
+    """Route one trajectory row exclusively to the System1 CFM objective.
+
+    Args:
+        lm: Always false because Pass T has no assistant text.
+        system1_action: Always true for the masked CFM objective.
+        trajectory: Always false for the legacy pixel trajectory head.
+        segmentation: Always false for the segmentation head.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    lm: Literal[False] = False
+    system1_action: Literal[True] = True
+    trajectory: Literal[False] = False
+    segmentation: Literal[False] = False
+
+
+class StageIICFMTrainingViewV1(BaseModel):
+    """Exchange one causal Pass-T row without token or normalized targets.
+
+    Args:
+        schema_version: Exact exchange-view schema stamp.
+        training_contract: Exact Stage II training profile.
+        sample_id: Unique Stage II row identity.
+        source_group_id: Parent source group.
+        split_group_id: Leakage-safe split group.
+        dataset_source: Dataset family.
+        modality_profile_id: Exact student-visible modality profile.
+        native_availability: Native optional-modality availability.
+        training_selection: Modalities retained by this projection.
+        modality_state: Native/dropout state for every modality.
+        instruction_training_role: Frozen instruction provenance.
+        images: Ordered model-visible media references.
+        image_roles: One semantic role per image.
+        instruction: Optional model-visible instruction.
+        model_visible_context: Additional safe visible context.
+        evidence_catalog: Prompt-visible evidence inventory.
+        input_modalities: Canonical modality flags.
+        reasoning_context: Accepted independent Pass-R cache.
+        decision_context: Accepted independent Pass-D cache.
+        trajectory_target: Private metric CFM truth.
+        direction_context: Public action vocabulary only.
+        private_direction_supervision: Private sampler/evaluator stamp.
+        parent_stage_i_sample_id: Formal FullCoT parent identity.
+        parent_source_fingerprint: Immutable source fingerprint.
+        parent_audit_id: Resolved action-reconciliation audit.
+        formal_training_eligible: Always true for emitted views.
+        review_status: Completed human-review state.
+        loss_mask: CFM-only physical loss route.
+        projection_policy_id: Exact projection policy.
+        projection_policy_version: Exact projection-policy version.
+        view_digest: SHA-256 over all other view fields.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[STAGE_II_CFM_TRAINING_VIEW_SCHEMA_VERSION] = (
+        STAGE_II_CFM_TRAINING_VIEW_SCHEMA_VERSION
+    )
+    training_contract: Literal[STAGE_II_TRAINING_CONTRACT_ID] = (
+        STAGE_II_TRAINING_CONTRACT_ID
+    )
+    sample_id: str = Field(min_length=1, max_length=480)
+    source_group_id: str = Field(min_length=1, max_length=240)
+    split_group_id: str = Field(min_length=1, max_length=240)
+    dataset_source: str = Field(min_length=1, max_length=128)
+    modality_profile_id: StageIModalityProfileIdV1
+    native_availability: StageIModalityAvailabilityV1
+    training_selection: StageIModalitySelectionV1
+    modality_state: StageIModalityStateV1
+    instruction_training_role: StageIInstructionTrainingRoleV1
+    images: list[str] = Field(min_length=1, max_length=16)
+    image_roles: list[str] = Field(min_length=1, max_length=16)
+    instruction: str | None = Field(default=None, min_length=1, max_length=4096)
+    model_visible_context: dict[str, Any] = Field(default_factory=dict)
+    evidence_catalog: list[EvidenceCatalogEntryV4] = Field(min_length=1, max_length=64)
+    input_modalities: InputModalitiesV4
+    reasoning_context: StageIIContextCacheV1
+    decision_context: StageIIContextCacheV1
+    trajectory_target: StageIITrajectoryTargetV1
+    direction_context: DirectionContextV4
+    private_direction_supervision: DirectionSupervisionV4
+    parent_stage_i_sample_id: str = Field(min_length=1, max_length=480)
+    parent_source_fingerprint: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    parent_audit_id: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    formal_training_eligible: Literal[True] = True
+    review_status: Literal["not_required", "resolved"]
+    loss_mask: StageIILossMaskV1 = Field(default_factory=StageIILossMaskV1)
+    projection_policy_id: Literal[STAGE_II_PROJECTION_POLICY_ID] = (
+        STAGE_II_PROJECTION_POLICY_ID
+    )
+    projection_policy_version: Literal[STAGE_II_PROJECTION_POLICY_VERSION] = (
+        STAGE_II_PROJECTION_POLICY_VERSION
+    )
+    view_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+    @model_validator(mode="after")
+    def validate_view(self) -> "StageIICFMTrainingViewV1":
+        """Require exact input/cache identity and keep private targets non-textual."""
+
+        if len(self.images) != len(self.image_roles):
+            raise ValueError("Stage II images and image_roles must align")
+        if self.image_roles.count("fpv.current") != 1:
+            raise ValueError("Stage II requires exactly one fpv.current")
+        if len(set(self.image_roles)) != len(self.image_roles):
+            raise ValueError("Stage II image_roles must be unique")
+        for cache, kind in (
+            (self.reasoning_context, "reasoning_grounding"),
+            (self.decision_context, "decision"),
+        ):
+            if cache.parse_status != "accepted" or cache.context_kind != kind:
+                raise ValueError(f"Stage II requires accepted {kind} cache")
+            identities = (
+                cache.sample_id == self.parent_stage_i_sample_id,
+                cache.source_group_id == self.source_group_id,
+                cache.split_group_id == self.split_group_id,
+                cache.dataset_source == self.dataset_source,
+                cache.modality_profile_id == self.modality_profile_id,
+                cache.parent_source_fingerprint == self.parent_source_fingerprint,
+            )
+            if not all(identities):
+                raise ValueError(f"Stage II {kind} cache identity mismatch")
+        if self.reasoning_context.producer.source != self.decision_context.producer.source:
+            raise ValueError("Stage II v1 forbids mixed oracle/predicted context sources")
+        producer_identity_fields = (
+            "base_model_id",
+            "checkpoint_id",
+            "checkpoint_digest",
+            "adapter_id",
+            "parser_contract_id",
+            "parser_contract_digest",
+        )
+        if any(
+            getattr(self.reasoning_context.producer, name)
+            != getattr(self.decision_context.producer, name)
+            for name in producer_identity_fields
+        ):
+            raise ValueError("Stage II Pass R/D producer checkpoint identity mismatch")
+        if (
+            self.private_direction_supervision.profile_id
+            != self.direction_context.action_profile_id
+            or self.private_direction_supervision.profile_version
+            != self.direction_context.action_profile_version
+        ):
+            raise ValueError("Stage II private direction/profile mismatch")
+        forbidden = _find_private_prompt_keys(self.model_visible_context)
+        if forbidden:
+            raise ValueError(f"Stage II prompt-visible private keys: {forbidden}")
+        expected = stage_ii_digest_v1(
+            self.model_dump(mode="json", exclude={"view_digest"})
+        )
+        if self.view_digest != expected:
+            raise ValueError("Stage II view_digest mismatch")
+        return self
+
+
+class StageIIProjectionDropV1(BaseModel):
+    """Record one fail-closed Stage II projection rejection.
+
+    Args:
+        schema_version: Exact drop schema stamp.
+        parent_sample_id: Best available parent identity.
+        source_group_id: Best available source group.
+        split_group_id: Best available leakage-safe split group.
+        dataset_source: Dataset family.
+        modality_profile_id: Requested modality profile.
+        reason_code: Stable bounded rejection category.
+        detail: Bounded engineering diagnostic.
+        projection_policy_id: Exact projection policy.
+        projection_policy_version: Exact projection-policy version.
+        drop_digest: SHA-256 over all other drop fields.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[STAGE_II_PROJECTION_DROP_SCHEMA_VERSION] = (
+        STAGE_II_PROJECTION_DROP_SCHEMA_VERSION
+    )
+    parent_sample_id: str = Field(min_length=1, max_length=480)
+    source_group_id: str = Field(min_length=1, max_length=240)
+    split_group_id: str = Field(min_length=1, max_length=240)
+    dataset_source: str = Field(min_length=1, max_length=128)
+    modality_profile_id: str = Field(min_length=1, max_length=128)
+    reason_code: ReasonCode
+    detail: str = Field(min_length=1, max_length=1000)
+    projection_policy_id: Literal[STAGE_II_PROJECTION_POLICY_ID] = (
+        STAGE_II_PROJECTION_POLICY_ID
+    )
+    projection_policy_version: Literal[STAGE_II_PROJECTION_POLICY_VERSION] = (
+        STAGE_II_PROJECTION_POLICY_VERSION
+    )
+    drop_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+    @model_validator(mode="after")
+    def validate_drop(self) -> "StageIIProjectionDropV1":
+        """Require immutable rejection evidence."""
+
+        expected = stage_ii_digest_v1(
+            self.model_dump(mode="json", exclude={"drop_digest"})
+        )
+        if self.drop_digest != expected:
+            raise ValueError("Stage II drop_digest mismatch")
+        return self
+
+
+def stage_ii_digest_v1(payload: Any) -> str:
+    """Return canonical SHA-256 after recursively removing JSON nulls.
+
+    Args:
+        payload: JSON-compatible value to canonicalize.
+
+    Returns:
+        Lowercase hexadecimal SHA-256 digest.
+    """
+
+    normalized = _drop_none_values(payload)
+    text = json.dumps(
+        normalized,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _drop_none_values(value: Any) -> Any:
+    """Remove JSON null fields recursively while preserving list order."""
+
+    if isinstance(value, dict):
+        return {
+            key: _drop_none_values(item)
+            for key, item in value.items()
+            if item is not None
+        }
+    if isinstance(value, list):
+        return [_drop_none_values(item) for item in value]
+    return value
+
+
+def _find_private_prompt_keys(value: Any, *, path: str = "") -> list[str]:
+    """Find target-like keys that must never enter model-visible context."""
+
+    forbidden_names = {
+        "action_mask",
+        "decision_target",
+        "direction_supervision",
+        "trajectory_ego_t",
+        "trajectory_target",
+    }
+    found: list[str] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            child = f"{path}.{key}" if path else str(key)
+            if str(key).lower() in forbidden_names:
+                found.append(child)
+            found.extend(_find_private_prompt_keys(item, path=child))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            found.extend(_find_private_prompt_keys(item, path=f"{path}[{index}]"))
+    return found
+
+
+__all__ = [
+    "STAGE_II_CFM_TRAINING_VIEW_SCHEMA_VERSION",
+    "STAGE_II_CONTEXT_CACHE_SCHEMA_VERSION",
+    "STAGE_II_GROUNDING_SECTION_NAMES",
+    "STAGE_II_HORIZON_SECONDS",
+    "STAGE_II_HORIZON_STEPS",
+    "STAGE_II_PROJECTION_DROP_SCHEMA_VERSION",
+    "STAGE_II_PROJECTION_POLICY_ID",
+    "STAGE_II_PROJECTION_POLICY_VERSION",
+    "STAGE_II_TARGET_FORMAT",
+    "STAGE_II_TEMPORAL_RESAMPLING_ID",
+    "STAGE_II_TRAINING_CONTRACT_ID",
+    "STAGE_II_TRAJECTORY_SOURCE_REGISTRY_ID",
+    "STAGE_II_TRAJECTORY_SOURCE_REGISTRY_SCHEMA_VERSION",
+    "STAGE_II_TRAJECTORY_SOURCE_REGISTRY_VERSION",
+    "STAGE_II_TRAJECTORY_POLICY_ID",
+    "STAGE_II_TRAJECTORY_POLICY_VERSION",
+    "STAGE_II_TRAJECTORY_QC_SCHEMA_VERSION",
+    "STAGE_II_TRAJECTORY_TARGET_SCHEMA_VERSION",
+    "StageIICFMTrainingViewV1",
+    "StageIIContextCacheV1",
+    "StageIIContextKindV1",
+    "StageIIContextProducerV1",
+    "StageIILossMaskV1",
+    "StageIIProjectionDropV1",
+    "StageIITrajectoryPolicyV1",
+    "StageIITrajectoryQCReportV1",
+    "StageIITrajectorySourceRegistryV1",
+    "StageIITrajectorySourceSpecV1",
+    "StageIITrajectorySplitPolicyV1",
+    "StageIITrajectoryTargetV1",
+    "stage_ii_digest_v1",
+]
