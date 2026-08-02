@@ -46,8 +46,8 @@ trajectory 或不在 registry 的 source 全部拒绝。
 ```text
 config/stage_ii_cfm/trajectory_source_registry_v1.json
 registry_id      = urbannav_stage_ii_trajectory_sources_v1
-registry_version = 1.0
-registry_digest  = e332451a0f0972f029c5c70436d618981530ee910e6687a87cd69e70143e77f1
+registry_version = 1.1
+registry_digest  = 8fb9891428f621daafdb273f7a433dd06f915ec93ed8e3cb37b8ef116e4aa402
 split_policy     = stage_i_group_sha256_colon_v1, seed=20260731, 90/5/5
 ```
 
@@ -57,6 +57,10 @@ split_policy     = stage_i_group_sha256_colon_v1, seed=20260731, 90/5/5
 | Foxglove | enabled | `calibrated_pose_projection` / `stationary_pose_hold` | 只对已验证 timed rows 确定性构造 | 必须已有 `t=0` row | path tangent |
 | EgoWalk | enabled | `egowalk_odometry` | 必须读取显式 `action_mask` | 确定性 prepend `[0,0,0,0]` | path tangent |
 | FrodoBots | disabled | 无 | 无 | 无 | 无；原因是 approximate camera trajectory 未获准作为 metric GT |
+
+V1.1 还冻结了能与 Stage I `source_group_id` 逐字符连接的 parent identity：SideWalk 使用
+`sidewalk_meta.clip_id + sidewalk_meta.frame_name`（保留零填充），Foxglove 使用原始 `id`。
+旧 V1.0 使用数值 `frame_idx`，会把 `000010` 变成 `10`，因此不能用于正式全量 join。
 
 这里的 mask 不是全局 “missing -> all true” fallback。adapter 必须同时核对 dataset、source、
 format、time unit、origin policy 和 mask policy；任一 stamp 漂移就拒绝。
@@ -90,6 +94,11 @@ ms-swift physical prompt 只序列化 `canonical_text`。
 两种来源混用，或两个 pass 来自不同 checkpoint，都会 fail closed。R/D 使用不同 prompt，
 因此各自保留独立的 prompt/generation digest。
 
+独立 Pass D 是 target-free inference task，不要求 Stage I 数据已有 Decision 训练标签。对每条
+FullCoT parent，ms-swift 从同一份 prompt-visible input 确定性构造一条 Decision request；已有
+Decision view 只作为 projected-input parity witness。这个操作不生成新的 GT、不复制 FullCoT
+内嵌 Decision，也不改变 Stage I loss。
+
 ## 4. StageIICFMTrainingViewV1 字段
 
 | 字段组 | 科研作用 | 真值/标签来源 | student 可推断 | loss |
@@ -116,8 +125,10 @@ src/mcp_server/contracts/stage_ii_cfm.py
 src/mcp_server/data/stage_ii_sources.py
 src/mcp_server/data/stage_ii_trajectory.py
 src/mcp_server/data/stage_ii_context.py
+src/mcp_server/data/stage_ii_sidecars.py
 src/mcp_server/data/stage_ii_views.py
 tools/model_processing/build_stage_ii_cfm_views.py
+tools/model_processing/build_stage_ii_trajectory_sidecars.py
 ```
 
 生成和同步合同：
@@ -147,6 +158,26 @@ PYTHONPATH=src python tools/model_processing/build_stage_ii_cfm_views.py \
 `--trajectory-source-registry-json` 必须指向完整、digest 自校验的
 `StageIITrajectorySourceRegistryV1`。工具不会按数据集名称猜 source，也不会从 V4.6 已经
 丢失时间信息的 trajectory sidecar 反推。
+
+全量 sidecar 构造先读取显式 lineage-safe Stage I train/validation manifest，不允许 registry
+重新划分 split，也不读取 withheld test：
+
+```bash
+PYTHONPATH=src python tools/model_processing/build_stage_ii_trajectory_sidecars.py \
+  --stage-i-jsonl /path/to/all_stage_i_views.jsonl \
+  --split-manifest train=/path/to/train_views.jsonl \
+  --split-manifest validation=/path/to/validation_views.jsonl \
+  --dataset-manifest sidewalk=/path/to/sidewalk_main.jsonl \
+  --dataset-manifest sidewalk=/path/to/sidewalk_extra.jsonl \
+  --dataset-manifest foxglove=/path/to/foxglove.jsonl \
+  --registry-json config/stage_ii_cfm/trajectory_source_registry_v1.json \
+  --output-dir /path/to/stage_ii_sidecars
+```
+
+当前冻结 Stage I 全集有 59,188 个 FullCoT parent。它是 Stage II corpus denominator，不是可
+全部用于梯度更新的 train 集：lineage-safe train 为 52,903，validation 为 2,365；withheld
+test 与 unknown-lineage parent 保持封存。正式训练必须报告 target/context QC 后的实际 accepted
+数，不能用 59,188 替代最终 train row 数。
 
 真实 train-split target audit：
 

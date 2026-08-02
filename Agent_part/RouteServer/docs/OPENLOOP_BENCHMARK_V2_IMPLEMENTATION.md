@@ -65,6 +65,28 @@ LVLM-weak provenance separately. Decision is aggregated within each native
 direction profile before profile macro aggregation. 50plus labels are ranges,
 not exact 50-degree point targets.
 
+### Portable Stage I exchange artifacts
+
+Canonical Stage I rows sign the ordered `images` values inside
+`projection_digest`. Therefore copying media and replacing path strings is not
+a valid relocation. RouteServer provides the contract-aware entry point:
+
+```bash
+PYTHONPATH=src python tools/model_processing/relocate_stage_i_exchange_views.py \
+  --input-jsonl /path/to/stage_i_exchange.jsonl \
+  --output-root /persistent/artifacts/stage_i_portable \
+  --source-prefix-map /retired/node/media=/persistent/source/media
+```
+
+The tool parses every source row, resolves paths only through the recorded
+location, an explicit root, or an anchored `OLD=NEW` mapping, copies media to
+content-addressed paths, rewrites `images` relative to the artifact root,
+recomputes `projection_digest`, and parses the relocated row again. It writes a
+relocation report containing input/output SHA-256, row/media counts, prefix-map
+digest, and media-inventory digest. Downstream consumers must set
+`ROOT_IMAGE_DIR` to `root_image_dir_for_consumers` from that report. Basename
+search and unrecorded path guessing are deliberately unsupported.
+
 ## Stage II flow
 
 1. RouteServer creates independent Pass-R and Pass-D cache records and the
@@ -84,6 +106,9 @@ not exact 50-degree point targets.
    its pre-cache benchmark case. Production requires predicted R/D context and
    equal R/D/T checkpoint digests. Frozen reference context is an explicitly
    named ablation only.
+   Each R/D producer also freezes the Qwen media-token preprocessing budget.
+   The inference CLI consumes the producer JSON and rejects any runtime
+   generation/preprocessing drift before model loading.
 5. `swift.sidewalk_nav.cli.infer_stage_ii_cfm` writes exactly one prediction or
    failure ledger entry per parent. The run freezes the canonical input artifact
    digest separately from the physical adapter-manifest digest, plus R/D cache,
