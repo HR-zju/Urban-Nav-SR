@@ -12,6 +12,7 @@ from typing import Any, Sequence
 from mcp_server.contracts.stage_ii_cfm import (
     STAGE_II_CFM_TRAINING_VIEW_SCHEMA_VERSION,
     STAGE_II_CONTEXT_CACHE_SCHEMA_VERSION,
+    STAGE_II_LEGACY_DIRECT_TARGET_SCHEMA_VERSION,
     STAGE_II_PROJECTION_POLICY_ID,
     STAGE_II_PROJECTION_POLICY_VERSION,
     STAGE_II_TRAINING_CONTRACT_ID,
@@ -22,6 +23,7 @@ from mcp_server.contracts.stage_ii_cfm import (
     STAGE_II_TRAJECTORY_TARGET_SCHEMA_VERSION,
     StageIICFMTrainingViewV1,
     StageIIContextCacheV1,
+    StageIILegacyDirectTargetV1,
     StageIIProjectionDropV1,
     StageIITrajectoryQCReportV1,
     StageIITrajectorySourceRegistryV1,
@@ -35,6 +37,7 @@ ARTIFACT_FILENAMES = (
     "stage_ii_trajectory_target_v1.schema.json",
     "stage_ii_trajectory_qc_v1.schema.json",
     "stage_ii_trajectory_source_registry_v1.schema.json",
+    "stage_ii_legacy_direct_target_v1.schema.json",
     "stage_ii_cfm_training_view_v1.schema.json",
     "stage_ii_projection_drop_v1.schema.json",
     "contract_digest.json",
@@ -51,6 +54,9 @@ def build_stage_ii_cfm_contract_artifacts() -> dict[str, Any]:
         "stage_ii_trajectory_source_registry_v1.schema.json": (
             StageIITrajectorySourceRegistryV1.model_json_schema()
         ),
+        "stage_ii_legacy_direct_target_v1.schema.json": (
+            StageIILegacyDirectTargetV1.model_json_schema()
+        ),
         "stage_ii_cfm_training_view_v1.schema.json": StageIICFMTrainingViewV1.model_json_schema(),
         "stage_ii_projection_drop_v1.schema.json": StageIIProjectionDropV1.model_json_schema(),
     }
@@ -62,6 +68,9 @@ def build_stage_ii_cfm_contract_artifacts() -> dict[str, Any]:
         "trajectory_qc_schema_version": STAGE_II_TRAJECTORY_QC_SCHEMA_VERSION,
         "trajectory_source_registry_schema_version": (
             STAGE_II_TRAJECTORY_SOURCE_REGISTRY_SCHEMA_VERSION
+        ),
+        "legacy_direct_target_schema_version": (
+            STAGE_II_LEGACY_DIRECT_TARGET_SCHEMA_VERSION
         ),
         "training_view_schema_version": STAGE_II_CFM_TRAINING_VIEW_SCHEMA_VERSION,
         "projection_policy_id": STAGE_II_PROJECTION_POLICY_ID,
@@ -118,6 +127,7 @@ def _canonical_source_hashes() -> dict[str, str]:
         "src/mcp_server/data/stage_ii_context.py",
         "src/mcp_server/data/stage_ii_trajectory.py",
         "src/mcp_server/data/stage_ii_sources.py",
+        "src/mcp_server/data/stage_ii_legacy_direct.py",
         "src/mcp_server/data/stage_ii_views.py",
     )
     return {

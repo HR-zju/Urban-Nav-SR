@@ -1,0 +1,349 @@
+{
+  "$defs": {
+    "StageIITrajectoryPolicyV1": {
+      "additionalProperties": false,
+      "description": "Freeze metric target geometry and temporal resampling semantics.\n\nArgs:\n    policy_id: Canonical trajectory-policy identity.\n    policy_version: Exact policy version.\n    target_field: Physical target sidecar name.\n    target_format: Metric cumulative FLU pose format.\n    representation: Cumulative relative-pose representation.\n    coordinate_frame: Current-ego FLU frame.\n    axis_names: Ordered target axes.\n    units: Ordered target units.\n    horizon_steps: Fixed 16-step horizon.\n    horizon_seconds: Fixed two-second horizon.\n    target_dt_sec: Fixed 0.125-second grid interval.\n    temporal_resampling_id: Deterministic resampler stamp.\n    source_format: Exact supported timed source format.\n    trajectory_source: Dataset-owned source code.\n    yaw_source: Odometry or deterministic path tangent.\n    normalized: Always false at the canonical exchange boundary.",
+      "properties": {
+        "axis_names": {
+          "default": [
+            "x_forward_m",
+            "y_left_m",
+            "yaw_rel_ccw_rad"
+          ],
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "const": "x_forward_m",
+              "type": "string"
+            },
+            {
+              "const": "y_left_m",
+              "type": "string"
+            },
+            {
+              "const": "yaw_rel_ccw_rad",
+              "type": "string"
+            }
+          ],
+          "title": "Axis Names",
+          "type": "array"
+        },
+        "coordinate_frame": {
+          "const": "current_ego_flu",
+          "default": "current_ego_flu",
+          "title": "Coordinate Frame",
+          "type": "string"
+        },
+        "horizon_seconds": {
+          "const": 2.0,
+          "default": 2.0,
+          "title": "Horizon Seconds",
+          "type": "number"
+        },
+        "horizon_steps": {
+          "const": 16,
+          "default": 16,
+          "title": "Horizon Steps",
+          "type": "integer"
+        },
+        "normalized": {
+          "const": false,
+          "default": false,
+          "title": "Normalized",
+          "type": "boolean"
+        },
+        "policy_id": {
+          "const": "urbannav_stage_ii_metric_flu_2s_16_v1",
+          "default": "urbannav_stage_ii_metric_flu_2s_16_v1",
+          "title": "Policy Id",
+          "type": "string"
+        },
+        "policy_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Policy Version",
+          "type": "string"
+        },
+        "representation": {
+          "const": "cumulative_relative_pose",
+          "default": "cumulative_relative_pose",
+          "title": "Representation",
+          "type": "string"
+        },
+        "source_format": {
+          "enum": [
+            "ego_xy_t_speed_right_front_v1",
+            "ego_pose_xyt_flu_timed_v1"
+          ],
+          "title": "Source Format",
+          "type": "string"
+        },
+        "target_dt_sec": {
+          "const": 0.125,
+          "default": 0.125,
+          "title": "Target Dt Sec",
+          "type": "number"
+        },
+        "target_field": {
+          "const": "trajectory_ego_t",
+          "default": "trajectory_ego_t",
+          "title": "Target Field",
+          "type": "string"
+        },
+        "target_format": {
+          "const": "ego_pose_xyt_flu_v1",
+          "default": "ego_pose_xyt_flu_v1",
+          "title": "Target Format",
+          "type": "string"
+        },
+        "temporal_resampling_id": {
+          "const": "linear_time_grid_2s_16_v1",
+          "default": "linear_time_grid_2s_16_v1",
+          "title": "Temporal Resampling Id",
+          "type": "string"
+        },
+        "trajectory_source": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Trajectory Source",
+          "type": "string"
+        },
+        "units": {
+          "default": [
+            "meter",
+            "meter",
+            "radian"
+          ],
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "const": "meter",
+              "type": "string"
+            },
+            {
+              "const": "meter",
+              "type": "string"
+            },
+            {
+              "const": "radian",
+              "type": "string"
+            }
+          ],
+          "title": "Units",
+          "type": "array"
+        },
+        "yaw_source": {
+          "enum": [
+            "odometry",
+            "path_tangent"
+          ],
+          "title": "Yaw Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_format",
+        "trajectory_source",
+        "yaw_source"
+      ],
+      "title": "StageIITrajectoryPolicyV1",
+      "type": "object"
+    },
+    "StageIITrajectoryTargetV1": {
+      "additionalProperties": false,
+      "description": "Carry one metric FLU trajectory and its prefix-contiguous valid mask.\n\nArgs:\n    schema_version: Exact target schema stamp.\n    trajectory_ego_t: Metric cumulative FLU poses shaped ``[16,3]``.\n    action_mask: Non-empty valid prefix followed by optional padding.\n    valid_step_count: Number of true mask entries.\n    policy: Frozen source/frame/time contract.\n    source_target_digest: Digest of raw source rows and declarations.\n    target_digest: SHA-256 over all other target fields.",
+      "properties": {
+        "action_mask": {
+          "items": {
+            "type": "boolean"
+          },
+          "maxItems": 16,
+          "minItems": 16,
+          "title": "Action Mask",
+          "type": "array"
+        },
+        "policy": {
+          "$ref": "#/$defs/StageIITrajectoryPolicyV1"
+        },
+        "schema_version": {
+          "const": "urbannav_stage_ii_trajectory_target_v1",
+          "default": "urbannav_stage_ii_trajectory_target_v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_target_digest": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Target Digest",
+          "type": "string"
+        },
+        "target_digest": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Target Digest",
+          "type": "string"
+        },
+        "trajectory_ego_t": {
+          "items": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "maxItems": 16,
+          "minItems": 16,
+          "title": "Trajectory Ego T",
+          "type": "array"
+        },
+        "valid_step_count": {
+          "maximum": 16,
+          "minimum": 1,
+          "title": "Valid Step Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "trajectory_ego_t",
+        "action_mask",
+        "valid_step_count",
+        "policy",
+        "source_target_digest",
+        "target_digest"
+      ],
+      "title": "StageIITrajectoryTargetV1",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Bind one legacy Stage I input to canonical metric Stage II truth.\n\nThis annotation-only exchange record intentionally contains no legacy\nassistant answer and no Pass-R/Pass-D cache.  ``legacy_visible_input_digest``\ncovers only the original system/user messages and ordered images; ms-swift\nmust reproduce that digest before appending isolated ``[TRAJ_i]`` queries.\n\nArgs:\n    schema_version: Exact legacy-direct target schema stamp.\n    profile_id: Independent direct-latent profile identity.\n    profile_version: Exact profile version.\n    sample_id: Unique Stage II row identity.\n    legacy_parent_id: Parent legacy Stage I sample identity.\n    split: Train or validation; hidden test is forbidden.\n    source_group_id: Canonical dataset-source identity.\n    split_group_id: Original leakage-safe legacy group identity.\n    dataset_source: Canonical dataset family.\n    legacy_source_name: Original legacy experiment source name.\n    legacy_source_line_no: One-based row in the frozen combined manifest.\n    legacy_split_row_digest: Digest of the exact legacy split row.\n    legacy_source_row_digest: Digest of the exact combined source row.\n    legacy_visible_input_digest: Digest of original visible messages/images.\n    trajectory_target: Canonical metric private CFM target.\n    trajectory_qc_digest: Accepted deterministic trajectory QC identity.\n    record_digest: SHA-256 over every other field.",
+  "properties": {
+    "dataset_source": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Dataset Source",
+      "type": "string"
+    },
+    "legacy_parent_id": {
+      "maxLength": 480,
+      "minLength": 1,
+      "title": "Legacy Parent Id",
+      "type": "string"
+    },
+    "legacy_source_line_no": {
+      "minimum": 1,
+      "title": "Legacy Source Line No",
+      "type": "integer"
+    },
+    "legacy_source_name": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Legacy Source Name",
+      "type": "string"
+    },
+    "legacy_source_row_digest": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Legacy Source Row Digest",
+      "type": "string"
+    },
+    "legacy_split_row_digest": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Legacy Split Row Digest",
+      "type": "string"
+    },
+    "legacy_visible_input_digest": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Legacy Visible Input Digest",
+      "type": "string"
+    },
+    "profile_id": {
+      "const": "legacy_full_cot_direct_latent_v1",
+      "default": "legacy_full_cot_direct_latent_v1",
+      "title": "Profile Id",
+      "type": "string"
+    },
+    "profile_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Profile Version",
+      "type": "string"
+    },
+    "record_digest": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Record Digest",
+      "type": "string"
+    },
+    "sample_id": {
+      "maxLength": 480,
+      "minLength": 1,
+      "title": "Sample Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "urbannav_stage_ii_legacy_direct_target_v1",
+      "default": "urbannav_stage_ii_legacy_direct_target_v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_group_id": {
+      "maxLength": 240,
+      "minLength": 1,
+      "title": "Source Group Id",
+      "type": "string"
+    },
+    "split": {
+      "enum": [
+        "train",
+        "validation"
+      ],
+      "title": "Split",
+      "type": "string"
+    },
+    "split_group_id": {
+      "maxLength": 240,
+      "minLength": 1,
+      "title": "Split Group Id",
+      "type": "string"
+    },
+    "trajectory_qc_digest": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Trajectory Qc Digest",
+      "type": "string"
+    },
+    "trajectory_target": {
+      "$ref": "#/$defs/StageIITrajectoryTargetV1"
+    }
+  },
+  "required": [
+    "sample_id",
+    "legacy_parent_id",
+    "split",
+    "source_group_id",
+    "split_group_id",
+    "dataset_source",
+    "legacy_source_name",
+    "legacy_source_line_no",
+    "legacy_split_row_digest",
+    "legacy_source_row_digest",
+    "legacy_visible_input_digest",
+    "trajectory_target",
+    "trajectory_qc_digest",
+    "record_digest"
+  ],
+  "title": "StageIILegacyDirectTargetV1",
+  "type": "object"
+}

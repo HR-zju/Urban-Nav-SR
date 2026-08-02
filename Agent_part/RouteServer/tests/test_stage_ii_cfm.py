@@ -10,6 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 from mcp_server.agent.reasoning_v4_text import render_reasoning_section_v4
+from mcp_server.contracts.stage_i_sft import stage_i_projection_digest_v1
 from mcp_server.contracts.stage_ii_cfm import (
     StageIIContextCacheV1,
     StageIIContextProducerV1,
@@ -23,6 +24,10 @@ from mcp_server.data.openloop_benchmark import (
 from mcp_server.data.stage_ii_context import (
     build_stage_ii_context_cache_v1,
     stage_ii_projected_input_digest_v1,
+)
+from mcp_server.data.stage_ii_legacy_direct import (
+    build_stage_ii_legacy_direct_selection_v1,
+    build_stage_ii_legacy_direct_targets_v1,
 )
 from mcp_server.data.stage_ii_trajectory import build_stage_ii_trajectory_target_v1
 from mcp_server.data.stage_ii_sources import (
@@ -45,6 +50,13 @@ from test_stage_i_sft import _formal_reasoning_view
 
 
 ROUTE_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _write_jsonl(path: Path, rows) -> None:
+    path.write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+        encoding="utf-8",
+    )
 
 
 def _source_registry_payload(
@@ -617,6 +629,288 @@ def test_stage_ii_view_builds_cfm_only_ms_swift_row() -> None:
         "loss_mask",
     ):
         assert forbidden not in eval_serialized
+
+
+def test_legacy_direct_profile_reuses_visible_prefix_without_pass_rd(
+    tmp_path: Path,
+) -> None:
+    messages = [
+        {"role": "system", "content": "legacy navigation system"},
+        {"role": "user", "content": "<image><image>\nchoose a direction"},
+        {
+            "role": "assistant",
+            "content": "<think><FPVScene>{}</FPVScene></think><finish>{}</finish>",
+        },
+    ]
+    images = ["/data/fpv/000001.jpg", "/data/bev/000001.jpg"]
+    raw = {
+        "messages": messages,
+        "images": images,
+        "direction_name": "straight",
+        "direction_choice": "straight",
+        "direction_choice_label": 1,
+        "trajectory_ego_t": [
+            [0.0, float(index) * 0.125, float(index) * 0.125, 1.0]
+            for index in range(17)
+        ],
+        "trajectory_policy": {
+            "schema_version": "sidewalk_time_conditioned_policy_v1",
+            "time_unit": "seconds",
+            "trajectory_source": "calibrated_pose_projection",
+        },
+        "sidewalk_meta": {
+            "clip_id": "clip-a",
+            "frame_idx": 1,
+            "trajectory_source": "calibrated_pose_projection",
+        },
+    }
+    split_row = {
+        "id": "sidewalk_main_multiframe|clip-a|1",
+        "messages": messages,
+        "images": images,
+        "direction_name": "straight",
+        "direction_choice": "straight",
+        "direction_choice_label": 1,
+        "direction_profile_id": "ego_degree10_12way_terminal_centroid_v2",
+        "direction_profile_version": "2.0",
+        "response_contract": "legacy_think_finish",
+        "reasoning_mode": "legacy_full_cot",
+        "sidewalk_meta": {
+            "experiment_group": {
+                "source": "sidewalk_main_multiframe",
+                "clip_id": "clip-a",
+                "group_key": "sidewalk_main_multiframe|clip-a",
+                "split": "train_pool",
+            },
+            "source_record": {"line_no": 1},
+            "image_roles": {
+                "roles": [
+                    {"modality": "fpv", "temporal_role": "current", "temporal_index": 0},
+                    {"modality": "bev", "temporal_role": "current", "temporal_index": 0},
+                ],
+            },
+        },
+    }
+    paths = {
+        "source": tmp_path / "source.jsonl",
+        "train": tmp_path / "train.jsonl",
+        "validation": tmp_path / "validation.jsonl",
+        "registry": tmp_path / "registry.json",
+        "output": tmp_path / "targets",
+    }
+    _write_jsonl(paths["source"], [raw, raw])
+    _write_jsonl(paths["train"], [split_row])
+    validation_row = copy.deepcopy(split_row)
+    validation_row["id"] = "sidewalk_main_multiframe|clip-b|2"
+    validation_row["sidewalk_meta"]["source_record"]["line_no"] = 2
+    validation_row["sidewalk_meta"]["experiment_group"].update({
+        "clip_id": "clip-b",
+        "group_key": "sidewalk_main_multiframe|clip-b",
+        "split": "val",
+    })
+    raw_validation = copy.deepcopy(raw)
+    raw_validation["sidewalk_meta"]["clip_id"] = "clip-b"
+    paths["source"].write_text(
+        json.dumps(raw, ensure_ascii=False) + "\n"
+        + json.dumps(raw_validation, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    _write_jsonl(paths["validation"], [validation_row])
+    paths["registry"].write_text(
+        json.dumps(_source_registry_payload(), ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    report = build_stage_ii_legacy_direct_targets_v1(
+        source_jsonl=paths["source"],
+        split_manifests={
+            "train": paths["train"],
+            "validation": paths["validation"],
+        },
+        source_dataset_map={"sidewalk_main_multiframe": "sidewalk"},
+        registry_json=paths["registry"],
+        output_dir=paths["output"],
+    )
+    assert report["passed"] is True
+    assert report["accepted_rows"] == 2
+    assert report["hidden_test_read"] is False
+
+    target = json.loads(
+        (paths["output"] / "legacy_direct_targets_train.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()[0]
+    )
+    ms_root = Path(__file__).resolve().parents[4] / "ms-swift"
+    if not ms_root.is_dir():
+        pytest.skip("sibling ms-swift checkout is unavailable")
+    sys.path.insert(0, str(ms_root))
+    try:
+        adapter = importlib.import_module(
+            "swift.sidewalk_nav.data.stage_ii_legacy_direct_manifest"
+        )
+        physical = adapter.build_stage_ii_legacy_direct_manifest_row(
+            split_row,
+            target,
+        )
+    finally:
+        sys.path.remove(str(ms_root))
+    assert physical["stage_ii_profile_id"] == "legacy_full_cot_direct_latent_v1"
+    assert physical["stage_ii_context_mode"] == "legacy_direct_latent"
+    assert all(message["role"] != "assistant" for message in physical["messages"])
+    assert physical["messages"][-1]["content"].count("[TRAJ_0]") == 1
+    assert "<finish>" not in physical["messages"][-1]["content"]
+    assert physical["loss_mask"]["lm"] is False
+
+
+def test_legacy_direct_selection_uses_current_stage_i_split_authority(
+    tmp_path: Path,
+) -> None:
+    images = [
+        path
+        for index in range(5)
+        for path in (
+            f"/data/fpv/{index:06d}.jpg",
+            f"/data/bev/{index:06d}_bev.jpg",
+        )
+    ]
+    messages = [
+        {"role": "system", "content": "legacy navigation system"},
+        {
+            "role": "user",
+            "content": "".join("<image>" for _ in images) + "\nchoose a direction",
+        },
+        {
+            "role": "assistant",
+            "content": "<think><FPVScene>{}</FPVScene></think><finish>{}</finish>",
+        },
+    ]
+
+    def raw_row(clip_id: str, frame_idx: int, source_name: str) -> dict:
+        return {
+            "id": f"{source_name}|{clip_id}|{frame_idx}",
+            "messages": copy.deepcopy(messages),
+            "images": list(images),
+            "direction_name": "straight",
+            "direction_choice": "straight",
+            "direction_choice_label": 1,
+            "direction_bin_mode": "degree10_12way_with_stop",
+            "direction_profile_id": "ego_degree10_12way_terminal_centroid_v2",
+            "direction_profile_version": "2.0",
+            "trajectory_ego_t": [
+                [0.0, float(index) * 0.125, float(index) * 0.125, 1.0]
+                for index in range(17)
+            ],
+            "trajectory_policy": {
+                "schema_version": "sidewalk_time_conditioned_policy_v1",
+                "time_unit": "seconds",
+                "trajectory_source": "calibrated_pose_projection",
+            },
+            "sidewalk_meta": {
+                "clip_id": clip_id,
+                "frame_idx": frame_idx,
+                "trajectory_source": "calibrated_pose_projection",
+                "direction_sample_source": source_name,
+            },
+        }
+
+    def restamped_stage_i_view(
+        *,
+        sample_id: str,
+        source_group_id: str,
+        split_group_id: str,
+    ) -> dict:
+        payload = _stage_i_full_cot().model_dump(
+            mode="json",
+            exclude_none=True,
+        )
+        payload.update({
+            "sample_id": sample_id,
+            "source_group_id": source_group_id,
+            "split_group_id": split_group_id,
+        })
+        payload.pop("projection_digest", None)
+        payload["projection_digest"] = stage_i_projection_digest_v1(payload)
+        return payload
+
+    train_view = restamped_stage_i_view(
+        sample_id="stage-i-full-cot:train-parent",
+        source_group_id="sidewalk:clip-train:1",
+        split_group_id="sidewalk:clip-train",
+    )
+    validation_view = restamped_stage_i_view(
+        sample_id="stage-i-full-cot:validation-parent",
+        source_group_id="sidewalk:clip-validation:2",
+        split_group_id="sidewalk:clip-validation",
+    )
+    train_manifest = tmp_path / "stage_i_train.jsonl"
+    validation_manifest = tmp_path / "stage_i_validation.jsonl"
+    _write_jsonl(
+        train_manifest,
+        [train_view],
+    )
+    _write_jsonl(
+        validation_manifest,
+        [validation_view],
+    )
+    source_rows = [
+        raw_row("clip-train", 1, "sidewalk_main_multiframe"),
+        raw_row("clip-train", 1, "sidewalk_extra_multiframe"),
+        raw_row("clip-validation", 2, "sidewalk_main_multiframe"),
+    ]
+    source_manifest = tmp_path / "combined.jsonl"
+    _write_jsonl(source_manifest, source_rows)
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(
+        json.dumps(_source_registry_payload(), ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    report = build_stage_ii_legacy_direct_selection_v1(
+        source_jsonl=source_manifest,
+        stage_i_split_manifests={
+            "train": train_manifest,
+            "validation": validation_manifest,
+        },
+        source_dataset_map={
+            "sidewalk_main_multiframe": "sidewalk",
+            "sidewalk_extra_multiframe": "sidewalk",
+        },
+        registry_json=registry_path,
+        output_dir=tmp_path / "selected",
+    )
+
+    assert report["complete"] is True
+    assert report["selected_rows"] == 2
+    assert report["historical_legacy_split_manifests_read"] is False
+    assert report["hidden_test_manifest_read"] is False
+    assert report["counts"]["matched_duplicate_equivalent"] == 1
+    selected_train = json.loads(
+        (tmp_path / "selected/legacy_direct_selected_train.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()[0]
+    )
+    assert selected_train["id"] == train_view["sample_id"]
+    assert selected_train["source_dataset"] == "sidewalk_main_multiframe"
+    assert selected_train["sidewalk_meta"]["source_record"]["line_no"] == 1
+
+    conflicting_rows = copy.deepcopy(source_rows)
+    conflicting_rows[1]["trajectory_ego_t"][-1][1] += 1.0
+    conflicting_source = tmp_path / "combined_conflicting.jsonl"
+    _write_jsonl(conflicting_source, conflicting_rows)
+    with pytest.raises(ValueError, match="conflicting duplicate"):
+        build_stage_ii_legacy_direct_selection_v1(
+            source_jsonl=conflicting_source,
+            stage_i_split_manifests={
+                "train": train_manifest,
+                "validation": validation_manifest,
+            },
+            source_dataset_map={
+                "sidewalk_main_multiframe": "sidewalk",
+                "sidewalk_extra_multiframe": "sidewalk",
+            },
+            registry_json=registry_path,
+            output_dir=tmp_path / "conflicting",
+        )
 
 
 def test_stage_ii_view_rejects_mixed_oracle_and_predicted_context() -> None:

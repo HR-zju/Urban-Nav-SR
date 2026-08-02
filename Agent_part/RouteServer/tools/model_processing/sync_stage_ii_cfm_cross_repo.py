@@ -68,6 +68,7 @@ def sync_stage_ii_cfm_cross_repo(
         "stage_ii_trajectory_target_v1.schema.json",
         "stage_ii_trajectory_qc_v1.schema.json",
         "stage_ii_trajectory_source_registry_v1.schema.json",
+        "stage_ii_legacy_direct_target_v1.schema.json",
         "stage_ii_cfm_training_view_v1.schema.json",
         "stage_ii_projection_drop_v1.schema.json",
         "contract_digest.json",

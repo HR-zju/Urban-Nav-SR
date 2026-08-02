@@ -51,6 +51,11 @@ STAGE_II_TRAJECTORY_QC_SCHEMA_VERSION = (
 STAGE_II_CFM_TRAINING_VIEW_SCHEMA_VERSION = (
     "urbannav_stage_ii_cfm_training_view_v1"
 )
+STAGE_II_LEGACY_DIRECT_TARGET_SCHEMA_VERSION = (
+    "urbannav_stage_ii_legacy_direct_target_v1"
+)
+STAGE_II_LEGACY_DIRECT_PROFILE_ID = "legacy_full_cot_direct_latent_v1"
+STAGE_II_LEGACY_DIRECT_PROFILE_VERSION = "1.0"
 STAGE_II_PROJECTION_DROP_SCHEMA_VERSION = (
     "urbannav_stage_ii_projection_drop_v1"
 )
@@ -522,6 +527,94 @@ class StageIITrajectoryTargetV1(BaseModel):
         return self
 
 
+class StageIILegacyDirectTargetV1(BaseModel):
+    """Bind one legacy Stage I input to canonical metric Stage II truth.
+
+    This annotation-only exchange record intentionally contains no legacy
+    assistant answer and no Pass-R/Pass-D cache.  ``legacy_visible_input_digest``
+    covers only the original system/user messages and ordered images; ms-swift
+    must reproduce that digest before appending isolated ``[TRAJ_i]`` queries.
+
+    Args:
+        schema_version: Exact legacy-direct target schema stamp.
+        profile_id: Independent direct-latent profile identity.
+        profile_version: Exact profile version.
+        sample_id: Unique Stage II row identity.
+        legacy_parent_id: Parent legacy Stage I sample identity.
+        split: Train or validation; hidden test is forbidden.
+        source_group_id: Canonical dataset-source identity.
+        split_group_id: Original leakage-safe legacy group identity.
+        dataset_source: Canonical dataset family.
+        legacy_source_name: Original legacy experiment source name.
+        legacy_source_line_no: One-based row in the frozen combined manifest.
+        legacy_split_row_digest: Digest of the exact legacy split row.
+        legacy_source_row_digest: Digest of the exact combined source row.
+        legacy_visible_input_digest: Digest of original visible messages/images.
+        trajectory_target: Canonical metric private CFM target.
+        trajectory_qc_digest: Accepted deterministic trajectory QC identity.
+        record_digest: SHA-256 over every other field.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[STAGE_II_LEGACY_DIRECT_TARGET_SCHEMA_VERSION] = (
+        STAGE_II_LEGACY_DIRECT_TARGET_SCHEMA_VERSION
+    )
+    profile_id: Literal[STAGE_II_LEGACY_DIRECT_PROFILE_ID] = (
+        STAGE_II_LEGACY_DIRECT_PROFILE_ID
+    )
+    profile_version: Literal[STAGE_II_LEGACY_DIRECT_PROFILE_VERSION] = (
+        STAGE_II_LEGACY_DIRECT_PROFILE_VERSION
+    )
+    sample_id: str = Field(min_length=1, max_length=480)
+    legacy_parent_id: str = Field(min_length=1, max_length=480)
+    split: Literal["train", "validation"]
+    source_group_id: str = Field(min_length=1, max_length=240)
+    split_group_id: str = Field(min_length=1, max_length=240)
+    dataset_source: str = Field(min_length=1, max_length=128)
+    legacy_source_name: str = Field(min_length=1, max_length=160)
+    legacy_source_line_no: int = Field(ge=1)
+    legacy_split_row_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    legacy_source_row_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    legacy_visible_input_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    trajectory_target: StageIITrajectoryTargetV1
+    trajectory_qc_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    record_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+    @model_validator(mode="after")
+    def validate_record(self) -> "StageIILegacyDirectTargetV1":
+        """Require stable parent identity and immutable record content."""
+
+        if self.sample_id != f"stage-ii-legacy-direct:{self.legacy_parent_id}":
+            raise ValueError("Stage II legacy-direct sample_id mismatch")
+        expected = stage_ii_digest_v1(
+            self.model_dump(mode="json", exclude={"record_digest"})
+        )
+        if self.record_digest != expected:
+            raise ValueError("Stage II legacy-direct record_digest mismatch")
+        return self
+
+
 class StageIITrajectoryQCReportV1(BaseModel):
     """Record deterministic target construction acceptance or rejection.
 
@@ -868,6 +961,9 @@ __all__ = [
     "STAGE_II_GROUNDING_SECTION_NAMES",
     "STAGE_II_HORIZON_SECONDS",
     "STAGE_II_HORIZON_STEPS",
+    "STAGE_II_LEGACY_DIRECT_PROFILE_ID",
+    "STAGE_II_LEGACY_DIRECT_PROFILE_VERSION",
+    "STAGE_II_LEGACY_DIRECT_TARGET_SCHEMA_VERSION",
     "STAGE_II_PROJECTION_DROP_SCHEMA_VERSION",
     "STAGE_II_PROJECTION_POLICY_ID",
     "STAGE_II_PROJECTION_POLICY_VERSION",
@@ -886,6 +982,7 @@ __all__ = [
     "StageIIContextKindV1",
     "StageIIContextProducerV1",
     "StageIILossMaskV1",
+    "StageIILegacyDirectTargetV1",
     "StageIIProjectionDropV1",
     "StageIITrajectoryPolicyV1",
     "StageIITrajectoryQCReportV1",
