@@ -14,9 +14,11 @@
 | [YELP_INSTRUCTION_DATA_DESIGN.md](YELP_INSTRUCTION_DATA_DESIGN.md) | Yelp 需求挖掘、taxonomy 扩展和 instruction set 构造流程。 |
 | [SIDEWALK_AGENT_EVAL_PROTOCOL.md](SIDEWALK_AGENT_EVAL_PROTOCOL.md) | SideWalk Agentic Stage2 评估协议。 |
 | [SIDEWALK_PHASE1_DATA_PIPELINE.md](SIDEWALK_PHASE1_DATA_PIPELINE.md) | SideWalk Phase1 数据生成与标注流水线。 |
+| [DATASET_ANNOTATION_STATUS.md](DATASET_ANNOTATION_STATUS.md) | SideWalk、Foxglove、EgoWalk 与 FrodoBots 的 FullCoT、behavior filter、VQA 候选池、QC 和发布状态。 |
 | [REASONING_V4_DATA_ANNOTATION_DESIGN.md](REASONING_V4_DATA_ANNOTATION_DESIGN.md) | Reasoning V4 共享输入六段合同、独立 section teacher、强 sidecar 边界与 LM/System1 loss 路由。 |
 | [VQA_V2_DATA_ANNOTATION_DESIGN.md](VQA_V2_DATA_ANNOTATION_DESIGN.md) | Navigation VQA V2 的 27-task typed contract、18/9 capability gate、标签来源、可见性、LM loss、审阅与评测边界。 |
 | [STAGE_II_CFM_DATA_CONTRACT.md](STAGE_II_CFM_DATA_CONTRACT.md) | Stage II 的 2.0 秒/16 步 metric FLU trajectory、严格 mask/QC、predicted context cache 与 exchange-view 边界。 |
+| [OPENLOOP_BENCHMARK_V2_IMPLEMENTATION.md](OPENLOOP_BENCHMARK_V2_IMPLEMENTATION.md) | SideWalk Stage I/II open-loop benchmark 的跨仓 schema、投影、lineage、评测和运行入口。 |
 
 ## 工程运行
 
