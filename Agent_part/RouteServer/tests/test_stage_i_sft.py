@@ -36,6 +36,7 @@ from mcp_server.contracts.reasoning_v4 import (
 from mcp_server.contracts.stage_i_sft import (
     StageIProjectionDropV1,
     parse_stage_i_training_view_v1,
+    stage_i_projection_digest_v1,
 )
 from mcp_server.data.stage_i_batch import project_stage_i_batch_v1
 from mcp_server.data.openloop_benchmark import (
@@ -49,6 +50,7 @@ from mcp_server.data.stage_i_provenance import (
     build_stage_i_instruction_provenance_v1,
     resolve_stage_i_instruction_role_v1,
 )
+from mcp_server.data.stage_i_portable import relocate_stage_i_training_views_v1
 from mcp_server.data.stage_i_views import (
     project_stage_i_reasoning_view_v1,
     project_stage_i_reasoning_view_with_audit_v1,
@@ -467,6 +469,68 @@ def test_projection_digest_rejects_mutation() -> None:
     payload["assistant_text"] = payload["assistant_text"].replace("straight", "straighx")
     with pytest.raises(ValidationError, match="projection_digest"):
         parse_stage_i_training_view_v1(payload)
+
+
+def test_stage_i_portable_relocation_rehashes_and_validates(
+    tmp_path: Path,
+) -> None:
+    """A stale explicit prefix is repaired without basename guessing."""
+
+    media_source = tmp_path / "current-media" / "clip" / "current.jpg"
+    media_source.parent.mkdir(parents=True)
+    media_source.write_bytes(b"portable-stage-i-image")
+    view = project_stage_i_reasoning_view_v1(
+        _formal_reasoning_view(),
+        task_type="decision",
+        modality_profile_id="fpv_current_v1",
+        instruction_training_role="unknown",
+        allow_fpv_only_decision=True,
+    ).model_dump(mode="json", exclude_none=True)
+    stale_root = Path("/retired/l20x/stage-i-media")
+    view["images"] = [str(stale_root / "clip" / "current.jpg")]
+    view.pop("projection_digest")
+    view["projection_digest"] = stage_i_projection_digest_v1(
+        {key: value for key, value in view.items() if key != "projection_digest"}
+    )
+    input_jsonl = tmp_path / "input.jsonl"
+    input_jsonl.write_text(json.dumps(view) + "\n", encoding="utf-8")
+
+    output_root = tmp_path / "portable"
+    report = relocate_stage_i_training_views_v1(
+        input_jsonl,
+        output_root,
+        source_prefix_maps=[(stale_root, media_source.parents[1])],
+    )
+    relocated = json.loads(
+        Path(report["output_jsonl"]).read_text(encoding="utf-8")
+    )
+
+    parsed = parse_stage_i_training_view_v1(relocated)
+    assert parsed.images[0].startswith("media/")
+    assert not Path(parsed.images[0]).is_absolute()
+    assert (output_root / parsed.images[0]).read_bytes() == media_source.read_bytes()
+    assert report["row_count"] == 1
+    assert report["prefix_repaired_reference_count"] == 1
+    assert report["root_image_dir_for_consumers"] == str(output_root.resolve())
+
+
+def test_stage_i_portable_relocation_rejects_unmapped_missing_media(
+    tmp_path: Path,
+) -> None:
+    """Missing media fails closed instead of searching for a matching name."""
+
+    view = project_stage_i_reasoning_view_v1(
+        _formal_reasoning_view(),
+        task_type="decision",
+        modality_profile_id="fpv_current_v1",
+        instruction_training_role="unknown",
+        allow_fpv_only_decision=True,
+    ).model_dump(mode="json", exclude_none=True)
+    input_jsonl = tmp_path / "input.jsonl"
+    input_jsonl.write_text(json.dumps(view) + "\n", encoding="utf-8")
+
+    with pytest.raises(FileNotFoundError, match="cannot resolve Stage I image"):
+        relocate_stage_i_training_views_v1(input_jsonl, tmp_path / "portable")
 
 
 def test_instruction_provenance_requires_exact_source_revision_and_text() -> None:
