@@ -717,8 +717,6 @@ class StageIICFMTrainingViewV1(BaseModel):
             "checkpoint_id",
             "checkpoint_digest",
             "adapter_id",
-            "parser_contract_id",
-            "parser_contract_digest",
         )
         if any(
             getattr(self.reasoning_context.producer, name)
@@ -726,6 +724,16 @@ class StageIICFMTrainingViewV1(BaseModel):
             for name in producer_identity_fields
         ):
             raise ValueError("Stage II Pass R/D producer checkpoint identity mismatch")
+        expected_parsers = {
+            "reasoning_grounding": "reasoning_v4_6_full_target_strict_v1",
+            "decision": "reasoning_v4_6_decision_section_strict_v1",
+        }
+        for cache, kind in (
+            (self.reasoning_context, "reasoning_grounding"),
+            (self.decision_context, "decision"),
+        ):
+            if cache.producer.parser_contract_id != expected_parsers[kind]:
+                raise ValueError(f"Stage II {kind} parser contract mismatch")
         if (
             self.private_direction_supervision.profile_id
             != self.direction_context.action_profile_id

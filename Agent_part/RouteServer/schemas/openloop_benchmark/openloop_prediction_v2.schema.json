@@ -1,0 +1,96 @@
+{
+  "additionalProperties": false,
+  "description": "Store one successful model output and its inference identity.\n\nArgs:\n    sample_id: Exact benchmark row identity.\n    parent_sample_id: Exact physical-sample identity.\n    stage: Benchmark stage.\n    task_type: Atomic task family.\n    response: Raw text generation for Stage I tasks.\n    trajectory_ego_t: Strict Stage II trajectory output.\n    metadata: Non-secret generation and latency diagnostics.\n    input_digest: Digest of the exact model-visible input.\n    context_identity: Stage II R/D/T producer and renderer identity.",
+  "properties": {
+    "context_identity": {
+      "additionalProperties": true,
+      "title": "Context Identity",
+      "type": "object"
+    },
+    "input_digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Input Digest",
+      "type": "string"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "title": "Metadata",
+      "type": "object"
+    },
+    "parent_sample_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Parent Sample Id",
+      "type": "string"
+    },
+    "response": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Response"
+    },
+    "sample_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Sample Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "urbannav_openloop_prediction_v2_0",
+      "default": "urbannav_openloop_prediction_v2_0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "stage": {
+      "enum": [
+        "stage_i",
+        "stage_ii"
+      ],
+      "title": "Stage",
+      "type": "string"
+    },
+    "task_type": {
+      "enum": [
+        "full_cot",
+        "vqa",
+        "decision",
+        "trajectory"
+      ],
+      "title": "Task Type",
+      "type": "string"
+    },
+    "trajectory_ego_t": {
+      "anyOf": [
+        {
+          "items": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Trajectory Ego T"
+    }
+  },
+  "required": [
+    "sample_id",
+    "parent_sample_id",
+    "stage",
+    "task_type",
+    "input_digest"
+  ],
+  "title": "OpenLoopPredictionV1",
+  "type": "object"
+}

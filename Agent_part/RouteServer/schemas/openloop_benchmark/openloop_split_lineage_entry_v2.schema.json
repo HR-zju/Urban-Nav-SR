@@ -1,0 +1,66 @@
+{
+  "additionalProperties": false,
+  "description": "Freeze one explicitly mapped parent and atomic split group.\n\nArgs:\n    split: Dataset role assigned by the source split manifest.\n    dataset_source: Canonical dataset identity after an explicit alias map.\n    parent_sample_id: Stable source-row identity.\n    split_group_id: Atomic leakage-safe clip/session identity.\n    source_manifest_id: Human-readable immutable manifest identity.\n    source_manifest_digest: SHA256 of the source split manifest.\n    source_row_number: One-based source JSONL row number.",
+  "properties": {
+    "dataset_source": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Dataset Source",
+      "type": "string"
+    },
+    "parent_sample_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Parent Sample Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "urbannav_openloop_split_lineage_entry_v2_0",
+      "default": "urbannav_openloop_split_lineage_entry_v2_0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_manifest_digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Manifest Digest",
+      "type": "string"
+    },
+    "source_manifest_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Source Manifest Id",
+      "type": "string"
+    },
+    "source_row_number": {
+      "exclusiveMinimum": 0,
+      "title": "Source Row Number",
+      "type": "integer"
+    },
+    "split": {
+      "enum": [
+        "train",
+        "validation",
+        "test"
+      ],
+      "title": "Split",
+      "type": "string"
+    },
+    "split_group_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Split Group Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "split",
+    "dataset_source",
+    "parent_sample_id",
+    "split_group_id",
+    "source_manifest_id",
+    "source_manifest_digest",
+    "source_row_number"
+  ],
+  "title": "OpenLoopSplitLineageEntryV1",
+  "type": "object"
+}

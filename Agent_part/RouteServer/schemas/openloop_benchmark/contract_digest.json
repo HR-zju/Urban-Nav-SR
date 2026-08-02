@@ -1,0 +1,16 @@
+{
+  "artifact_sha256": {
+    "checkpoint_exposure_registry_v2.schema.json": "6e83f372bef62b523e6ae9e291810a89a959697ae74bbc349347c56414caa773",
+    "openloop_failure_v2.schema.json": "8bde1df7033bd0bd03106a216b56a3629bbc0da41d80af1a5750dca02bdc4da7",
+    "openloop_input_v2.schema.json": "675084abebf3cd097a5c8e0ca57b0a7b0e46d0cb3df8e5ab303b80ed4fb5721e",
+    "openloop_package_v2.schema.json": "0d3e2e3410b1a63fb93c75fa86321940fe03c6f1c1596eb89fa172957aa8d4fb",
+    "openloop_prediction_v2.schema.json": "99a1457be90bb1ea16c6d2e1a8b4513f5ec28e10f7b915253d8c9e10252fa33e",
+    "openloop_reference_v2.schema.json": "3bc15d25e511b6379b2ee1d9e23f9c0422df6944e232b8833bb12c95f323b140",
+    "openloop_run_v2.schema.json": "99299c39cbda90b21ed186f36092de9a3e75b3bcda35ac1768345cf46f0eefa9",
+    "openloop_split_lineage_entry_v2.schema.json": "3815fab6dcde306bec40d5af229a9f85d62a35dc22e717b7f38a87b4c73c4eac"
+  },
+  "benchmark_schema_version": "urbannav_openloop_benchmark_v2_0",
+  "canonical_source_sha256": "7a1f8c7596283fb52b03664ea5cdf9ef46a7d2f56432ba43eac7d18bec200be9",
+  "schema_version": "urbannav_openloop_contract_artifacts_v1",
+  "semantic_schema_digest": "6e2c715a0e415514236c0756efe85fd43cef7ace5213f9d495f016ea45865dd0"
+}

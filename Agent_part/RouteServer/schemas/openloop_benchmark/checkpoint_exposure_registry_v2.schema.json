@@ -1,0 +1,107 @@
+{
+  "$defs": {
+    "CheckpointExposureEntryV1": {
+      "additionalProperties": false,
+      "description": "Record one group exposed to a checkpoint lineage.\n\nArgs:\n    parent_sample_id: Physical-sample identity seen in training.\n    split_group_id: Atomic exposed group identity.\n    source_fingerprint: Optional immutable source fingerprint.\n    manifest_digest: Train/replay manifest containing the exposure.\n    stage: Training stage or replay source.\n    annotation_version: Optional annotation protocol version.\n    cache_version: Optional Stage II context-cache version.",
+      "properties": {
+        "annotation_version": {
+          "anyOf": [
+            {
+              "maxLength": 160,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Annotation Version"
+        },
+        "cache_version": {
+          "anyOf": [
+            {
+              "maxLength": 160,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cache Version"
+        },
+        "manifest_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Manifest Digest",
+          "type": "string"
+        },
+        "parent_sample_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Parent Sample Id",
+          "type": "string"
+        },
+        "source_fingerprint": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Fingerprint"
+        },
+        "split_group_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Split Group Id",
+          "type": "string"
+        },
+        "stage": {
+          "maxLength": 96,
+          "minLength": 1,
+          "title": "Stage",
+          "type": "string"
+        }
+      },
+      "required": [
+        "parent_sample_id",
+        "split_group_id",
+        "manifest_digest",
+        "stage"
+      ],
+      "title": "CheckpointExposureEntryV1",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Store all known training exposure for one checkpoint lineage.\n\nArgs:\n    checkpoint_digest: Checkpoint lineage being audited.\n    entries: Parent/group exposure records from all train manifests.",
+  "properties": {
+    "checkpoint_digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Checkpoint Digest",
+      "type": "string"
+    },
+    "entries": {
+      "items": {
+        "$ref": "#/$defs/CheckpointExposureEntryV1"
+      },
+      "title": "Entries",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "urbannav_checkpoint_exposure_registry_v2_0",
+      "default": "urbannav_checkpoint_exposure_registry_v2_0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "checkpoint_digest"
+  ],
+  "title": "CheckpointExposureRegistryV1",
+  "type": "object"
+}

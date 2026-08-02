@@ -1,0 +1,226 @@
+{
+  "$defs": {
+    "OpenLoopMetricPolicyV1": {
+      "additionalProperties": false,
+      "description": "Freeze primary aggregations and metric-domain conventions.\n\nArgs:\n    policy_version: Exact metric-policy protocol version.\n    full_cot_reliability_primary: FullCoT reliability aggregation.\n    full_cot_semantics_primary: FullCoT semantic aggregation.\n    decision_primary: Standalone Decision aggregation.\n    vqa_primary: VQA aggregation order.\n    stage_ii_geometry_primary: Trajectory aggregation order.\n    direction_range_policy: Treatment of 50plus direction ranges.\n    stage_ii_horizons_s: Fixed evaluation horizons in seconds.\n    stage_ii_step_s: Time interval between target points.\n    stage_ii_motion_policy: Physical motion policy availability.\n    semantic_failure_denominator: Denominator used for strict semantics.",
+      "properties": {
+        "decision_primary": {
+          "const": "native_profile_macro",
+          "default": "native_profile_macro",
+          "title": "Decision Primary",
+          "type": "string"
+        },
+        "direction_range_policy": {
+          "const": "exclude_50plus_from_point_angle_report_coverage",
+          "default": "exclude_50plus_from_point_angle_report_coverage",
+          "title": "Direction Range Policy",
+          "type": "string"
+        },
+        "full_cot_reliability_primary": {
+          "const": "parent_natural_micro",
+          "default": "parent_natural_micro",
+          "title": "Full Cot Reliability Primary",
+          "type": "string"
+        },
+        "full_cot_semantics_primary": {
+          "const": "human_gold_field_macro",
+          "default": "human_gold_field_macro",
+          "title": "Full Cot Semantics Primary",
+          "type": "string"
+        },
+        "policy_version": {
+          "const": "urbannav_openloop_metric_policy_v2_0",
+          "default": "urbannav_openloop_metric_policy_v2_0",
+          "title": "Policy Version",
+          "type": "string"
+        },
+        "semantic_failure_denominator": {
+          "const": "full_reference",
+          "default": "full_reference",
+          "title": "Semantic Failure Denominator",
+          "type": "string"
+        },
+        "stage_ii_geometry_primary": {
+          "const": "eligible_dataset_macro_per_horizon",
+          "default": "eligible_dataset_macro_per_horizon",
+          "title": "Stage Ii Geometry Primary",
+          "type": "string"
+        },
+        "stage_ii_horizons_s": {
+          "default": [
+            0.5,
+            1.0,
+            2.0
+          ],
+          "items": {
+            "type": "number"
+          },
+          "title": "Stage Ii Horizons S",
+          "type": "array"
+        },
+        "stage_ii_motion_policy": {
+          "default": "not_frozen",
+          "enum": [
+            "not_frozen",
+            "frozen"
+          ],
+          "title": "Stage Ii Motion Policy",
+          "type": "string"
+        },
+        "stage_ii_step_s": {
+          "default": 0.125,
+          "title": "Stage Ii Step S",
+          "type": "number"
+        },
+        "vqa_primary": {
+          "const": "task_parent_balanced_then_provenance_task_macro",
+          "default": "task_parent_balanced_then_provenance_task_macro",
+          "title": "Vqa Primary",
+          "type": "string"
+        }
+      },
+      "title": "OpenLoopMetricPolicyV1",
+      "type": "object"
+    },
+    "OpenLoopRendererPolicyV1": {
+      "additionalProperties": false,
+      "description": "Freeze canonical context rendering and overflow behavior.\n\nArgs:\n    policy_version: Exact renderer-policy protocol version.\n    reasoning_renderer_id: Canonical Reasoning renderer implementation.\n    reasoning_renderer_digest: Digest of the Reasoning renderer contract.\n    decision_renderer_id: Canonical Decision renderer implementation.\n    decision_renderer_digest: Digest of the Decision renderer contract.\n    field_order_policy: Frozen mapping-field ordering policy.\n    list_normalization_policy: Frozen list normalization policy.\n    null_normalization_policy: Frozen optional/null normalization policy.\n    max_context_tokens: Hard maximum context length.\n    overflow_policy: Overflow handling; V2.0 fails closed.",
+      "properties": {
+        "decision_renderer_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Decision Renderer Digest",
+          "type": "string"
+        },
+        "decision_renderer_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Decision Renderer Id",
+          "type": "string"
+        },
+        "field_order_policy": {
+          "const": "schema_order_v1",
+          "default": "schema_order_v1",
+          "title": "Field Order Policy",
+          "type": "string"
+        },
+        "list_normalization_policy": {
+          "const": "preserve_semantic_order_sort_unordered_v1",
+          "default": "preserve_semantic_order_sort_unordered_v1",
+          "title": "List Normalization Policy",
+          "type": "string"
+        },
+        "max_context_tokens": {
+          "exclusiveMinimum": 0,
+          "title": "Max Context Tokens",
+          "type": "integer"
+        },
+        "null_normalization_policy": {
+          "const": "omit_optional_none_v1",
+          "default": "omit_optional_none_v1",
+          "title": "Null Normalization Policy",
+          "type": "string"
+        },
+        "overflow_policy": {
+          "const": "fail_closed",
+          "default": "fail_closed",
+          "title": "Overflow Policy",
+          "type": "string"
+        },
+        "policy_version": {
+          "const": "urbannav_openloop_renderer_policy_v2_0",
+          "default": "urbannav_openloop_renderer_policy_v2_0",
+          "title": "Policy Version",
+          "type": "string"
+        },
+        "reasoning_renderer_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reasoning Renderer Digest",
+          "type": "string"
+        },
+        "reasoning_renderer_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Reasoning Renderer Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reasoning_renderer_id",
+        "reasoning_renderer_digest",
+        "decision_renderer_id",
+        "decision_renderer_digest",
+        "max_context_tokens"
+      ],
+      "title": "OpenLoopRendererPolicyV1",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Freeze file identities for one input/reference benchmark package.\n\nArgs:\n    benchmark_id: Human-readable versioned benchmark identity.\n    split: Frozen validation or test split.\n    input_path: Relative model-visible input JSONL path.\n    input_digest: SHA256 of the input artifact.\n    reference_path: Relative hidden-reference JSONL path.\n    reference_digest: SHA256 of the reference artifact.\n    metric_policy: Frozen metric policy.\n    renderer_policy: Frozen renderer policy.\n    reference_count: Exact reference denominator.",
+  "properties": {
+    "benchmark_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Benchmark Id",
+      "type": "string"
+    },
+    "input_digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Input Digest",
+      "type": "string"
+    },
+    "input_path": {
+      "minLength": 1,
+      "title": "Input Path",
+      "type": "string"
+    },
+    "metric_policy": {
+      "$ref": "#/$defs/OpenLoopMetricPolicyV1"
+    },
+    "reference_count": {
+      "exclusiveMinimum": 0,
+      "title": "Reference Count",
+      "type": "integer"
+    },
+    "reference_digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Reference Digest",
+      "type": "string"
+    },
+    "reference_path": {
+      "minLength": 1,
+      "title": "Reference Path",
+      "type": "string"
+    },
+    "renderer_policy": {
+      "$ref": "#/$defs/OpenLoopRendererPolicyV1"
+    },
+    "schema_version": {
+      "const": "urbannav_openloop_benchmark_v2_0",
+      "default": "urbannav_openloop_benchmark_v2_0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "split": {
+      "enum": [
+        "validation",
+        "test"
+      ],
+      "title": "Split",
+      "type": "string"
+    }
+  },
+  "required": [
+    "benchmark_id",
+    "split",
+    "input_path",
+    "input_digest",
+    "reference_path",
+    "reference_digest",
+    "metric_policy",
+    "renderer_policy",
+    "reference_count"
+  ],
+  "title": "OpenLoopPackageManifestV1",
+  "type": "object"
+}

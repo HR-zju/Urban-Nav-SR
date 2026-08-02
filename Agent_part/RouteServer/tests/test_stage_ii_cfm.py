@@ -17,6 +17,9 @@ from mcp_server.contracts.stage_ii_cfm import (
     stage_ii_digest_v1,
 )
 from mcp_server.data.stage_i_views import project_stage_i_reasoning_view_v1
+from mcp_server.data.openloop_benchmark import (
+    build_stage_ii_openloop_reference_from_parent_v1,
+)
 from mcp_server.data.stage_ii_context import (
     build_stage_ii_context_cache_v1,
     stage_ii_projected_input_digest_v1,
@@ -121,8 +124,15 @@ def _source_registry_payload(
     return payload
 
 
-def _producer(source: str = "model_prediction") -> StageIIContextProducerV1:
+def _producer(
+    source: str = "model_prediction",
+    kind: str = "reasoning_grounding",
+) -> StageIIContextProducerV1:
     generation_config = {"temperature": 0.0, "max_tokens": 2048}
+    parser_contract_id = {
+        "reasoning_grounding": "reasoning_v4_6_full_target_strict_v1",
+        "decision": "reasoning_v4_6_decision_section_strict_v1",
+    }[kind]
     return StageIIContextProducerV1(
         source=source,
         base_model_id="test/qwen",
@@ -130,7 +140,7 @@ def _producer(source: str = "model_prediction") -> StageIIContextProducerV1:
         checkpoint_digest="1" * 64,
         prompt_profile_id="test_prompt_v1",
         prompt_digest="2" * 64,
-        parser_contract_id="reasoning_v4_6_strict",
+        parser_contract_id=parser_contract_id,
         parser_contract_digest="3" * 64,
         generation_config=generation_config,
         generation_config_digest=stage_ii_digest_v1(generation_config),
@@ -143,6 +153,16 @@ def _stage_i_full_cot():
         task_type="full_cot",
         modality_profile_id="fpv_instruction_v1",
         instruction_training_role="primary",
+    )
+
+
+def _stage_i_decision():
+    return project_stage_i_reasoning_view_v1(
+        _formal_reasoning_view(),
+        task_type="decision",
+        modality_profile_id="fpv_instruction_v1",
+        instruction_training_role="primary",
+        allow_fpv_only_decision=True,
     )
 
 
@@ -170,7 +190,7 @@ def _cache(view, kind: str, raw_generation: str):
         parent_source_fingerprint=view.parent_source_fingerprint,
         projected_input_digest=_input_digest(view),
         context_kind=kind,
-        producer=_producer(),
+        producer=_producer(kind=kind),
         raw_generation=raw_generation,
     )
 
@@ -405,6 +425,13 @@ def test_stage_ii_view_builds_cfm_only_ms_swift_row() -> None:
     assert serialized["loss_mask"]["lm"] is False
     assert serialized["loss_mask"]["system1_action"] is True
     assert "assistant_text" not in serialized
+    reference = build_stage_ii_openloop_reference_from_parent_v1(
+        view,
+        trajectory.target,
+    )
+    assert reference.trajectory_valid_mask == trajectory.target.action_mask
+    assert reference.label_provenance == "deterministic_gt"
+    assert reference.subgroup_metadata["yaw_source"] == "path_tangent"
 
     ms_root = Path(__file__).resolve().parents[4] / "ms-swift"
     if not ms_root.is_dir():
@@ -415,6 +442,26 @@ def test_stage_ii_view_builds_cfm_only_ms_swift_row() -> None:
             "swift.sidewalk_nav.data.stage_ii_manifest"
         )
         row = adapter.build_stage_ii_manifest_row(serialized)
+        eval_adapter = importlib.import_module(
+            "swift.sidewalk_nav.data.stage_ii_eval_manifest"
+        )
+        case_adapter = importlib.import_module(
+            "swift.sidewalk_nav.data.stage_ii_case_manifest"
+        )
+        benchmark_input = case_adapter.build_stage_ii_case_input_row(
+            view,
+            _stage_i_decision(),
+            split="validation",
+            renderer_policy_digest="6" * 64,
+        )
+        eval_row = eval_adapter.build_stage_ii_eval_manifest_row(
+            serialized,
+            context_policy="shared_current_checkpoint_v1",
+            pass_t_backbone_checkpoint_digest="1" * 64,
+            reasoning_renderer_digest="4" * 64,
+            decision_renderer_digest="5" * 64,
+            benchmark_input=benchmark_input,
+        )
     finally:
         sys.path.remove(str(ms_root))
     assert all(message["role"] != "assistant" for message in row["messages"])
@@ -430,6 +477,21 @@ def test_stage_ii_view_builds_cfm_only_ms_swift_row() -> None:
     assert prompt.count("[TRAJ_15]") == 1
     assert "trajectory_ego_t" not in prompt
     assert "direction_supervision" not in prompt
+    eval_serialized = json.dumps(eval_row, ensure_ascii=False)
+    assert eval_row["stage_ii_context_policy"] == (
+        "shared_current_checkpoint_v1"
+    )
+    assert eval_row["stage_ii_decision_context_label"] == "straight"
+    assert len(eval_row["stage_ii_input_digest"]) == 64
+    assert len(eval_row["openloop_input_digest"]) == 64
+    assert eval_row["openloop_parent_sample_id"] == view.parent_sample_id
+    for forbidden in (
+        "trajectory_ego_t",
+        "action_mask",
+        "direction_label_name",
+        "loss_mask",
+    ):
+        assert forbidden not in eval_serialized
 
 
 def test_stage_ii_view_rejects_mixed_oracle_and_predicted_context() -> None:
@@ -495,6 +557,8 @@ def test_stage_ii_bulk_builder_emits_view_qc_and_report(tmp_path) -> None:
         "views": tmp_path / "views.jsonl",
         "qc": tmp_path / "qc.jsonl",
         "drops": tmp_path / "drops.jsonl",
+        "references": tmp_path / "references.jsonl",
+        "eligible": tmp_path / "eligible.jsonl",
     }
     paths["stage_i"].write_text(
         view.model_dump_json(exclude_none=True) + "\n",
@@ -531,13 +595,84 @@ def test_stage_ii_bulk_builder_emits_view_qc_and_report(tmp_path) -> None:
         output_view_jsonl=paths["views"],
         output_qc_jsonl=paths["qc"],
         output_drop_jsonl=paths["drops"],
+        output_reference_jsonl=paths["references"],
+        output_eligible_jsonl=paths["eligible"],
     )
 
     assert report["counts"]["input_rows"] == 1
     assert report["counts"]["output_views"] == 1
+    assert report["counts"]["eligible_references"] == 1
     assert paths["views"].read_text(encoding="utf-8").count("\n") == 1
+    assert paths["references"].read_text(encoding="utf-8").count("\n") == 1
+    assert paths["eligible"].read_text(encoding="utf-8").count("\n") == 1
     assert '"status":"accepted"' in paths["qc"].read_text(encoding="utf-8")
     assert paths["drops"].read_text(encoding="utf-8") == ""
+
+
+def test_stage_ii_bulk_builder_freezes_denominator_without_context_cache(tmp_path) -> None:
+    view = _stage_i_full_cot()
+    raw_target = {
+        "stage_i_sample_id": view.sample_id,
+        "trajectory_ego_t": [
+            [0.0, index * 0.125, index * 0.125, 1.0]
+            for index in range(21)
+        ],
+        "action_mask": [True] * 21,
+        "source_format": "ego_xy_t_speed_right_front_v1",
+        "trajectory_source": "dataset_pose_trajectory",
+        "yaw_source": "path_tangent",
+        "review_status": "not_required",
+    }
+    paths = {
+        name: tmp_path / filename
+        for name, filename in {
+            "stage_i": "stage_i.jsonl",
+            "trajectory": "trajectory.jsonl",
+            "registry": "registry.json",
+            "views": "views.jsonl",
+            "qc": "qc.jsonl",
+            "drops": "drops.jsonl",
+            "references": "references.jsonl",
+            "eligible": "eligible.jsonl",
+        }.items()
+    }
+    paths["stage_i"].write_text(
+        view.model_dump_json(exclude_none=True) + "\n", encoding="utf-8"
+    )
+    paths["trajectory"].write_text(
+        json.dumps(raw_target) + "\n", encoding="utf-8"
+    )
+    paths["registry"].write_text(
+        json.dumps(
+            _source_registry_payload(
+                sidewalk_sources=("dataset_pose_trajectory",),
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = build_stage_ii_cfm_views(
+        stage_i_jsonl=paths["stage_i"],
+        trajectory_jsonl=paths["trajectory"],
+        reasoning_cache_jsonl=None,
+        decision_cache_jsonl=None,
+        trajectory_source_registry_json=paths["registry"],
+        output_view_jsonl=paths["views"],
+        output_qc_jsonl=paths["qc"],
+        output_drop_jsonl=paths["drops"],
+        output_reference_jsonl=paths["references"],
+        output_eligible_jsonl=paths["eligible"],
+        denominator_only=True,
+    )
+
+    assert report["mode"] == "denominator_only"
+    assert report["counts"]["eligible_references"] == 1
+    assert report["counts"]["denominator_only_rows"] == 1
+    assert paths["views"].read_text(encoding="utf-8") == ""
+    assert paths["drops"].read_text(encoding="utf-8") == ""
+    assert paths["references"].read_text(encoding="utf-8").count("\n") == 1
+    assert paths["eligible"].read_text(encoding="utf-8").count("\n") == 1
 
 
 def test_real_train_target_audit_reports_horizon_mask_and_yaw_distributions(tmp_path) -> None:

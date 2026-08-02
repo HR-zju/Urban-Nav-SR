@@ -1,0 +1,24 @@
+{
+  "schema_version": "urbannav_stage_i_instruction_policy_v1",
+  "policy_id": "stage_i_declared_student_task_instruction_policy_v1",
+  "policy_version": "1.0",
+  "decision_authority": "project_contract_adjudication",
+  "unmatched_instruction_policy": "fail_closed",
+  "decisions": [
+    {
+      "instruction": "Navigate safely on the sidewalk and follow the visible route.",
+      "instruction_sha256": "635e1faa5b07ee4a6997552514ed463f03b6d48603dc31dff1d969ab98e6279b",
+      "training_role": "primary",
+      "provenance_source": "frozen_student_visible_task_contract",
+      "rationale": "Exact prompt-visible task instruction in the frozen source artifact; it is available to the student and is not teacher-only or audit metadata."
+    },
+    {
+      "instruction": "Navigate safely within the sidewalk or other pedestrian-accessible space. Choose one short-horizon local motion direction from the provided candidate options.",
+      "instruction_sha256": "57a5191b4556e8c3dd5a17ef797ae496a34484a9326fbc34d572fa442802f73e",
+      "training_role": "primary",
+      "provenance_source": "frozen_student_visible_task_contract",
+      "rationale": "Exact prompt-visible task instruction in the frozen source artifact; it is available to the student and is not teacher-only or audit metadata."
+    }
+  ],
+  "policy_digest": "12d7e303c728e49557f33a4aeb41a77c906be3c2a04dbf25466499125368834c"
+}

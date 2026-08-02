@@ -1,0 +1,228 @@
+{
+  "$defs": {
+    "DirectionLabelStamp": {
+      "additionalProperties": false,
+      "description": "Carry a complete direction-label identity and its derivation source.",
+      "properties": {
+        "angle_deg": {
+          "anyOf": [
+            {
+              "maximum": 180.0,
+              "minimum": -180.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Angle Deg"
+        },
+        "bin_mode": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Bin Mode",
+          "type": "string"
+        },
+        "choice": {
+          "maxLength": 32,
+          "minLength": 1,
+          "title": "Choice",
+          "type": "string"
+        },
+        "derivation_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Derivation Version",
+          "type": "string"
+        },
+        "label_index": {
+          "minimum": 0,
+          "title": "Label Index",
+          "type": "integer"
+        },
+        "label_name": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Label Name",
+          "type": "string"
+        },
+        "profile_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Profile Id",
+          "type": "string"
+        },
+        "profile_version": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Profile Version",
+          "type": "string"
+        },
+        "source": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile_id",
+        "profile_version",
+        "label_index",
+        "label_name",
+        "choice",
+        "source",
+        "bin_mode",
+        "derivation_version"
+      ],
+      "title": "DirectionLabelStamp",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Store one hidden reference row aligned to a model-visible input.\n\nArgs:\n    sample_id: Exact input identity.\n    parent_sample_id: Exact physical-sample identity.\n    source_group_id: Exact source/session group.\n    split_group_id: Exact split group.\n    stage: Benchmark stage.\n    task_type: Atomic task family.\n    dataset_source: Dataset identity used for grouped metrics.\n    target: Hidden task-specific target payload.\n    label_provenance: Default semantic provenance of the target.\n    field_provenance: Optional dotted field to provenance mapping.\n    direction_stamp: Deterministic direction reference when applicable.\n    trajectory_valid_mask: Hidden valid future-point mask for Stage II.\n    trajectory_policy_id: Frozen target policy identity.\n    subgroup_metadata: Hidden evaluation subgroup properties.",
+  "properties": {
+    "dataset_source": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Dataset Source",
+      "type": "string"
+    },
+    "direction_stamp": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DirectionLabelStamp"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "field_provenance": {
+      "additionalProperties": {
+        "enum": [
+          "deterministic_gt",
+          "human_gold",
+          "lvlm_weak",
+          "reference_annotation"
+        ],
+        "type": "string"
+      },
+      "title": "Field Provenance",
+      "type": "object"
+    },
+    "label_provenance": {
+      "enum": [
+        "deterministic_gt",
+        "human_gold",
+        "lvlm_weak",
+        "reference_annotation"
+      ],
+      "title": "Label Provenance",
+      "type": "string"
+    },
+    "parent_sample_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Parent Sample Id",
+      "type": "string"
+    },
+    "sample_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Sample Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "urbannav_openloop_reference_v2_0",
+      "default": "urbannav_openloop_reference_v2_0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_group_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Source Group Id",
+      "type": "string"
+    },
+    "split_group_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Split Group Id",
+      "type": "string"
+    },
+    "stage": {
+      "enum": [
+        "stage_i",
+        "stage_ii"
+      ],
+      "title": "Stage",
+      "type": "string"
+    },
+    "subgroup_metadata": {
+      "additionalProperties": true,
+      "title": "Subgroup Metadata",
+      "type": "object"
+    },
+    "target": {
+      "additionalProperties": true,
+      "title": "Target",
+      "type": "object"
+    },
+    "task_type": {
+      "enum": [
+        "full_cot",
+        "vqa",
+        "decision",
+        "trajectory"
+      ],
+      "title": "Task Type",
+      "type": "string"
+    },
+    "trajectory_policy_id": {
+      "anyOf": [
+        {
+          "maxLength": 160,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Trajectory Policy Id"
+    },
+    "trajectory_valid_mask": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "boolean"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Trajectory Valid Mask"
+    }
+  },
+  "required": [
+    "sample_id",
+    "parent_sample_id",
+    "source_group_id",
+    "split_group_id",
+    "stage",
+    "task_type",
+    "dataset_source",
+    "target",
+    "label_provenance"
+  ],
+  "title": "OpenLoopReferenceV1",
+  "type": "object"
+}

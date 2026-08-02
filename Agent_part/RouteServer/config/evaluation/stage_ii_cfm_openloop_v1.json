@@ -1,0 +1,37 @@
+{
+  "schema_version": "urbannav_stage_ii_cfm_openloop_config_v1",
+  "metric_policy": {
+    "policy_version": "urbannav_openloop_metric_policy_v2_0",
+    "full_cot_reliability_primary": "parent_natural_micro",
+    "full_cot_semantics_primary": "human_gold_field_macro",
+    "decision_primary": "native_profile_macro",
+    "vqa_primary": "task_parent_balanced_then_provenance_task_macro",
+    "stage_ii_geometry_primary": "eligible_dataset_macro_per_horizon",
+    "direction_range_policy": "exclude_50plus_from_point_angle_report_coverage",
+    "stage_ii_horizons_s": [0.5, 1.0, 2.0],
+    "stage_ii_step_s": 0.125,
+    "stage_ii_motion_policy": "not_frozen",
+    "semantic_failure_denominator": "full_reference"
+  },
+  "renderer_policy": {
+    "policy_version": "urbannav_openloop_renderer_policy_v2_0",
+    "reasoning_renderer_id": "reasoning_v4_compact_full_cot_renderer_v3",
+    "reasoning_renderer_digest": "b4040ff89989f4693c128ab7e43dbc16d4744fb001f705748087042776a88819",
+    "decision_renderer_id": "render_reasoning_section_v4_v6",
+    "decision_renderer_digest": "f254b6404716ab414fa6054f8c8a9ad27022994ab7302e2a565130b28dbbee9b",
+    "field_order_policy": "schema_order_v1",
+    "list_normalization_policy": "preserve_semantic_order_sort_unordered_v1",
+    "null_normalization_policy": "omit_optional_none_v1",
+    "max_context_tokens": 32768,
+    "overflow_policy": "fail_closed"
+  },
+  "stage_ii": {
+    "trajectory_policy_id": "urbannav_stage_ii_metric_flu_2s_16_v1",
+    "target_format": "ego_pose_xyt_flu_v1",
+    "coordinate_frame": "current_ego_flu",
+    "horizon_steps": 16,
+    "horizon_seconds": 2.0,
+    "target_dt_sec": 0.125,
+    "production_context_policy": "shared_current_checkpoint_v1"
+  }
+}

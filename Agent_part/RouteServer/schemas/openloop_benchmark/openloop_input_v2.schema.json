@@ -1,0 +1,177 @@
+{
+  "$defs": {
+    "OpenLoopMessageV1": {
+      "additionalProperties": false,
+      "description": "Represent one model-visible prompt message.\n\nArgs:\n    role: Prompt role accepted by the inference adapter.\n    content: Exact model-visible content.",
+      "properties": {
+        "content": {
+          "minLength": 1,
+          "title": "Content",
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "system",
+            "user",
+            "assistant",
+            "tool",
+            "tool_response"
+          ],
+          "title": "Role",
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "content"
+      ],
+      "title": "OpenLoopMessageV1",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Store one strictly model-visible benchmark input.\n\nArgs:\n    sample_id: Stable task-row identity.\n    parent_sample_id: Stable physical-sample identity.\n    source_group_id: Stable source/session group.\n    split_group_id: Atomic train/validation/test split group.\n    split: Frozen benchmark split.\n    stage: Benchmark stage.\n    task_type: Atomic task family.\n    dataset_source: Dataset identity used for grouped metrics.\n    messages: Model-visible prompt messages only.\n    images: Ordered model-visible image paths.\n    image_roles: Semantic role for every image.\n    public_context: Additional prompt-visible structured context.\n    task_id: VQA task identifier when applicable.\n    modality_profile_id: Frozen input-modality profile.\n    direction_profile_id: Public output vocabulary when applicable.\n    renderer_policy_digest: Digest of the benchmark renderer policy.",
+  "properties": {
+    "dataset_source": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Dataset Source",
+      "type": "string"
+    },
+    "direction_profile_id": {
+      "anyOf": [
+        {
+          "maxLength": 160,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Direction Profile Id"
+    },
+    "image_roles": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Image Roles",
+      "type": "array"
+    },
+    "images": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Images",
+      "type": "array"
+    },
+    "messages": {
+      "items": {
+        "$ref": "#/$defs/OpenLoopMessageV1"
+      },
+      "minItems": 1,
+      "title": "Messages",
+      "type": "array"
+    },
+    "modality_profile_id": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Modality Profile Id",
+      "type": "string"
+    },
+    "parent_sample_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Parent Sample Id",
+      "type": "string"
+    },
+    "public_context": {
+      "additionalProperties": true,
+      "title": "Public Context",
+      "type": "object"
+    },
+    "renderer_policy_digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Renderer Policy Digest",
+      "type": "string"
+    },
+    "sample_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Sample Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "urbannav_openloop_input_v2_0",
+      "default": "urbannav_openloop_input_v2_0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_group_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Source Group Id",
+      "type": "string"
+    },
+    "split": {
+      "enum": [
+        "validation",
+        "test"
+      ],
+      "title": "Split",
+      "type": "string"
+    },
+    "split_group_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Split Group Id",
+      "type": "string"
+    },
+    "stage": {
+      "enum": [
+        "stage_i",
+        "stage_ii"
+      ],
+      "title": "Stage",
+      "type": "string"
+    },
+    "task_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Task Id"
+    },
+    "task_type": {
+      "enum": [
+        "full_cot",
+        "vqa",
+        "decision",
+        "trajectory"
+      ],
+      "title": "Task Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "sample_id",
+    "parent_sample_id",
+    "source_group_id",
+    "split_group_id",
+    "split",
+    "stage",
+    "task_type",
+    "dataset_source",
+    "messages",
+    "modality_profile_id",
+    "renderer_policy_digest"
+  ],
+  "title": "OpenLoopInputV1",
+  "type": "object"
+}

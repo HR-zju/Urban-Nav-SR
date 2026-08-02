@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib
 import json
 import sys
@@ -37,6 +38,13 @@ from mcp_server.contracts.stage_i_sft import (
     parse_stage_i_training_view_v1,
 )
 from mcp_server.data.stage_i_batch import project_stage_i_batch_v1
+from mcp_server.data.openloop_benchmark import (
+    build_stage_i_openloop_reference_v1,
+)
+from mcp_server.data.openloop_lineage import (
+    build_openloop_split_lineage_v1,
+    freeze_openloop_stage_i_views_v1,
+)
 from mcp_server.data.stage_i_provenance import (
     build_stage_i_instruction_provenance_v1,
     resolve_stage_i_instruction_role_v1,
@@ -51,6 +59,9 @@ from mcp_server.data.vqa_v2_eligibility import load_vqa_capabilities_v2
 from mcp_server.data.vqa_v2_producers import CanonicalDemonstratedDirectionProducerV2
 from mcp_server.data.vqa_v2_questions import build_vqa_questions_v2
 from mcp_server.data.vqa_v2_source import build_vqa_source_v2
+from tools.model_processing.build_stage_i_instruction_provenance import (
+    build_policy_registry,
+)
 
 
 def _direction(label: str = "straight", *, profile_id: str = "fpv_degree10_terminal_centroid_v2") -> dict:
@@ -237,6 +248,14 @@ def test_full_cot_projection_masks_only_final_action_value() -> None:
     span = zero_spans[0]
     assert view.assistant_text[span.start:span.end] == '"straight"'
     assert parse_stage_i_training_view_v1(view.model_dump(mode="json")) == view
+    reference = build_stage_i_openloop_reference_v1(
+        view.model_dump(mode="json")
+    )
+    assert reference.label_provenance == "lvlm_weak"
+    assert reference.field_provenance[
+        "decision.selected_action_label"
+    ] == "deterministic_gt"
+    assert "assistant_text" not in reference.target
 
 
 def test_full_cot_projection_rejects_native_modality_dropout() -> None:
@@ -278,6 +297,9 @@ def test_decision_only_projection_has_no_full_cot_prefix_or_system1() -> None:
     assert all(span.scale == 1.0 for span in view.loss_spans)
     assert "trajectory_ego_t" not in serialized
     assert "action_mask" not in serialized
+    reference = build_stage_i_openloop_reference_v1(serialized)
+    assert reference.direction_stamp is not None
+    assert reference.direction_stamp.label_name == "stop"
 
 
 def test_selected_instruction_must_be_primary() -> None:
@@ -376,6 +398,13 @@ def test_vqa_projection_keeps_annotation_evidence() -> None:
     assert view.modality_state.instruction == "present"
     assert "fpv.obstacle_a" in {str(item.ref) for item in view.evidence_catalog}
     assert set(view.annotation_evidence_refs).issubset({str(item.ref) for item in view.evidence_catalog})
+    reference = build_stage_i_openloop_reference_v1(
+        view.model_dump(mode="json")
+    )
+    assert reference.label_provenance == "deterministic_gt"
+    assert reference.target["question"]["task_id"] == (
+        "e0_demonstrated_direction_selection"
+    )
 
 
 def test_vqa_projection_rejects_removed_annotation_evidence() -> None:
@@ -475,6 +504,92 @@ def test_instruction_provenance_requires_exact_source_revision_and_text() -> Non
             source_fingerprint="f" * 64,
             instruction=view.instruction,
             registry=registry,
+        )
+
+
+def test_instruction_policy_builds_primary_registry_and_fails_closed(
+    tmp_path: Path,
+) -> None:
+    view = _formal_reasoning_view()
+    view_path = tmp_path / "reasoning.jsonl"
+    view_path.write_text(
+        json.dumps(view.model_dump(mode="json")) + "\n",
+        encoding="utf-8",
+    )
+    instruction = str(view.instruction)
+    instruction_digest = hashlib.sha256(
+        instruction.encode("utf-8")
+    ).hexdigest()
+    policy_payload = {
+        "schema_version": "urbannav_stage_i_instruction_policy_v1",
+        "policy_id": "stage_i_test_exact_instruction_policy",
+        "policy_version": "1.0",
+        "decision_authority": "test_fixture",
+        "unmatched_instruction_policy": "fail_closed",
+        "decisions": [
+            {
+                "instruction": instruction,
+                "instruction_sha256": instruction_digest,
+                "training_role": "primary",
+                "provenance_source": "test_visible_task_contract",
+                "rationale": "The fixture instruction is prompt-visible.",
+            }
+        ],
+    }
+    digest_payload = json.dumps(
+        policy_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    policy_payload["policy_digest"] = hashlib.sha256(
+        digest_payload.encode("utf-8")
+    ).hexdigest()
+    policy_path = tmp_path / "instruction-policy.json"
+    policy_path.write_text(
+        json.dumps(policy_payload),
+        encoding="utf-8",
+    )
+    registry_path = tmp_path / "instruction-registry.jsonl"
+    report = build_policy_registry(
+        policy_path,
+        registry_path,
+        reasoning_view_jsonls=[view_path],
+        report_json=tmp_path / "report.json",
+    )
+
+    assert report["mode"] == "exact_policy"
+    assert report["training_role_counts"] == {"primary": 1}
+    projected = project_stage_i_batch_v1(
+        output_view_jsonl=tmp_path / "views.jsonl",
+        output_drop_jsonl=tmp_path / "drops.jsonl",
+        instruction_provenance_jsonl=registry_path,
+        reasoning_view_jsonls=[view_path],
+        modality_profile_ids=["fpv_instruction_v1"],
+    )
+    assert projected["counts"]["task:full_cot"] == 1
+
+    changed = view.model_copy(
+        update={
+            "sample_id": "sidewalk:changed:formal",
+            "source_group_id": "sidewalk:changed",
+            "instruction": "A new unreviewed instruction.",
+            "metadata": {
+                **view.metadata,
+                "source_fingerprint": "c" * 64,
+            },
+        }
+    )
+    changed_path = tmp_path / "changed.jsonl"
+    changed_path.write_text(
+        json.dumps(changed.model_dump(mode="json")) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="no exact decision"):
+        build_policy_registry(
+            policy_path,
+            tmp_path / "rejected.jsonl",
+            reasoning_view_jsonls=[changed_path],
         )
 
 
@@ -593,3 +708,97 @@ def test_all_stage_i_task_views_build_ms_swift_physical_rows() -> None:
         assert all(row["loss_mask"]["lm"] for row in rows)
     finally:
         sys.path.remove(str(ms_root))
+
+
+def test_split_lineage_uses_explicit_nested_fields_and_freezes_views(
+    tmp_path: Path,
+) -> None:
+    def write_source(name: str, row_id: str, clip_id: str) -> Path:
+        path = tmp_path / name
+        path.write_text(
+            json.dumps(
+                {
+                    "id": row_id,
+                    "source_dataset": "sidewalk_main_multiframe",
+                    "sidewalk_meta": {
+                        "experiment_group": {"clip_id": clip_id}
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return path
+
+    write_source("train.jsonl", "train-row", "clip-train")
+    write_source("validation.jsonl", "validation-row", "clip-1")
+    write_source("test.jsonl", "test-row", "clip-test")
+    spec = {
+        "schema_version": "urbannav_openloop_split_source_spec_v1",
+        "manifests": [
+            {
+                "manifest_id": f"legacy-{split}",
+                "path": f"{split}.jsonl",
+                "split": split,
+                "parent_field": "id",
+                "split_group_field": (
+                    "sidewalk_meta.experiment_group.clip_id"
+                ),
+                "dataset_field": "source_dataset",
+                "dataset_aliases": {
+                    "sidewalk_main_multiframe": "sidewalk"
+                },
+            }
+            for split in ("train", "validation", "test")
+        ],
+    }
+    spec_path = tmp_path / "split-spec.json"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+    report = build_openloop_split_lineage_v1(
+        spec_path,
+        tmp_path / "lineage.jsonl",
+        tmp_path / "lineage-report.json",
+    )
+    assert report["cross_split_group_overlap"] == 0
+    assert report["emitted_rows"] == 3
+
+    view = project_stage_i_reasoning_view_v1(
+        _formal_reasoning_view(),
+        task_type="full_cot",
+        modality_profile_id="fpv_instruction_v1",
+        instruction_training_role="primary",
+    )
+    view_path = tmp_path / "views.jsonl"
+    view_path.write_text(
+        json.dumps(view.model_dump(mode="json")) + "\n",
+        encoding="utf-8",
+    )
+    freeze_report = freeze_openloop_stage_i_views_v1(
+        tmp_path / "lineage.jsonl",
+        [view_path],
+        tmp_path / "frozen-validation.jsonl",
+        tmp_path / "frozen-validation-report.json",
+        split="validation",
+    )
+    assert freeze_report["selected_rows"] == 1
+    assert freeze_report["selected_group_count"] == 1
+
+    write_source("test.jsonl", "test-row", "clip-1")
+    with pytest.raises(ValueError, match="split-group leakage"):
+        build_openloop_split_lineage_v1(
+            spec_path,
+            tmp_path / "invalid-lineage.jsonl",
+            tmp_path / "invalid-lineage-report.json",
+        )
+
+    spec["overlap_policy"] = "quarantine_evaluation_conflicts_v1"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+    quarantined = build_openloop_split_lineage_v1(
+        spec_path,
+        tmp_path / "safe-lineage.jsonl",
+        tmp_path / "safe-lineage-report.json",
+        quarantine_jsonl=tmp_path / "safe-lineage-quarantine.jsonl",
+    )
+    assert quarantined["source_overlap_group_count"] == 1
+    assert quarantined["quarantined_rows"] == 2
+    assert quarantined["cross_split_group_overlap"] == 0

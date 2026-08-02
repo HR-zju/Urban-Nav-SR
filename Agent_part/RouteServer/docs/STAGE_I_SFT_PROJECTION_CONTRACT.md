@@ -52,8 +52,13 @@ Legacy artifacts are never edited in place:
   policy v2.1 change and does not retroactively bless old weak labels.
 
 `build_stage_i_instruction_provenance.py` turns explicit, exact-source
-assignments into the digest-bound provenance registry. It does not infer roles
-from dataset names. `project_stage_i_batch.py` is the production batch entry:
+assignments into the digest-bound provenance registry. Its policy mode reads
+`config/stage_i_sft/instruction_policy_v1.json`, matches the SHA-256 of the
+exact visible text, and fails closed on every instruction not listed in that
+frozen policy. The current policy classifies the two frozen Foxglove/SideWalk
+task-contract strings as `primary` because they occur verbatim in the student
+prompt; it does not infer roles from dataset names. `project_stage_i_batch.py`
+is the production batch entry:
 it requires that registry, emits both exchange views and structured drops, and
 fails closed when a present instruction has no matching fingerprint/text
 record. The low-level projector's role argument remains available for unit

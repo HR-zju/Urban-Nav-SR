@@ -1,0 +1,448 @@
+{
+  "$defs": {
+    "OpenLoopCheckpointIdentityV1": {
+      "additionalProperties": false,
+      "description": "Freeze model/checkpoint identity for one run.\n\nArgs:\n    model_id: Base model identity.\n    checkpoint_id: Human-readable checkpoint/run identity.\n    checkpoint_digest: Content or immutable artifact digest.\n    adapter_id: Optional adapter identity.\n    tokenizer_id: Tokenizer identity.\n    processor_id: Multimodal processor identity.",
+      "properties": {
+        "adapter_id": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Adapter Id"
+        },
+        "checkpoint_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Checkpoint Digest",
+          "type": "string"
+        },
+        "checkpoint_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Checkpoint Id",
+          "type": "string"
+        },
+        "model_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Model Id",
+          "type": "string"
+        },
+        "processor_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Processor Id",
+          "type": "string"
+        },
+        "tokenizer_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Tokenizer Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "model_id",
+        "checkpoint_id",
+        "checkpoint_digest",
+        "tokenizer_id",
+        "processor_id"
+      ],
+      "title": "OpenLoopCheckpointIdentityV1",
+      "type": "object"
+    },
+    "OpenLoopContextIdentityV1": {
+      "additionalProperties": false,
+      "description": "Freeze Pass R/D/T lineage and inference context policy.\n\nArgs:\n    policy: Production or explicit frozen-context ablation policy.\n    reasoning_context_source: Benchmark provenance of the Pass R context.\n    decision_context_source: Benchmark provenance of the Pass D context.\n    reasoning_producer_checkpoint_digest: Pass R producer backbone digest.\n    decision_producer_checkpoint_digest: Pass D producer backbone digest.\n    pass_t_backbone_checkpoint_digest: Pass T backbone digest.\n    reasoning_renderer_digest: Canonical Pass R renderer digest.\n    decision_renderer_digest: Canonical Pass D renderer digest.\n    input_manifest_digest: Exact canonical benchmark input artifact digest.\n    adapter_input_manifest_digest: Exact physical ms-swift row artifact.\n    reasoning_cache_digest: Exact Pass R cache digest.\n    decision_cache_digest: Exact Pass D cache digest.\n    normalization_profile_digest: Exact trajectory normalization digest.\n    flow_steps: CFM sampling steps.\n    seed: Run seed.",
+      "properties": {
+        "adapter_input_manifest_digest": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Adapter Input Manifest Digest"
+        },
+        "decision_cache_digest": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Decision Cache Digest"
+        },
+        "decision_context_source": {
+          "enum": [
+            "not_applicable",
+            "reference_annotation",
+            "model_prediction"
+          ],
+          "title": "Decision Context Source",
+          "type": "string"
+        },
+        "decision_producer_checkpoint_digest": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Decision Producer Checkpoint Digest"
+        },
+        "decision_renderer_digest": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Decision Renderer Digest"
+        },
+        "flow_steps": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Flow Steps"
+        },
+        "input_manifest_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Input Manifest Digest",
+          "type": "string"
+        },
+        "normalization_profile_digest": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalization Profile Digest"
+        },
+        "pass_t_backbone_checkpoint_digest": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pass T Backbone Checkpoint Digest"
+        },
+        "policy": {
+          "enum": [
+            "not_applicable",
+            "shared_current_checkpoint_v1",
+            "frozen_context_ablation"
+          ],
+          "title": "Policy",
+          "type": "string"
+        },
+        "reasoning_cache_digest": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reasoning Cache Digest"
+        },
+        "reasoning_context_source": {
+          "enum": [
+            "not_applicable",
+            "reference_annotation",
+            "model_prediction"
+          ],
+          "title": "Reasoning Context Source",
+          "type": "string"
+        },
+        "reasoning_producer_checkpoint_digest": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reasoning Producer Checkpoint Digest"
+        },
+        "reasoning_renderer_digest": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reasoning Renderer Digest"
+        },
+        "seed": {
+          "title": "Seed",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "policy",
+        "reasoning_context_source",
+        "decision_context_source",
+        "input_manifest_digest",
+        "seed"
+      ],
+      "title": "OpenLoopContextIdentityV1",
+      "type": "object"
+    },
+    "OpenLoopRendererPolicyV1": {
+      "additionalProperties": false,
+      "description": "Freeze canonical context rendering and overflow behavior.\n\nArgs:\n    policy_version: Exact renderer-policy protocol version.\n    reasoning_renderer_id: Canonical Reasoning renderer implementation.\n    reasoning_renderer_digest: Digest of the Reasoning renderer contract.\n    decision_renderer_id: Canonical Decision renderer implementation.\n    decision_renderer_digest: Digest of the Decision renderer contract.\n    field_order_policy: Frozen mapping-field ordering policy.\n    list_normalization_policy: Frozen list normalization policy.\n    null_normalization_policy: Frozen optional/null normalization policy.\n    max_context_tokens: Hard maximum context length.\n    overflow_policy: Overflow handling; V2.0 fails closed.",
+      "properties": {
+        "decision_renderer_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Decision Renderer Digest",
+          "type": "string"
+        },
+        "decision_renderer_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Decision Renderer Id",
+          "type": "string"
+        },
+        "field_order_policy": {
+          "const": "schema_order_v1",
+          "default": "schema_order_v1",
+          "title": "Field Order Policy",
+          "type": "string"
+        },
+        "list_normalization_policy": {
+          "const": "preserve_semantic_order_sort_unordered_v1",
+          "default": "preserve_semantic_order_sort_unordered_v1",
+          "title": "List Normalization Policy",
+          "type": "string"
+        },
+        "max_context_tokens": {
+          "exclusiveMinimum": 0,
+          "title": "Max Context Tokens",
+          "type": "integer"
+        },
+        "null_normalization_policy": {
+          "const": "omit_optional_none_v1",
+          "default": "omit_optional_none_v1",
+          "title": "Null Normalization Policy",
+          "type": "string"
+        },
+        "overflow_policy": {
+          "const": "fail_closed",
+          "default": "fail_closed",
+          "title": "Overflow Policy",
+          "type": "string"
+        },
+        "policy_version": {
+          "const": "urbannav_openloop_renderer_policy_v2_0",
+          "default": "urbannav_openloop_renderer_policy_v2_0",
+          "title": "Policy Version",
+          "type": "string"
+        },
+        "reasoning_renderer_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reasoning Renderer Digest",
+          "type": "string"
+        },
+        "reasoning_renderer_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Reasoning Renderer Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reasoning_renderer_id",
+        "reasoning_renderer_digest",
+        "decision_renderer_id",
+        "decision_renderer_digest",
+        "max_context_tokens"
+      ],
+      "title": "OpenLoopRendererPolicyV1",
+      "type": "object"
+    },
+    "OpenLoopRepositoryStateV1": {
+      "additionalProperties": false,
+      "description": "Freeze one repository revision used by a benchmark run.\n\nArgs:\n    name: Repository role/name.\n    commit: Exact Git commit.\n    dirty: Whether uncommitted changes were present.\n    dirty_diff_digest: Optional digest of the captured diff.",
+      "properties": {
+        "commit": {
+          "pattern": "^[0-9a-f]{7,64}$",
+          "title": "Commit",
+          "type": "string"
+        },
+        "dirty": {
+          "title": "Dirty",
+          "type": "boolean"
+        },
+        "dirty_diff_digest": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dirty Diff Digest"
+        },
+        "name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "commit",
+        "dirty"
+      ],
+      "title": "OpenLoopRepositoryStateV1",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Freeze one model run and all reproducibility-critical identities.\n\nArgs:\n    run_id: Stable run identity.\n    benchmark_id: Frozen benchmark package identity.\n    benchmark_digest: Digest of the benchmark package manifest.\n    stage: Run stage.\n    repositories: Exact repository states.\n    checkpoint: Model/checkpoint identity.\n    renderer_policy: Frozen rendering policy.\n    metric_policy_digest: Digest of the metric policy.\n    context_identity: Pass R/D/T lineage and sampling identity.\n    generation_parameters: Decoding or sampling parameters.\n    hardware: Non-secret hardware/runtime description.\n    batch_size: Physical inference batch size.\n    precision: Inference precision.",
+  "properties": {
+    "batch_size": {
+      "exclusiveMinimum": 0,
+      "title": "Batch Size",
+      "type": "integer"
+    },
+    "benchmark_digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Benchmark Digest",
+      "type": "string"
+    },
+    "benchmark_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Benchmark Id",
+      "type": "string"
+    },
+    "checkpoint": {
+      "$ref": "#/$defs/OpenLoopCheckpointIdentityV1"
+    },
+    "context_identity": {
+      "$ref": "#/$defs/OpenLoopContextIdentityV1"
+    },
+    "generation_parameters": {
+      "additionalProperties": true,
+      "title": "Generation Parameters",
+      "type": "object"
+    },
+    "hardware": {
+      "additionalProperties": true,
+      "title": "Hardware",
+      "type": "object"
+    },
+    "metric_policy_digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Metric Policy Digest",
+      "type": "string"
+    },
+    "precision": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Precision",
+      "type": "string"
+    },
+    "renderer_policy": {
+      "$ref": "#/$defs/OpenLoopRendererPolicyV1"
+    },
+    "repositories": {
+      "items": {
+        "$ref": "#/$defs/OpenLoopRepositoryStateV1"
+      },
+      "minItems": 2,
+      "title": "Repositories",
+      "type": "array"
+    },
+    "run_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Run Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "urbannav_openloop_run_v2_0",
+      "default": "urbannav_openloop_run_v2_0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "stage": {
+      "enum": [
+        "stage_i",
+        "stage_ii"
+      ],
+      "title": "Stage",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "benchmark_id",
+    "benchmark_digest",
+    "stage",
+    "repositories",
+    "checkpoint",
+    "renderer_policy",
+    "metric_policy_digest",
+    "context_identity",
+    "batch_size",
+    "precision"
+  ],
+  "title": "OpenLoopRunManifestV1",
+  "type": "object"
+}
