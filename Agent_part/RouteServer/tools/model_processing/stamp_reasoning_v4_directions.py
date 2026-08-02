@@ -20,6 +20,8 @@ from mcp_server.contracts.direction_profile import (
     FPV_DEGREE10_TERMINAL_CENTROID_V2,
     DirectionLabelStamp,
     canonical_direction_derivation_version,
+    canonical_direction_source_codes,
+    direction_source_requires_stop,
     resolve_stage_a_direction_profile,
 )
 from mcp_server.contracts.reasoning_dataset_v4 import (
@@ -181,15 +183,21 @@ def stamp_reasoning_v4_direction_row(
             f"index={index}, expected={expected_name}, actual={label_name}"
         )
 
-    canonical_derivation = canonical_direction_derivation_version(
-        profile_id
+    canonical_derivation = canonical_direction_derivation_version(profile_id)
+    allowed_sources = set(
+        canonical_direction_source_codes(
+            profile_id,
+            include_stop_rule=expected_name == "stop",
+        )
     )
-    allowed_sources = {canonical_derivation}
-    if expected_name == "stop":
-        allowed_sources.add("finish_stop_rule")
     if source not in allowed_sources:
         raise ValueError(
             "legacy direction source cannot justify the requested stamp: "
+            f"label={expected_name}, source={source}"
+        )
+    if direction_source_requires_stop(source) and expected_name != "stop":
+        raise ValueError(
+            "legacy stop-only direction source requires label=stop: "
             f"label={expected_name}, source={source}"
         )
 

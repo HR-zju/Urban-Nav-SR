@@ -1,6 +1,6 @@
 # UrbanNav Reasoning V4.6 数据标注与训练合同
 
-更新时间：2026-07-30。
+更新时间：2026-08-01。
 
 本文是 Stage-A 单轮 E2E 导航 FullCoT 的 canonical 合同。V4.6 的目标不是表达一个
 理论上完备的因果图，而是监督当前输入可回答、当前流水线能稳定构造、并且会影响短时
@@ -338,17 +338,19 @@ Action Reconciliation 是独立 annotation-only audit，不是第七段，也不
 | `review_trigger_codes[]` | 排序、去重的确定性触发原因 |
 
 等距离最近 probe 不得任意选一个。例如 `right_20` 同时投影到 `right_10/right_30`。
-聚合 support 只有 `all_supported/all_unsupported/mixed/unknown/not_applicable`；
-`mixed/all_unsupported/unknown` 都触发 review。方向 profile 的 10° compatibility
-tolerance 只用于记录 `proposal_strong_relation`；纯移动方向角差必须严格大于 20° 才触发
-人工复核。sign conflict、stop/move mismatch、probe hard failure、constraint conflict 和
-tuple conflict 不受 20° 放宽影响。profile stamp、proposal、strong label 和 candidate
-仍由 parent join 读取，不在 audit 中重复。review priority/status 是派生值，不持久化在
-audit。
+聚合 support 只有 `all_supported/all_unsupported/mixed/unknown/not_applicable`。audit 继续
+保存 `strong_action_probe_unsupported/mixed/unknown`，但 admission-v2 将这三类定义为
+Grounding QC advisory；它们单独出现时不再强制人工 Action Reconciliation。方向 profile 的
+10° compatibility tolerance 用于记录 `proposal_strong_relation`，因此 `delta <= 10°` 不会因
+角度本身送审；当前独立 human-review angle threshold 仍为严格 `delta > 20°`。sign conflict、
+stop/move mismatch、constraint conflict 和 tuple conflict 是 blocking trigger，不受角度放宽
+影响。profile stamp、proposal、strong label 和 candidate 仍由 parent join 读取，不在 audit
+中重复。review admission policy、priority/status 都是派生值，不持久化在 audit。
 
 ### 5.1 LVLM filtering：只诊断，不改 target
 
-deterministic audit 触发后，样本仍为 `pending_human`。LVLM filtering 是 annotation-only
+deterministic audit 出现 blocking trigger 后，样本为 `pending_human`；仅含 Grounding QC
+advisory 的样本保持 `not_required`。LVLM filtering 是 annotation-only
 质量控制层，不是 FullCoT 第七段，不进入 student prompt、assistant target 或 LM loss。
 它固定运行两步：
 

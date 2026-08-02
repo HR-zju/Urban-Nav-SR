@@ -46,6 +46,8 @@ from mcp_server.data.reasoning_v4_composer import (
     compose_reasoning_target_v4,
 )
 from mcp_server.data.reasoning_v4_reconciliation import (
+    action_reconciliation_advisory_trigger_codes_v4,
+    action_reconciliation_review_required_v4,
     build_action_reconciliation_audit_v4,
 )
 from mcp_server.data.reasoning_v4_task_canonicalization import (
@@ -1635,6 +1637,7 @@ def _initial_report_v4(
         "all_sections_accepted_rows": 0,
         "candidate_structurally_valid_rows": 0,
         "pending_human_rows": 0,
+        "grounding_qc_advisory_rows": 0,
         "concurrency": concurrency,
         "resume_counts": dict(resume_counts),
         "composer_version": REASONING_V4_COMPOSER_VERSION,
@@ -1718,8 +1721,13 @@ def _accumulate_annotation_metrics_v4(
         int(report["dataset_counts"].get(dataset, 0)) + 1
     )
     audit = annotation.action_reconciliation
-    if audit is not None and audit.review_trigger_codes:
-        report["pending_human_rows"] += 1
+    if audit is not None:
+        report["pending_human_rows"] += int(
+            action_reconciliation_review_required_v4(audit)
+        )
+        report["grounding_qc_advisory_rows"] += int(
+            bool(action_reconciliation_advisory_trigger_codes_v4(audit))
+        )
         for code in audit.review_trigger_codes:
             value = str(code)
             report["review_trigger_counts"][value] = (

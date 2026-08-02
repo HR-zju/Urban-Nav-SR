@@ -26,6 +26,7 @@ from mcp_server.contracts.direction_profile import (
     canonical_direction_derivation_version,
     canonical_direction_source_codes,
     coarse_motion_for_direction_label,
+    direction_source_requires_stop,
     direction_label_names,
     resolve_affordance_probe_profile,
     resolve_stage_a_direction_profile,
@@ -564,6 +565,12 @@ class DirectionSupervisionV4(DirectionLabelStamp):
             raise ValueError(
                 "direction source is incompatible with selected profile: "
                 f"{self.source}"
+            )
+        if direction_source_requires_stop(str(self.source)) and str(
+            self.label_name
+        ) != "stop":
+            raise ValueError(
+                "stop-only direction source requires label_name=stop"
             )
         coarse_motion_for_direction_label(
             self.profile_id,

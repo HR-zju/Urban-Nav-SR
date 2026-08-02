@@ -64,6 +64,34 @@ def test_stamp_is_idempotent() -> None:
 
 
 @pytest.mark.parametrize(
+    "source",
+    ["low_displacement_rule", "single_point_trajectory_rule"],
+)
+def test_stamp_accepts_deterministic_stop_source_branches(
+    source: str,
+) -> None:
+    row = _legacy_row()
+    row.update(
+        {
+            "direction_choice_label": 19,
+            "direction_name": "stop",
+            "direction_choice": "T",
+            "direction_angle_deg": None,
+            "direction_source": source,
+        }
+    )
+
+    stamped, added = stamp_reasoning_v4_direction_row(
+        row,
+        profile_id=FPV_DEGREE10_TERMINAL_CENTROID_V2,
+    )
+
+    assert added is True
+    assert stamped["direction_supervision"]["label_name"] == "stop"
+    assert stamped["direction_supervision"]["source"] == source
+
+
+@pytest.mark.parametrize(
     ("field", "value"),
     [
         ("direction_name", "left_10"),
@@ -71,6 +99,7 @@ def test_stamp_is_idempotent() -> None:
         ("direction_bin_mode", "degree10_12way_with_stop"),
         ("direction_source", "existing_direction_name"),
         ("direction_source", "route_theta"),
+        ("direction_source", "low_displacement_rule"),
     ],
 )
 def test_stamp_rejects_inconsistent_or_untrusted_fields(

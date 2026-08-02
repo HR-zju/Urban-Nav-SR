@@ -17,6 +17,9 @@ from mcp_server.contracts.reasoning_dataset_v4 import (
 )
 from mcp_server.data.jsonl_io import iter_jsonl, write_jsonl_atomic
 from mcp_server.data.reasoning_v4_reconciliation import (
+    ACTION_RECONCILIATION_REVIEW_ADMISSION_POLICY_VERSION_V4,
+    action_reconciliation_advisory_trigger_codes_v4,
+    action_reconciliation_blocking_trigger_codes_v4,
     action_reconciliation_review_priority_v4,
     action_reconciliation_review_required_v4,
     validate_action_reconciliation_audit_v4,
@@ -163,6 +166,12 @@ def export_action_reconciliation_review_v4(
         required = action_reconciliation_review_required_v4(
             audit
         )
+        blocking_codes = (
+            action_reconciliation_blocking_trigger_codes_v4(audit)
+        )
+        advisory_codes = (
+            action_reconciliation_advisory_trigger_codes_v4(audit)
+        )
         priority = action_reconciliation_review_priority_v4(
             audit
         )
@@ -188,6 +197,12 @@ def export_action_reconciliation_review_v4(
         counts[f"review_priority:{priority}"] += 1
         for code in audit.review_trigger_codes:
             counts[f"review_trigger:{code}"] += 1
+        for code in blocking_codes:
+            counts[f"blocking_review_trigger:{code}"] += 1
+        for code in advisory_codes:
+            counts[f"grounding_qc_advisory:{code}"] += 1
+        counts["blocking_review_rows"] += int(bool(blocking_codes))
+        counts["grounding_qc_advisory_rows"] += int(bool(advisory_codes))
 
         audit_rows.append(
             {
@@ -266,6 +281,9 @@ def export_action_reconciliation_review_v4(
         "audit_jsonl": str(audit_jsonl),
         "queue_jsonl": str(queue_jsonl),
         "release_track": "review_preview",
+        "review_admission_policy_version": (
+            ACTION_RECONCILIATION_REVIEW_ADMISSION_POLICY_VERSION_V4
+        ),
         "formal_release_ready": (
             not errors
             and counts["formal_training_eligible"] > 0
@@ -361,6 +379,12 @@ def _queue_projection_v4(
         "checks": audit.checks.model_dump(mode="json"),
         "review_trigger_codes": list(
             audit.review_trigger_codes
+        ),
+        "blocking_review_trigger_codes": list(
+            action_reconciliation_blocking_trigger_codes_v4(audit)
+        ),
+        "grounding_qc_advisory_codes": list(
+            action_reconciliation_advisory_trigger_codes_v4(audit)
         ),
         "candidate_structure_record": (
             annotation.candidate_structure_record.model_dump(

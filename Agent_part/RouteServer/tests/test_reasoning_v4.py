@@ -66,6 +66,9 @@ from mcp_server.data.reasoning_v4_composer import (
     compose_reasoning_target_v4,
 )
 from mcp_server.data.reasoning_v4_reconciliation import (
+    action_reconciliation_advisory_trigger_codes_v4,
+    action_reconciliation_blocking_trigger_codes_v4,
+    action_reconciliation_review_priority_v4,
     action_reconciliation_review_required_v4,
     build_action_reconciliation_audit_v4,
 )
@@ -827,6 +830,15 @@ def test_human_review_angle_threshold_is_independent_from_profile_tolerance() ->
             response="proceed",
         ),
     )
+    within_tolerance_unsupported = build_action_reconciliation_audit_v4(
+        source,
+        unsupported,
+        DecisionProposalV4(
+            selected_action_label="right_10",
+            speed="normal",
+            response="proceed",
+        ),
+    )
 
     assert at_threshold is not None
     assert at_threshold.checks.proposal_strong_relation == "large_delta"
@@ -840,6 +852,29 @@ def test_human_review_angle_threshold_is_independent_from_profile_tolerance() ->
         str(value)
         for value in threshold_but_unsupported.review_trigger_codes
     } == {"strong_action_probe_unsupported"}
+    assert not action_reconciliation_review_required_v4(
+        threshold_but_unsupported
+    )
+    assert action_reconciliation_blocking_trigger_codes_v4(
+        threshold_but_unsupported
+    ) == ()
+    assert action_reconciliation_advisory_trigger_codes_v4(
+        threshold_but_unsupported
+    ) == ("strong_action_probe_unsupported",)
+    assert (
+        action_reconciliation_review_priority_v4(
+            threshold_but_unsupported
+        )
+        == "not_required"
+    )
+    assert within_tolerance_unsupported is not None
+    assert (
+        within_tolerance_unsupported.checks.proposal_strong_relation
+        == "within_tolerance"
+    )
+    assert not action_reconciliation_review_required_v4(
+        within_tolerance_unsupported
+    )
 
 
 def test_reconciliation_preserves_all_nearest_probe_ties() -> None:

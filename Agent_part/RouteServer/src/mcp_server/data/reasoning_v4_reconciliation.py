@@ -30,6 +30,9 @@ ACTION_RECONCILIATION_POLICY_VERSION_V4 = (
     "urbannav_action_reconciliation_policy_v4"
 )
 ACTION_RECONCILIATION_ANGLE_REVIEW_THRESHOLD_DEG_V4 = 20.0
+ACTION_RECONCILIATION_REVIEW_ADMISSION_POLICY_VERSION_V4 = (
+    "urbannav_action_reconciliation_review_admission_v2"
+)
 
 _TRIGGER_POLICY = {
     "proposal_delta": (
@@ -43,6 +46,13 @@ _TRIGGER_POLICY = {
     "constraint": "strong_action_constraint_conflict",
     "tuple": "proposal_action_tuple_conflict",
 }
+_ADVISORY_TRIGGER_CODES = frozenset(
+    {
+        _TRIGGER_POLICY["probe_unsupported"],
+        _TRIGGER_POLICY["probe_mixed"],
+        _TRIGGER_POLICY["probe_unknown"],
+    }
+)
 
 
 def action_reconciliation_policy_digest_v4() -> str:
@@ -60,6 +70,10 @@ def action_reconciliation_policy_digest_v4() -> str:
             "human_review_angle_threshold_deg": (
                 ACTION_RECONCILIATION_ANGLE_REVIEW_THRESHOLD_DEG_V4
             ),
+            "review_admission_policy_version": (
+                ACTION_RECONCILIATION_REVIEW_ADMISSION_POLICY_VERSION_V4
+            ),
+            "advisory_trigger_codes": sorted(_ADVISORY_TRIGGER_CODES),
             "trigger_policy": _TRIGGER_POLICY,
             "action_profiles": (
                 approved_stage_a_direction_profiles()
@@ -228,10 +242,54 @@ def action_reconciliation_review_required_v4(
         audit: Canonical action audit.
 
     Returns:
-        True exactly when trigger codes are non-empty.
+        True when at least one blocking action-conflict trigger exists. Sparse
+        traversability probes remain auditable but cannot, by themselves,
+        override profile tolerance or force human action adjudication.
     """
 
-    return bool(audit.review_trigger_codes)
+    return bool(action_reconciliation_blocking_trigger_codes_v4(audit))
+
+
+def action_reconciliation_blocking_trigger_codes_v4(
+    audit: ActionReconciliationAuditV4,
+) -> tuple[str, ...]:
+    """Return action-conflict codes that block automatic admission.
+
+    Args:
+        audit: Canonical action audit.
+
+    Returns:
+        Sorted trigger codes excluding sparse grounding-probe advisories.
+    """
+
+    return tuple(
+        sorted(
+            str(value)
+            for value in audit.review_trigger_codes
+            if str(value) not in _ADVISORY_TRIGGER_CODES
+        )
+    )
+
+
+def action_reconciliation_advisory_trigger_codes_v4(
+    audit: ActionReconciliationAuditV4,
+) -> tuple[str, ...]:
+    """Return non-blocking sparse grounding-probe QC codes.
+
+    Args:
+        audit: Canonical action audit.
+
+    Returns:
+        Sorted advisory codes retained for reporting or automatic relabeling.
+    """
+
+    return tuple(
+        sorted(
+            str(value)
+            for value in audit.review_trigger_codes
+            if str(value) in _ADVISORY_TRIGGER_CODES
+        )
+    )
 
 
 def action_reconciliation_review_priority_v4(
@@ -246,16 +304,12 @@ def action_reconciliation_review_priority_v4(
         ``critical``, ``high``, ``normal``, or ``not_required``.
     """
 
-    codes = {
-        str(value) for value in audit.review_trigger_codes
-    }
+    codes = set(action_reconciliation_blocking_trigger_codes_v4(audit))
     if not codes:
         return "not_required"
     if codes & {
         _TRIGGER_POLICY["proposal_stop_move"],
         _TRIGGER_POLICY["proposal_sign"],
-        _TRIGGER_POLICY["probe_unsupported"],
-        _TRIGGER_POLICY["probe_mixed"],
         _TRIGGER_POLICY["constraint"],
     }:
         return "critical"
@@ -423,9 +477,11 @@ def _review_trigger_codes_v4(
 
     The action profile keeps its 10-degree compatibility tolerance for the
     descriptive ``proposal_strong_relation`` check.  Human review uses an
-    independent strict ``>20`` degree threshold.  Sign conflicts, stop/move
-    mismatches, unsupported or mixed probes, constraint conflicts, and invalid
-    action tuples remain hard review triggers at every angle.
+    independent strict ``>20`` degree threshold. Sign conflicts, stop/move
+    mismatches, constraint conflicts, and invalid action tuples remain hard
+    review triggers at every angle. Sparse probe conflicts stay in the audit,
+    but the admission policy treats probe-only findings as Grounding QC
+    advisories rather than action-label failures.
     """
 
     values: set[str] = set()
@@ -466,6 +522,9 @@ def _canonical_digest(value: Any) -> str:
 __all__ = [
     "ACTION_RECONCILIATION_ANGLE_REVIEW_THRESHOLD_DEG_V4",
     "ACTION_RECONCILIATION_POLICY_VERSION_V4",
+    "ACTION_RECONCILIATION_REVIEW_ADMISSION_POLICY_VERSION_V4",
+    "action_reconciliation_advisory_trigger_codes_v4",
+    "action_reconciliation_blocking_trigger_codes_v4",
     "action_reconciliation_policy_digest_v4",
     "action_reconciliation_review_priority_v4",
     "action_reconciliation_review_required_v4",

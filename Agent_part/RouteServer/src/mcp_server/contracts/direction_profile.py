@@ -38,6 +38,11 @@ _FORBIDDEN_DIRECTION_SOURCE_PARTS = (
     "route_match",
     "route_theta",
 )
+_STOP_ONLY_DIRECTION_SOURCE_CODES = (
+    "finish_stop_rule",
+    "low_displacement_rule",
+    "single_point_trajectory_rule",
+)
 
 _DIRECTION_PROFILE_REGISTRY_V1: dict[str, dict[str, Any]] = {
     FPV_DEGREE10_TERMINAL_CENTROID_V2: {
@@ -258,6 +263,8 @@ _FPV_GEOMETRY = {
     "allowed_sources": (
         "pixel_trajectory_terminal_centroid_rule_v2",
         "pixel_trajectory",
+        "low_displacement_rule",
+        "single_point_trajectory_rule",
     ),
 }
 _EGO_GEOMETRY = {
@@ -273,6 +280,8 @@ _EGO_GEOMETRY = {
         "ego_x_right_y_front_terminal_centroid_rule_v2",
         "trajectory_ego_t",
         "gt_trajectory_ego_t",
+        "low_displacement_rule",
+        "single_point_trajectory_rule",
     ),
 }
 
@@ -906,6 +915,20 @@ def canonical_direction_source_codes(
     return sources
 
 
+def direction_source_requires_stop(source: str) -> bool:
+    """Return whether a deterministic source branch can only emit stop.
+
+    Args:
+        source: Direction-label provenance code.
+
+    Returns:
+        ``True`` for explicit-stop, low-displacement, and single-point
+        trajectory branches.
+    """
+
+    return str(source) in _STOP_ONLY_DIRECTION_SOURCE_CODES
+
+
 __all__ = [
     "AffordanceProbeCandidate",
     "DirectionComparisonFacts",
@@ -926,6 +949,7 @@ __all__ = [
     "approved_stage_a_direction_profiles",
     "canonical_direction_derivation_version",
     "canonical_direction_source_codes",
+    "direction_source_requires_stop",
     "coarse_motion_for_direction_label",
     "direction_comparison_facts",
     "direction_compatibility_class",
