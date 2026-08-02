@@ -30,6 +30,9 @@ from mcp_server.data.stage_ii_sources import (
     adapt_stage_ii_trajectory_source_row_v1,
     load_stage_ii_trajectory_source_registry_v1,
 )
+from mcp_server.data.stage_ii_sidecars import (
+    build_stage_ii_trajectory_sidecars_v1,
+)
 from mcp_server.data.stage_ii_views import project_stage_ii_cfm_view_v1
 from tools.model_processing.build_stage_ii_cfm_views import (
     build_stage_ii_cfm_views,
@@ -116,7 +119,7 @@ def _source_registry_payload(
     payload = {
         "schema_version": "urbannav_stage_ii_trajectory_source_registry_v1",
         "registry_id": "urbannav_stage_ii_trajectory_sources_v1",
-        "registry_version": "1.0",
+        "registry_version": "1.1",
         "split_policy": split,
         "datasets": datasets,
     }
@@ -245,6 +248,128 @@ def test_committed_trajectory_source_registry_is_frozen_and_complete() -> None:
     }
     assert registry.dataset("frodobots").status == "disabled"
     assert registry.dataset("egowalk").origin_policy == "prepend_current_origin_v1"
+    assert registry.dataset("sidewalk").sample_identity_fields == (
+        "sidewalk_meta.clip_id",
+        "sidewalk_meta.frame_name",
+    )
+    assert registry.dataset("foxglove").sample_identity_fields == ("id",)
+
+
+def test_full_sidecar_builder_uses_explicit_stage_i_splits(tmp_path) -> None:
+    full_cot = _stage_i_full_cot()
+    stage_i_path = tmp_path / "stage_i.jsonl"
+    stage_i_path.write_text(
+        json.dumps(full_cot.model_dump(mode="json", exclude_none=True)) + "\n",
+        encoding="utf-8",
+    )
+    train_path = tmp_path / "train.jsonl"
+    train_path.write_text(
+        json.dumps({"sample_id": full_cot.sample_id, "task_type": "full_cot"}) + "\n",
+        encoding="utf-8",
+    )
+    validation_path = tmp_path / "validation.jsonl"
+    validation_path.write_text("", encoding="utf-8")
+
+    registry_payload = _source_registry_payload()
+    sidewalk_spec = next(
+        item for item in registry_payload["datasets"] if item["dataset_source"] == "sidewalk"
+    )
+    sidewalk_spec["sample_identity_fields"] = ["id"]
+    registry_payload["registry_digest"] = stage_ii_digest_v1({
+        key: value for key, value in registry_payload.items() if key != "registry_digest"
+    })
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(json.dumps(registry_payload), encoding="utf-8")
+    source_path = tmp_path / "sidewalk.jsonl"
+    source_path.write_text(
+        json.dumps({
+            "id": "case-straight",
+            "trajectory_ego_t": [[0.0, index * 0.125, index * 0.125, 1.0] for index in range(21)],
+            "trajectory_policy": {
+                "schema_version": "sidewalk_time_conditioned_policy_v1",
+                "time_unit": "seconds",
+                "trajectory_source": "calibrated_pose_projection",
+            },
+            "sidewalk_meta": {
+                "clip_id": "clip-1",
+                "trajectory_source": "calibrated_pose_projection",
+            },
+        }) + "\n",
+        encoding="utf-8",
+    )
+    duplicate_path = tmp_path / "sidewalk_duplicate.jsonl"
+    duplicate_path.write_text(source_path.read_text(encoding="utf-8"), encoding="utf-8")
+
+    report = build_stage_ii_trajectory_sidecars_v1(
+        stage_i_jsonl=stage_i_path,
+        split_manifests={"train": train_path, "validation": validation_path},
+        dataset_manifests={"sidewalk": [source_path, duplicate_path]},
+        registry_json=registry_path,
+        output_dir=tmp_path / "output",
+    )
+
+    assert report["complete"] is True
+    assert report["accepted_sidecars"] == 1
+    assert report["dataset_scan"]["sidewalk"]["counts"]["matched_duplicate_equivalent"] == 1
+    assert len(report["dataset_scan"]["sidewalk"]["equivalent_duplicate_examples"]) == 1
+    sidecar = json.loads((tmp_path / "output/trajectory_sidecars_train.jsonl").read_text())
+    assert sidecar["stage_i_sample_id"] == full_cot.sample_id
+    assert sidecar["source_parent_id"] == full_cot.source_group_id
+    assert sidecar["action_mask"] == [True] * 21
+
+
+def test_full_sidecar_builder_rejects_conflicting_duplicate_sources(tmp_path) -> None:
+    full_cot = _stage_i_full_cot()
+    stage_i_path = tmp_path / "stage_i.jsonl"
+    stage_i_path.write_text(
+        json.dumps(full_cot.model_dump(mode="json", exclude_none=True)) + "\n",
+        encoding="utf-8",
+    )
+    train_path = tmp_path / "train.jsonl"
+    train_path.write_text(
+        json.dumps({"sample_id": full_cot.sample_id, "task_type": "full_cot"}) + "\n",
+        encoding="utf-8",
+    )
+    validation_path = tmp_path / "validation.jsonl"
+    validation_path.write_text("", encoding="utf-8")
+    registry_payload = _source_registry_payload()
+    sidewalk_spec = next(
+        item for item in registry_payload["datasets"] if item["dataset_source"] == "sidewalk"
+    )
+    sidewalk_spec["sample_identity_fields"] = ["id"]
+    registry_payload["registry_digest"] = stage_ii_digest_v1({
+        key: value for key, value in registry_payload.items() if key != "registry_digest"
+    })
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(json.dumps(registry_payload), encoding="utf-8")
+    base_row = {
+        "id": "case-straight",
+        "trajectory_ego_t": [[0.0, index * 0.125, index * 0.125, 1.0] for index in range(21)],
+        "trajectory_policy": {
+            "schema_version": "sidewalk_time_conditioned_policy_v1",
+            "time_unit": "seconds",
+            "trajectory_source": "calibrated_pose_projection",
+        },
+        "sidewalk_meta": {
+            "clip_id": "clip-1",
+            "trajectory_source": "calibrated_pose_projection",
+        },
+    }
+    first_path = tmp_path / "first.jsonl"
+    first_path.write_text(json.dumps(base_row) + "\n", encoding="utf-8")
+    conflicting = copy.deepcopy(base_row)
+    conflicting["trajectory_ego_t"][-1][1] += 1.0
+    second_path = tmp_path / "second.jsonl"
+    second_path.write_text(json.dumps(conflicting) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="conflicting duplicate"):
+        build_stage_ii_trajectory_sidecars_v1(
+            stage_i_jsonl=stage_i_path,
+            split_manifests={"train": train_path, "validation": validation_path},
+            dataset_manifests={"sidewalk": [first_path, second_path]},
+            registry_json=registry_path,
+            output_dir=tmp_path / "output",
+        )
 
 
 def test_source_registry_derives_only_authorized_legacy_mask_and_egowalk_origin() -> None:

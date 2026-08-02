@@ -215,8 +215,8 @@
       "type": "string"
     },
     "registry_version": {
-      "const": "1.0",
-      "default": "1.0",
+      "const": "1.1",
+      "default": "1.1",
       "title": "Registry Version",
       "type": "string"
     },

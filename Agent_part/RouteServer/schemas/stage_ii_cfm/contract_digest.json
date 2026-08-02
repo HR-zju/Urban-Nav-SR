@@ -4,11 +4,11 @@
     "stage_ii_context_cache_v1.schema.json": "28c34e111ed8aa783f00bcb790772bff6cfa86da53846fecbf982f64058bbe75",
     "stage_ii_projection_drop_v1.schema.json": "819206b820c20656fedc70f5c34f2b19a4f5cd2daf9f912e3eeec14ecd6ce250",
     "stage_ii_trajectory_qc_v1.schema.json": "3b9b335f4c9d6578b64b98d3773aad67f5530de51772a7ddce4fc2b8d7413239",
-    "stage_ii_trajectory_source_registry_v1.schema.json": "44ac2e754a73170d4e5386b5162946f1f68f382126f8a998091953f913b9ae28",
+    "stage_ii_trajectory_source_registry_v1.schema.json": "a54bbc73a7cce02e55a3a7fadc85ab114bb3275a5710ba564e167362c3a1fb06",
     "stage_ii_trajectory_target_v1.schema.json": "627296b87443477211647f8f83f8c0d57e9fd1ca60698fefe32b050decafc3c9"
   },
   "canonical_source_sha256": {
-    "src/mcp_server/contracts/stage_ii_cfm.py": "889ad3245da9666d67390541b4981b9c5b615d0f0aa63d1a3e9774984282921c",
+    "src/mcp_server/contracts/stage_ii_cfm.py": "5ce1f85bafd1aa35dcad87e601a24827c19141254c6085a0cc0ceeb9f42986e4",
     "src/mcp_server/data/stage_ii_context.py": "7a7f8f7462933fd2ccaaa54eaadee6f8563a67ed34ccc4b6822219dcf7ff7c4f",
     "src/mcp_server/data/stage_ii_sources.py": "2f75c2b516fe31d891bced02e745bdd5ec3044547bb5bc81b93be75938af7696",
     "src/mcp_server/data/stage_ii_trajectory.py": "ea803c48327d2ff39a7aa7db0f65f23ec7ba63e8d88e4e53acec0b582fde536d",

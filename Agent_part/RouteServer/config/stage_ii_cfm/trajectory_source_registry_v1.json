@@ -1,7 +1,7 @@
 {
   "schema_version": "urbannav_stage_ii_trajectory_source_registry_v1",
   "registry_id": "urbannav_stage_ii_trajectory_sources_v1",
-  "registry_version": "1.0",
+  "registry_version": "1.1",
   "split_policy": {
     "policy_id": "stage_i_group_sha256_colon_v1",
     "seed": 20260731,
@@ -15,7 +15,7 @@
       "status": "enabled",
       "sample_identity_fields": [
         "sidewalk_meta.clip_id",
-        "sidewalk_meta.frame_idx"
+        "sidewalk_meta.frame_name"
       ],
       "split_group_fields": [
         "sidewalk_meta.clip_id"
@@ -44,8 +44,7 @@
       "dataset_source": "foxglove",
       "status": "enabled",
       "sample_identity_fields": [
-        "sidewalk_meta.clip_id",
-        "sidewalk_meta.frame_idx"
+        "id"
       ],
       "split_group_fields": [
         "sidewalk_meta.clip_id"
@@ -122,5 +121,5 @@
       "disabled_reason": "untrusted_approximate_camera_trajectory"
     }
   ],
-  "registry_digest": "e332451a0f0972f029c5c70436d618981530ee910e6687a87cd69e70143e77f1"
+  "registry_digest": "8fb9891428f621daafdb273f7a433dd06f915ec93ed8e3cb37b8ef116e4aa402"
 }
