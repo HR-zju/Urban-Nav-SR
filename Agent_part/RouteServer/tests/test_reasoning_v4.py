@@ -768,6 +768,20 @@ def test_task_canonicalization_is_stable_and_registry_owned() -> None:
         requirements=["route_adherence"],
         ambiguities=[],
     )
+    local_selection = canonicalize_task_instruction_v4(
+        "Navigate safely within the sidewalk or other pedestrian-accessible "
+        "space. Choose one short-horizon local motion direction from the "
+        "provided candidate options."
+    )
+    assert local_selection is not None
+    assert local_selection.task_grounding == TaskGroundingV4(
+        objective="choose_local_motion_direction",
+        requirements=[
+            "pedestrian_accessible_navigation",
+            "short_horizon_motion_selection",
+        ],
+        ambiguities=[],
+    )
 
 
 def test_reconciliation_requires_review_without_mutating_strong_action() -> None:

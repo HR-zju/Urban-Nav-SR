@@ -19,7 +19,7 @@ from mcp_server.contracts.reasoning_v4 import TaskGroundingV4
 
 
 REASONING_V4_TASK_CANONICALIZATION_VERSION = (
-    "reasoning_v4_task_canonicalization_v2"
+    "reasoning_v4_task_canonicalization_v3"
 )
 
 _GENERIC_ROUTE_INSTRUCTIONS = (
@@ -32,6 +32,12 @@ _GENERIC_ROUTE_INSTRUCTIONS = (
     "请沿路线前进",
     "请按照路线前进",
     "沿导航路线前进",
+)
+
+_LOCAL_MOTION_SELECTION_INSTRUCTIONS = (
+    "Navigate safely within the sidewalk or other pedestrian-accessible "
+    "space. Choose one short-horizon local motion direction from the "
+    "provided candidate options.",
 )
 
 
@@ -88,12 +94,33 @@ def _generic_route_task() -> TaskGroundingV4:
     )
 
 
+def _local_motion_selection_task() -> TaskGroundingV4:
+    """Build the frozen local direction-selection task taxonomy."""
+
+    return TaskGroundingV4(
+        objective="choose_local_motion_direction",
+        requirements=[
+            "pedestrian_accessible_navigation",
+            "short_horizon_motion_selection",
+        ],
+        ambiguities=[],
+    )
+
+
 _TASK_REGISTRY = MappingProxyType(
     {
-        task_instruction_fingerprint_v4(instruction): (
-            _generic_route_task()
-        )
-        for instruction in _GENERIC_ROUTE_INSTRUCTIONS
+        **{
+            task_instruction_fingerprint_v4(instruction): (
+                _generic_route_task()
+            )
+            for instruction in _GENERIC_ROUTE_INSTRUCTIONS
+        },
+        **{
+            task_instruction_fingerprint_v4(instruction): (
+                _local_motion_selection_task()
+            )
+            for instruction in _LOCAL_MOTION_SELECTION_INSTRUCTIONS
+        },
     }
 )
 

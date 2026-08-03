@@ -483,7 +483,16 @@ def _bev_route_evidence_v4(
         or overlay_point_count > 0
     )
     family = _dataset_family(dataset_source)
-    if overlay_visible and family in {"sidewalk", "foxglove"}:
+    alignment = str(
+        row.get("bev_image_alignment")
+        or metadata.get("bev_alignment")
+        or "unknown"
+    )
+    if (
+        overlay_visible
+        and family in {"sidewalk", "foxglove"}
+        and alignment == "ego_aligned"
+    ):
         endpoint_semantics = str(
             overlay_meta.get("route_endpoint_semantics")
             or (
@@ -492,30 +501,22 @@ def _bev_route_evidence_v4(
                 else "recorded_clip_endpoint"
             )
         )
-        alignment = str(
-            row.get("bev_image_alignment")
-            or metadata.get("bev_alignment")
-            or "ego_aligned"
-        )
-        ego_aligned = alignment == "ego_aligned"
         return BevRouteEvidenceV4(
-            frame="ego" if ego_aligned else "north_up",
-            ego_forward="up" if ego_aligned else "unknown",
+            frame="ego",
+            ego_forward="up",
             route_overlay_visible=True,
-            route_direction_authority=(
-                "visual_conditional" if ego_aligned else "none"
-            ),
+            route_direction_authority="visual_conditional",
             route_progress_authority="none",
             route_terminal_marker_visible=True,
             route_endpoint_semantics=endpoint_semantics,
-            producer_contract_id="sidewalk_bev_route_renderer_legacy",
+            producer_contract_id=(
+                "legacy_bev_overlay_explicit_ego_alignment"
+            ),
             producer_contract_version="1.0",
         )
     return BevRouteEvidenceV4(
         route_overlay_visible=overlay_visible,
-        route_direction_authority=(
-            "visual_conditional" if overlay_visible else "none"
-        ),
+        route_direction_authority="none",
         route_progress_authority="none",
         route_terminal_marker_visible=False,
         route_endpoint_semantics="unknown",
