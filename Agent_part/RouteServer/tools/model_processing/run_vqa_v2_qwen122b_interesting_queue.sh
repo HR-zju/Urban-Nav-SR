@@ -496,9 +496,9 @@ resume_egowalk_cot() {
     RETRY_FAILED_ON_RESUME=1 \
     LLM_VISION_TIMEOUT_S=900 \
     LLM_VISION_MAX_TOKENS=4096 \
-    FULL_INPUT_JSONL="${EGOWALK_COT_INPUT}" \
-    FULL_RUN_ROOT="${EGOWALK_COT_RUN_ROOT}" \
-    FULL_EXPECTED_ROWS=284470 \
+    INPUT_JSONL="${EGOWALK_COT_INPUT}" \
+    RUN_ROOT="${EGOWALK_COT_RUN_ROOT}" \
+    EXPECTED_ROWS=284470 \
     "${ROUTESERVER_ROOT}/tools/model_processing/run_reasoning_v4_qwen122b_dual_annotation.sh" \
     run-full
   write_state "complete"
