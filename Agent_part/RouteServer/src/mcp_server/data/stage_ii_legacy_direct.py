@@ -32,13 +32,18 @@ from mcp_server.data.stage_ii_trajectory import (
 
 
 STAGE_II_LEGACY_DIRECT_BUILD_REPORT_VERSION = (
-    "urbannav_stage_ii_legacy_direct_build_report_v1"
+    "urbannav_stage_ii_legacy_direct_build_report_v2"
 )
 STAGE_II_LEGACY_DIRECT_SELECTION_REPORT_VERSION = (
     "urbannav_stage_ii_legacy_direct_selection_report_v1"
 )
 LEGACY_FULL_COT_REASONING_MODE = "legacy_full_cot"
 LEGACY_THINK_FINISH_RESPONSE_CONTRACT = "legacy_think_finish"
+STAGE_II_LEGACY_DIRECT_TRAJECTORY_ADMISSION_POLICY_ID = (
+    "urbannav_stage_ii_legacy_direct_source_qc_v2"
+)
+STAGE_II_LEGACY_DIRECT_TRAJECTORY_ADMISSION_POLICY_VERSION = "2.0"
+STAGE_II_LEGACY_DIRECT_MAX_SOURCE_STEP_M = 3.0
 
 
 def build_stage_ii_legacy_direct_selection_v1(
@@ -289,6 +294,7 @@ def build_stage_ii_legacy_direct_targets_v1(
                         trajectory_source=adapted.trajectory_source,
                         allowed_trajectory_sources=spec.allowed_trajectory_sources,
                         yaw_source=adapted.yaw_source,
+                        max_source_step_m=STAGE_II_LEGACY_DIRECT_MAX_SOURCE_STEP_M,
                     )
                 except StageIISourceAdapterErrorV1 as exc:
                     _write_jsonl_row(qc_handle, {
@@ -348,6 +354,8 @@ def build_stage_ii_legacy_direct_targets_v1(
         )
     expected = len(requested)
     accepted = counts["accepted:train"] + counts["accepted:validation"]
+    rejected = expected - accepted
+    complete = expected > 0 and len(seen_lines) == expected
     report = {
         "schema_version": STAGE_II_LEGACY_DIRECT_BUILD_REPORT_VERSION,
         "profile_id": STAGE_II_LEGACY_DIRECT_PROFILE_ID,
@@ -358,7 +366,12 @@ def build_stage_ii_legacy_direct_targets_v1(
         "split_counts": split_counts,
         "requested_rows": expected,
         "accepted_rows": accepted,
-        "rejected_by_trajectory_qc": expected - accepted,
+        "rejected_by_trajectory_qc": rejected,
+        "trajectory_admission_policy": {
+            "policy_id": STAGE_II_LEGACY_DIRECT_TRAJECTORY_ADMISSION_POLICY_ID,
+            "policy_version": STAGE_II_LEGACY_DIRECT_TRAJECTORY_ADMISSION_POLICY_VERSION,
+            "max_source_step_m": STAGE_II_LEGACY_DIRECT_MAX_SOURCE_STEP_M,
+        },
         "counts": dict(sorted(counts.items())),
         "outputs": {
             "train_targets": str(target_paths["train"]),
@@ -367,8 +380,8 @@ def build_stage_ii_legacy_direct_targets_v1(
             "drops": str(drops_path),
         },
         "hidden_test_read": False,
-        "complete": expected > 0 and accepted == expected,
-        "passed": expected > 0 and accepted == expected,
+        "complete": complete,
+        "passed": complete and accepted > 0,
     }
     report_path = destination / "legacy_direct_build_report.json"
     report["outputs"]["report"] = str(report_path)

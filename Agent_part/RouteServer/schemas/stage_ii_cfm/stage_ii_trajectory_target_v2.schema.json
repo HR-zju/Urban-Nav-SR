@@ -1,0 +1,271 @@
+{
+  "$defs": {
+    "StageIITrajectoryPolicyV2": {
+      "additionalProperties": false,
+      "description": "Freeze the strict four-second metric trajectory data policy.\n\nV2 is a data-only contract for the future decoupled latent-plan/CFM model.\nIt intentionally does not alter the executable V1 training view or its\n16-query head.  Every accepted row contains the complete 4-second horizon;\nsuffix padding is forbidden. Source speed remains an audited statistic;\nexceeding 6 m/s does not reject a row because speed alone cannot\ndistinguish real fast motion from source-specific sampling behavior.\n\nArgs:\n    source_adapter_id: Versioned raw-pose adapter used for this dataset.\n    trajectory_source: Dataset-owned odometry or pose provenance.\n    raw_timestamp_unit: Unit of the raw pose clock before conversion.\n    yaw_offset_deg: Fixed odom-to-base rotation used only for XY projection.",
+      "properties": {
+        "axis_names": {
+          "default": [
+            "x_forward_m",
+            "y_left_m",
+            "yaw_rel_ccw_rad"
+          ],
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "const": "x_forward_m",
+              "type": "string"
+            },
+            {
+              "const": "y_left_m",
+              "type": "string"
+            },
+            {
+              "const": "yaw_rel_ccw_rad",
+              "type": "string"
+            }
+          ],
+          "title": "Axis Names",
+          "type": "array"
+        },
+        "coordinate_frame": {
+          "const": "current_ego_flu",
+          "default": "current_ego_flu",
+          "title": "Coordinate Frame",
+          "type": "string"
+        },
+        "full_horizon_required": {
+          "const": true,
+          "default": true,
+          "title": "Full Horizon Required",
+          "type": "boolean"
+        },
+        "horizon_seconds": {
+          "const": 4.0,
+          "default": 4.0,
+          "title": "Horizon Seconds",
+          "type": "number"
+        },
+        "horizon_steps": {
+          "const": 32,
+          "default": 32,
+          "title": "Horizon Steps",
+          "type": "integer"
+        },
+        "max_source_gap_sec": {
+          "const": 0.5,
+          "default": 0.5,
+          "title": "Max Source Gap Sec",
+          "type": "number"
+        },
+        "max_source_step_m": {
+          "const": 3.0,
+          "default": 3.0,
+          "title": "Max Source Step M",
+          "type": "number"
+        },
+        "max_source_yaw_rate_rad_s": {
+          "const": 4.0,
+          "default": 4.0,
+          "title": "Max Source Yaw Rate Rad S",
+          "type": "number"
+        },
+        "normalized": {
+          "const": false,
+          "default": false,
+          "title": "Normalized",
+          "type": "boolean"
+        },
+        "policy_id": {
+          "const": "urbannav_stage_ii_metric_flu_4s_32_speed_audit_v2_1",
+          "default": "urbannav_stage_ii_metric_flu_4s_32_speed_audit_v2_1",
+          "title": "Policy Id",
+          "type": "string"
+        },
+        "policy_version": {
+          "const": "2.1",
+          "default": "2.1",
+          "title": "Policy Version",
+          "type": "string"
+        },
+        "raw_timestamp_unit": {
+          "enum": [
+            "nanosecond",
+            "millisecond"
+          ],
+          "title": "Raw Timestamp Unit",
+          "type": "string"
+        },
+        "representation": {
+          "const": "cumulative_relative_pose",
+          "default": "cumulative_relative_pose",
+          "title": "Representation",
+          "type": "string"
+        },
+        "source_adapter_id": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Source Adapter Id",
+          "type": "string"
+        },
+        "source_format": {
+          "const": "ego_pose_xyt_flu_timed_v1",
+          "default": "ego_pose_xyt_flu_timed_v1",
+          "title": "Source Format",
+          "type": "string"
+        },
+        "source_speed_audit_threshold_mps": {
+          "const": 6.0,
+          "default": 6.0,
+          "title": "Source Speed Audit Threshold Mps",
+          "type": "number"
+        },
+        "source_speed_qc_mode": {
+          "const": "audit_only",
+          "default": "audit_only",
+          "title": "Source Speed Qc Mode",
+          "type": "string"
+        },
+        "target_dt_sec": {
+          "const": 0.125,
+          "default": 0.125,
+          "title": "Target Dt Sec",
+          "type": "number"
+        },
+        "target_field": {
+          "const": "trajectory_ego_t",
+          "default": "trajectory_ego_t",
+          "title": "Target Field",
+          "type": "string"
+        },
+        "target_format": {
+          "const": "ego_pose_xyt_flu_v1",
+          "default": "ego_pose_xyt_flu_v1",
+          "title": "Target Format",
+          "type": "string"
+        },
+        "temporal_resampling_id": {
+          "const": "linear_xy_shortest_yaw_4s_32_v2",
+          "default": "linear_xy_shortest_yaw_4s_32_v2",
+          "title": "Temporal Resampling Id",
+          "type": "string"
+        },
+        "trajectory_source": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Trajectory Source",
+          "type": "string"
+        },
+        "units": {
+          "default": [
+            "meter",
+            "meter",
+            "radian"
+          ],
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "const": "meter",
+              "type": "string"
+            },
+            {
+              "const": "meter",
+              "type": "string"
+            },
+            {
+              "const": "radian",
+              "type": "string"
+            }
+          ],
+          "title": "Units",
+          "type": "array"
+        },
+        "yaw_offset_deg": {
+          "title": "Yaw Offset Deg",
+          "type": "number"
+        },
+        "yaw_source": {
+          "const": "odometry",
+          "default": "odometry",
+          "title": "Yaw Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_adapter_id",
+        "trajectory_source",
+        "raw_timestamp_unit",
+        "yaw_offset_deg"
+      ],
+      "title": "StageIITrajectoryPolicyV2",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Carry one complete 4-second, 32-step metric FLU target.",
+  "properties": {
+    "action_mask": {
+      "items": {
+        "type": "boolean"
+      },
+      "maxItems": 32,
+      "minItems": 32,
+      "title": "Action Mask",
+      "type": "array"
+    },
+    "policy": {
+      "$ref": "#/$defs/StageIITrajectoryPolicyV2"
+    },
+    "schema_version": {
+      "const": "urbannav_stage_ii_trajectory_target_v2_1",
+      "default": "urbannav_stage_ii_trajectory_target_v2_1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_target_digest": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Target Digest",
+      "type": "string"
+    },
+    "target_digest": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Target Digest",
+      "type": "string"
+    },
+    "trajectory_ego_t": {
+      "items": {
+        "items": {
+          "type": "number"
+        },
+        "type": "array"
+      },
+      "maxItems": 32,
+      "minItems": 32,
+      "title": "Trajectory Ego T",
+      "type": "array"
+    },
+    "valid_step_count": {
+      "const": 32,
+      "default": 32,
+      "title": "Valid Step Count",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "trajectory_ego_t",
+    "action_mask",
+    "policy",
+    "source_target_digest",
+    "target_digest"
+  ],
+  "title": "StageIITrajectoryTargetV2",
+  "type": "object"
+}

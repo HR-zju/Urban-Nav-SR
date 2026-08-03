@@ -483,6 +483,29 @@ def test_trajectory_builder_rejects_forbidden_source_even_if_allowlisted() -> No
     assert str(result.qc.reason_codes[0]) == "trajectory_source_forbidden"
 
 
+def test_trajectory_builder_optional_step_gate_rejects_zero_fill_jump() -> None:
+    rows = [
+        [0.0, 0.0, 0.0, 1.0],
+        [-324.0, 728.0, 0.2, 1.0],
+        [-0.1, 0.5, 0.4, 1.0],
+    ]
+    result = build_stage_ii_trajectory_target_v1(
+        sample_id="zero-fill-jump",
+        dataset_source="foxglove",
+        raw_trajectory=rows,
+        action_mask=[True, True, True],
+        source_format="ego_xy_t_speed_right_front_v1",
+        trajectory_source="calibrated_pose_projection",
+        allowed_trajectory_sources={"calibrated_pose_projection"},
+        yaw_source="path_tangent",
+        max_source_step_m=3.0,
+    )
+
+    assert not result.accepted
+    assert result.target is None
+    assert str(result.qc.reason_codes[0]) == "trajectory_source_step_exceeded"
+
+
 def test_context_cache_requires_independent_strict_passes() -> None:
     view = _stage_i_full_cot()
     reasoning = _cache(view, "reasoning_grounding", view.assistant_text)

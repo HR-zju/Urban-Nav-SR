@@ -9,13 +9,15 @@ FullCoT 投影视图的可见输入、action audit 和 strong direction sidecar�
 RouteServer 只负责：
 
 - metric、current-ego FLU 的 canonical trajectory truth；
-- 2.0 秒、16 步 temporal resampling 与 QC；
+- V1 的 2.0 秒/16 步，以及 V2 的 4.0 秒/32 步 temporal resampling 与 QC；
 - Pass R/Pass D cache 的身份和严格解析合同；
 - Stage II exchange view 与 fail-closed drop audit。
 
 它不保存 token、pixel values、query index、normalized target，也不执行模型训练。
+当前可执行训练/head 仍绑定 V1；V2 先作为独立数据资产落盘，不能据此宣称模型已经支持
+32 点输出。
 
-## 2. 冻结轨迹合同
+## 2. V1 冻结轨迹合同
 
 | 字段 | 定义 | 来源 | student 可见 | 进入 loss |
 | --- | --- | --- | --- | --- |
@@ -64,6 +66,30 @@ V1.1 还冻结了能与 Stage I `source_group_id` 逐字符连接的 parent iden
 
 这里的 mask 不是全局 “missing -> all true” fallback。adapter 必须同时核对 dataset、source、
 format、time unit、origin policy 和 mask policy；任一 stamp 漂移就拒绝。
+
+### 2.1 Pose validity 与 legacy-direct admission
+
+MCAP 预处理不能再把缺失 odometry 的帧仅编码为数值 `[0,0,0]`。当前 exporter/repairer 同时
+写出 `frame_pose_valid.npy`；Phase1 只消费 mask 为 true 且 position/orientation finite 的帧。
+对早于该 mask 的旧 prepared clip，Phase1 仍在投影和 resampling 之前对实际 future window
+应用 `max_pose_step_m=3.0` 连续性门禁，拒绝 `pose_source_step_exceeded`。
+
+兼容旧 FullCoT checkpoint 的 `legacy_full_cot_direct_latent_v1` target 仍保持原 V1 target
+schema，但其批量 admission report 已升级为：
+
+```text
+policy_id      = urbannav_stage_ii_legacy_direct_source_qc_v2
+policy_version = 2.0
+max source step = 3.0 m
+```
+
+该门禁是 caller-stamped：generic V1 builder 未显式传入阈值时保持历史 digest 与行为；legacy
+builder 显式传入阈值，并把阈值计入 source evidence digest。QC drop 表示该 parent 已完成审计但
+不生成 target，不应把“存在合法 drop”误判为整批构建失败。
+
+2026-08-03 对历史 legacy train/validation 的只读重建审计请求 55,268 条，接受 55,043 条，
+因 `trajectory_source_step_exceeded` 拒绝 225 条；accepted train/validation 分别为
+52,688/2,355。该审计没有读取 hidden test。
 
 ## 3. Predicted context cache
 
@@ -209,3 +235,187 @@ resampling、mask 与 trajectory QC，不包含 Stage I formal admission、Pass 
 当前验证覆盖 synthetic contract/resampling/QC/cache/leakage/cross-repo parity，以及上述
 600-parent target-only audit。真实 Qwen processor、完整 Pass-T view 和 GPU optimizer smoke
 仍是独立后续 gate，不能由单元测试或 target audit 替代。
+
+## 6. V2.1：4 秒、32 点 raw-pose 数据合同
+
+V2 的唯一 policy ID 是：
+
+```text
+urbannav_stage_ii_metric_flu_4s_32_speed_audit_v2_1
+```
+
+它从 raw pose/odometry 重新生成标签，不延长 V1 的 2 秒轨迹，也不重复末点。目标时间网格为：
+
+\[
+t_k=k\Delta t,\qquad \Delta t=0.125\text{ s},\qquad k=1,\ldots,32,
+\]
+
+因此完整 horizon 为 \(4.0\) 秒。raw window 还必须包含当前原点
+\([0,0,0,0]\)。对 map 位移和当前 base yaw 的 FLU 变换为：
+
+\[
+x_f=\Delta x\cos\psi_0+\Delta y\sin\psi_0,
+\qquad
+y_l=-\Delta x\sin\psi_0+\Delta y\cos\psi_0.
+\]
+
+XY 按时间线性插值；yaw 先 unwrap 到最短角路径，再插值并 wrap 回
+\([-\pi,\pi)\)。V2 只接受完整的 `32 x 3` target，`action_mask` 必须全部为 true；raw
+pose 不覆盖 4 秒时直接拒绝，禁止 extrapolation、terminal repeat 和 padding。
+
+### 6.1 Raw adapter 与可信边界
+
+| 数据 | raw truth | quaternion | odom-to-base yaw | 额外 gate |
+| --- | --- | --- | ---: | --- |
+| SideWalk main/extra | `frame_positions/orientations/times.npy` | metadata；旧资产缺 metadata 时为 `wxyz` | 0 deg | 拒绝 whole-clip static export |
+| Foxglove | 同步后的 NPY pose | 必须由 metadata 显式给出 | +90 deg | 拒绝缺 quaternion-order 的 clip |
+| EgoWalk | 原始 odometry parquet | `xyzw` | 0 deg | caption/instruction 必须覆盖未来完整 4 秒，并拒绝 backward discontinuity |
+| FrodoBots | 无可信 metric trajectory | N/A | N/A | 不生成 V2 target |
+
+单条 raw 文件损坏或局部身份缺失进入版本化 reject，不会终止整个 corpus；重复 clip identity
+仍按全局数据冲突 fail closed。接受样本还需同时满足以下连续性硬门禁：
+
+```text
+max raw timestamp gap <= 0.5 s
+max adjacent source step <= 3.0 m
+max source yaw rate <= 4.0 rad/s
+```
+
+`max_source_speed_mps` 仍逐样本计算。超过 6.0 m/s 时追加
+`trajectory_source_speed_audit_exceeded`，但不再拒绝；速度阈值不是部署速度策略，也不能单独
+区分真实快速运动、时间采样抖动和位姿尺度异常。训练与评测必须保留该 audit slice，连续性异常
+仍由 gap、step、yaw-rate、non-finite 和数据源专属 backward-discontinuity gate 拒绝。
+
+#### 6.1.1 短 horizon 与参考实现
+
+V2.1 继续要求 raw observation 覆盖完整 4 秒，不把不足 4 秒的序列补成监督。CityWalker 在
+构造 LUT 时先扣除 `context_size + max(arrived_threshold*2, wp_length)`，因此靠近序列末尾且
+拿不到完整 waypoint 的 anchor 不进入训练；其图像 frame clamp 只处理视觉输入边界，不是
+trajectory padding。SocialNav 的公开 action head 固定消费 `[B,5,2]`，flow loss 对全部坐标做
+无 mask MSE，公开训练 consumer 没有 partial-horizon action mask。其公开仓没有提供 SocNav
+Dataset 上游 terminal-window builder，因此不能据此声称它对短轨迹做了安全 padding。
+
+InternNav/RDP 采用了另一种明确的 episode-terminal 假设：当 future action chunk 越过 episode
+末尾时，`fill_mode='constant'` 重复最后 GPS 与 yaw，再把绝对 waypoint 转为 delta，因此补齐段
+成为零位移、零转角的 absorbing stop。该策略适用于“episode 已权威结束”的语义；其
+`not_done_masks` 用于变长 rollout batch，不是 action chunk 内逐点有效性 mask，不能直接用于
+普通 clip 截断或 instruction coverage 缺失。
+
+UrbanNav 只在 raw pose 本身持续记录到 4 秒且真实呈现 stationary hold 时把后续静止点视为
+有效监督。因 clip 结束、instruction 结束或文件缺失导致的 horizon 不足仍拒绝；禁止 zero
+padding、末点重复和无 mask 的伪停止标签。若后续能提供权威 `episode_terminal/goal_reached`
+证据，可在新 policy 中显式增加 `terminal_hold_steps` 与 provenance，再评估 InternNav 式
+absorbing-stop；不能在 V2.1 中静默改变语义。
+
+### 6.2 V2 产物与入口
+
+核心实现：
+
+```text
+src/mcp_server/data/stage_ii_raw_trajectory_v2.py
+src/mcp_server/data/stage_ii_trajectory_v2_corpus.py
+tools/model_processing/build_stage_ii_trajectory_4s32.py
+tools/model_processing/run_stage_ii_trajectory_4s32_v2_local.zsh
+```
+
+每个 run 输出：
+
+```text
+trajectory_sidecars_v2_{train,validation,test}.jsonl
+trajectory_qc_v2.jsonl
+trajectory_rejected_v2.jsonl
+trajectory_build_report_v2.json
+trajectory_normalization_v2.json
+```
+
+本地四个 prepared source manifest 的一键生成命令为：
+
+```bash
+cd /home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR
+Agent_part/RouteServer/tools/model_processing/run_stage_ii_trajectory_4s32_v2_local.zsh
+```
+
+可先运行每个 manifest 100 条的 smoke：
+
+```bash
+SMOKE_LIMIT_PER_MANIFEST=100 \
+RUN_ROOT=/tmp/urbannav_stage_ii_metric_flu_4s_32_speed_audit_v2_1_smoke \
+Agent_part/RouteServer/tools/model_processing/run_stage_ii_trajectory_4s32_v2_local.zsh
+```
+
+2026-08-02 的 400-row real-data smoke 接受 345、拒绝 55：SideWalk main 95/100、
+SideWalk extra 89/100、Foxglove 94/100、EgoWalk 67/100。55 条拒绝全部来自
+`trajectory_full_horizon_missing`（22）或
+`trajectory_instruction_horizon_missing`（33），没有速度、step、gap 或 yaw-rate 异常。
+该证据只验证数据生成和 QC，不验证后续 32 点模型训练。
+
+### 6.3 2026-08-02 V2.0 历史全量结果
+
+全量 prepared source 输入 383,526 行。按 stable parent 去重后为 381,797 条，其中 accepted
+247,059、rejected 134,738；SideWalk main/extra 重叠产生 1,729 条等价重复，已确定性跳过。
+
+| source | input | equivalent duplicate | accepted | rejected |
+| --- | ---: | ---: | ---: | ---: |
+| EgoWalk | 284,470 | 0 | 171,321 | 113,149 |
+| Foxglove | 49,319 | 0 | 32,737 | 16,582 |
+| SideWalk main | 45,397 | 0 | 40,922 | 4,475 |
+| SideWalk extra | 4,340 | 1,729 | 2,079 | 532 |
+
+accepted split 为 train 220,907、validation 10,502、test 15,650。主要 reject 是 EgoWalk
+instruction 不覆盖完整未来 4 秒（105,904）、Foxglove/其他来源速度超过 6 m/s（12,912）、
+full horizon 缺失（7,886）和 EgoWalk backward discontinuity（6,534）。这些是数据选择结果，
+不是 padding 候选。
+
+```text
+run root:
+/media/ubuntu/Extreme SSD/urbannav_stage_ii_metric_flu_4s_32_v2
+
+train sidecar sha256:
+567c7a0a565778fb640ae84f4d128d1923e74a6763c4a612efd9dda115b144a2
+
+normalization profile digest:
+8a723d910633465c04679df00bf4c91d2b8f03c23ed1b470d0c745620f62a6f2
+```
+
+独立流式复核验证了全部 247,059 个 accepted sidecar 和 381,797 个 QC row：Pydantic
+schema 全部通过、accepted/rejected 交集为 0、8,115 个 split group 的跨 split 泄漏为 0，
+normalization 绑定的 train SHA 与生成报告一致。
+
+### 6.4 V2.1 speed-audit 策略
+
+2026-08-03 将 6 m/s 从硬拒绝改为 audit-only，并提升 policy version 到 `2.1`；V2.0 目录、
+sidecar SHA 和 normalization digest 保留为历史证据，不原地覆盖。新默认 run root 为：
+
+```text
+/media/ubuntu/Extreme SSD/urbannav_stage_ii_metric_flu_4s_32_speed_audit_v2_1
+```
+
+全量重建仍输入 383,526 行，按 stable parent 去重后为 381,797 条；其中 accepted
+259,964、rejected 121,833，另有 1,729 条 SideWalk main/extra 等价重复。相对 V2.0 实际增加
+12,905 条 accepted，原 12,912 个 speed reject 中其余 7 条因 yaw-rate gate 继续拒绝。
+
+| source | input | equivalent duplicate | accepted | rejected | `>6 m/s` audit |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| EgoWalk | 284,470 | 0 | 171,395 | 113,075 | 74 |
+| Foxglove | 49,319 | 0 | 45,018 | 4,301 | 12,281 |
+| SideWalk main | 45,397 | 0 | 41,451 | 3,946 | 529 |
+| SideWalk extra | 4,340 | 1,729 | 2,100 | 511 | 21 |
+
+accepted split 为 train 232,670、validation 11,036、test 16,258。121,833 条 reject 的主要原因
+仍是 instruction horizon 不足（105,904）、full horizon 不足（7,886）和 EgoWalk backward
+discontinuity（6,534）；其他连续性门禁拒绝 non-finite 537、step 548、gap 314、yaw-rate 110。
+
+```text
+train sidecar sha256:
+2dd3d53d752aec86c2d529b9d9ef46c3d66d264afd4ed6fd8e9234e06cc7876a
+
+normalization scales:
+[13.747750070927463, 3.3851487938464113, 2.075140968969098]
+
+normalization profile digest:
+92048ce5df70566e5e60c7ac4266c2618d9270039824a848f2ed4782b2116daf
+```
+
+独立流式复核验证了全部 259,964 个 accepted sidecar 和 381,797 个 QC row：schema 全部通过、
+accepted/rejected 交集为 0、8,123 个 split group 的跨 split 泄漏为 0，12,905 个 speed-audit
+row 均存在于 accepted sidecar，normalization 绑定的 train SHA、parent 数和报告一致。

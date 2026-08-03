@@ -18,24 +18,35 @@ from mcp_server.contracts.stage_ii_cfm import (
     STAGE_II_TRAINING_CONTRACT_ID,
     STAGE_II_TRAJECTORY_POLICY_ID,
     STAGE_II_TRAJECTORY_POLICY_VERSION,
+    STAGE_II_TRAJECTORY_POLICY_V2_ID,
+    STAGE_II_TRAJECTORY_POLICY_V2_VERSION,
     STAGE_II_TRAJECTORY_QC_SCHEMA_VERSION,
+    STAGE_II_TRAJECTORY_QC_V2_SCHEMA_VERSION,
+    STAGE_II_TRAJECTORY_SIDECAR_V2_SCHEMA_VERSION,
     STAGE_II_TRAJECTORY_SOURCE_REGISTRY_SCHEMA_VERSION,
     STAGE_II_TRAJECTORY_TARGET_SCHEMA_VERSION,
+    STAGE_II_TRAJECTORY_TARGET_V2_SCHEMA_VERSION,
     StageIICFMTrainingViewV1,
     StageIIContextCacheV1,
     StageIILegacyDirectTargetV1,
     StageIIProjectionDropV1,
     StageIITrajectoryQCReportV1,
+    StageIITrajectoryQCReportV2,
+    StageIITrajectorySidecarV2,
     StageIITrajectorySourceRegistryV1,
     StageIITrajectoryTargetV1,
+    StageIITrajectoryTargetV2,
 )
 
 
-ARTIFACT_SCHEMA_VERSION = "urbannav_stage_ii_cfm_contract_artifacts_v1"
+ARTIFACT_SCHEMA_VERSION = "urbannav_stage_ii_cfm_contract_artifacts_v2"
 ARTIFACT_FILENAMES = (
     "stage_ii_context_cache_v1.schema.json",
     "stage_ii_trajectory_target_v1.schema.json",
     "stage_ii_trajectory_qc_v1.schema.json",
+    "stage_ii_trajectory_target_v2.schema.json",
+    "stage_ii_trajectory_qc_v2.schema.json",
+    "stage_ii_trajectory_sidecar_v2.schema.json",
     "stage_ii_trajectory_source_registry_v1.schema.json",
     "stage_ii_legacy_direct_target_v1.schema.json",
     "stage_ii_cfm_training_view_v1.schema.json",
@@ -51,6 +62,9 @@ def build_stage_ii_cfm_contract_artifacts() -> dict[str, Any]:
         "stage_ii_context_cache_v1.schema.json": StageIIContextCacheV1.model_json_schema(),
         "stage_ii_trajectory_target_v1.schema.json": StageIITrajectoryTargetV1.model_json_schema(),
         "stage_ii_trajectory_qc_v1.schema.json": StageIITrajectoryQCReportV1.model_json_schema(),
+        "stage_ii_trajectory_target_v2.schema.json": StageIITrajectoryTargetV2.model_json_schema(),
+        "stage_ii_trajectory_qc_v2.schema.json": StageIITrajectoryQCReportV2.model_json_schema(),
+        "stage_ii_trajectory_sidecar_v2.schema.json": StageIITrajectorySidecarV2.model_json_schema(),
         "stage_ii_trajectory_source_registry_v1.schema.json": (
             StageIITrajectorySourceRegistryV1.model_json_schema()
         ),
@@ -66,6 +80,9 @@ def build_stage_ii_cfm_contract_artifacts() -> dict[str, Any]:
         "context_cache_schema_version": STAGE_II_CONTEXT_CACHE_SCHEMA_VERSION,
         "trajectory_target_schema_version": STAGE_II_TRAJECTORY_TARGET_SCHEMA_VERSION,
         "trajectory_qc_schema_version": STAGE_II_TRAJECTORY_QC_SCHEMA_VERSION,
+        "trajectory_target_v2_schema_version": STAGE_II_TRAJECTORY_TARGET_V2_SCHEMA_VERSION,
+        "trajectory_qc_v2_schema_version": STAGE_II_TRAJECTORY_QC_V2_SCHEMA_VERSION,
+        "trajectory_sidecar_v2_schema_version": STAGE_II_TRAJECTORY_SIDECAR_V2_SCHEMA_VERSION,
         "trajectory_source_registry_schema_version": (
             STAGE_II_TRAJECTORY_SOURCE_REGISTRY_SCHEMA_VERSION
         ),
@@ -77,6 +94,8 @@ def build_stage_ii_cfm_contract_artifacts() -> dict[str, Any]:
         "projection_policy_version": STAGE_II_PROJECTION_POLICY_VERSION,
         "trajectory_policy_id": STAGE_II_TRAJECTORY_POLICY_ID,
         "trajectory_policy_version": STAGE_II_TRAJECTORY_POLICY_VERSION,
+        "trajectory_policy_v2_id": STAGE_II_TRAJECTORY_POLICY_V2_ID,
+        "trajectory_policy_v2_version": STAGE_II_TRAJECTORY_POLICY_V2_VERSION,
         "canonical_source_sha256": _canonical_source_hashes(),
         "artifact_sha256": {
             filename: _payload_sha256(payload)
@@ -126,6 +145,8 @@ def _canonical_source_hashes() -> dict[str, str]:
         "src/mcp_server/contracts/stage_ii_cfm.py",
         "src/mcp_server/data/stage_ii_context.py",
         "src/mcp_server/data/stage_ii_trajectory.py",
+        "src/mcp_server/data/stage_ii_raw_trajectory_v2.py",
+        "src/mcp_server/data/stage_ii_trajectory_v2_corpus.py",
         "src/mcp_server/data/stage_ii_sources.py",
         "src/mcp_server/data/stage_ii_legacy_direct.py",
         "src/mcp_server/data/stage_ii_views.py",

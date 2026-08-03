@@ -67,6 +67,27 @@ STAGE_II_TEMPORAL_RESAMPLING_ID = "linear_time_grid_2s_16_v1"
 STAGE_II_HORIZON_STEPS = 16
 STAGE_II_HORIZON_SECONDS = 2.0
 STAGE_II_TARGET_FORMAT = "ego_pose_xyt_flu_v1"
+STAGE_II_TRAJECTORY_TARGET_V2_SCHEMA_VERSION = (
+    "urbannav_stage_ii_trajectory_target_v2_1"
+)
+STAGE_II_TRAJECTORY_QC_V2_SCHEMA_VERSION = (
+    "urbannav_stage_ii_trajectory_qc_v2_1"
+)
+STAGE_II_TRAJECTORY_SIDECAR_V2_SCHEMA_VERSION = (
+    "urbannav_stage_ii_trajectory_sidecar_v2_1"
+)
+STAGE_II_TRAJECTORY_POLICY_V2_ID = (
+    "urbannav_stage_ii_metric_flu_4s_32_speed_audit_v2_1"
+)
+STAGE_II_TRAJECTORY_POLICY_V2_VERSION = "2.1"
+STAGE_II_TEMPORAL_RESAMPLING_V2_ID = "linear_xy_shortest_yaw_4s_32_v2"
+STAGE_II_HORIZON_STEPS_V2 = 32
+STAGE_II_HORIZON_SECONDS_V2 = 4.0
+STAGE_II_TARGET_DT_SEC_V2 = 0.125
+STAGE_II_MAX_SOURCE_GAP_SEC_V2 = 0.5
+STAGE_II_MAX_SOURCE_STEP_M_V2 = 3.0
+STAGE_II_SOURCE_SPEED_AUDIT_THRESHOLD_MPS_V2 = 6.0
+STAGE_II_MAX_SOURCE_YAW_RATE_RAD_S_V2 = 4.0
 STAGE_II_GROUNDING_SECTION_NAMES = (
     "TaskGrounding",
     "SceneGrounding",
@@ -668,6 +689,261 @@ class StageIITrajectoryQCReportV1(BaseModel):
         return self
 
 
+class StageIITrajectoryPolicyV2(BaseModel):
+    """Freeze the strict four-second metric trajectory data policy.
+
+    V2 is a data-only contract for the future decoupled latent-plan/CFM model.
+    It intentionally does not alter the executable V1 training view or its
+    16-query head.  Every accepted row contains the complete 4-second horizon;
+    suffix padding is forbidden. Source speed remains an audited statistic;
+    exceeding 6 m/s does not reject a row because speed alone cannot
+    distinguish real fast motion from source-specific sampling behavior.
+
+    Args:
+        source_adapter_id: Versioned raw-pose adapter used for this dataset.
+        trajectory_source: Dataset-owned odometry or pose provenance.
+        raw_timestamp_unit: Unit of the raw pose clock before conversion.
+        yaw_offset_deg: Fixed odom-to-base rotation used only for XY projection.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    policy_id: Literal[STAGE_II_TRAJECTORY_POLICY_V2_ID] = (
+        STAGE_II_TRAJECTORY_POLICY_V2_ID
+    )
+    policy_version: Literal[STAGE_II_TRAJECTORY_POLICY_V2_VERSION] = (
+        STAGE_II_TRAJECTORY_POLICY_V2_VERSION
+    )
+    target_field: Literal["trajectory_ego_t"] = "trajectory_ego_t"
+    target_format: Literal[STAGE_II_TARGET_FORMAT] = STAGE_II_TARGET_FORMAT
+    representation: Literal["cumulative_relative_pose"] = (
+        "cumulative_relative_pose"
+    )
+    coordinate_frame: Literal["current_ego_flu"] = "current_ego_flu"
+    axis_names: tuple[
+        Literal["x_forward_m"],
+        Literal["y_left_m"],
+        Literal["yaw_rel_ccw_rad"],
+    ] = ("x_forward_m", "y_left_m", "yaw_rel_ccw_rad")
+    units: tuple[Literal["meter"], Literal["meter"], Literal["radian"]] = (
+        "meter",
+        "meter",
+        "radian",
+    )
+    horizon_steps: Literal[STAGE_II_HORIZON_STEPS_V2] = (
+        STAGE_II_HORIZON_STEPS_V2
+    )
+    horizon_seconds: Literal[STAGE_II_HORIZON_SECONDS_V2] = (
+        STAGE_II_HORIZON_SECONDS_V2
+    )
+    target_dt_sec: Literal[STAGE_II_TARGET_DT_SEC_V2] = (
+        STAGE_II_TARGET_DT_SEC_V2
+    )
+    temporal_resampling_id: Literal[STAGE_II_TEMPORAL_RESAMPLING_V2_ID] = (
+        STAGE_II_TEMPORAL_RESAMPLING_V2_ID
+    )
+    source_format: Literal["ego_pose_xyt_flu_timed_v1"] = (
+        "ego_pose_xyt_flu_timed_v1"
+    )
+    source_adapter_id: ReasonCode
+    trajectory_source: ReasonCode
+    raw_timestamp_unit: Literal["nanosecond", "millisecond"]
+    yaw_source: Literal["odometry"] = "odometry"
+    yaw_offset_deg: float
+    full_horizon_required: Literal[True] = True
+    max_source_gap_sec: Literal[STAGE_II_MAX_SOURCE_GAP_SEC_V2] = (
+        STAGE_II_MAX_SOURCE_GAP_SEC_V2
+    )
+    max_source_step_m: Literal[STAGE_II_MAX_SOURCE_STEP_M_V2] = (
+        STAGE_II_MAX_SOURCE_STEP_M_V2
+    )
+    source_speed_qc_mode: Literal["audit_only"] = "audit_only"
+    source_speed_audit_threshold_mps: Literal[
+        STAGE_II_SOURCE_SPEED_AUDIT_THRESHOLD_MPS_V2
+    ] = (
+        STAGE_II_SOURCE_SPEED_AUDIT_THRESHOLD_MPS_V2
+    )
+    max_source_yaw_rate_rad_s: Literal[
+        STAGE_II_MAX_SOURCE_YAW_RATE_RAD_S_V2
+    ] = STAGE_II_MAX_SOURCE_YAW_RATE_RAD_S_V2
+    normalized: Literal[False] = False
+
+    @model_validator(mode="after")
+    def validate_policy(self) -> "StageIITrajectoryPolicyV2":
+        """Require a finite odom-to-base rotation."""
+
+        if not math.isfinite(float(self.yaw_offset_deg)):
+            raise ValueError("Stage II V2 yaw_offset_deg must be finite")
+        return self
+
+
+class StageIITrajectoryTargetV2(BaseModel):
+    """Carry one complete 4-second, 32-step metric FLU target."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[STAGE_II_TRAJECTORY_TARGET_V2_SCHEMA_VERSION] = (
+        STAGE_II_TRAJECTORY_TARGET_V2_SCHEMA_VERSION
+    )
+    trajectory_ego_t: list[list[float]] = Field(
+        min_length=STAGE_II_HORIZON_STEPS_V2,
+        max_length=STAGE_II_HORIZON_STEPS_V2,
+    )
+    action_mask: list[bool] = Field(
+        min_length=STAGE_II_HORIZON_STEPS_V2,
+        max_length=STAGE_II_HORIZON_STEPS_V2,
+    )
+    valid_step_count: Literal[STAGE_II_HORIZON_STEPS_V2] = (
+        STAGE_II_HORIZON_STEPS_V2
+    )
+    policy: StageIITrajectoryPolicyV2
+    source_target_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    target_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+    @model_validator(mode="after")
+    def validate_target(self) -> "StageIITrajectoryTargetV2":
+        """Reject padding, non-finite metric poses, and digest drift."""
+
+        if not all(self.action_mask):
+            raise ValueError("Stage II V2 requires all 32 target steps")
+        for index, row in enumerate(self.trajectory_ego_t):
+            if len(row) != 3 or not all(math.isfinite(float(item)) for item in row):
+                raise ValueError(
+                    f"Stage II V2 trajectory row {index} must be finite [3]"
+                )
+        expected = stage_ii_digest_v1(
+            self.model_dump(mode="json", exclude={"target_digest"})
+        )
+        if self.target_digest != expected:
+            raise ValueError("Stage II V2 target_digest mismatch")
+        return self
+
+
+class StageIITrajectoryQCReportV2(BaseModel):
+    """Record raw-pose, temporal-coverage, and kinematic V2 QC."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[STAGE_II_TRAJECTORY_QC_V2_SCHEMA_VERSION] = (
+        STAGE_II_TRAJECTORY_QC_V2_SCHEMA_VERSION
+    )
+    sample_id: str = Field(min_length=1, max_length=480)
+    dataset_source: str = Field(min_length=1, max_length=128)
+    source_adapter_id: ReasonCode
+    trajectory_source: ReasonCode
+    clip_id: str = Field(min_length=1, max_length=300)
+    frame_idx: int = Field(ge=0)
+    status: StageIITrajectoryQCStatusV1
+    reason_codes: tuple[ReasonCode, ...] = Field(min_length=1, max_length=16)
+    raw_pose_count: int = Field(ge=0)
+    source_valid_step_count: int = Field(ge=0)
+    source_horizon_seconds: float | None = Field(default=None, ge=0.0)
+    max_source_gap_sec: float | None = Field(default=None, ge=0.0)
+    max_source_step_m: float | None = Field(default=None, ge=0.0)
+    max_source_speed_mps: float | None = Field(default=None, ge=0.0)
+    max_source_yaw_rate_rad_s: float | None = Field(default=None, ge=0.0)
+    target_valid_step_count: int = Field(ge=0, le=STAGE_II_HORIZON_STEPS_V2)
+    source_evidence_digest: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    qc_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+    @model_validator(mode="after")
+    def validate_qc(self) -> "StageIITrajectoryQCReportV2":
+        """Require full-horizon acceptance and immutable audit content."""
+
+        if self.status == "accepted":
+            if self.target_valid_step_count != STAGE_II_HORIZON_STEPS_V2:
+                raise ValueError("accepted Stage II V2 QC requires 32 target steps")
+            if self.source_evidence_digest is None:
+                raise ValueError("accepted Stage II V2 QC requires source evidence")
+        elif self.target_valid_step_count != 0:
+            raise ValueError("rejected Stage II V2 QC cannot claim target steps")
+        for value in (
+            self.source_horizon_seconds,
+            self.max_source_gap_sec,
+            self.max_source_step_m,
+            self.max_source_speed_mps,
+            self.max_source_yaw_rate_rad_s,
+        ):
+            if value is not None and not math.isfinite(float(value)):
+                raise ValueError("Stage II V2 QC statistics must be finite")
+        expected = stage_ii_digest_v1(
+            self.model_dump(mode="json", exclude={"qc_digest"})
+        )
+        if self.qc_digest != expected:
+            raise ValueError("Stage II V2 qc_digest mismatch")
+        return self
+
+
+class StageIITrajectorySidecarV2(BaseModel):
+    """Bind one accepted source parent to a portable V2 trajectory target."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[STAGE_II_TRAJECTORY_SIDECAR_V2_SCHEMA_VERSION] = (
+        STAGE_II_TRAJECTORY_SIDECAR_V2_SCHEMA_VERSION
+    )
+    sample_id: str = Field(min_length=1, max_length=480)
+    source_group_id: str = Field(min_length=1, max_length=480)
+    split_group_id: str = Field(min_length=1, max_length=480)
+    dataset_source: str = Field(min_length=1, max_length=128)
+    split: Literal["train", "validation", "test"]
+    source_manifest_name: str = Field(min_length=1, max_length=300)
+    source_manifest_sha256: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    source_line: int = Field(ge=1)
+    trajectory_target: StageIITrajectoryTargetV2
+    trajectory_qc: StageIITrajectoryQCReportV2
+    sidecar_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+    @model_validator(mode="after")
+    def validate_sidecar(self) -> "StageIITrajectorySidecarV2":
+        """Require one accepted target/QC identity and immutable sidecar."""
+
+        if self.sample_id != self.source_group_id:
+            raise ValueError("Stage II V2 sidecar sample/source identity mismatch")
+        if self.trajectory_qc.sample_id != self.sample_id:
+            raise ValueError("Stage II V2 sidecar QC identity mismatch")
+        if self.trajectory_qc.dataset_source != self.dataset_source:
+            raise ValueError("Stage II V2 sidecar dataset identity mismatch")
+        if self.trajectory_qc.status != "accepted":
+            raise ValueError("Stage II V2 sidecar requires accepted QC")
+        if (
+            self.trajectory_qc.source_evidence_digest
+            != self.trajectory_target.source_target_digest
+        ):
+            raise ValueError("Stage II V2 source evidence digest mismatch")
+        expected = stage_ii_digest_v1(
+            self.model_dump(mode="json", exclude={"sidecar_digest"})
+        )
+        if self.sidecar_digest != expected:
+            raise ValueError("Stage II V2 sidecar_digest mismatch")
+        return self
+
+
 class StageIILossMaskV1(BaseModel):
     """Route one trajectory row exclusively to the System1 CFM objective.
 
@@ -960,7 +1236,9 @@ __all__ = [
     "STAGE_II_CONTEXT_CACHE_SCHEMA_VERSION",
     "STAGE_II_GROUNDING_SECTION_NAMES",
     "STAGE_II_HORIZON_SECONDS",
+    "STAGE_II_HORIZON_SECONDS_V2",
     "STAGE_II_HORIZON_STEPS",
+    "STAGE_II_HORIZON_STEPS_V2",
     "STAGE_II_LEGACY_DIRECT_PROFILE_ID",
     "STAGE_II_LEGACY_DIRECT_PROFILE_VERSION",
     "STAGE_II_LEGACY_DIRECT_TARGET_SCHEMA_VERSION",
@@ -968,15 +1246,26 @@ __all__ = [
     "STAGE_II_PROJECTION_POLICY_ID",
     "STAGE_II_PROJECTION_POLICY_VERSION",
     "STAGE_II_TARGET_FORMAT",
+    "STAGE_II_TARGET_DT_SEC_V2",
     "STAGE_II_TEMPORAL_RESAMPLING_ID",
+    "STAGE_II_TEMPORAL_RESAMPLING_V2_ID",
     "STAGE_II_TRAINING_CONTRACT_ID",
     "STAGE_II_TRAJECTORY_SOURCE_REGISTRY_ID",
     "STAGE_II_TRAJECTORY_SOURCE_REGISTRY_SCHEMA_VERSION",
     "STAGE_II_TRAJECTORY_SOURCE_REGISTRY_VERSION",
     "STAGE_II_TRAJECTORY_POLICY_ID",
     "STAGE_II_TRAJECTORY_POLICY_VERSION",
+    "STAGE_II_TRAJECTORY_POLICY_V2_ID",
+    "STAGE_II_TRAJECTORY_POLICY_V2_VERSION",
     "STAGE_II_TRAJECTORY_QC_SCHEMA_VERSION",
+    "STAGE_II_TRAJECTORY_QC_V2_SCHEMA_VERSION",
+    "STAGE_II_TRAJECTORY_SIDECAR_V2_SCHEMA_VERSION",
     "STAGE_II_TRAJECTORY_TARGET_SCHEMA_VERSION",
+    "STAGE_II_TRAJECTORY_TARGET_V2_SCHEMA_VERSION",
+    "STAGE_II_MAX_SOURCE_GAP_SEC_V2",
+    "STAGE_II_SOURCE_SPEED_AUDIT_THRESHOLD_MPS_V2",
+    "STAGE_II_MAX_SOURCE_STEP_M_V2",
+    "STAGE_II_MAX_SOURCE_YAW_RATE_RAD_S_V2",
     "StageIICFMTrainingViewV1",
     "StageIIContextCacheV1",
     "StageIIContextKindV1",
@@ -985,10 +1274,14 @@ __all__ = [
     "StageIILegacyDirectTargetV1",
     "StageIIProjectionDropV1",
     "StageIITrajectoryPolicyV1",
+    "StageIITrajectoryPolicyV2",
     "StageIITrajectoryQCReportV1",
+    "StageIITrajectoryQCReportV2",
+    "StageIITrajectorySidecarV2",
     "StageIITrajectorySourceRegistryV1",
     "StageIITrajectorySourceSpecV1",
     "StageIITrajectorySplitPolicyV1",
     "StageIITrajectoryTargetV1",
+    "StageIITrajectoryTargetV2",
     "stage_ii_digest_v1",
 ]
