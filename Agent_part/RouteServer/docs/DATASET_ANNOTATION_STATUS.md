@@ -34,37 +34,36 @@ annotation JSONL 不是默认训练 manifest。
 | 模型服务 0 | `http://127.0.0.1:18461/v1`，`qwen3.5-122b-a10b-behavior` |
 | 模型服务 1 | `http://127.0.0.1:18462/v1`，`qwen3.5-122b-a10b-instruction` |
 | 图片策略 | `reasoning_v4_section_images_routed_visual_v1` |
-| 标注并发 | 当前 VQA 每服务 16，总客户端并发 32；EgoWalk FullCoT 恢复后为每服务 8、总并发 16 |
-| 当前标注 tmux | `vla-annotation-vqa-interesting` |
-| 最近服务器实测 | `2026-08-01 23:03:27 CST`；VQA queue、两个 worker 和两个模型服务均存活 |
-| 最新连接检查 | `2026-08-01 23:03:27 CST`；经跳板机成功连接 `172.28.4.47:2222` |
-| 当前活动阶段 | `vqa_label_foxglove`；EgoWalk FullCoT 已暂停，等待 VQA 队列完成后自动续跑 |
+| 标注并发 | EgoWalk FullCoT 为每服务 8、总并发 16；SideWalk repair 沿用同一设置但等待服务空闲后才启动 |
+| 当前标注 tmux | 活动：`vla-annotation-fullcot-egowalk-resume`；等待：`vla-annotation-fullcot-sidewalk-repair` |
+| 最近服务器实测 | `2026-08-03 22:50 CST`；VQA worker 已退出，EgoWalk 两个 worker 和两个模型服务均存活 |
+| 最新连接检查 | `2026-08-03 22:50 CST`；经跳板机成功连接 `172.28.4.47:2222` |
+| 当前活动阶段 | EgoWalk FullCoT 断点续标；其 worker 退出后自动启动 SideWalk NavigationContext contract repair |
 
 ## 3. FullCoT 数据状态
 
 | 数据集 | 输入行 | annotation 行 | 关键 QC | 当前状态 | 正式 run root |
 | --- | ---: | ---: | --- | --- | --- |
 | Foxglove | 47,249 | 47,249 | admission v2：`all_sections_accepted=47,249`；`candidate_structurally_valid=46,628`；`pending_human=13,087`；`formal_training_eligible=34,162` | `QC 待处理`；行级 completeness passed，但仍有 blocking action conflicts，尚未导出正式训练 view | `annotation_runs/reasoning_v4_6_qwen122b_foxglove_20way_routed_visual_full_v1` |
-| SideWalk main | 45,397 | 45,397 | admission v2：`all_sections_accepted=35,038`；`candidate_structurally_valid=33,997`；`pending_human=10,012`；`formal_training_eligible=25,026` | `QC 待处理`；action reconciliation 仍 `passed=false`，另有 NavigationContext section gap | `annotation_runs/reasoning_v4_6_qwen122b_sidewalk_main_20way_routed_visual_full_v1` |
+| SideWalk main | 45,397 | 45,397 | admission v2：`all_sections_accepted=35,038`；`candidate_structurally_valid=33,997`；`pending_human=10,012`；`formal_training_eligible=25,026` | `contract repair 已排队`；10,359 条 section failure 已完成 source/media 预检，原 run 不覆盖 | baseline：`annotation_runs/reasoning_v4_6_qwen122b_sidewalk_main_20way_routed_visual_full_v1`；repair：`annotation_runs/reasoning_v4_6_qwen122b_sidewalk_main_navigation_contract_repair_v1` |
 | SideWalk extra unique | 2,611 | 0 | 输入和 20-way profile 已检查 | `已排队`；当前 VQA 队列明确将该 FullCoT 阶段延后，尚无活动 worker | `annotation_runs/reasoning_v4_6_qwen122b_sidewalk_extra_20way_routed_visual_full_v1` |
-| EgoWalk | 284,470 | 7,076 | `record_complete=7,076`、`record_error=0`、`all_sections_accepted=6,743`、`candidate_structurally_valid=6,733`、`pending_human=1,221`；rejected side records 为 343 | `已暂停`；service 0/1 分别停在 3,547/3,529 行，VQA 三数据集完成后自动断点续跑 | `annotation_runs/reasoning_v4_6_qwen122b_egowalk_12way_routed_visual_full_v1` |
+| EgoWalk | 284,470 | 57,436 | service 0/1 分别为 28,759/28,677 行；当前 worker 报告速率约 2,073-2,078 row/h/service | `标注中`；VQA 完成后已恢复两路 8 并发 FullCoT worker | `annotation_runs/reasoning_v4_6_qwen122b_egowalk_12way_routed_visual_full_v1` |
 | FrodoBots | 未纳入 | 0 | continuous trajectory/System1 不可信；当前正式队列未包含 | `未开始`；不得借用 FrodoBots trajectory 生成 strong action | 无 |
 
 结论：当前不能表述为“已上传的数据全部完成 FullCoT”。已完成行级 annotation 的只有
-Foxglove 和 SideWalk main。EgoWalk 完成 7,076 行后被当前 VQA 生产队列暂停；SideWalk extra
-尚未开始。FrodoBots 不在本轮可信强动作 FullCoT 队列。
+Foxglove 和 SideWalk main；其中 SideWalk main 仍有 10,359 条 section repair 等待执行。
+EgoWalk 已在 VQA 完成后恢复并处理到 57,436 行；SideWalk extra 尚未开始。FrodoBots 不在
+本轮可信强动作 FullCoT 队列。
 
-当前 VQA 队列证据：
+VQA 队列已完成，其最后动作已恢复 EgoWalk FullCoT；当前生产链为：
 
 ```text
-tmux: vla-annotation-vqa-interesting
-launcher: Urban-Nav-SR/Agent_part/RouteServer/tools/model_processing/
-          run_vqa_v2_qwen122b_interesting_queue.sh
-queue: foxglove VQA -> sidewalk VQA -> egowalk VQA -> resume EgoWalk FullCoT
+vla-annotation-fullcot-egowalk-resume
+  -> EgoWalk FullCoT complete
+  -> vla-annotation-fullcot-sidewalk-repair 自动离开等待状态
 ```
 
-该队列设置了 `RESUME_EGOWALK_COT=1`。SideWalk extra FullCoT 在当前队列中明确为 deferred，
-不能再把旧的独立轮询 tmux 表述为当前活动队列。
+SideWalk extra FullCoT 仍为 deferred，不能把旧的独立轮询 tmux 表述为当前活动队列。
 
 ### 3.1 `QC 待处理` 的准确含义
 
@@ -173,6 +172,64 @@ InteractionConstraintGrounding 都完成。缺口集中在 NavigationContextGrou
 <sidewalk_run_root>/reports/navigation_context_failure_provenance_rows.jsonl
 <sidewalk_run_root>/reports/navigation_context_failure_media_hashes.server.jsonl
 ```
+
+### 3.3 NavigationContext source contract repair
+
+2026-08-03 已实现 producer-backed 修复，不修改 validator，也不人工逐条放行。处理链为：
+
+```text
+navigation_context_failure_provenance_rows.jsonl (10,359)
+  + raw chunk_*/<clip_id>/bev_index.json
+  -> sidewalk_bev_contract_registry_v1.jsonl
+  -> 原 45,397-row manifest 按 source_index/source_group_id 精确选行
+  -> 校验当前归档 BEV SHA-256
+  -> 注入显式 bev_route_evidence["bev.current"]
+  -> 新 source fingerprint + 新 repair run root
+```
+
+恢复合同仅在 producer 同时满足以下条件时开放 BEV direction authority：
+
+\[
+A_{bev} = \mathbb{1}[alignment=ego\_aligned]
+\cdot \mathbb{1}[draw\_trajectory=true]
+\cdot \mathbb{1}[scope=global\_full]
+\cdot \mathbb{1}[N_{route}>0].
+\]
+
+真实 registry 结果为 10,359/10,359 passed，其中 instruction 8,367、BEV 1,991、decode 1；
+SHA-256 为 `6877fffd374f12a5ef281703d2c71f9faf44da39660f86940fb20b6a64200607`。
+服务器 source-only 预检再次确认：10,359 行全部成功 stamp，10,359 行均具有
+`producer_contract_id=sidewalk_bev_index_v1`、`frame=ego`、`ego_forward=up` 和
+`route_direction_authority=visual_conditional`。registry 的持久路径为：
+
+```text
+local:
+/media/ubuntu/Extreme SSD/urbannav_annotation_repairs/sidewalk_navigation_context_contract_repair_v1/sidewalk_bev_contract_registry_v1.jsonl
+
+server:
+/lpai/volumes/mind-eb-bd-ga/suh/UrbanNavigation/annotation_inputs/reasoning_v4_6/sidewalk_bev_contract_registry_v1.jsonl
+```
+
+唯一 0 字节 BEV 已由 raw producer 的 194,836-byte JPEG 恢复，本地和服务器目标文件均为
+`e9504012...1377b6`，原 0 字节文件以 `.bak_zero_byte_20260803` 保留。legacy source builder
+也已改为 fail closed：没有显式 alignment 的 route overlay 不再获得方向权威。
+
+当前等待队列为：
+
+```text
+tmux: vla-annotation-fullcot-sidewalk-repair
+run root:
+/lpai/volumes/mind-eb-bd-ga/suh/UrbanNavigation/annotation_runs/reasoning_v4_6_qwen122b_sidewalk_main_navigation_contract_repair_v1
+log:
+<run root>/logs/repair_queue.log
+```
+
+队列等待当前 EgoWalk/VQA worker 退出，再以两个 Qwen3.5-122B 服务、每服务 8 并发运行。
+最终 gate 要求 10,359 行的 `TaskGrounding`、`NavigationContextGrounding`、`Decision` 和全部
+六段 section 均 accepted。`candidate_structurally_valid` 只统计、不作为本次 source repair 的
+pass 条件，因为原有 1,041 条 `strong_action_constraint_conflict` 属于独立的人工作用轴，不能
+借本次重标静默放行。原 45,397-row annotation 保持不可变，repair 结果验收后再生成新的合并
+revision。
 
 ## 4. EgoWalk 当前运行
 
