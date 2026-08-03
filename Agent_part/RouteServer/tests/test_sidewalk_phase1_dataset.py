@@ -24,10 +24,26 @@ build_phase1_dataset = _MODULE.build_phase1_dataset
 local_xy_m = _MODULE.local_xy_m
 project_pose_to_fpv = _MODULE.project_pose_to_fpv
 smooth_forward_fpv_trajectory = _MODULE.smooth_forward_fpv_trajectory
+validate_pose_local_path_continuity = _MODULE.validate_pose_local_path_continuity
+SampleSkip = _MODULE._SampleSkip
 CameraParams = _MODULE.CameraParams
 
 
 class SidewalkPhase1DatasetTest(unittest.TestCase):
+    def test_pose_continuity_gate_rejects_isolated_zero_fill(self) -> None:
+        with self.assertRaisesRegex(SampleSkip, "pose_source_step_exceeded"):
+            validate_pose_local_path_continuity(
+                np.asarray(
+                    [
+                        [0.1, 0.5],
+                        [-1217.9, 2726.3],
+                        [0.2, 1.0],
+                    ],
+                    dtype=np.float32,
+                ),
+                max_pose_step_m=3.0,
+            )
+
     def test_local_xy_heading_convention(self) -> None:
         # Facing north: north is forward, east is right.
         x, y = local_xy_m(30.0, 120.0, 30.0001, 120.0, 0.0)
@@ -150,6 +166,77 @@ class SidewalkPhase1DatasetTest(unittest.TestCase):
             self.assertAlmostEqual(row["trajectory_fpv_t"][1][2], 0.1, places=5)
             self.assertAlmostEqual(row["trajectory_fpv_tv"][1][3], 0.4, places=5)
             self.assertEqual(row["trajectory_policy"]["primary_temporal_target"], "trajectory_fpv_t")
+
+    def test_internnav_pose_valid_mask_excludes_missing_odom_frames(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "sidewalk" / "chunk_0" / "clip_a"
+            images = root / "images"
+            bevs = root / "bev_images"
+            images.mkdir(parents=True)
+            bevs.mkdir(parents=True)
+            for idx in range(8):
+                name = f"{idx:06d}"
+                Image.new("RGB", (640, 360), (20, 20, 20)).save(
+                    images / f"{name}.jpg"
+                )
+                Image.new("RGB", (512, 512), (200, 200, 200)).save(
+                    bevs / f"{name}_bev.jpg"
+                )
+            positions = np.asarray(
+                [[float(idx), 0.0] for idx in range(8)], dtype=np.float32
+            )
+            positions[1] = [0.0, 0.0]
+            np.save(root / "frame_positions.npy", positions)
+            np.save(
+                root / "frame_orientations.npy",
+                np.asarray(
+                    [[1.0, 0.0, 0.0, 0.0] for _ in range(8)],
+                    dtype=np.float32,
+                ),
+            )
+            np.save(
+                root / "frame_times.npy",
+                np.asarray(
+                    [idx * 50_000_000 for idx in range(8)], dtype=np.int64
+                ),
+            )
+            np.save(
+                root / "frame_pose_valid.npy",
+                np.asarray(
+                    [True, False, True, True, True, True, True, True],
+                    dtype=np.bool_,
+                ),
+            )
+            (root.parent / "camera_params.json").write_text(
+                json.dumps({
+                    "K": [
+                        [100.0, 0.0, 320.0],
+                        [0.0, 100.0, 180.0],
+                        [0.0, 0.0, 1.0],
+                    ],
+                    "image_width": 640,
+                    "image_height": 360,
+                    "camera_height_meters": 1.0,
+                }),
+                encoding="utf-8",
+            )
+
+            out = Path(tmp) / "phase1"
+            report = build_phase1_dataset(
+                str(root),
+                str(out),
+                config=Phase1Config(num_points=4, frame_step=1, future_frames=4),
+                limit=4,
+            )
+
+            self.assertEqual(report["frames_written"], 4)
+            rows = [
+                json.loads(line)
+                for line in (
+                    out / "manifests" / "phase1_source_train.jsonl"
+                ).read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertNotIn(1, [row["frame_idx"] for row in rows])
 
     def test_future_horizon_uses_timestamp_window_before_frame_count(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

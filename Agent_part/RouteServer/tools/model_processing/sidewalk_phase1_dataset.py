@@ -47,6 +47,7 @@ class Phase1Config:
     min_future_distance_m: float = 0.3
     min_fpv_projection_forward_m: float = 1.0
     trajectory_min_y_step: float = 0.005
+    max_pose_step_m: float = 3.0
     max_bev_time_delta_ms: float = 300.0
     frame_rate_hz: float = 20.0
     odom_yaw_offset_deg: float = 0.0
@@ -375,6 +376,10 @@ def build_phase1_dataset(
         "frame_subset_frames": sum(len(indices) for indices in frame_subset.values()) if frame_subset is not None else None,
         "allow_heuristic_trajectory": bool(allow_heuristic_trajectory),
         "camera_params_path": str(camera_params_override) if camera_params_override is not None else None,
+        "trajectory_qc": {
+            "pose_valid_mask": "frame_pose_valid.npy_when_available",
+            "max_pose_step_m": float(cfg.max_pose_step_m),
+        },
         "max_clips": max_clips,
         "clips_total": 0,
         "clips_used": 0,
@@ -684,6 +689,13 @@ def build_phase1_targets(
     """
 
     if record.position_xy is not None and record.orientation_wxyz is not None:
+        raw_pose_path = pose_local_path_right_front(record, future, config=config)
+        if raw_pose_path.shape[0] == 0:
+            raise _SampleSkip("no_pose_future_points")
+        validate_pose_local_path_continuity(
+            raw_pose_path,
+            max_pose_step_m=config.max_pose_step_m,
+        )
         sampled_future = sample_future_records(future, config.num_points)
         local_path = pose_local_path_right_front(record, sampled_future, config=config)
         if local_path.shape[0] == 0:
@@ -1144,6 +1156,36 @@ def _future_path_extent_m(local_path: np.ndarray) -> float:
     return float(np.max(distances)) if distances.size else 0.0
 
 
+def validate_pose_local_path_continuity(
+    local_path: np.ndarray,
+    *,
+    max_pose_step_m: float,
+) -> None:
+    """Reject calibrated pose windows containing an impossible XY jump.
+
+    Older prepared clips encoded a missing odometry observation as a zero pose
+    without a companion validity mask.  A whole-clip static check cannot find
+    isolated zero fills, so validate the exact future window before it is
+    projected or resampled.  The current ego origin is prepended because the
+    first future pose can itself be the corrupted observation.
+    """
+
+    threshold = float(max_pose_step_m)
+    if not math.isfinite(threshold) or threshold <= 0.0:
+        raise ValueError("max_pose_step_m must be finite and positive")
+    points = np.asarray(local_path, dtype=np.float64).reshape(-1, 2)
+    if not np.isfinite(points).all():
+        raise _SampleSkip("pose_source_non_finite")
+    with_origin = np.concatenate(
+        [np.zeros((1, 2), dtype=np.float64), points], axis=0
+    )
+    max_step = float(
+        np.max(np.linalg.norm(np.diff(with_origin, axis=0), axis=1))
+    )
+    if max_step > threshold + 1e-9:
+        raise _SampleSkip("pose_source_step_exceeded")
+
+
 def stable_fpv_projection_local_path(local_path: np.ndarray, *, config: Phase1Config) -> np.ndarray:
     r"""Return the future path subset that can be stably projected to FPV.
 
@@ -1512,10 +1554,23 @@ def _iter_internnav_frame_records(
     front_video_fps = _load_front_video_fps(clip_dir)
     frame_times = _load_optional_array(clip_dir / "frame_times.npy")
     frame_speeds = _load_optional_array(clip_dir / "frame_speeds.npy")
+    frame_pose_valid = _load_optional_array(clip_dir / "frame_pose_valid.npy")
     frame_video_indices = _load_optional_array(clip_dir / "frame_video_indices.npy")
     frame_count = min(len(positions), len(orientations))
+    if frame_pose_valid is not None:
+        frame_pose_valid = np.asarray(frame_pose_valid, dtype=np.bool_).reshape(-1)
+        if len(frame_pose_valid) != frame_count:
+            raise ValueError(
+                f"frame_pose_valid.npy length must match pose arrays: {clip_dir}"
+            )
     fpv_video_path = (clip_dir / "front.mp4").resolve() if (clip_dir / "front.mp4").is_file() else None
     for frame_idx in range(frame_count):
+        if frame_pose_valid is not None and not bool(frame_pose_valid[frame_idx]):
+            continue
+        if not np.isfinite(positions[frame_idx, :2]).all():
+            continue
+        if not np.isfinite(orientations[frame_idx, :4]).all():
+            continue
         image_path = _resolve_existing_internnav_image_path(clip_dir, frame_idx)
         if image_path is None and fpv_video_path is None:
             continue
@@ -2128,6 +2183,15 @@ def parse_args() -> argparse.Namespace:
         help="Minimum y_front distance kept for moving FPV trajectory projection.",
     )
     parser.add_argument("--trajectory-min-y-step", type=float, default=0.005)
+    parser.add_argument(
+        "--max-pose-step-m",
+        type=float,
+        default=3.0,
+        help=(
+            "Reject a calibrated-pose future window when any adjacent XY step "
+            "exceeds this distance. This catches isolated zero-filled odom poses."
+        ),
+    )
     parser.add_argument("--frame-rate-hz", type=float, default=20.0, help="Fallback FPV frame rate used to derive dt when frame_times.npy is missing.")
     parser.add_argument(
         "--max-bev-time-delta-ms",
@@ -2170,6 +2234,7 @@ def main() -> None:
         min_future_distance_m=float(args.min_future_distance_m),
         min_fpv_projection_forward_m=float(args.min_fpv_projection_forward_m),
         trajectory_min_y_step=float(args.trajectory_min_y_step),
+        max_pose_step_m=float(args.max_pose_step_m),
         max_bev_time_delta_ms=float(args.max_bev_time_delta_ms),
         frame_rate_hz=float(args.frame_rate_hz),
         odom_yaw_offset_deg=float(args.odom_yaw_offset_deg),

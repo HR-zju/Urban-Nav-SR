@@ -81,10 +81,15 @@ python tools/dataset_processing/repair_sidewalk_odom_from_mcap.py \
 ```
 
 该脚本优先使用全量 `frame_times.npy` / `frame_gps.npy` 重建 FPV timeline，再同步 `/odom`；旧版 2fps `trajectory.json` 不再决定输出数组长度。它只更新 `trajectory.json`、`frames_manifest.json`、`mcap_extract_meta.json` 和
-`frame_positions/orientations/velocities/speeds.npy`，不会重抽 `images/`、`front.mp4` 或
+`frame_positions/orientations/velocities/speeds.npy` 和 `frame_pose_valid.npy`，不会重抽 `images/`、`front.mp4` 或
 `bev_images/`。若个别 FPV 帧缺 odom，同步结果会用最近有效 odom 填充并在 report 记录 `filled_missing_odom_frames`，避免写入 `[0,0]` 跳变。`frame_orientations.npy` 的磁盘约定为 ROS `xyzw`，并通过
 `mcap_extract_meta.json.frame_orientations_order = "xyzw"` 告诉 Phase1 exporter 在内部转换成
 `wxyz`。
+
+新导出资产必须同时保存 `frame_pose_valid.npy`。Phase1 读取时跳过 mask 为 false 的
+pose，并对实际 future window 再执行相邻 XY step `<= 3.0 m` 的连续性门禁；这层门禁用于
+拦截旧资产中没有 validity mask 的孤立 `[0,0]` 占位。它是度量轨迹 QC，不由 LVLM
+interestingness 或 CoT teacher 代替。
 
 例外情况：部分 prepared chunk 的 `frame_positions.npy` 可能全零或近似静止，但
 `trajectory.json` / `frame_gps.npy` 中仍有真实 GNSS 轨迹。Phase1 exporter 会检测这类静止

@@ -300,6 +300,10 @@ def mcap_to_sidewalk_format(
         print("\n[2/4] Creating npy files...")
 
     num_frames = len(trajectory)
+    frame_pose_valid = np.asarray(
+        [_has_odom_pose(frame) for frame in trajectory], dtype=np.bool_
+    )
+    np.save(output_dir / "frame_pose_valid.npy", frame_pose_valid)
 
     # frame_times.npy (int64)
     frame_times = np.array([f["timestamp"] for f in trajectory], dtype=np.int64)

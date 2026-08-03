@@ -131,9 +131,13 @@ frame_orientations.npy
 frame_linear_velocities.npy
 frame_angular_velocities.npy
 frame_speeds.npy
+frame_pose_valid.npy         # 与 timeline 对齐；false 表示该帧没有可靠 odom pose
 ```
 
-如果个别 FPV 帧没有同步到 odom，脚本不会写 `[0,0]` 位姿，而会用最近有效 odom 填充，并在 report 里记录 `missing_odom_frames` 和 `filled_missing_odom_frames`，便于后续过滤或抽查。
+如果个别 FPV 帧没有同步到 odom，repair 会优先用最近有效 odom 填充，并在 report 里记录
+`missing_odom_frames` 和 `filled_missing_odom_frames`。无论是否发生填充，落盘的
+`frame_pose_valid.npy` 都保留原始同步有效性；Phase1 还会对每个 future window 施加 3 m
+相邻 pose-step 门禁，防止旧无 mask 资产中的零占位进入 trajectory 监督。
 
 不会重写：
 

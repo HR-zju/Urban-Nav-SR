@@ -343,6 +343,9 @@ def _write_odom_arrays(
     frame_orientations[:, 3] = 1.0
     frame_linear_velocities = np.zeros((n, 3), dtype=np.float64)
     frame_angular_velocities = np.zeros((n, 3), dtype=np.float64)
+    frame_pose_valid = np.asarray(
+        [_has_odom(row) for row in trajectory], dtype=np.bool_
+    )
     orientation_counts: dict[str, int] = {}
 
     for i, row in enumerate(trajectory):
@@ -376,8 +379,9 @@ def _write_odom_arrays(
         np.save(clip_dir / "frame_linear_velocities.npy", frame_linear_velocities)
         np.save(clip_dir / "frame_angular_velocities.npy", frame_angular_velocities)
         np.save(clip_dir / "frame_speeds.npy", frame_speeds)
+        np.save(clip_dir / "frame_pose_valid.npy", frame_pose_valid)
 
-    valid_positions = frame_positions[np.linalg.norm(frame_positions[:, :2], axis=1) > 1e-9]
+    valid_positions = frame_positions[frame_pose_valid]
     if len(valid_positions) >= 2:
         xy_displacement_m = float(np.linalg.norm(valid_positions[-1, :2] - valid_positions[0, :2]))
         xy_path_length_m = float(np.sum(np.linalg.norm(np.diff(valid_positions[:, :2], axis=0), axis=1)))
@@ -386,7 +390,8 @@ def _write_odom_arrays(
         xy_path_length_m = 0.0
     return {
         "frame_count": n,
-        "odom_frame_count": int(sum(1 for row in trajectory if _has_odom(row))),
+        "odom_frame_count": int(frame_pose_valid.sum()),
+        "missing_odom_frame_count": int(n - frame_pose_valid.sum()),
         "xy_displacement_m": round(xy_displacement_m, 6),
         "xy_path_length_m": round(xy_path_length_m, 6),
         "speed_mean_mps": round(float(np.mean(frame_speeds)) if n else 0.0, 6),
