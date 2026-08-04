@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -43,6 +44,10 @@ from mcp_server.data.vqa_v2_eligibility import (
 from mcp_server.data.vqa_v2_producers import (
     CanonicalDemonstratedDirectionProducerV2,
     produce_external_interface_annotation_v2,
+)
+from mcp_server.data.vqa_v2_review import (
+    VQAReviewDecisionV2,
+    filter_vqa_artifacts_by_review_v2,
 )
 from mcp_server.data.vqa_v2_questions import (
     build_vqa_questions_v2,
@@ -850,6 +855,12 @@ def test_offline_evaluator_and_review_html(
         "&quot;direction_label&quot;: &quot;straight&quot;"
         in page
     )
+    assert "Export reviewed JSONL" in page
+    assert "Human verdict" in page
+    assert ".join('\\n')+'\\n'" in page
+    assert "split(/\\r?\\n/)" in page
+    assert "canonical_reconstructed" not in page
+    assert review["review_set_id"].startswith("vqa-v2-")
 
 
 def test_all_active_tasks_complete_synthetic_e2e_smoke(
@@ -941,9 +952,64 @@ def test_all_active_tasks_complete_synthetic_e2e_smoke(
         for annotation in annotations
     ) == 1
     assert review["rendered_annotations"] == 18
-    assert "not human reviewed" in review_path.read_text(
-        encoding="utf-8"
+    review_page = review_path.read_text(encoding="utf-8")
+    assert "not human reviewed" in review_page
+    assert "question_not_grounded" in review_page
+
+    decision_path = tmp_path / "review_decisions.jsonl"
+    filtered_annotation_path = tmp_path / "annotations.filtered.jsonl"
+    rejected_annotation_path = tmp_path / "annotations.rejected.jsonl"
+    needs_fix_annotation_path = tmp_path / "annotations.needs_fix.jsonl"
+    filtered_view_path = tmp_path / "views.filtered.jsonl"
+    decisions = [
+        VQAReviewDecisionV2(
+            review_set_id=review["review_set_id"],
+            annotation_id=annotations[0].annotation_id,
+            source_group_id=annotations[0].source_group_id,
+            source_fingerprint=annotations[0].source_fingerprint,
+            task_id=annotations[0].question.task_id,
+            label_source=annotations[0].label_source,
+            reviewer="unit-test",
+            reviewed_at=datetime.now(UTC),
+            verdict="keep",
+        ),
+        VQAReviewDecisionV2(
+            review_set_id=review["review_set_id"],
+            annotation_id=annotations[1].annotation_id,
+            source_group_id=annotations[1].source_group_id,
+            source_fingerprint=annotations[1].source_fingerprint,
+            task_id=annotations[1].question.task_id,
+            label_source=annotations[1].label_source,
+            reviewer="unit-test",
+            reviewed_at=datetime.now(UTC),
+            verdict="reject",
+            issue_codes=["answer_incorrect"],
+        ),
+    ]
+    write_jsonl_atomic(
+        decision_path,
+        [item.model_dump(mode="json") for item in decisions],
     )
+    filter_report = filter_vqa_artifacts_by_review_v2(
+        annotation_jsonl=annotation_path,
+        decision_jsonl=decision_path,
+        output_annotation_jsonl=filtered_annotation_path,
+        rejected_annotation_jsonl=rejected_annotation_path,
+        needs_fix_annotation_jsonl=needs_fix_annotation_path,
+        training_view_jsonl=view_path,
+        output_training_view_jsonl=filtered_view_path,
+        unreviewed_policy="keep",
+    )
+
+    assert filter_report["annotation_counts"] == {
+        "keep": 1,
+        "reject": 1,
+        "unreviewed_keep": 16,
+    }
+    assert len(filtered_annotation_path.read_text().splitlines()) == 17
+    assert len(rejected_annotation_path.read_text().splitlines()) == 1
+    assert needs_fix_annotation_path.read_text() == ""
+    assert len(filtered_view_path.read_text().splitlines()) == 17
 
 
 def test_legacy_v1_source_is_rejected() -> None:

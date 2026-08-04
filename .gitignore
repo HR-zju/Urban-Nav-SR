@@ -9,6 +9,7 @@
 Locomotion_part/viobot_ctrl/build/
 Locomotion_part/viobot_ctrl/install/
 Locomotion_part/viobot_ctrl/log/
+Agent_part/RouteServer/tools/model_service_handoff/
 
 # colcon metadata
 .colcon/
@@ -96,6 +97,10 @@ data/
 !Locomotion_part/viobot_ctrl/scripts/data/
 Locomotion_part/viobot_ctrl/scripts/data/*
 !Locomotion_part/viobot_ctrl/scripts/data/visualize_baton_insight_comparison.py
+# 仅跟踪人工维护的数据集状态文档，继续忽略 RouteServer/data 下的运行数据。
+!Agent_part/RouteServer/data/
+Agent_part/RouteServer/data/*
+!Agent_part/RouteServer/data/DATASET_ANNOTATION_STATUS.md
 # RouteServer 的 Python 数据合同/转换器是源码，不属于运行时数据目录。
 !Agent_part/RouteServer/src/mcp_server/data/
 !Agent_part/RouteServer/src/mcp_server/data/*.py
