@@ -317,6 +317,25 @@ V2.0 中静默打开。
 真实付费/外部标注前必须先跑小规模 smoke，生成自包含 HTML 供人工逐条检查。smoke
 通过只表示 pipeline 与样例可审，不表示语义收敛或可以全量生产。
 
+### 8.1 人工校阅与过滤合同
+
+人工校阅不原地修改 canonical annotation，而是按 `annotation_id` 导出独立
+`urbannav_navigation_vqa_review_decision_v2_0` sidecar。每条决定绑定
+`source_group_id/source_fingerprint/task_id/label_source`，防止把同一 source 下其他 VQA
+问题一起误删，也防止 decision 被应用到不同 source revision。
+
+校阅页按 `dataset × task_id × label_source` 做确定性 SHA-256 分层抽样，支持：
+
+- `keep`：标签可以继续进入训练；
+- `reject`：标签错误，排除 annotation 和对应 training view；
+- `needs_fix`：排除当前训练池并进入独立返修队列；
+- `unreviewed`：仅为 UI 草稿状态，不写入 decision JSONL。
+
+浏览器使用 `localStorage` 保存当前 review-set 草稿，并可导入、导出 reviewed-only JSONL。
+抽样校阅不能静默决定未抽中样本，因此过滤工具要求显式指定
+`--unreviewed-policy error|keep|drop`。常规抽样补丁使用 `keep`；全量人工门禁使用默认
+`error`。过滤器流式同步 annotation 和 training view，并按 `annotation_id` 保持两者一致。
+
 ## 9. ms-swift loss 与训练语义
 
 ms-swift 对每个 view 新建 messages row：
@@ -384,6 +403,7 @@ src/mcp_server/data/vqa_v2_source.py
 src/mcp_server/data/vqa_v2_eligibility.py
 src/mcp_server/data/vqa_v2_questions.py
 src/mcp_server/data/vqa_v2_producers.py
+src/mcp_server/data/vqa_v2_review.py
 src/mcp_server/data/vqa_v2_views.py
 src/mcp_server/data/vqa_v2_audit.py
 src/mcp_server/teacher/vqa_v2_profiles.py
@@ -416,6 +436,27 @@ PYTHONPATH=src python tools/model_processing/build_vqa_v2_review_html.py \
   --views-jsonl vqa_v2_views.jsonl \
   --output-html review_outputs/vqa_v2/smoke_review.html \
   --report-json review_outputs/vqa_v2/smoke_review.json
+
+# 标准三数据集 run root 的小规模分层人工校阅页；默认嵌入去重缩略图。
+PYTHONPATH=src python tools/model_processing/build_vqa_v2_review_html.py \
+  --dataset-root /path/to/vqa_run_root \
+  --datasets foxglove sidewalk egowalk \
+  --samples-per-stratum 1 \
+  --max-annotations 48 \
+  --output-html review_outputs/vqa_v2/sample_review.html \
+  --report-json review_outputs/vqa_v2/sample_review.report.json
+
+# 将浏览器导出的 decision sidecar 同步应用到 annotation 与 training view。
+PYTHONPATH=src python tools/model_processing/apply_vqa_v2_review_decisions.py \
+  --annotation-jsonl vqa_v2_annotations.jsonl \
+  --training-view-jsonl vqa_v2_views.jsonl \
+  --decision-jsonl vqa_v2_review_decisions.jsonl \
+  --output-annotation-jsonl vqa_v2_annotations.filtered.jsonl \
+  --output-training-view-jsonl vqa_v2_views.filtered.jsonl \
+  --rejected-annotation-jsonl vqa_v2_annotations.rejected.jsonl \
+  --needs-fix-annotation-jsonl vqa_v2_annotations.needs_fix.jsonl \
+  --unreviewed-policy keep \
+  --report-json vqa_v2_review_filter.report.json
 
 PYTHONPATH=src python tools/model_processing/audit_vqa_v2_artifacts.py \
   --source-jsonl vqa_v2_sources.jsonl \

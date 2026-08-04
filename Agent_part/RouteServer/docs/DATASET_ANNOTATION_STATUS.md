@@ -1,6 +1,6 @@
 # UrbanNav 数据集标注状态
 
-更新时间：2026-08-01 23:03 CST。
+更新时间：2026-08-04 16:41 CST。
 
 本文维护服务器上 Reasoning V4.6 Compact FullCoT 与 VQA V2 的运行快照。它是运行证据索引，不替代
 [`REASONING_V4_DATA_ANNOTATION_DESIGN.md`](REASONING_V4_DATA_ANNOTATION_DESIGN.md)
@@ -28,17 +28,17 @@ annotation JSONL 不是默认训练 manifest。
 | 项目 | 当前值 |
 | --- | --- |
 | 逻辑节点 | `leap-a800-2-2` |
-| 实测主机 | `root@172.28.4.47:2222`，经 `wangjingke@8.162.3.74:12087` |
-| 实测 hostname | `cce-ig-x78qqhwq-mzceh1rr-j22mvq8a-06` |
+| 实测主机 | `root@172.28.4.127:2222`，经 `wangjingke@8.162.3.74:12087` |
+| 实测 hostname | `cce-ig-8dy9mgec-esjd9g61-b423inyb-01` |
 | 基线 commit | `fe39c954e61efa9edc6d481f00681ab15d9172c3`；EgoWalk 启动另含已测试 direction-source hotfix |
 | 模型服务 0 | `http://127.0.0.1:18461/v1`，`qwen3.5-122b-a10b-behavior` |
 | 模型服务 1 | `http://127.0.0.1:18462/v1`，`qwen3.5-122b-a10b-instruction` |
 | 图片策略 | `reasoning_v4_section_images_routed_visual_v1` |
 | 标注并发 | EgoWalk FullCoT 为每服务 8、总并发 16；SideWalk repair 沿用同一设置但等待服务空闲后才启动 |
-| 当前标注 tmux | 活动：`vla-annotation-fullcot-egowalk-resume`；等待：`vla-annotation-fullcot-sidewalk-repair` |
-| 最近服务器实测 | `2026-08-03 22:50 CST`；VQA worker 已退出，EgoWalk 两个 worker 和两个模型服务均存活 |
-| 最新连接检查 | `2026-08-03 22:50 CST`；经跳板机成功连接 `172.28.4.47:2222` |
-| 当前活动阶段 | EgoWalk FullCoT 断点续标；其 worker 退出后自动启动 SideWalk NavigationContext contract repair |
+| 当前标注 tmux | 模型：`vla-eval-0` / `vla-eval-1`；worker：`vla-annotation-fullcot-egowalk-0` / `vla-annotation-fullcot-egowalk-1` |
+| 最近服务器实测 | `2026-08-04 16:41 CST`；VQA worker 已退出，EgoWalk 两个 v2-compatible worker 和两个模型服务均存活 |
+| 最新连接检查 | `2026-08-04 16:41 CST`；经跳板机成功连接 `172.28.4.127:2222` |
+| 当前活动阶段 | EgoWalk FullCoT 使用 run-local 隔离 runtime 中的 `reasoning_v4_task_canonicalization_v2` 断点续标；旧 v2 deterministic TaskGrounding 已通过全 shard cache preflight，可继续复用 |
 
 ## 3. FullCoT 数据状态
 
@@ -47,20 +47,21 @@ annotation JSONL 不是默认训练 manifest。
 | Foxglove | 47,249 | 47,249 | admission v2：`all_sections_accepted=47,249`；`candidate_structurally_valid=46,628`；`pending_human=13,087`；`formal_training_eligible=34,162` | `QC 待处理`；行级 completeness passed，但仍有 blocking action conflicts，尚未导出正式训练 view | `annotation_runs/reasoning_v4_6_qwen122b_foxglove_20way_routed_visual_full_v1` |
 | SideWalk main | 45,397 | 45,397 | admission v2：`all_sections_accepted=35,038`；`candidate_structurally_valid=33,997`；`pending_human=10,012`；`formal_training_eligible=25,026` | `contract repair 已排队`；10,359 条 section failure 已完成 source/media 预检，原 run 不覆盖 | baseline：`annotation_runs/reasoning_v4_6_qwen122b_sidewalk_main_20way_routed_visual_full_v1`；repair：`annotation_runs/reasoning_v4_6_qwen122b_sidewalk_main_navigation_contract_repair_v1` |
 | SideWalk extra unique | 2,611 | 0 | 输入和 20-way profile 已检查 | `已排队`；当前 VQA 队列明确将该 FullCoT 阶段延后，尚无活动 worker | `annotation_runs/reasoning_v4_6_qwen122b_sidewalk_extra_20way_routed_visual_full_v1` |
-| EgoWalk | 284,470 | 57,436 | service 0/1 分别为 28,759/28,677 行；当前 worker 报告速率约 2,073-2,078 row/h/service | `标注中`；VQA 完成后已恢复两路 8 并发 FullCoT worker | `annotation_runs/reasoning_v4_6_qwen122b_egowalk_12way_routed_visual_full_v1` |
+| EgoWalk | 284,470 | 124,778 raw append-only rows（`2026-08-04 16:41 CST` 快照） | 两片各 142,235 source；v2 preflight 复用完整行 59,570/58,969，重试 2,732/3,143，未标注 79,933/80,123 | `标注中`；两路并发 8，8 卡实测利用率 100% | `annotation_runs/reasoning_v4_6_qwen122b_egowalk_12way_routed_visual_full_v1` |
 | FrodoBots | 未纳入 | 0 | continuous trajectory/System1 不可信；当前正式队列未包含 | `未开始`；不得借用 FrodoBots trajectory 生成 strong action | 无 |
 
 结论：当前不能表述为“已上传的数据全部完成 FullCoT”。已完成行级 annotation 的只有
 Foxglove 和 SideWalk main；其中 SideWalk main 仍有 10,359 条 section repair 等待执行。
-EgoWalk 已在 VQA 完成后恢复并处理到 57,436 行；SideWalk extra 尚未开始。FrodoBots 不在
+EgoWalk 已在 VQA 完成后按原 run 的 v2 canonicalization contract 恢复 FullCoT 标注；SideWalk extra 尚未开始。FrodoBots 不在
 本轮可信强动作 FullCoT 队列。
 
 VQA 队列已完成，其最后动作已恢复 EgoWalk FullCoT；当前生产链为：
 
 ```text
-vla-annotation-fullcot-egowalk-resume
+vla-annotation-fullcot-egowalk-0 + vla-annotation-fullcot-egowalk-1
   -> EgoWalk FullCoT complete
-  -> vla-annotation-fullcot-sidewalk-repair 自动离开等待状态
+  -> 修复 exporter/contract 的 `ActionReviewResolutionV4` 版本闭合
+  -> SideWalk NavigationContext repair / SideWalk extra
 ```
 
 SideWalk extra FullCoT 仍为 deferred，不能把旧的独立轮询 tmux 表述为当前活动队列。
@@ -276,25 +277,32 @@ annotation_runs/reasoning_v4_6_qwen122b_egowalk_12way_routed_visual_full_v1
 | `left_40` | 1,412 | `right_40` | 6,046 |
 | `left_50plus` | 1,136 | `right_50plus` | 4,358 |
 
-最近一次实时核验（2026-08-01 23:03:27 CST）：
+最近一次实时核验（2026-08-04 16:41 CST）：
 
 | 检查项 | 实测结果 |
 | --- | --- |
-| tmux | 无活动 EgoWalk FullCoT worker；当前 GPU 由 `vla-annotation-vqa-interesting` 使用 |
+| tmux | `vla-annotation-fullcot-egowalk-0/1` 活动；模型服务为 `vla-eval-0/1` |
 | source coverage | 284,470 / 284,470，`passed=true` |
 | stamped input | 284,470 行 |
 | worker shards | service 0/1 各 142,235 行 |
-| annotation | service 0 为 3,547 行；service 1 为 3,529 行；合计 7,076 行 |
-| rejected | service 0 为 156 行；service 1 为 187 行；合计 343 行 |
-| LVLM 请求 | 2026-08-01 17:12 CST 左右暂停；现有 report 的 `status=running` 是中断前快照，不代表 worker 仍存活 |
-| GPU | GPU0–7 当前用于 VQA；每卡约 78.8 GiB，实测利用率 66%–100% |
-| 暂停前吞吐 | 两路 report 合计约 4,198 rows/h |
-| 恢复后 ETA | 剩余 277,394 行；若维持暂停前吞吐，约需 66 h，该 ETA 从实际恢复时刻重新起算 |
+| annotation | raw append-only：service 0 为 62,469 行；service 1 为 62,309 行；最终必须按 `source_group_id` 取最新 v2-compatible 行 |
+| cache 口径 | service 0：59,570 complete + 2,732 retry + 79,933 missing；service 1：58,969 complete + 3,143 retry + 80,123 missing；无额外 stale 行 |
+| LVLM 请求 | 两个 report 均为 `status=running`、`task_canonicalization_version=..._v2`；快照时新处理 11/10 条 |
+| GPU | GPU0–7 各约 78.5 GiB，实测利用率 100% |
+| 当前吞吐 | 刚启动快照约 1,405/1,320 rows/h，仍在集中重试旧失败行；应在稳态后重新估算 |
+| 当前 ETA | 启动时 pending 为 82,665/83,266，合计 165,931；按早期/历史稳态吞吐估计约 41–61 h |
 
-当前 7,076 行中 `record_error=0`，但只有 6,743 行达到 section 全接受、6,733 行达到 candidate
-structurally valid，另有 1,221 行进入人工 reconciliation。reject 主要来自
-`NavigationContextGrounding`，另有少量 candidate construction failure；暂停快照不能外推最终
-接受率。
+本轮续标使用 run root 内的隔离 runtime：
+
+```text
+resume_runtime/reasoning_v4_6_taskcanon_v2
+```
+
+其 batch、teacher、prompt profile 与原 run 一致，只将后来升级的 TaskGrounding canonicalization 回定到原
+`reasoning_v4_task_canonicalization_v2`。误启 v3 生成的尾部行已全部移入独立 quarantine JSONL，
+不参与续标 cache。当前 `launch-full` 的 exporter 仍有
+`ActionReviewResolutionV4` contract/import 版本不闭合；这不影响正在运行的 labeler，但在最终
+deduplicate、reconciliation 和 formal-view export 前必须修复。
 
 ## 5. 输入模态覆盖
 
@@ -333,33 +341,16 @@ EgoWalk 合计为 284,470 输入、66,256 interesting、218,214 boring。上表�
 
 ### 6.1 VQA V2 当前运行
 
-当前生产队列已经完成 stable-ID selection、Reasoning source build 和 VQA source build，正在对
-interesting 候选池做 VQA teacher 标注。这里的“运行中”只表示生产链路已启动，不等于 VQA
-training view 已通过人工语义验收或 release gate。
+当前 interesting VQA teacher 队列已完成并退出。三个数据集的 `vqa_audit.json`
+均为 `passed=true`；这只证明 artifact/schema audit 通过，不等于已完成人工语义验收或
+release gate。
 
 | 数据集 | 已准备 source | 当前状态 |
 | --- | ---: | --- |
-| Foxglove | 20,680 | 标注中 |
-| SideWalk | 19,248 | 等待 Foxglove |
-| EgoWalk | 66,256 | 等待 SideWalk |
-| 合计 | 106,184 | 顺序队列 |
-
-Foxglove 最近快照（2026-08-01 23:03 CST）：
-
-| 指标 | service 0 | service 1 | 合计 |
-| --- | ---: | ---: | ---: |
-| completed source | 7,800 | 7,900 | 15,700 |
-| accepted QA annotation | 93,498 | 94,374 | 187,872 |
-| task-level schema error | 151 | 148 | 299 |
-
-因此 Foxglove source 进度为 `15,700 / 20,680 = 75.92%`。task-level error 约占已经尝试
-QA 的 `299 / (187,872 + 299) = 0.16%`，主要是 `d4_applicable_constraint` 的
-`affected_direction_labels` 超出 question candidates，另有少量 reason-code 格式错误。每个 source
-会根据 eligibility 生成不同数量的 QA，不能用 annotation JSONL 行数除以 source 行数计算进度。
-
-Foxglove 从 17:38 CST 开始标注，当前平均约 2,900 source rows/h；按该速度剩余约 1.7 h。
-若后续数据集的 eligible task 组合和服务速度近似，三批 VQA 的总剩余时间约 31 h。该估计按
-source 完成数计算；SideWalk/EgoWalk 的 task mix 不同，切换数据集后必须重新测量。
+| Foxglove | 20,680 | 已完成；243,223 条 VQA view，audit passed |
+| SideWalk | 19,248 | 已完成；237,977 条 VQA view，audit passed |
+| EgoWalk | 66,256 | 已完成；1,038,696 条 VQA view，audit passed |
+| 合计 | 106,184 | 1,519,896 条 VQA view；三批 artifact audit 全部通过 |
 
 `interesting` 应作为 VQA 的**高价值优先候选池**，尤其服务于障碍、交互、规则、局部通行性
 等视觉任务，但不能成为所有 VQA task 的唯一分布。instruction grounding、方向 E0 和正常可通行
