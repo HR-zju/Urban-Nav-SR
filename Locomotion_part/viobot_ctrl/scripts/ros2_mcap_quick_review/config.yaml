@@ -1,5 +1,5 @@
 paths:
-  data_root: /volume1/Datasets/foxglove/mcap_post/repaired
+  data_root: /volume1/Datasets/foxglove/mcap
   work_dir: ./work
 
 scan:

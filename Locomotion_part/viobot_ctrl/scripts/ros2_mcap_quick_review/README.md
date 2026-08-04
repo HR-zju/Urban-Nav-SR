@@ -195,6 +195,70 @@ export REVIEW_CONFIG=$PWD/config.yaml
 streamlit run app.py --server.address 0.0.0.0 --server.port 8501
 ```
 
+### 5.1 按初筛决定增量重建服务器数据
+
+`rsync_decision_data.py` 可以从 `decisions.csv` 中选择人工
+`REVIEW`/`DROP`，提取每行文件名中的 `rec_...` 编号，再用相同编号匹配本地 MCAP。
+因此 CSV 与本地文件的前缀可以不同。例如：
+
+```text
+CSV:   old_prefix__rec_0eMXBkIl0RRdZiFV.mcap
+本地:  repaired_prefix__rec_0eMXBkIl0RRdZiFV_global.mcap
+```
+
+先执行 dry-run；没有 `--execute` 时不会写入服务器：
+
+```bash
+python rsync_decision_data.py \
+  --decisions-csv ../data/decisions.csv \
+  --local-root /path/to/local/mcap \
+  --remote 'user@server:/path/to/rebuild/' \
+  --ssh-port 10522 \
+  --include-decisions-csv
+```
+
+检查 rsync 输出以及以下报告：
+
+```text
+/tmp/rsync-decision-transfer/manifest.tsv
+/tmp/rsync-decision-transfer/missing.tsv
+/tmp/rsync-decision-transfer/summary.json
+```
+
+确认无误后使用相同参数增加 `--execute`：
+
+```bash
+python rsync_decision_data.py \
+  --decisions-csv ../data/decisions.csv \
+  --local-root /path/to/local/mcap \
+  --remote 'user@server:/path/to/rebuild/' \
+  --ssh-port 10522 \
+  --include-decisions-csv \
+  --execute
+```
+
+脚本每次都会重建完整筛选清单，但 rsync 默认只发送服务器上缺少或已经变化的文件；
+未变化文件会被跳过。中断时保留 `.rsync-partial`，重新执行相同命令即可续传。
+脚本不会传递 `--delete`，因而不会删除服务器上的额外文件。
+第一次重建应使用一个专用的空目标目录；如果以后改变了同一编号的本地相对文件名，
+旧文件不会被自动删除，需要先人工核对服务器内容，避免同一 `rec_...` 编号残留多个文件。
+
+完整重建要求所有选中编号都能在本地找到时，增加 `--require-all`。如果同一编号匹配到
+多个本地 MCAP，脚本默认停止，避免在原始版和修复版之间任意选择；确实需要全部传输时
+才使用 `--allow-multiple`。当本地与服务器文件的时间戳不可信时可使用 `--checksum`
+按内容比较，但这会完整读取两端文件，速度明显更慢。
+
+默认按 `manual_decision` 筛选。若明确需要按自动建议重建，可改用：
+
+```bash
+python rsync_decision_data.py \
+  --decision-column auto_recommendation \
+  --decisions-csv ../data/decisions.csv \
+  --local-root /path/to/local/mcap \
+  --remote 'user@server:/path/to/rebuild/' \
+  --ssh-port 10522
+```
+
 ## 6. 导出标签
 
 ```bash
