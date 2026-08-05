@@ -19,7 +19,10 @@ from mcp_server.eval.openloop_common import (
     validate_openloop_package_v1,
 )
 from mcp_server.eval.openloop_reporting import write_openloop_scorecard_v1
-from mcp_server.eval.stage_i_openloop import evaluate_stage_i_openloop_v1
+from mcp_server.eval.stage_i_openloop import (
+    evaluate_stage_i_decision_only_v1,
+    evaluate_stage_i_openloop_v1,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -34,6 +37,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-json", required=True, type=Path)
     parser.add_argument("--output-csv", required=True, type=Path)
     parser.add_argument("--output-html", required=True, type=Path)
+    parser.add_argument(
+        "--evaluation-scope",
+        choices=("all", "decision_only"),
+        default="all",
+        help=(
+            "Use decision_only for the current Stage I primary direction "
+            "evaluation; all preserves the mixed benchmark protocol."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -71,7 +83,11 @@ def main() -> None:
         predictions,
         failures,
     )
-    report = evaluate_stage_i_openloop_v1(rows)
+    report = (
+        evaluate_stage_i_decision_only_v1(rows)
+        if args.evaluation_scope == "decision_only"
+        else evaluate_stage_i_openloop_v1(rows)
+    )
     report["benchmark_id"] = artifacts.package.benchmark_id
     report["run_id"] = artifacts.run.run_id
     report["split"] = artifacts.package.split

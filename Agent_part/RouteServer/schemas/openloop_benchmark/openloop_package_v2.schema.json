@@ -29,8 +29,8 @@
           "type": "string"
         },
         "policy_version": {
-          "const": "urbannav_openloop_metric_policy_v2_0",
-          "default": "urbannav_openloop_metric_policy_v2_0",
+          "const": "urbannav_openloop_metric_policy_v2_1",
+          "default": "urbannav_openloop_metric_policy_v2_1",
           "title": "Policy Version",
           "type": "string"
         },
@@ -127,8 +127,8 @@
           "type": "string"
         },
         "policy_version": {
-          "const": "urbannav_openloop_renderer_policy_v2_0",
-          "default": "urbannav_openloop_renderer_policy_v2_0",
+          "const": "urbannav_openloop_renderer_policy_v2_1",
+          "default": "urbannav_openloop_renderer_policy_v2_1",
           "title": "Policy Version",
           "type": "string"
         },
@@ -196,8 +196,11 @@
       "$ref": "#/$defs/OpenLoopRendererPolicyV1"
     },
     "schema_version": {
-      "const": "urbannav_openloop_benchmark_v2_0",
-      "default": "urbannav_openloop_benchmark_v2_0",
+      "default": "urbannav_openloop_benchmark_v2_1",
+      "enum": [
+        "urbannav_openloop_benchmark_v2_1",
+        "urbannav_openloop_benchmark_v2_0"
+      ],
       "title": "Schema Version",
       "type": "string"
     },

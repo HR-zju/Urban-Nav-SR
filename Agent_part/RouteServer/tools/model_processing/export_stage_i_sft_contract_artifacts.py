@@ -16,6 +16,8 @@ from mcp_server.contracts.stage_i_sft import (
     STAGE_I_PROJECTION_POLICY_VERSION,
     STAGE_I_TRAINING_VIEW_ADAPTER_V1,
     STAGE_I_TRAINING_VIEW_SCHEMA_VERSION,
+    STAGE_I_TRAINING_VIEW_ADAPTER_V2,
+    STAGE_I_TRAINING_VIEW_V2_SCHEMA_VERSION,
     StageIProjectionDropV1,
     StageIInstructionProvenanceV1,
 )
@@ -24,6 +26,7 @@ from mcp_server.contracts.stage_i_sft import (
 ARTIFACT_SCHEMA_VERSION = "urbannav_stage_i_contract_artifacts_v1"
 ARTIFACT_FILENAMES = (
     "stage_i_training_view_v1.schema.json",
+    "stage_i_training_view_v2.schema.json",
     "stage_i_projection_drop_v1.schema.json",
     "stage_i_instruction_provenance_v1.schema.json",
     "contract_digest.json",
@@ -41,6 +44,9 @@ def build_stage_i_sft_contract_artifacts() -> dict[str, Any]:
         "stage_i_training_view_v1.schema.json": (
             STAGE_I_TRAINING_VIEW_ADAPTER_V1.json_schema()
         ),
+        "stage_i_training_view_v2.schema.json": (
+            STAGE_I_TRAINING_VIEW_ADAPTER_V2.json_schema()
+        ),
         "stage_i_projection_drop_v1.schema.json": (
             StageIProjectionDropV1.model_json_schema()
         ),
@@ -51,6 +57,7 @@ def build_stage_i_sft_contract_artifacts() -> dict[str, Any]:
     artifacts["contract_digest.json"] = {
         "schema_version": ARTIFACT_SCHEMA_VERSION,
         "training_view_schema_version": STAGE_I_TRAINING_VIEW_SCHEMA_VERSION,
+        "training_view_v2_schema_version": STAGE_I_TRAINING_VIEW_V2_SCHEMA_VERSION,
         "projection_policy_id": STAGE_I_PROJECTION_POLICY_ID,
         "projection_policy_version": STAGE_I_PROJECTION_POLICY_VERSION,
         "loss_span_policy_id": STAGE_I_LOSS_SPAN_POLICY_ID,

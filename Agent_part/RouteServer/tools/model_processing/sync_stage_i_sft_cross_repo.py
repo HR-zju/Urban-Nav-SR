@@ -89,6 +89,7 @@ def sync_stage_i_sft_cross_repo(
     artifact_hashes: dict[str, str] = {}
     for filename in (
         "stage_i_training_view_v1.schema.json",
+        "stage_i_training_view_v2.schema.json",
         "stage_i_projection_drop_v1.schema.json",
         "stage_i_instruction_provenance_v1.schema.json",
         "contract_digest.json",

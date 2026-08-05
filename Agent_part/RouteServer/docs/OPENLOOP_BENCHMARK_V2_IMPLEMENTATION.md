@@ -25,6 +25,12 @@ The canonical contract is
 the same schema artifacts. `contract_digest.json` is the cross-repository parity
 gate.
 
+Open-loop contract V2.1 adds the Stage I `reasoning_dropout` atomic task used by
+the V2 direct-direction renderer. V2.1 writers emit the new schema versions;
+readers explicitly accept frozen V2.0 rows so existing Stage II and historical
+evaluation artifacts remain auditable. This compatibility is only for artifact
+reading, not permission to mix V1 standalone `decision` rows into V2 training.
+
 ## Frozen policies
 
 `config/evaluation/stage_i_openloop_v1.json` and
@@ -122,9 +128,28 @@ search and unrecorded path guessing are deliberately unsupported.
 
 The formal Stage II output reports Geometry Coverage and conditional ADE/FDE at
 each fixed horizon, moving-only yaw diagnostics, eligible dataset counts,
-per-dataset metrics, three-pass reliability, and DecisionStopDrift. Collision,
-route progress, physical FalseMove/FalseFreeze without a frozen policy, and
-closed-loop success are N/A.
+per-dataset metrics, three-pass reliability, and DecisionStopDrift. It also
+publishes the single selected trajectory's fixed-time endpoint errors as
+`conditional_l2_m` within each horizon and as the explicit top-level
+`selected_l2.primary_eligible_dataset_macro.{l2_1s_m,l2_2s_m}` scorecard. The
+secondary natural-micro values are retained under
+`selected_l2.secondary_natural_micro`.
+
+For the current one-trajectory output contract, this is an explicit naming of
+the existing fixed-horizon endpoint error, not a new approximation:
+
+```text
+L2@tau = ||p_hat(tau) - p(tau)||_2 = FDE@tau.
+```
+
+The first future point occurs at `0.125 s`, so `L2@1s` reads point index 7 and
+`L2@2s` reads point index 15. A reference contributes only when every target
+mask entry through that physical horizon is valid. Invalid or missing model
+outputs remain visible through Geometry Coverage and never receive a prefix
+score. `mAP`, `minADE`, and `minFDE` are intentionally outside this milestone:
+they require a frozen multi-candidate output, confidence, matching, and
+aggregation contract. Collision, route progress, physical
+FalseMove/FalseFreeze without a frozen policy, and closed-loop success are N/A.
 
 ## Lineage and split safety
 

@@ -47,6 +47,21 @@ STAGE_I_OPENLOOP_EVALUATOR_VERSION = (
     "urbannav_stage_i_openloop_evaluator_v2_0"
 )
 
+_COMMON_12_LABELS = (
+    "stop",
+    "straight",
+    "left_10",
+    "right_10",
+    "left_20",
+    "right_20",
+    "left_30",
+    "right_30",
+    "left_40",
+    "right_40",
+    "left_50plus",
+    "right_50plus",
+)
+
 _PROVENANCE_SCOPES = (
     "deterministic_gt",
     "human_gold",
@@ -146,19 +161,62 @@ def evaluate_stage_i_openloop_v1(
     by_task: dict[str, list[OpenLoopJoinedRowV1]] = defaultdict(list)
     for row in materialized:
         by_task[row.reference.task_type].append(row)
-    unsupported = set(by_task) - {"full_cot", "vqa", "decision"}
+    unsupported = set(by_task) - {"full_cot", "vqa", "decision", "reasoning_dropout"}
     if unsupported:
         raise ValueError(f"unsupported Stage I task types: {sorted(unsupported)}")
+    direct_task_types = set(by_task) & {"decision", "reasoning_dropout"}
+    if len(direct_task_types) != 1:
+        raise ValueError(
+            "Stage I aggregate evaluator requires exactly one direct task type: "
+            f"{sorted(direct_task_types)}"
+        )
+    direct_task_type = next(iter(direct_task_types))
     return {
         "evaluator_version": STAGE_I_OPENLOOP_EVALUATOR_VERSION,
         "coverage": coverage_metrics_v1(materialized),
         "full_cot": evaluate_full_cot_openloop_v1(by_task["full_cot"]),
         "vqa": evaluate_vqa_openloop_v1(by_task["vqa"]),
-        "decision": evaluate_decision_openloop_v1(by_task["decision"]),
+        "decision": evaluate_decision_openloop_v1(by_task[direct_task_type]),
+        "direct_task_type": direct_task_type,
         "modality_robustness": {
             "status": "N/A",
             "reason": "V2.0 has no approved same-parent paired target reprojection",
         },
+    }
+
+
+def evaluate_stage_i_decision_only_v1(
+    rows: Iterable[OpenLoopJoinedRowV1],
+) -> dict[str, Any]:
+    """Evaluate only the Stage I short-horizon Decision contract.
+
+    FullCoT and VQA are training views and auxiliary generation gates for the
+    current experiment.  They are intentionally excluded from this primary
+    test scorecard.
+    """
+
+    materialized = list(rows)
+    accepted_task_types = {"decision", "reasoning_dropout"}
+    invalid = [
+        row.reference.sample_id
+        for row in materialized
+        if row.reference.stage != "stage_i"
+        or row.reference.task_type not in accepted_task_types
+    ]
+    if invalid:
+        raise ValueError(
+            "Direction-only evaluator received rows outside Stage I direct Decision views: "
+            f"{invalid[:8]}"
+        )
+    task_types = {row.reference.task_type for row in materialized}
+    if len(task_types) != 1:
+        raise ValueError(f"Direction-only evaluator cannot mix direct task types: {sorted(task_types)}")
+    return {
+        "evaluator_version": STAGE_I_OPENLOOP_EVALUATOR_VERSION,
+        "evaluation_scope": "stage_i_direction_only",
+        "direct_task_type": next(iter(task_types)),
+        "coverage": coverage_metrics_v1(materialized),
+        "decision": evaluate_decision_openloop_v1(materialized),
     }
 
 
@@ -487,6 +545,11 @@ def _evaluate_decision_profile(
     range_rows = 0
     range_correct = 0
     within_one_bin = 0
+    within_two_bins = 0
+    common12_correct = 0
+    common12_confusion: dict[str, Counter[str]] = {
+        label: Counter() for label in _COMMON_12_LABELS
+    }
     speed_correct = 0
     response_correct = 0
     tuple_correct = 0
@@ -519,6 +582,14 @@ def _evaluate_decision_profile(
         confusion[expected_label][predicted_label] += 1
         is_correct = predicted_label == expected_label
         correct += is_correct
+        expected_common12 = _common12_direction_label(expected_label)
+        predicted_common12 = (
+            _common12_direction_label(predicted_label)
+            if predicted is not None
+            else "__invalid__"
+        )
+        common12_confusion[expected_common12][predicted_common12] += 1
+        common12_correct += predicted_common12 == expected_common12
         if expected_label != "stop":
             moving_rows += 1
             moving_correct += is_correct
@@ -554,6 +625,10 @@ def _evaluate_decision_profile(
                     facts.angular_delta_deg is not None
                     and facts.angular_delta_deg <= 10.0
                 ) or is_correct
+                within_two_bins += (
+                    facts.angular_delta_deg is not None
+                    and facts.angular_delta_deg <= 20.0
+                ) or is_correct
             except ValueError:
                 pass
             speed_correct += predicted.speed == expected_decision.speed
@@ -579,6 +654,10 @@ def _evaluate_decision_profile(
         else None
     )
     per_class = _classification_metrics(labels, confusion)
+    common12_per_class = _classification_metrics(
+        _COMMON_12_LABELS,
+        common12_confusion,
+    )
     return {
         "reference_count": len(rows),
         "strict_parse_rate": parsed_count / denominator,
@@ -593,8 +672,12 @@ def _evaluate_decision_profile(
             "precision": stop_precision,
             "recall": stop_recall,
             "f1": stop_f1,
+            "accuracy": stop_recall,
         },
         "moving_accuracy": moving_correct / moving_rows if moving_rows else None,
+        "non_stop_accuracy": (
+            moving_correct / moving_rows if moving_rows else None
+        ),
         "exact_center_angular": {
             "reference_count": exact_angle_reference,
             "defined_count": exact_angle_defined,
@@ -608,6 +691,23 @@ def _evaluate_decision_profile(
             "accuracy": range_correct / range_rows if range_rows else None,
         },
         "within_one_bin_accuracy": within_one_bin / denominator,
+        "within_10_accuracy": within_one_bin / denominator,
+        "within_20_accuracy": within_two_bins / denominator,
+        "common_12way": {
+            "strict_direction_accuracy": common12_correct / denominator,
+            "macro_f1": macro_mean_v1(
+                value["f1"] for value in common12_per_class.values()
+            ),
+            "balanced_accuracy": macro_mean_v1(
+                value["recall"] for value in common12_per_class.values()
+            ),
+            "per_class": common12_per_class,
+            "confusion_matrix": {
+                label: dict(sorted(values.items()))
+                for label, values in common12_confusion.items()
+                if sum(values.values())
+            },
+        },
         "speed_agreement": speed_correct / denominator,
         "response_agreement": response_correct / denominator,
         "exact_tuple_agreement": tuple_correct / denominator,
@@ -615,6 +715,19 @@ def _evaluate_decision_profile(
         "constraint_consistency": constraint_consistent / denominator,
         "errors": errors,
     }
+
+
+def _common12_direction_label(label: str) -> str:
+    """Project a native degree-10 label into the shared 12-way space."""
+
+    value = str(label)
+    if value in {"stop", "straight"}:
+        return value
+    side, magnitude = value.split("_", 1)
+    if magnitude == "50plus":
+        return value
+    angle = int(magnitude)
+    return f"{side}_{angle}" if angle <= 40 else f"{side}_50plus"
 
 
 def _classification_metrics(
@@ -780,6 +893,7 @@ __all__ = [
     "STAGE_I_OPENLOOP_EVALUATOR_VERSION",
     "evaluate_decision_openloop_v1",
     "evaluate_full_cot_openloop_v1",
+    "evaluate_stage_i_decision_only_v1",
     "evaluate_stage_i_openloop_v1",
     "evaluate_vqa_openloop_v1",
 ]

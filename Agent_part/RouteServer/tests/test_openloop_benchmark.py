@@ -219,7 +219,6 @@ def test_model_visible_input_rejects_private_supervision() -> None:
             direction_profile_id="ego_degree10_12way_terminal_centroid_v2",
             renderer_policy_digest=_HEX_A,
         )
-
     with pytest.raises(ValueError, match="assistant turns"):
         OpenLoopInputV1(
             sample_id="sample-2",
@@ -235,6 +234,34 @@ def test_model_visible_input_rejects_private_supervision() -> None:
             renderer_policy_digest=_HEX_A,
         )
 
+
+def test_openloop_v21_accepts_reasoning_dropout_and_reads_v20_rows() -> None:
+    """V2 direct rendering adds one task without invalidating frozen V2.0 rows."""
+
+    common = {
+        "sample_id": "dropout-1",
+        "parent_sample_id": "parent-1",
+        "source_group_id": "source-1",
+        "split_group_id": "clip-1",
+        "split": "validation",
+        "stage": "stage_i",
+        "task_type": "reasoning_dropout",
+        "dataset_source": "sidewalk",
+        "messages": [OpenLoopMessageV1(role="user", content="<image>go")],
+        "images": ["current.jpg"],
+        "image_roles": ["fpv.current"],
+        "modality_profile_id": "fpv_current_v1",
+        "direction_profile_id": "ego_degree10_12way_terminal_centroid_v2",
+        "renderer_policy_digest": _HEX_A,
+    }
+    current = OpenLoopInputV1.model_validate(common)
+    legacy = OpenLoopInputV1.model_validate({
+        **common,
+        "schema_version": "urbannav_openloop_input_v2_0",
+    })
+
+    assert current.schema_version == "urbannav_openloop_input_v2_1"
+    assert legacy.schema_version == "urbannav_openloop_input_v2_0"
 
 def test_join_uses_full_reference_denominator_and_rejects_extra_ids() -> None:
     target = _reasoning_target()
@@ -549,6 +576,55 @@ def test_stage_ii_fixed_horizon_coverage_rejects_short_prediction() -> None:
         == 1
     )
     assert score["physical_motion"]["status"] == "N/A"
+
+
+def test_stage_ii_reports_selected_l2_at_fixed_physical_horizons() -> None:
+    target = _trajectory_target(16)
+    reference = _reference(
+        "fixed-l2",
+        task_type="trajectory",
+        target={"trajectory_target": target.model_dump(mode="json")},
+        provenance="deterministic_gt",
+        stamp=_stamp("straight"),
+        mask=target.action_mask,
+    )
+    trajectory = [row[:] for row in target.trajectory_ego_t]
+    trajectory[7][0] += 0.25
+    trajectory[15][0] += 0.75
+    prediction = _prediction(
+        reference,
+        trajectory=trajectory,
+        context_identity=_context_identity().model_dump(mode="json"),
+    )
+    joined = join_openloop_artifacts_v1(
+        {reference.sample_id: reference},
+        {prediction.sample_id: prediction},
+        {},
+    )
+
+    score = evaluate_stage_ii_cfm_openloop_v1(
+        joined,
+        run_manifest=_run_manifest(),
+        metric_policy=OpenLoopMetricPolicyV1(),
+    )
+
+    one_second = score["horizons"]["1.000s"]
+    two_seconds = score["horizons"]["2.000s"]
+    assert one_second["step_count"] == 8
+    assert two_seconds["step_count"] == 16
+    assert one_second["primary_eligible_dataset_macro"][
+        "conditional_l2_m"
+    ] == pytest.approx(0.25)
+    assert two_seconds["primary_eligible_dataset_macro"][
+        "conditional_l2_m"
+    ] == pytest.approx(0.75)
+    assert one_second["primary_eligible_dataset_macro"][
+        "conditional_l2_m"
+    ] == one_second["primary_eligible_dataset_macro"]["conditional_fde_m"]
+    assert score["selected_l2"]["primary_eligible_dataset_macro"] == {
+        "l2_1s_m": pytest.approx(0.25),
+        "l2_2s_m": pytest.approx(0.75),
+    }
 
 
 def test_production_context_identity_and_exposure_fail_closed() -> None:

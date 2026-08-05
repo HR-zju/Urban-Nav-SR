@@ -42,8 +42,11 @@
       "type": "string"
     },
     "schema_version": {
-      "const": "urbannav_openloop_prediction_v2_0",
-      "default": "urbannav_openloop_prediction_v2_0",
+      "default": "urbannav_openloop_prediction_v2_1",
+      "enum": [
+        "urbannav_openloop_prediction_v2_1",
+        "urbannav_openloop_prediction_v2_0"
+      ],
       "title": "Schema Version",
       "type": "string"
     },
@@ -60,6 +63,7 @@
         "full_cot",
         "vqa",
         "decision",
+        "reasoning_dropout",
         "trajectory"
       ],
       "title": "Task Type",

@@ -56,6 +56,7 @@ from mcp_server.data.stage_i_views import (
     project_stage_i_reasoning_view_with_audit_v1,
     project_stage_i_vqa_view_v1,
     project_stage_i_vqa_view_with_audit_v1,
+    project_stage_i_reasoning_view_v2,
 )
 from mcp_server.data.vqa_v2_eligibility import load_vqa_capabilities_v2
 from mcp_server.data.vqa_v2_producers import CanonicalDemonstratedDirectionProducerV2
@@ -302,6 +303,35 @@ def test_decision_only_projection_has_no_full_cot_prefix_or_system1() -> None:
     reference = build_stage_i_openloop_reference_v1(serialized)
     assert reference.direction_stamp is not None
     assert reference.direction_stamp.label_name == "stop"
+
+
+def test_v2_full_cot_supervises_decision_and_dropout_is_parent_linked() -> None:
+    """V2 fixes the V1 action mask without creating a second action teacher."""
+
+    full = project_stage_i_reasoning_view_v2(
+        _formal_reasoning_view(label="left_20"),
+        task_type="full_cot",
+        modality_profile_id="fpv_instruction_v1",
+        instruction_training_role="primary",
+    )
+    assert full.task_type == "full_cot"
+    assert len(full.loss_spans) == 1
+    assert full.loss_spans[0].scale == 1.0
+    assert full.assistant_text[full.loss_spans[0].start:full.loss_spans[0].end] == full.assistant_text
+    assert '"selected_action_label":"left_20"' in full.assistant_text
+
+    dropout = project_stage_i_reasoning_view_v2(
+        _formal_reasoning_view(label="left_20"),
+        task_type="reasoning_dropout",
+        modality_profile_id="fpv_instruction_v1",
+        instruction_training_role="primary",
+    )
+    assert dropout.task_type == "reasoning_dropout"
+    assert dropout.assistant_text.startswith("<Decision>")
+    assert "<TaskGrounding>" not in dropout.assistant_text
+    assert dropout.dropout_link.dropout_reason == "assistant_reasoning_prefix"
+    assert dropout.dropout_link.parent_full_cot_sample_id.endswith(":stage_i:fpv_instruction_v1")
+    assert all(span.scale == 1.0 for span in dropout.loss_spans)
 
 
 def test_selected_instruction_must_be_primary() -> None:

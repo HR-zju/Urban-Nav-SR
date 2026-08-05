@@ -17,14 +17,22 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from mcp_server.contracts.direction_profile import DirectionLabelStamp
 
 
-OPENLOOP_BENCHMARK_SCHEMA_VERSION = "urbannav_openloop_benchmark_v2_0"
-OPENLOOP_INPUT_SCHEMA_VERSION = "urbannav_openloop_input_v2_0"
-OPENLOOP_REFERENCE_SCHEMA_VERSION = "urbannav_openloop_reference_v2_0"
-OPENLOOP_PREDICTION_SCHEMA_VERSION = "urbannav_openloop_prediction_v2_0"
-OPENLOOP_FAILURE_SCHEMA_VERSION = "urbannav_openloop_failure_v2_0"
-OPENLOOP_RUN_SCHEMA_VERSION = "urbannav_openloop_run_v2_0"
-OPENLOOP_METRIC_POLICY_VERSION = "urbannav_openloop_metric_policy_v2_0"
-OPENLOOP_RENDERER_POLICY_VERSION = "urbannav_openloop_renderer_policy_v2_0"
+OPENLOOP_BENCHMARK_SCHEMA_VERSION = "urbannav_openloop_benchmark_v2_1"
+OPENLOOP_INPUT_SCHEMA_VERSION = "urbannav_openloop_input_v2_1"
+OPENLOOP_REFERENCE_SCHEMA_VERSION = "urbannav_openloop_reference_v2_1"
+OPENLOOP_PREDICTION_SCHEMA_VERSION = "urbannav_openloop_prediction_v2_1"
+OPENLOOP_FAILURE_SCHEMA_VERSION = "urbannav_openloop_failure_v2_1"
+OPENLOOP_RUN_SCHEMA_VERSION = "urbannav_openloop_run_v2_1"
+OPENLOOP_METRIC_POLICY_VERSION = "urbannav_openloop_metric_policy_v2_1"
+OPENLOOP_RENDERER_POLICY_VERSION = "urbannav_openloop_renderer_policy_v2_1"
+# V2.1 adds ``reasoning_dropout`` as a Stage I atomic task.  Existing frozen
+# V2.0 inputs remain readable so Stage II audits do not need artifact rewrites.
+LEGACY_OPENLOOP_BENCHMARK_SCHEMA_VERSION = "urbannav_openloop_benchmark_v2_0"
+LEGACY_OPENLOOP_INPUT_SCHEMA_VERSION = "urbannav_openloop_input_v2_0"
+LEGACY_OPENLOOP_REFERENCE_SCHEMA_VERSION = "urbannav_openloop_reference_v2_0"
+LEGACY_OPENLOOP_PREDICTION_SCHEMA_VERSION = "urbannav_openloop_prediction_v2_0"
+LEGACY_OPENLOOP_FAILURE_SCHEMA_VERSION = "urbannav_openloop_failure_v2_0"
+LEGACY_OPENLOOP_RUN_SCHEMA_VERSION = "urbannav_openloop_run_v2_0"
 OPENLOOP_EXPOSURE_REGISTRY_VERSION = (
     "urbannav_checkpoint_exposure_registry_v2_0"
 )
@@ -37,6 +45,7 @@ OpenLoopTaskTypeV1 = Literal[
     "full_cot",
     "vqa",
     "decision",
+    "reasoning_dropout",
     "trajectory",
 ]
 ReferenceSemanticV1 = Literal[
@@ -213,7 +222,7 @@ class OpenLoopInputV1(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[OPENLOOP_INPUT_SCHEMA_VERSION] = (
+    schema_version: Literal[OPENLOOP_INPUT_SCHEMA_VERSION, LEGACY_OPENLOOP_INPUT_SCHEMA_VERSION] = (
         OPENLOOP_INPUT_SCHEMA_VERSION
     )
     sample_id: str = Field(min_length=1, max_length=256)
@@ -285,7 +294,7 @@ class OpenLoopReferenceV1(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[OPENLOOP_REFERENCE_SCHEMA_VERSION] = (
+    schema_version: Literal[OPENLOOP_REFERENCE_SCHEMA_VERSION, LEGACY_OPENLOOP_REFERENCE_SCHEMA_VERSION] = (
         OPENLOOP_REFERENCE_SCHEMA_VERSION
     )
     sample_id: str = Field(min_length=1, max_length=256)
@@ -345,7 +354,7 @@ class OpenLoopPredictionV1(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[OPENLOOP_PREDICTION_SCHEMA_VERSION] = (
+    schema_version: Literal[OPENLOOP_PREDICTION_SCHEMA_VERSION, LEGACY_OPENLOOP_PREDICTION_SCHEMA_VERSION] = (
         OPENLOOP_PREDICTION_SCHEMA_VERSION
     )
     sample_id: str = Field(min_length=1, max_length=256)
@@ -397,7 +406,7 @@ class OpenLoopFailureV1(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[OPENLOOP_FAILURE_SCHEMA_VERSION] = (
+    schema_version: Literal[OPENLOOP_FAILURE_SCHEMA_VERSION, LEGACY_OPENLOOP_FAILURE_SCHEMA_VERSION] = (
         OPENLOOP_FAILURE_SCHEMA_VERSION
     )
     sample_id: str = Field(min_length=1, max_length=256)
@@ -622,7 +631,7 @@ class OpenLoopRunManifestV1(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[OPENLOOP_RUN_SCHEMA_VERSION] = (
+    schema_version: Literal[OPENLOOP_RUN_SCHEMA_VERSION, LEGACY_OPENLOOP_RUN_SCHEMA_VERSION] = (
         OPENLOOP_RUN_SCHEMA_VERSION
     )
     run_id: str = Field(min_length=1, max_length=256)
@@ -743,7 +752,7 @@ class OpenLoopPackageManifestV1(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[OPENLOOP_BENCHMARK_SCHEMA_VERSION] = (
+    schema_version: Literal[OPENLOOP_BENCHMARK_SCHEMA_VERSION, LEGACY_OPENLOOP_BENCHMARK_SCHEMA_VERSION] = (
         OPENLOOP_BENCHMARK_SCHEMA_VERSION
     )
     benchmark_id: str = Field(min_length=1, max_length=256)

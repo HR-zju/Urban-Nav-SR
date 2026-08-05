@@ -18,18 +18,29 @@ from mcp_server.contracts.stage_i_sft import (
     STAGE_I_PROJECTION_POLICY_ID,
     STAGE_I_PROJECTION_POLICY_VERSION,
     STAGE_I_TRAINING_VIEW_SCHEMA_VERSION,
+    StageIAnswerabilityV2,
     StageIAnswerabilityV1,
     StageIDecisionViewV1,
     StageIFullCoTViewV1,
+    StageIFullCoTViewV2,
     StageIInstructionTrainingRoleV1,
     StageILossSpanV1,
+    StageILossSpanV2,
     StageIModalityAvailabilityV1,
     StageIModalityProfileIdV1,
     StageIModalitySelectionV1,
     StageIModalityStateV1,
     StageIProjectionDropV1,
     StageIVQAViewV1,
+    StageIVQAViewV2,
+    StageIReasoningDropoutLinkV2,
+    StageIReasoningDropoutViewV2,
+    STAGE_I_LOSS_SPAN_POLICY_V2_ID,
+    STAGE_I_PROJECTION_POLICY_V2_ID,
+    STAGE_I_PROJECTION_POLICY_V2_VERSION,
+    STAGE_I_TRAINING_VIEW_V2_SCHEMA_VERSION,
     stage_i_projection_digest_v1,
+    stage_i_projection_digest_v2,
 )
 from mcp_server.contracts.vqa_dataset_v2 import (
     VQAAnnotationV2,
@@ -781,12 +792,160 @@ def _finalize_view(model_type, payload: dict[str, Any]):
     return model_type.model_validate(normalized)
 
 
+def project_stage_i_reasoning_view_v2(
+    view: ReasoningTrainingViewV4 | Mapping[str, Any],
+    *,
+    task_type: str,
+    modality_profile_id: str,
+    instruction_training_role: StageIInstructionTrainingRoleV1,
+) -> StageIFullCoTViewV2 | StageIReasoningDropoutViewV2:
+    """Project one formal FullCoT parent into the V2 training contract.
+
+    The V1 projector is reused only for its proven input/provenance gate.  V2
+    then replaces the action-masked span policy with one all-target span.  A
+    dropout row is never independently admitted: it is derived from the same
+    validated V2 FullCoT object in this call.
+    """
+
+    if task_type not in {"full_cot", "reasoning_dropout"}:
+        raise ValueError(f"unsupported Stage I V2 Reasoning task_type: {task_type}")
+    legacy_full = project_stage_i_reasoning_view_v1(
+        view,
+        task_type="full_cot",
+        modality_profile_id=modality_profile_id,
+        instruction_training_role=instruction_training_role,
+    )
+    if not isinstance(legacy_full, StageIFullCoTViewV1):
+        raise RuntimeError("V2 FullCoT projection did not produce a FullCoT parent")
+    full = _upgrade_full_cot_view_v2(legacy_full)
+    if task_type == "full_cot":
+        return full
+    return _project_reasoning_dropout_v2(full)
+
+
+def project_stage_i_vqa_view_v2(
+    source: VQASourceV2 | Mapping[str, Any],
+    annotation: VQAAnnotationV2 | Mapping[str, Any],
+    *,
+    capabilities: VQACapabilityConfigV2,
+    modality_profile_id: str,
+    instruction_training_role: StageIInstructionTrainingRoleV1,
+) -> StageIVQAViewV2:
+    """Wrap one accepted VQA V2 annotation in the V2 all-target envelope."""
+
+    legacy = project_stage_i_vqa_view_v1(
+        source,
+        annotation,
+        capabilities=capabilities,
+        modality_profile_id=modality_profile_id,
+        instruction_training_role=instruction_training_role,
+    )
+    payload = legacy.model_dump(mode="json", exclude_none=True)
+    payload.update({
+        "schema_version": STAGE_I_TRAINING_VIEW_V2_SCHEMA_VERSION,
+        "loss_span_policy_id": STAGE_I_LOSS_SPAN_POLICY_V2_ID,
+        "loss_spans": _full_loss_span_v2(legacy.assistant_text, "vqa"),
+        "projection_policy_id": STAGE_I_PROJECTION_POLICY_V2_ID,
+        "projection_policy_version": STAGE_I_PROJECTION_POLICY_V2_VERSION,
+        "answerability": StageIAnswerabilityV2(
+            vqa=True,
+            reasons=("required_modalities_retained", "annotation_evidence_retained"),
+        ).model_dump(mode="json"),
+        "metadata": {
+            **legacy.metadata,
+            "source_stage_i_projection_digest_v1": legacy.projection_digest,
+        },
+    })
+    return _finalize_view_v2(StageIVQAViewV2, payload)
+
+
+def _upgrade_full_cot_view_v2(legacy: StageIFullCoTViewV1) -> StageIFullCoTViewV2:
+    """Upgrade a validated V1 FullCoT view without changing visible inputs."""
+
+    payload = legacy.model_dump(mode="json", exclude_none=True)
+    payload.update({
+        "schema_version": STAGE_I_TRAINING_VIEW_V2_SCHEMA_VERSION,
+        "loss_span_policy_id": STAGE_I_LOSS_SPAN_POLICY_V2_ID,
+        "loss_spans": _full_loss_span_v2(legacy.assistant_text, "full_cot"),
+        "projection_policy_id": STAGE_I_PROJECTION_POLICY_V2_ID,
+        "projection_policy_version": STAGE_I_PROJECTION_POLICY_V2_VERSION,
+        "answerability": StageIAnswerabilityV2(
+            full_cot=True,
+            reasons=("all_native_modalities_retained", "canonical_full_cot_reused"),
+        ).model_dump(mode="json"),
+        "metadata": {
+            **legacy.metadata,
+            "source_stage_i_projection_digest_v1": legacy.projection_digest,
+            "decision_loss_policy": "all_canonical_tokens",
+        },
+    })
+    return _finalize_view_v2(StageIFullCoTViewV2, payload)
+
+
+def _project_reasoning_dropout_v2(full: StageIFullCoTViewV2) -> StageIReasoningDropoutViewV2:
+    """Extract the sole permitted direct target from a V2 FullCoT parent."""
+
+    decision = full.reasoning_target.reasoning.decision
+    assistant_text = _render_decision(decision.model_dump(mode="json"))
+    payload = full.model_dump(mode="json", exclude_none=True)
+    payload.pop("reasoning_target")
+    payload.pop("prompt_profile_id")
+    payload.pop("prompt_policy_digest")
+    payload.update({
+        "task_type": "reasoning_dropout",
+        "sample_id": f"{full.sample_id}:reasoning_dropout",
+        "assistant_text": assistant_text,
+        "loss_spans": _full_loss_span_v2(assistant_text, "reasoning_dropout"),
+        "answerability": StageIAnswerabilityV2(
+            reasoning_dropout=True,
+            reasons=("canonical_full_cot_decision_projection",),
+        ).model_dump(mode="json"),
+        "decision": decision.model_dump(mode="json"),
+        "dropout_link": StageIReasoningDropoutLinkV2(
+            parent_full_cot_sample_id=full.sample_id,
+            parent_full_cot_projection_digest=full.projection_digest,
+            parent_full_cot_assistant_sha256=_sha256(full.assistant_text),
+            assistant_decision_sha256=_sha256(assistant_text),
+        ).model_dump(mode="json"),
+        "metadata": {
+            **full.metadata,
+            "dropout_mirror_of_parent": full.sample_id,
+        },
+    })
+    return _finalize_view_v2(StageIReasoningDropoutViewV2, payload)
+
+
+def _full_loss_span_v2(assistant_text: str, channel: str) -> list[dict[str, Any]]:
+    """Return V2's required all-canonical-target loss partition."""
+
+    return [{"start": 0, "end": len(assistant_text), "scale": 1.0, "channel": channel}]
+
+
+def _finalize_view_v2(model_type, payload: dict[str, Any]):
+    """Attach a V2 projection digest and validate the resulting exchange view."""
+
+    normalized = {key: value for key, value in payload.items() if value is not None}
+    normalized.pop("projection_digest", None)
+    normalized["projection_digest"] = stage_i_projection_digest_v2(normalized)
+    return model_type.model_validate(normalized)
+
+
+def _sha256(value: str) -> str:
+    """Return a stable UTF-8 SHA-256 used only for immutable V2 lineage."""
+
+    import hashlib
+
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
 __all__ = [
     "STAGE_I_MODALITY_PROFILES_V1",
     "StageIModalityProfileV1",
     "get_stage_i_modality_profile_v1",
     "project_stage_i_reasoning_view_v1",
     "project_stage_i_reasoning_view_with_audit_v1",
+    "project_stage_i_reasoning_view_v2",
     "project_stage_i_vqa_view_v1",
     "project_stage_i_vqa_view_with_audit_v1",
+    "project_stage_i_vqa_view_v2",
 ]
