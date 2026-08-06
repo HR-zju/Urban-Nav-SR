@@ -18,13 +18,13 @@ from mcp_server.contracts.vqa_dataset_v2 import (
     annotation_context_digest_v2,
 )
 from mcp_server.contracts.vqa_v2 import VQAQuestionV2
-from mcp_server.data.jsonl_io import append_jsonl_row, iter_jsonl
-from mcp_server.data.vqa_v2_producers import (
+from mcp_server.data.io.jsonl import append_jsonl_row, iter_jsonl
+from mcp_server.data.vqa.producers import (
     CanonicalDemonstratedDirectionProducerV2,
     VQAProducerResultV2,
 )
-from mcp_server.data.vqa_v2_eligibility import vqa_task_eligibility_v2
-from mcp_server.data.vqa_v2_questions import build_vqa_questions_v2
+from mcp_server.data.vqa.eligibility import vqa_task_eligibility_v2
+from mcp_server.data.vqa.questions import build_vqa_questions_v2
 from mcp_server.teacher.reasoning_v2_teacher import (
     TeacherGeneration,
     VisionReasoningTeacherBackend,

@@ -23,7 +23,7 @@ from typing import Any
 
 from mcp_server.agent.schemas import AgentStage2Case, AgentTrace, ToolCall, ToolResponse
 from mcp_server.llm import GoalDecomposer, IntentParser
-from mcp_server.teacher.agentic_stage2_trace_builder import (
+from mcp_server.teacher.agent_tools.agentic_stage2_trace_builder import (
     AgenticStage2TraceBuilder,
     AgenticStage2TraceBuilderConfig,
 )

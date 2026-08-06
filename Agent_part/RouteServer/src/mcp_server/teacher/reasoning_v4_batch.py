@@ -40,17 +40,17 @@ from mcp_server.contracts.reasoning_v4 import (
     SceneGroundingV4,
     TaskGroundingV4,
 )
-from mcp_server.data.jsonl_io import append_jsonl_row, iter_jsonl
-from mcp_server.data.reasoning_v4_composer import (
+from mcp_server.data.io.jsonl import append_jsonl_row, iter_jsonl
+from mcp_server.data.canonical.reasoning_v4_composer import (
     REASONING_V4_COMPOSER_VERSION,
     compose_reasoning_target_v4,
 )
-from mcp_server.data.reasoning_v4_reconciliation import (
+from mcp_server.data.canonical.reasoning_v4_reconciliation import (
     action_reconciliation_advisory_trigger_codes_v4,
     action_reconciliation_review_required_v4,
     build_action_reconciliation_audit_v4,
 )
-from mcp_server.data.reasoning_v4_task_canonicalization import (
+from mcp_server.data.canonical.reasoning_v4_task_canonicalization import (
     REASONING_V4_TASK_CANONICALIZATION_VERSION,
     canonicalize_task_instruction_v4,
     task_instruction_fingerprint_v4,

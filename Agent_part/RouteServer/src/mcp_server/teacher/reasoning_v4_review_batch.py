@@ -19,11 +19,11 @@ from mcp_server.contracts.reasoning_dataset_v4 import (
     ReasoningAnnotationV4,
     ReasoningSourceV4,
 )
-from mcp_server.data.jsonl_io import append_jsonl_row, iter_jsonl
-from mcp_server.data.reasoning_v4_reconciliation import (
+from mcp_server.data.io.jsonl import append_jsonl_row, iter_jsonl
+from mcp_server.data.canonical.reasoning_v4_reconciliation import (
     action_reconciliation_review_required_v4,
 )
-from mcp_server.data.reasoning_v4_review import (
+from mcp_server.data.canonical.reasoning_v4_review import (
     bind_action_review_diagnosis_v4,
     load_latest_action_review_diagnoses_v4,
 )

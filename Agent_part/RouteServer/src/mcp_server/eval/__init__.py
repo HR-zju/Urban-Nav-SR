@@ -1,6 +1,10 @@
-"""Evaluation helpers for SideWalk Agentic Stage2 traces."""
+"""Compatibility facade for the split evaluation packages.
 
-from mcp_server.eval.cases import (
+New code should import from ``agent_tools``, ``urbannav`` or ``openloop``.
+The facade remains intentionally stable for backend and legacy callers.
+"""
+
+from mcp_server.eval.agent_tools.cases import (
     iter_eval_cases,
     iter_stage2_cases,
     load_eval_cases,
@@ -8,15 +12,15 @@ from mcp_server.eval.cases import (
     write_eval_cases,
     write_stage2_cases,
 )
-from mcp_server.eval.exporters import (
+from mcp_server.eval.agent_tools.exporters import (
     trace_to_ms_swift_row,
     trace_to_ms_swift_stage2_row,
     write_ms_swift_jsonl,
     write_ms_swift_stage2_jsonl,
     write_traces_jsonl,
 )
-from mcp_server.eval.metrics import compute_trace_metrics
-from mcp_server.eval.online_agent_runner import (
+from mcp_server.eval.agent_tools.metrics import compute_trace_metrics
+from mcp_server.eval.agent_tools.online_agent_runner import (
     CallableModelAdapter,
     ModelAdapter,
     MsSwiftInferenceAdapter,
@@ -28,15 +32,15 @@ from mcp_server.eval.online_agent_runner import (
     OnlineAgentRunnerConfig,
     build_initial_model_messages,
 )
-from mcp_server.eval.phase1_archive_adapter import (
+from mcp_server.eval.agent_tools.phase1_archive_adapter import (
     PHASE1_ARCHIVE_STAGE2_ADAPTER_VERSION,
     iter_phase1_archive_stage2_cases,
     load_phase1_archive_stage2_cases,
     phase1_archive_row_to_stage2_case,
     write_phase1_archive_stage2_cases,
 )
-from mcp_server.eval.runners import AgentRunner, RouteServerTeacherRunner, RuleRunner
-from mcp_server.eval.stage2_validator import (
+from mcp_server.eval.agent_tools.runners import AgentRunner, RouteServerTeacherRunner, RuleRunner
+from mcp_server.eval.agent_tools.stage2_validator import (
     Stage2ValidationResult,
     validate_ms_swift_stage2_row,
     validate_stage2_case,
@@ -44,16 +48,16 @@ from mcp_server.eval.stage2_validator import (
 )
 
 _LAZY_EXPORTS = {
-    "URBANNAV_MODULE1_BENCHMARK_VERSION": "mcp_server.eval.urbannav_module1_benchmark",
-    "UrbanNavModule1BenchmarkConfig": "mcp_server.eval.urbannav_module1_benchmark",
-    "UrbanNavModule1BenchmarkResult": "mcp_server.eval.urbannav_module1_benchmark",
-    "module1_prediction_contract": "mcp_server.eval.urbannav_module1_benchmark",
-    "run_module1_benchmark": "mcp_server.eval.urbannav_module1_benchmark",
-    "MODULE1_COMPARISON_VERSION": "mcp_server.eval.urbannav_module1_compare",
-    "Module1ComparisonConfig": "mcp_server.eval.urbannav_module1_compare",
-    "Module1RunSpec": "mcp_server.eval.urbannav_module1_compare",
-    "compare_module1_runs": "mcp_server.eval.urbannav_module1_compare",
-    "comparison_to_markdown": "mcp_server.eval.urbannav_module1_compare",
+    "URBANNAV_MODULE1_BENCHMARK_VERSION": "mcp_server.eval.urbannav.urbannav_module1_benchmark",
+    "UrbanNavModule1BenchmarkConfig": "mcp_server.eval.urbannav.urbannav_module1_benchmark",
+    "UrbanNavModule1BenchmarkResult": "mcp_server.eval.urbannav.urbannav_module1_benchmark",
+    "module1_prediction_contract": "mcp_server.eval.urbannav.urbannav_module1_benchmark",
+    "run_module1_benchmark": "mcp_server.eval.urbannav.urbannav_module1_benchmark",
+    "MODULE1_COMPARISON_VERSION": "mcp_server.eval.urbannav.urbannav_module1_compare",
+    "Module1ComparisonConfig": "mcp_server.eval.urbannav.urbannav_module1_compare",
+    "Module1RunSpec": "mcp_server.eval.urbannav.urbannav_module1_compare",
+    "compare_module1_runs": "mcp_server.eval.urbannav.urbannav_module1_compare",
+    "comparison_to_markdown": "mcp_server.eval.urbannav.urbannav_module1_compare",
 }
 
 

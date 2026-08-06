@@ -21,7 +21,7 @@ from mcp_server.agent.reasoning_text import parse_reasoning_target_v2, render_re
 from mcp_server.agent.reasoning_validation import validate_reasoning_target_v2
 from mcp_server.contracts.reasoning import ReasoningTargetV2
 from mcp_server.contracts.reasoning_dataset import ReasoningAnnotationV2, ReasoningSourceV2
-from mcp_server.data.jsonl_io import append_jsonl_row, iter_jsonl
+from mcp_server.data.io.jsonl import append_jsonl_row, iter_jsonl
 from mcp_server.llm import LLMSettings, VisionAnalyzer, local_image_path_to_data_url
 
 
