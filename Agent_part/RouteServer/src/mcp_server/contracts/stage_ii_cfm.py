@@ -10,9 +10,9 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from typing import Any, Literal
+from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from mcp_server.contracts.reasoning import ReasonCode
 from mcp_server.contracts.reasoning_dataset_v4 import (
@@ -22,6 +22,7 @@ from mcp_server.contracts.reasoning_dataset_v4 import (
     InputModalitiesV4,
 )
 from mcp_server.contracts.stage_i_sft import (
+    StageIReasoningDropoutLinkV2,
     StageIInstructionTrainingRoleV1,
     StageIModalityAvailabilityV1,
     StageIModalityProfileIdV1,
@@ -51,6 +52,13 @@ STAGE_II_TRAJECTORY_QC_SCHEMA_VERSION = (
 STAGE_II_CFM_TRAINING_VIEW_SCHEMA_VERSION = (
     "urbannav_stage_ii_cfm_training_view_v1"
 )
+STAGE_II_V2_TRAINING_CONTRACT_ID = "stage_ii_cfm_v2"
+STAGE_II_REASONING_CONTEXT_V2_SCHEMA_VERSION = (
+    "urbannav_stage_ii_reasoning_context_v2"
+)
+STAGE_II_CFM_TRAINING_VIEW_V2_SCHEMA_VERSION = (
+    "urbannav_stage_ii_cfm_training_view_v2"
+)
 STAGE_II_LEGACY_DIRECT_TARGET_SCHEMA_VERSION = (
     "urbannav_stage_ii_legacy_direct_target_v1"
 )
@@ -61,6 +69,13 @@ STAGE_II_PROJECTION_DROP_SCHEMA_VERSION = (
 )
 STAGE_II_PROJECTION_POLICY_ID = "urbannav_stage_ii_safe_projection_v1"
 STAGE_II_PROJECTION_POLICY_VERSION = "1.0"
+STAGE_II_PROJECTION_DROP_V2_SCHEMA_VERSION = (
+    "urbannav_stage_ii_projection_drop_v2"
+)
+STAGE_II_PROJECTION_POLICY_V2_ID = (
+    "urbannav_stage_ii_reasoning_dropout_projection_v2"
+)
+STAGE_II_PROJECTION_POLICY_V2_VERSION = "2.0"
 STAGE_II_TRAJECTORY_POLICY_ID = "urbannav_stage_ii_metric_flu_2s_16_v1"
 STAGE_II_TRAJECTORY_POLICY_VERSION = "1.0"
 STAGE_II_TEMPORAL_RESAMPLING_ID = "linear_time_grid_2s_16_v1"
@@ -99,6 +114,11 @@ STAGE_II_GROUNDING_SECTION_NAMES = (
 StageIIContextKindV1 = Literal["reasoning_grounding", "decision"]
 StageIIContextSourceV1 = Literal["ground_truth", "model_prediction"]
 StageIIContextParseStatusV1 = Literal["accepted", "rejected"]
+StageIIContextModeV2 = Literal["reasoning_plus_decision", "decision_only"]
+StageIIReasoningStateV2 = Literal[
+    "present",
+    "absent_by_reasoning_dropout",
+]
 StageIITrajectoryQCStatusV1 = Literal["accepted", "rejected"]
 StageIITrajectoryDatasetStatusV1 = Literal["enabled", "disabled"]
 StageIITrajectoryMaskPolicyV1 = Literal[
@@ -249,6 +269,110 @@ class StageIIContextCacheV1(BaseModel):
         if self.cache_digest != expected:
             raise ValueError("Stage II context cache_digest mismatch")
         return self
+
+
+class StageIIReasoningPresentV2(BaseModel):
+    """Bind V2 Pass T to one accepted reasoning-grounding cache.
+
+    The wrapper is intentionally distinct from an optional cache field.  Its
+    discriminator proves that reasoning is present and accepted; a rejected or
+    empty cache therefore cannot silently become a no-CoT example.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[STAGE_II_REASONING_CONTEXT_V2_SCHEMA_VERSION] = (
+        STAGE_II_REASONING_CONTEXT_V2_SCHEMA_VERSION
+    )
+    reasoning_state: Literal["present"] = "present"
+    reasoning_context: StageIIContextCacheV1
+    state_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+    @model_validator(mode="after")
+    def validate_state(self) -> "StageIIReasoningPresentV2":
+        """Require a strict accepted Pass-R cache and immutable wrapper."""
+
+        cache = self.reasoning_context
+        if cache.context_kind != "reasoning_grounding" or cache.parse_status != "accepted":
+            raise ValueError("present Stage II V2 reasoning requires accepted Pass R")
+        expected = stage_ii_digest_v1(
+            self.model_dump(mode="json", exclude={"state_digest"})
+        )
+        if self.state_digest != expected:
+            raise ValueError("Stage II V2 reasoning state_digest mismatch")
+        return self
+
+
+class StageIIReasoningAbsentV2(BaseModel):
+    """Prove that reasoning is absent only because Stage I routed no-CoT.
+
+    No parser result is stored here.  Absence is valid only when it is linked
+    to a validated Stage I reasoning-dropout projection of an immutable
+    FullCoT parent.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[STAGE_II_REASONING_CONTEXT_V2_SCHEMA_VERSION] = (
+        STAGE_II_REASONING_CONTEXT_V2_SCHEMA_VERSION
+    )
+    reasoning_state: Literal["absent_by_reasoning_dropout"] = (
+        "absent_by_reasoning_dropout"
+    )
+    parent_stage_i_sample_id: str = Field(min_length=1, max_length=480)
+    stage_i_dropout_sample_id: str = Field(min_length=1, max_length=480)
+    stage_i_dropout_projection_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    source_group_id: str = Field(min_length=1, max_length=240)
+    split_group_id: str = Field(min_length=1, max_length=240)
+    dataset_source: str = Field(min_length=1, max_length=128)
+    modality_profile_id: StageIModalityProfileIdV1
+    parent_source_fingerprint: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    projected_input_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    dropout_link: StageIReasoningDropoutLinkV2
+    state_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+    @model_validator(mode="after")
+    def validate_state(self) -> "StageIIReasoningAbsentV2":
+        """Require exact Stage I dropout lineage and immutable absence."""
+
+        if self.dropout_link.parent_full_cot_sample_id != self.parent_stage_i_sample_id:
+            raise ValueError("Stage II V2 absence parent identity mismatch")
+        expected_dropout_id = f"{self.parent_stage_i_sample_id}:reasoning_dropout"
+        if self.stage_i_dropout_sample_id != expected_dropout_id:
+            raise ValueError("Stage II V2 absence dropout sample identity mismatch")
+        expected = stage_ii_digest_v1(
+            self.model_dump(mode="json", exclude={"state_digest"})
+        )
+        if self.state_digest != expected:
+            raise ValueError("Stage II V2 absence state_digest mismatch")
+        return self
+
+
+StageIIReasoningContextV2 = Annotated[
+    Union[StageIIReasoningPresentV2, StageIIReasoningAbsentV2],
+    Field(discriminator="reasoning_state"),
+]
+STAGE_II_REASONING_CONTEXT_ADAPTER_V2 = TypeAdapter(StageIIReasoningContextV2)
 
 
 class StageIITrajectorySplitPolicyV1(BaseModel):
@@ -1121,6 +1245,248 @@ class StageIICFMTrainingViewV1(BaseModel):
         return self
 
 
+class StageIICFMTrainingViewV2(BaseModel):
+    """Exchange one four-second CFM row under an explicit reasoning route.
+
+    V2 keeps the observation and accepted standalone Decision visible on both
+    routes.  The reasoning field is a discriminated union: either an accepted
+    Pass-R cache or a cryptographically linked Stage I dropout absence.  Query
+    count is deliberately not part of this data view because ms-swift owns the
+    independent ``Q`` profile while the target remains fixed at ``T=32``.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[STAGE_II_CFM_TRAINING_VIEW_V2_SCHEMA_VERSION] = (
+        STAGE_II_CFM_TRAINING_VIEW_V2_SCHEMA_VERSION
+    )
+    training_contract: Literal[STAGE_II_V2_TRAINING_CONTRACT_ID] = (
+        STAGE_II_V2_TRAINING_CONTRACT_ID
+    )
+    sample_id: str = Field(min_length=1, max_length=560)
+    source_group_id: str = Field(min_length=1, max_length=240)
+    split_group_id: str = Field(min_length=1, max_length=240)
+    dataset_source: str = Field(min_length=1, max_length=128)
+    modality_profile_id: StageIModalityProfileIdV1
+    native_availability: StageIModalityAvailabilityV1
+    training_selection: StageIModalitySelectionV1
+    modality_state: StageIModalityStateV1
+    instruction_training_role: StageIInstructionTrainingRoleV1
+    images: list[str] = Field(min_length=1, max_length=16)
+    image_roles: list[str] = Field(min_length=1, max_length=16)
+    instruction: str | None = Field(default=None, min_length=1, max_length=4096)
+    model_visible_context: dict[str, Any] = Field(default_factory=dict)
+    evidence_catalog: list[EvidenceCatalogEntryV4] = Field(min_length=1, max_length=64)
+    input_modalities: InputModalitiesV4
+    projected_input_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    context_mode: StageIIContextModeV2
+    reasoning: StageIIReasoningContextV2
+    decision_context: StageIIContextCacheV1
+    pass_t_input_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    system1_condition_mode: Literal["traj_query_only"] = "traj_query_only"
+    trajectory_target: StageIITrajectoryTargetV2
+    direction_context: DirectionContextV4
+    private_direction_supervision: DirectionSupervisionV4
+    parent_stage_i_sample_id: str = Field(min_length=1, max_length=480)
+    stage_i_route_sample_id: str = Field(min_length=1, max_length=480)
+    stage_i_route_task_type: Literal["full_cot", "reasoning_dropout"]
+    stage_i_route_projection_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    parent_source_fingerprint: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    parent_audit_id: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    formal_training_eligible: Literal[True] = True
+    review_status: Literal["not_required", "resolved"]
+    loss_mask: StageIILossMaskV1 = Field(default_factory=StageIILossMaskV1)
+    projection_policy_id: Literal[STAGE_II_PROJECTION_POLICY_V2_ID] = (
+        STAGE_II_PROJECTION_POLICY_V2_ID
+    )
+    projection_policy_version: Literal[STAGE_II_PROJECTION_POLICY_V2_VERSION] = (
+        STAGE_II_PROJECTION_POLICY_V2_VERSION
+    )
+    view_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+    @model_validator(mode="after")
+    def validate_view(self) -> "StageIICFMTrainingViewV2":
+        """Close route, cache, identity, target, and prompt-visible invariants."""
+
+        if len(self.images) != len(self.image_roles):
+            raise ValueError("Stage II V2 images and image_roles must align")
+        if self.image_roles.count("fpv.current") != 1:
+            raise ValueError("Stage II V2 requires exactly one fpv.current")
+        if len(set(self.image_roles)) != len(self.image_roles):
+            raise ValueError("Stage II V2 image_roles must be unique")
+        expected_route = {
+            "reasoning_plus_decision": ("present", "full_cot"),
+            "decision_only": (
+                "absent_by_reasoning_dropout",
+                "reasoning_dropout",
+            ),
+        }[self.context_mode]
+        actual_route = (self.reasoning.reasoning_state, self.stage_i_route_task_type)
+        if actual_route != expected_route:
+            raise ValueError("Stage II V2 context mode and reasoning route disagree")
+        expected_sample_id = (
+            f"{self.parent_stage_i_sample_id}:stage_ii_cfm_v2:{self.context_mode}"
+        )
+        if self.sample_id != expected_sample_id:
+            raise ValueError("Stage II V2 sample_id does not encode the context route")
+        if self.stage_i_route_task_type == "full_cot":
+            if self.stage_i_route_sample_id != self.parent_stage_i_sample_id:
+                raise ValueError("Stage II V2 FullCoT route identity mismatch")
+        elif not isinstance(self.reasoning, StageIIReasoningAbsentV2):
+            raise ValueError("Stage II V2 dropout route requires an absence record")
+        self._validate_cache_identity(self.decision_context, "decision")
+        if isinstance(self.reasoning, StageIIReasoningPresentV2):
+            reasoning_cache = self.reasoning.reasoning_context
+            self._validate_cache_identity(reasoning_cache, "reasoning_grounding")
+            if reasoning_cache.producer.source != self.decision_context.producer.source:
+                raise ValueError("Stage II V2 forbids mixed R/D context sources")
+            producer_identity_fields = (
+                "base_model_id",
+                "checkpoint_id",
+                "checkpoint_digest",
+                "adapter_id",
+            )
+            if any(
+                getattr(reasoning_cache.producer, name)
+                != getattr(self.decision_context.producer, name)
+                for name in producer_identity_fields
+            ):
+                raise ValueError("Stage II V2 Pass R/D producer identity mismatch")
+        else:
+            absence = self.reasoning
+            absence_identity = (
+                absence.parent_stage_i_sample_id == self.parent_stage_i_sample_id,
+                absence.stage_i_dropout_sample_id == self.stage_i_route_sample_id,
+                absence.stage_i_dropout_projection_digest
+                == self.stage_i_route_projection_digest,
+                absence.source_group_id == self.source_group_id,
+                absence.split_group_id == self.split_group_id,
+                absence.dataset_source == self.dataset_source,
+                absence.modality_profile_id == self.modality_profile_id,
+                absence.parent_source_fingerprint
+                == self.parent_source_fingerprint,
+                absence.projected_input_digest == self.projected_input_digest,
+            )
+            if not all(absence_identity):
+                raise ValueError("Stage II V2 reasoning absence identity mismatch")
+        expected_parsers = {
+            "reasoning_grounding": "reasoning_v4_6_full_target_strict_v1",
+            "decision": "reasoning_v4_6_decision_section_strict_v1",
+        }
+        if self.decision_context.producer.parser_contract_id != expected_parsers["decision"]:
+            raise ValueError("Stage II V2 Decision parser contract mismatch")
+        if isinstance(self.reasoning, StageIIReasoningPresentV2):
+            parser_id = self.reasoning.reasoning_context.producer.parser_contract_id
+            if parser_id != expected_parsers["reasoning_grounding"]:
+                raise ValueError("Stage II V2 reasoning parser contract mismatch")
+        if (
+            self.private_direction_supervision.profile_id
+            != self.direction_context.action_profile_id
+            or self.private_direction_supervision.profile_version
+            != self.direction_context.action_profile_version
+        ):
+            raise ValueError("Stage II V2 private direction/profile mismatch")
+        forbidden = _find_private_prompt_keys(self.model_visible_context)
+        if forbidden:
+            raise ValueError(f"Stage II V2 prompt-visible private keys: {forbidden}")
+        expected_pass_t = _stage_ii_pass_t_digest_from_view_v2(self)
+        if self.pass_t_input_digest != expected_pass_t:
+            raise ValueError("Stage II V2 pass_t_input_digest mismatch")
+        expected = stage_ii_digest_v1(
+            self.model_dump(mode="json", exclude={"view_digest"})
+        )
+        if self.view_digest != expected:
+            raise ValueError("Stage II V2 view_digest mismatch")
+        return self
+
+    def _validate_cache_identity(
+        self,
+        cache: StageIIContextCacheV1,
+        kind: StageIIContextKindV1,
+    ) -> None:
+        """Require one accepted cache over the exact V2 observation."""
+
+        if cache.parse_status != "accepted" or cache.context_kind != kind:
+            raise ValueError(f"Stage II V2 requires accepted {kind} cache")
+        identities = (
+            cache.sample_id == self.parent_stage_i_sample_id,
+            cache.source_group_id == self.source_group_id,
+            cache.split_group_id == self.split_group_id,
+            cache.dataset_source == self.dataset_source,
+            cache.modality_profile_id == self.modality_profile_id,
+            cache.parent_source_fingerprint == self.parent_source_fingerprint,
+            cache.projected_input_digest == self.projected_input_digest,
+        )
+        if not all(identities):
+            raise ValueError(f"Stage II V2 {kind} cache identity mismatch")
+
+
+class StageIIProjectionDropV2(BaseModel):
+    """Record one fail-closed V2 projection rejection without training content."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[STAGE_II_PROJECTION_DROP_V2_SCHEMA_VERSION] = (
+        STAGE_II_PROJECTION_DROP_V2_SCHEMA_VERSION
+    )
+    parent_sample_id: str = Field(min_length=1, max_length=480)
+    stage_i_route_sample_id: str = Field(min_length=1, max_length=480)
+    stage_i_route_task_type: str = Field(min_length=1, max_length=96)
+    requested_context_mode: str = Field(min_length=1, max_length=96)
+    source_group_id: str = Field(min_length=1, max_length=240)
+    split_group_id: str = Field(min_length=1, max_length=240)
+    dataset_source: str = Field(min_length=1, max_length=128)
+    modality_profile_id: str = Field(min_length=1, max_length=160)
+    reason_code: ReasonCode
+    detail: str = Field(min_length=1, max_length=1000)
+    projection_policy_id: Literal[STAGE_II_PROJECTION_POLICY_V2_ID] = (
+        STAGE_II_PROJECTION_POLICY_V2_ID
+    )
+    projection_policy_version: Literal[STAGE_II_PROJECTION_POLICY_V2_VERSION] = (
+        STAGE_II_PROJECTION_POLICY_V2_VERSION
+    )
+    drop_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+    @model_validator(mode="after")
+    def validate_drop(self) -> "StageIIProjectionDropV2":
+        """Require immutable rejection evidence."""
+
+        expected = stage_ii_digest_v1(
+            self.model_dump(mode="json", exclude={"drop_digest"})
+        )
+        if self.drop_digest != expected:
+            raise ValueError("Stage II V2 drop_digest mismatch")
+        return self
+
+
 class StageIIProjectionDropV1(BaseModel):
     """Record one fail-closed Stage II projection rejection.
 
@@ -1172,6 +1538,58 @@ class StageIIProjectionDropV1(BaseModel):
         if self.drop_digest != expected:
             raise ValueError("Stage II drop_digest mismatch")
         return self
+
+
+def stage_ii_pass_t_input_digest_v2(
+    *,
+    projected_input_digest: str,
+    context_mode: StageIIContextModeV2,
+    reasoning: StageIIReasoningContextV2 | dict[str, Any],
+    decision_context: StageIIContextCacheV1 | dict[str, Any],
+) -> str:
+    """Fingerprint only the content visible to the V2 Pass-T prompt.
+
+    Producer metadata and private targets are deliberately excluded.  The
+    digest binds the common observation, explicit reasoning state, optional
+    canonical grounding text, and accepted standalone Decision text.
+    """
+
+    typed_reasoning = (
+        STAGE_II_REASONING_CONTEXT_ADAPTER_V2.validate_python(reasoning)
+        if isinstance(reasoning, dict)
+        else reasoning
+    )
+    typed_decision = (
+        StageIIContextCacheV1.model_validate(decision_context)
+        if isinstance(decision_context, dict)
+        else decision_context
+    )
+    reasoning_visible: dict[str, Any] = {
+        "state": typed_reasoning.reasoning_state,
+    }
+    if isinstance(typed_reasoning, StageIIReasoningPresentV2):
+        reasoning_visible["canonical_text"] = (
+            typed_reasoning.reasoning_context.canonical_text
+        )
+    return stage_ii_digest_v1(
+        {
+            "projected_input_digest": projected_input_digest,
+            "context_mode": context_mode,
+            "reasoning": reasoning_visible,
+            "decision": typed_decision.canonical_text,
+        }
+    )
+
+
+def _stage_ii_pass_t_digest_from_view_v2(view: StageIICFMTrainingViewV2) -> str:
+    """Compute the public Pass-T digest from one typed V2 view."""
+
+    return stage_ii_pass_t_input_digest_v2(
+        projected_input_digest=view.projected_input_digest,
+        context_mode=view.context_mode,
+        reasoning=view.reasoning,
+        decision_context=view.decision_context,
+    )
 
 
 def stage_ii_digest_v1(payload: Any) -> str:
@@ -1232,6 +1650,7 @@ def _find_private_prompt_keys(value: Any, *, path: str = "") -> list[str]:
 
 
 __all__ = [
+    "STAGE_II_CFM_TRAINING_VIEW_V2_SCHEMA_VERSION",
     "STAGE_II_CFM_TRAINING_VIEW_SCHEMA_VERSION",
     "STAGE_II_CONTEXT_CACHE_SCHEMA_VERSION",
     "STAGE_II_GROUNDING_SECTION_NAMES",
@@ -1243,13 +1662,19 @@ __all__ = [
     "STAGE_II_LEGACY_DIRECT_PROFILE_VERSION",
     "STAGE_II_LEGACY_DIRECT_TARGET_SCHEMA_VERSION",
     "STAGE_II_PROJECTION_DROP_SCHEMA_VERSION",
+    "STAGE_II_PROJECTION_DROP_V2_SCHEMA_VERSION",
     "STAGE_II_PROJECTION_POLICY_ID",
     "STAGE_II_PROJECTION_POLICY_VERSION",
+    "STAGE_II_PROJECTION_POLICY_V2_ID",
+    "STAGE_II_PROJECTION_POLICY_V2_VERSION",
+    "STAGE_II_REASONING_CONTEXT_ADAPTER_V2",
+    "STAGE_II_REASONING_CONTEXT_V2_SCHEMA_VERSION",
     "STAGE_II_TARGET_FORMAT",
     "STAGE_II_TARGET_DT_SEC_V2",
     "STAGE_II_TEMPORAL_RESAMPLING_ID",
     "STAGE_II_TEMPORAL_RESAMPLING_V2_ID",
     "STAGE_II_TRAINING_CONTRACT_ID",
+    "STAGE_II_V2_TRAINING_CONTRACT_ID",
     "STAGE_II_TRAJECTORY_SOURCE_REGISTRY_ID",
     "STAGE_II_TRAJECTORY_SOURCE_REGISTRY_SCHEMA_VERSION",
     "STAGE_II_TRAJECTORY_SOURCE_REGISTRY_VERSION",
@@ -1267,12 +1692,19 @@ __all__ = [
     "STAGE_II_MAX_SOURCE_STEP_M_V2",
     "STAGE_II_MAX_SOURCE_YAW_RATE_RAD_S_V2",
     "StageIICFMTrainingViewV1",
+    "StageIICFMTrainingViewV2",
     "StageIIContextCacheV1",
+    "StageIIContextModeV2",
     "StageIIContextKindV1",
     "StageIIContextProducerV1",
     "StageIILossMaskV1",
     "StageIILegacyDirectTargetV1",
     "StageIIProjectionDropV1",
+    "StageIIProjectionDropV2",
+    "StageIIReasoningAbsentV2",
+    "StageIIReasoningContextV2",
+    "StageIIReasoningPresentV2",
+    "StageIIReasoningStateV2",
     "StageIITrajectoryPolicyV1",
     "StageIITrajectoryPolicyV2",
     "StageIITrajectoryQCReportV1",
@@ -1284,4 +1716,5 @@ __all__ = [
     "StageIITrajectoryTargetV1",
     "StageIITrajectoryTargetV2",
     "stage_ii_digest_v1",
+    "stage_ii_pass_t_input_digest_v2",
 ]

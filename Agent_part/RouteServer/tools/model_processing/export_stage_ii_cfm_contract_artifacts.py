@@ -10,12 +10,19 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from mcp_server.contracts.stage_ii_cfm import (
+    STAGE_II_CFM_TRAINING_VIEW_V2_SCHEMA_VERSION,
     STAGE_II_CFM_TRAINING_VIEW_SCHEMA_VERSION,
     STAGE_II_CONTEXT_CACHE_SCHEMA_VERSION,
     STAGE_II_LEGACY_DIRECT_TARGET_SCHEMA_VERSION,
+    STAGE_II_PROJECTION_DROP_V2_SCHEMA_VERSION,
     STAGE_II_PROJECTION_POLICY_ID,
     STAGE_II_PROJECTION_POLICY_VERSION,
+    STAGE_II_PROJECTION_POLICY_V2_ID,
+    STAGE_II_PROJECTION_POLICY_V2_VERSION,
+    STAGE_II_REASONING_CONTEXT_ADAPTER_V2,
+    STAGE_II_REASONING_CONTEXT_V2_SCHEMA_VERSION,
     STAGE_II_TRAINING_CONTRACT_ID,
+    STAGE_II_V2_TRAINING_CONTRACT_ID,
     STAGE_II_TRAJECTORY_POLICY_ID,
     STAGE_II_TRAJECTORY_POLICY_VERSION,
     STAGE_II_TRAJECTORY_POLICY_V2_ID,
@@ -27,9 +34,11 @@ from mcp_server.contracts.stage_ii_cfm import (
     STAGE_II_TRAJECTORY_TARGET_SCHEMA_VERSION,
     STAGE_II_TRAJECTORY_TARGET_V2_SCHEMA_VERSION,
     StageIICFMTrainingViewV1,
+    StageIICFMTrainingViewV2,
     StageIIContextCacheV1,
     StageIILegacyDirectTargetV1,
     StageIIProjectionDropV1,
+    StageIIProjectionDropV2,
     StageIITrajectoryQCReportV1,
     StageIITrajectoryQCReportV2,
     StageIITrajectorySidecarV2,
@@ -39,9 +48,10 @@ from mcp_server.contracts.stage_ii_cfm import (
 )
 
 
-ARTIFACT_SCHEMA_VERSION = "urbannav_stage_ii_cfm_contract_artifacts_v2"
+ARTIFACT_SCHEMA_VERSION = "urbannav_stage_ii_cfm_contract_artifacts_v3"
 ARTIFACT_FILENAMES = (
     "stage_ii_context_cache_v1.schema.json",
+    "stage_ii_reasoning_context_v2.schema.json",
     "stage_ii_trajectory_target_v1.schema.json",
     "stage_ii_trajectory_qc_v1.schema.json",
     "stage_ii_trajectory_target_v2.schema.json",
@@ -50,7 +60,9 @@ ARTIFACT_FILENAMES = (
     "stage_ii_trajectory_source_registry_v1.schema.json",
     "stage_ii_legacy_direct_target_v1.schema.json",
     "stage_ii_cfm_training_view_v1.schema.json",
+    "stage_ii_cfm_training_view_v2.schema.json",
     "stage_ii_projection_drop_v1.schema.json",
+    "stage_ii_projection_drop_v2.schema.json",
     "contract_digest.json",
 )
 
@@ -60,6 +72,9 @@ def build_stage_ii_cfm_contract_artifacts() -> dict[str, Any]:
 
     artifacts: dict[str, Any] = {
         "stage_ii_context_cache_v1.schema.json": StageIIContextCacheV1.model_json_schema(),
+        "stage_ii_reasoning_context_v2.schema.json": (
+            STAGE_II_REASONING_CONTEXT_ADAPTER_V2.json_schema()
+        ),
         "stage_ii_trajectory_target_v1.schema.json": StageIITrajectoryTargetV1.model_json_schema(),
         "stage_ii_trajectory_qc_v1.schema.json": StageIITrajectoryQCReportV1.model_json_schema(),
         "stage_ii_trajectory_target_v2.schema.json": StageIITrajectoryTargetV2.model_json_schema(),
@@ -72,12 +87,18 @@ def build_stage_ii_cfm_contract_artifacts() -> dict[str, Any]:
             StageIILegacyDirectTargetV1.model_json_schema()
         ),
         "stage_ii_cfm_training_view_v1.schema.json": StageIICFMTrainingViewV1.model_json_schema(),
+        "stage_ii_cfm_training_view_v2.schema.json": StageIICFMTrainingViewV2.model_json_schema(),
         "stage_ii_projection_drop_v1.schema.json": StageIIProjectionDropV1.model_json_schema(),
+        "stage_ii_projection_drop_v2.schema.json": StageIIProjectionDropV2.model_json_schema(),
     }
     artifacts["contract_digest.json"] = {
         "schema_version": ARTIFACT_SCHEMA_VERSION,
         "training_contract": STAGE_II_TRAINING_CONTRACT_ID,
+        "training_contract_v2": STAGE_II_V2_TRAINING_CONTRACT_ID,
         "context_cache_schema_version": STAGE_II_CONTEXT_CACHE_SCHEMA_VERSION,
+        "reasoning_context_v2_schema_version": (
+            STAGE_II_REASONING_CONTEXT_V2_SCHEMA_VERSION
+        ),
         "trajectory_target_schema_version": STAGE_II_TRAJECTORY_TARGET_SCHEMA_VERSION,
         "trajectory_qc_schema_version": STAGE_II_TRAJECTORY_QC_SCHEMA_VERSION,
         "trajectory_target_v2_schema_version": STAGE_II_TRAJECTORY_TARGET_V2_SCHEMA_VERSION,
@@ -90,8 +111,14 @@ def build_stage_ii_cfm_contract_artifacts() -> dict[str, Any]:
             STAGE_II_LEGACY_DIRECT_TARGET_SCHEMA_VERSION
         ),
         "training_view_schema_version": STAGE_II_CFM_TRAINING_VIEW_SCHEMA_VERSION,
+        "training_view_v2_schema_version": (
+            STAGE_II_CFM_TRAINING_VIEW_V2_SCHEMA_VERSION
+        ),
+        "projection_drop_v2_schema_version": STAGE_II_PROJECTION_DROP_V2_SCHEMA_VERSION,
         "projection_policy_id": STAGE_II_PROJECTION_POLICY_ID,
         "projection_policy_version": STAGE_II_PROJECTION_POLICY_VERSION,
+        "projection_policy_v2_id": STAGE_II_PROJECTION_POLICY_V2_ID,
+        "projection_policy_v2_version": STAGE_II_PROJECTION_POLICY_V2_VERSION,
         "trajectory_policy_id": STAGE_II_TRAJECTORY_POLICY_ID,
         "trajectory_policy_version": STAGE_II_TRAJECTORY_POLICY_VERSION,
         "trajectory_policy_v2_id": STAGE_II_TRAJECTORY_POLICY_V2_ID,

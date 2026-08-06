@@ -65,6 +65,7 @@ def sync_stage_ii_cfm_cross_repo(
     artifact_hashes: dict[str, str] = {}
     for filename in (
         "stage_ii_context_cache_v1.schema.json",
+        "stage_ii_reasoning_context_v2.schema.json",
         "stage_ii_trajectory_target_v1.schema.json",
         "stage_ii_trajectory_qc_v1.schema.json",
         "stage_ii_trajectory_target_v2.schema.json",
@@ -73,7 +74,9 @@ def sync_stage_ii_cfm_cross_repo(
         "stage_ii_trajectory_source_registry_v1.schema.json",
         "stage_ii_legacy_direct_target_v1.schema.json",
         "stage_ii_cfm_training_view_v1.schema.json",
+        "stage_ii_cfm_training_view_v2.schema.json",
         "stage_ii_projection_drop_v1.schema.json",
+        "stage_ii_projection_drop_v2.schema.json",
         "contract_digest.json",
     ):
         source = route_root / "schemas/stage_ii_cfm" / filename

@@ -419,3 +419,79 @@ normalization profile digest:
 独立流式复核验证了全部 259,964 个 accepted sidecar 和 381,797 个 QC row：schema 全部通过、
 accepted/rejected 交集为 0、8,123 个 split group 的跨 split 泄漏为 0，12,905 个 speed-audit
 row 均存在于 accepted sidecar，normalization 绑定的 train SHA、parent 数和报告一致。
+
+## 7. 计划中的 `stage_ii_cfm_v2`：Reasoning Dropout 双系统合同
+
+本节是后续实现计划，不表示 V1 或 V2.1 数据已具备该能力。`stage_ii_cfm_v2` 是模型条件与
+exchange view 的版本；`trajectory_target_v2_1` 是 raw-pose 轨迹数据版本，二者不能混为同一个
+“V2”。V1 保持只读兼容，不能静默接收 V2 row。
+
+### 7.1 目标与不变量
+
+System 2 的 `[TRAJ_i]` token 是在 prompt 末尾读取 hidden state 的 latent query。它可注意到所有
+此前的可见图像、instruction、BEV/goal/waypoint、Decision 与可选 grounding，但不生成语言轨迹：
+
+\[
+H_t^Q=F_\theta(O_t,C_t^D,C_t^R,Q),\qquad
+Q=[TRAJ_0,\ldots,TRAJ_{Q-1}],
+\]
+
+\[
+\hat W_t=\operatorname{CFM}_\phi(H_t^Q),\qquad
+\hat W_t\in\mathbb{R}^{B\times32\times3}.
+\]
+
+`C_t^D` 始终是 accepted standalone Decision。`C_t^R` 只可以是 accepted FullCoT grounding，或由
+训练路由显式声明为 absent；它不能是 parser failure、unknown、human reject、空字符串或缺失缓存。
+trajectory truth、normalization、strong direction label 和 teacher-only GT 始终不得进入 prompt。
+
+### 7.2 两条合法 context route
+
+| `context_mode` | `reasoning_state` | 需要的 cache | Pass-T 可见内容 | 目的 |
+| --- | --- | --- | --- | --- |
+| `reasoning_plus_decision` | `present` | accepted R + accepted D；同一 producer identity | canonical grounding + Decision + `[TRAJ]` | 显式 reasoning 条件基线。 |
+| `decision_only` | `absent_by_reasoning_dropout` | accepted D；无 R cache | explicit absence tag + Decision + `[TRAJ]` | 默认部署候选；训练 CFM 不依赖 FullCoT。 |
+
+两条 route 的图片、`image_roles`、instruction、evidence catalog、可选 BEV/waypoint、direction
+context、trajectory target、split 与 `[TRAJ]` query placement 必须一致。一个 parent 在一个 immutable
+CFM epoch appearance 中只能选择其中一条 route；不能把同一轨迹作为 R+D 与 D-only 两次梯度样本。
+
+### 7.3 V2 prompt 与 query 合同
+
+V2 的 user prompt 计划收敛为：
+
+```text
+<image>...<image>
+<TASK_TRAJECTORY_CFM>
+<MODE profile_id="...">
+{model-visible observation payload}
+<REASONING_CONTEXT state="present|absent_by_reasoning_dropout">...</REASONING_CONTEXT>
+<PREDICTED_DECISION>{accepted standalone Decision}</PREDICTED_DECISION>
+[TRAJ_0] ... [TRAJ_Q-1]
+```
+
+`absent_by_reasoning_dropout` 只表达训练/部署选择，不表达不确定性或感知失败。`Q` 与 4 秒 target
+长度 `T=32` 解耦；首个 profile 应把 `Q` 作为显式配置并比较 `Q in {4,8,16}`，而不是沿用 V1 的
+“一个 query 对应一个 target step”假设。
+
+### 7.4 实现职责与顺序
+
+**RouteServer canonical owner**：新增 V2 cache union、`reasoning_state`、context-mode invariant、
+V2 prompt-visible digest、drop/reject audit 和 cross-repository schema exporter。V2 builder 必须拒绝
+R/D cache identity 不匹配，也必须拒绝将不合格 R cache 解释为 dropout absence。
+
+**ms-swift training owner**：新增 V2 manifest adapter、query contract、profile-driven route sampler、
+CFM condition-mode metric 和 checkpoint sidecar。CFM loss 在 valid trajectory point 上独立归一化；
+它不与 Stage I FullCoT/Decision/VQA 的 LM loss 合并为一个虚假的单 forward 公式。
+
+**先后顺序**：
+
+1. 先用 `traj_query_only` 实现并验证 R+D/D-only paired CFM，冻结 4 秒/32 点轨迹与 query contract；
+2. 在同一 held-out case 下报告 ADE/FDE/L2@1s/L2@2s、direction/stop/turn slices、coverage、latency 和
+   `Delta_reason`；
+3. 再把 System 1 的 `hybrid` memory 变体接入每个控制 tick 的新视觉特征，检验快速视觉纠偏；
+4. 最后才进入实物 replay、独立 safety supervisor 与有限速度的 closed-loop 验证。
+
+当前 V1 虽有 `traj_query_only` prompt 和 System1 condition 的基础设施，但 prompt builder 仍固定
+要求 accepted R/D context，且 V1 使用 2 秒/16 步 target。它不能作为已完成的 no-CoT 4 秒双系统
+实现，也不能直接加载 V2.1 sidecar。

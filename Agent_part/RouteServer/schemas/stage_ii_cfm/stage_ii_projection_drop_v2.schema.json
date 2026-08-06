@@ -1,0 +1,107 @@
+{
+  "additionalProperties": false,
+  "description": "Record one fail-closed V2 projection rejection without training content.",
+  "properties": {
+    "dataset_source": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Dataset Source",
+      "type": "string"
+    },
+    "detail": {
+      "maxLength": 1000,
+      "minLength": 1,
+      "title": "Detail",
+      "type": "string"
+    },
+    "drop_digest": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Drop Digest",
+      "type": "string"
+    },
+    "modality_profile_id": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Modality Profile Id",
+      "type": "string"
+    },
+    "parent_sample_id": {
+      "maxLength": 480,
+      "minLength": 1,
+      "title": "Parent Sample Id",
+      "type": "string"
+    },
+    "projection_policy_id": {
+      "const": "urbannav_stage_ii_reasoning_dropout_projection_v2",
+      "default": "urbannav_stage_ii_reasoning_dropout_projection_v2",
+      "title": "Projection Policy Id",
+      "type": "string"
+    },
+    "projection_policy_version": {
+      "const": "2.0",
+      "default": "2.0",
+      "title": "Projection Policy Version",
+      "type": "string"
+    },
+    "reason_code": {
+      "maxLength": 96,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "title": "Reason Code",
+      "type": "string"
+    },
+    "requested_context_mode": {
+      "maxLength": 96,
+      "minLength": 1,
+      "title": "Requested Context Mode",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "urbannav_stage_ii_projection_drop_v2",
+      "default": "urbannav_stage_ii_projection_drop_v2",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_group_id": {
+      "maxLength": 240,
+      "minLength": 1,
+      "title": "Source Group Id",
+      "type": "string"
+    },
+    "split_group_id": {
+      "maxLength": 240,
+      "minLength": 1,
+      "title": "Split Group Id",
+      "type": "string"
+    },
+    "stage_i_route_sample_id": {
+      "maxLength": 480,
+      "minLength": 1,
+      "title": "Stage I Route Sample Id",
+      "type": "string"
+    },
+    "stage_i_route_task_type": {
+      "maxLength": 96,
+      "minLength": 1,
+      "title": "Stage I Route Task Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "parent_sample_id",
+    "stage_i_route_sample_id",
+    "stage_i_route_task_type",
+    "requested_context_mode",
+    "source_group_id",
+    "split_group_id",
+    "dataset_source",
+    "modality_profile_id",
+    "reason_code",
+    "detail",
+    "drop_digest"
+  ],
+  "title": "StageIIProjectionDropV2",
+  "type": "object"
+}
