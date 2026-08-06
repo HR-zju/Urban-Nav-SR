@@ -42,6 +42,10 @@ cross-repository contract tests 交换行为。Runtime/audit traces、trainable 
 - 用于正式证据的 evaluator 必须 offline 且 deterministic。
 - 在当前 workflow run manifest 中记录精确 data、model、command、environment、
   commit 和 artifact。
+- 每次训练、生成或正式评测必须在持久 artifact root 下建立 run 专属的可视化与导出目录。训练至少
+  交付 TensorBoard event、loss/吞吐/显存曲线及 checkpoint 对应关系；数据与评测至少交付
+  machine-readable report、分层错误统计、可定位的 FPV/BEV/trajectory/reasoning review。dashboard 只可
+  监听 loopback 并通过受信 SSH 转发访问；实验记录和 lifecycle receipt 必须绑定 visual manifest/index。
 - service model listing、synthetic fixture 或 mini smoke 不能当作 semantic 或
   frozen-benchmark validation。
 

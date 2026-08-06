@@ -831,6 +831,64 @@ def parse_stage_i_training_view_v2(payload: dict[str, Any]) -> StageITrainingVie
     return STAGE_I_TRAINING_VIEW_ADAPTER_V2.validate_python(payload)
 
 
+def project_reasoning_dropout_from_full_v2(
+    full: StageIFullCoTViewV2 | dict[str, Any],
+) -> StageIReasoningDropoutViewV2:
+    """Build the unique direct Decision projection of one V2 FullCoT view.
+
+    The function is deliberately a pure contract projection.  It does not
+    decide whether the direct row is used; Stage I V3 performs that choice at
+    epoch compilation time.
+
+    Args:
+        full: Validated V2 FullCoT view or its JSON-compatible payload.
+
+    Returns:
+        A direct Decision view with cryptographic lineage to ``full``.
+
+    Raises:
+        ValueError: If the input is not a V2 FullCoT view.
+    """
+
+    parsed = parse_stage_i_training_view_v2(full) if isinstance(full, dict) else full
+    if not isinstance(parsed, StageIFullCoTViewV2):
+        raise ValueError("reasoning route requires a V2 FullCoT parent")
+    decision = parsed.reasoning_target.reasoning.decision
+    assistant_text = (
+        "<Decision>"
+        + json.dumps(decision.model_dump(mode="json"), ensure_ascii=False, separators=(",", ":"))
+        + "</Decision>"
+    )
+    payload = parsed.model_dump(mode="json", exclude_none=True)
+    payload.pop("reasoning_target")
+    payload.pop("prompt_profile_id")
+    payload.pop("prompt_policy_digest")
+    payload.update({
+        "task_type": "reasoning_dropout",
+        "sample_id": f"{parsed.sample_id}:reasoning_dropout",
+        "assistant_text": assistant_text,
+        "loss_spans": [{"start": 0, "end": len(assistant_text), "scale": 1.0, "channel": "reasoning_dropout"}],
+        "answerability": StageIAnswerabilityV2(
+            reasoning_dropout=True,
+            reasons=("canonical_full_cot_decision_projection",),
+        ).model_dump(mode="json"),
+        "decision": decision.model_dump(mode="json"),
+        "dropout_link": StageIReasoningDropoutLinkV2(
+            parent_full_cot_sample_id=parsed.sample_id,
+            parent_full_cot_projection_digest=parsed.projection_digest,
+            parent_full_cot_assistant_sha256=hashlib.sha256(parsed.assistant_text.encode("utf-8")).hexdigest(),
+            assistant_decision_sha256=hashlib.sha256(assistant_text.encode("utf-8")).hexdigest(),
+        ).model_dump(mode="json"),
+        "metadata": {
+            **parsed.metadata,
+            "dropout_mirror_of_parent": parsed.sample_id,
+        },
+    })
+    payload.pop("projection_digest", None)
+    payload["projection_digest"] = stage_i_projection_digest_v2(payload)
+    return StageIReasoningDropoutViewV2.model_validate(payload)
+
+
 __all__ = [
     "STAGE_I_LOSS_SPAN_POLICY_ID",
     "STAGE_I_INSTRUCTION_PROVENANCE_SCHEMA_VERSION",
@@ -868,6 +926,7 @@ __all__ = [
     "StageIReasoningDropoutViewV2",
     "parse_stage_i_training_view_v1",
     "parse_stage_i_training_view_v2",
+    "project_reasoning_dropout_from_full_v2",
     "stage_i_projection_digest_v1",
     "stage_i_projection_digest_v2",
 ]

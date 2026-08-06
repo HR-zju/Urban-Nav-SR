@@ -23,7 +23,7 @@ from mcp_server.eval.openloop_common import (
 
 
 STAGE_II_OPENLOOP_EVALUATOR_VERSION = (
-    "urbannav_stage_ii_cfm_openloop_evaluator_v2_0"
+    "urbannav_stage_ii_cfm_openloop_evaluator_v2_1"
 )
 
 
@@ -144,6 +144,10 @@ def evaluate_stage_ii_cfm_openloop_v1(
             "checkpoint_lineage_valid": True,
         },
         "horizons": horizon_metrics,
+        "selected_l2": _explicit_selected_l2_report(
+            horizon_metrics,
+            metric_policy=metric_policy,
+        ),
         "decision_stop_drift": _decision_stop_drift(materialized),
         "physical_motion": (
             {
@@ -240,6 +244,7 @@ def _evaluate_horizon(
             for name in (
                 "conditional_ade_m",
                 "conditional_fde_m",
+                "conditional_l2_m",
                 "conditional_lateral_endpoint_error_m",
                 "conditional_longitudinal_endpoint_error_m",
                 "conditional_yaw_mae_rad",
@@ -292,6 +297,8 @@ def _summarize_geometry(
     mapping = {
         "conditional_ade_m": "ade_m",
         "conditional_fde_m": "fde_m",
+        # 单候选合同下，固定 horizon 的 L2 就是该截断轨迹的 FDE。
+        "conditional_l2_m": "fde_m",
         "conditional_lateral_endpoint_error_m": "lateral_endpoint_error_m",
         "conditional_longitudinal_endpoint_error_m": "longitudinal_endpoint_error_m",
         "conditional_yaw_mae_rad": "yaw_mae_rad",
@@ -307,6 +314,56 @@ def _summarize_geometry(
         if source_name == "yaw_mae_rad":
             result["moving_yaw_count"] = len(values)
     return result
+
+
+def _explicit_selected_l2_report(
+    horizon_metrics: dict[str, dict[str, Any]],
+    *,
+    metric_policy: OpenLoopMetricPolicyV1,
+) -> dict[str, Any]:
+    """Publish selected-trajectory endpoint L2 at one and two seconds.
+
+    For the current single-trajectory contract, fixed-horizon L2 is exactly
+    the endpoint displacement error of the trajectory prefix:
+
+    ``L2@tau = ||p_hat(tau) - p(tau)||_2 = FDE@tau``.
+
+    Args:
+        horizon_metrics: Per-horizon evaluator outputs keyed by physical time.
+        metric_policy: Frozen aggregation and temporal-grid policy.
+
+    Returns:
+        Explicit primary dataset-macro and secondary natural-micro L2 values.
+
+    Raises:
+        ValueError: If the frozen evaluator policy does not expose 1 s and 2 s.
+    """
+
+    required = {"l2_1s_m": _horizon_key(1.0), "l2_2s_m": _horizon_key(2.0)}
+    missing = [key for key in required.values() if key not in horizon_metrics]
+    if missing:
+        raise ValueError(
+            "Stage II selected L2 requires fixed 1 s and 2 s horizons: "
+            f"missing={missing}"
+        )
+
+    def collect(section: str) -> dict[str, float | None]:
+        return {
+            output_name: horizon_metrics[horizon_key][section][
+                "conditional_l2_m"
+            ]
+            for output_name, horizon_key in required.items()
+        }
+
+    return {
+        "definition": "selected_trajectory_endpoint_l2_v1",
+        "unit": "meter",
+        "primary_aggregation": metric_policy.stage_ii_geometry_primary,
+        "primary_eligible_dataset_macro": collect(
+            "primary_eligible_dataset_macro"
+        ),
+        "secondary_natural_micro": collect("secondary_natural_micro"),
+    }
 
 
 def _strict_prediction(value: Any) -> list[list[float]]:

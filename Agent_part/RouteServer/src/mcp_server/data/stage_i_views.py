@@ -33,12 +33,13 @@ from mcp_server.contracts.stage_i_sft import (
     StageIProjectionDropV1,
     StageIVQAViewV1,
     StageIVQAViewV2,
-    StageIReasoningDropoutLinkV2,
     StageIReasoningDropoutViewV2,
     STAGE_I_LOSS_SPAN_POLICY_V2_ID,
     STAGE_I_PROJECTION_POLICY_V2_ID,
     STAGE_I_PROJECTION_POLICY_V2_VERSION,
     STAGE_I_TRAINING_VIEW_V2_SCHEMA_VERSION,
+    parse_stage_i_training_view_v2,
+    project_reasoning_dropout_from_full_v2,
     stage_i_projection_digest_v1,
     stage_i_projection_digest_v2,
 )
@@ -820,7 +821,40 @@ def project_stage_i_reasoning_view_v2(
     full = _upgrade_full_cot_view_v2(legacy_full)
     if task_type == "full_cot":
         return full
-    return _project_reasoning_dropout_v2(full)
+    return project_reasoning_dropout_from_full_v2(full)
+
+
+def project_stage_i_reasoning_dropout_from_full_v2(
+    full: StageIFullCoTViewV2 | Mapping[str, Any],
+) -> StageIReasoningDropoutViewV2:
+    """Project one validated V2 FullCoT view to its direct Decision target.
+
+    This is a deterministic projection primitive, not an instruction to
+    materialize a second dataset.  Stage I V3 calls it only after the epoch
+    sampler has routed a FullCoT appearance to the no-CoT path.
+
+    Args:
+        full: A validated V2 FullCoT exchange view or its JSON-compatible
+            payload.
+
+    Returns:
+        The unique direct ``<Decision>`` projection with immutable lineage to
+        ``full``.
+
+    Raises:
+        TypeError: If ``full`` is neither a V2 object nor a mapping.
+        ValueError: If a mapping is not a V2 FullCoT view.
+    """
+
+    if isinstance(full, Mapping):
+        parsed = parse_stage_i_training_view_v2(dict(full))
+    elif isinstance(full, StageIFullCoTViewV2):
+        parsed = full
+    else:
+        raise TypeError("full must be a StageIFullCoTViewV2 or mapping")
+    if not isinstance(parsed, StageIFullCoTViewV2):
+        raise ValueError("reasoning route requires a V2 FullCoT parent")
+    return project_reasoning_dropout_from_full_v2(parsed)
 
 
 def project_stage_i_vqa_view_v2(
@@ -882,39 +916,6 @@ def _upgrade_full_cot_view_v2(legacy: StageIFullCoTViewV1) -> StageIFullCoTViewV
     return _finalize_view_v2(StageIFullCoTViewV2, payload)
 
 
-def _project_reasoning_dropout_v2(full: StageIFullCoTViewV2) -> StageIReasoningDropoutViewV2:
-    """Extract the sole permitted direct target from a V2 FullCoT parent."""
-
-    decision = full.reasoning_target.reasoning.decision
-    assistant_text = _render_decision(decision.model_dump(mode="json"))
-    payload = full.model_dump(mode="json", exclude_none=True)
-    payload.pop("reasoning_target")
-    payload.pop("prompt_profile_id")
-    payload.pop("prompt_policy_digest")
-    payload.update({
-        "task_type": "reasoning_dropout",
-        "sample_id": f"{full.sample_id}:reasoning_dropout",
-        "assistant_text": assistant_text,
-        "loss_spans": _full_loss_span_v2(assistant_text, "reasoning_dropout"),
-        "answerability": StageIAnswerabilityV2(
-            reasoning_dropout=True,
-            reasons=("canonical_full_cot_decision_projection",),
-        ).model_dump(mode="json"),
-        "decision": decision.model_dump(mode="json"),
-        "dropout_link": StageIReasoningDropoutLinkV2(
-            parent_full_cot_sample_id=full.sample_id,
-            parent_full_cot_projection_digest=full.projection_digest,
-            parent_full_cot_assistant_sha256=_sha256(full.assistant_text),
-            assistant_decision_sha256=_sha256(assistant_text),
-        ).model_dump(mode="json"),
-        "metadata": {
-            **full.metadata,
-            "dropout_mirror_of_parent": full.sample_id,
-        },
-    })
-    return _finalize_view_v2(StageIReasoningDropoutViewV2, payload)
-
-
 def _full_loss_span_v2(assistant_text: str, channel: str) -> list[dict[str, Any]]:
     """Return V2's required all-canonical-target loss partition."""
 
@@ -930,14 +931,6 @@ def _finalize_view_v2(model_type, payload: dict[str, Any]):
     return model_type.model_validate(normalized)
 
 
-def _sha256(value: str) -> str:
-    """Return a stable UTF-8 SHA-256 used only for immutable V2 lineage."""
-
-    import hashlib
-
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
 __all__ = [
     "STAGE_I_MODALITY_PROFILES_V1",
     "StageIModalityProfileV1",
@@ -945,6 +938,7 @@ __all__ = [
     "project_stage_i_reasoning_view_v1",
     "project_stage_i_reasoning_view_with_audit_v1",
     "project_stage_i_reasoning_view_v2",
+    "project_stage_i_reasoning_dropout_from_full_v2",
     "project_stage_i_vqa_view_v1",
     "project_stage_i_vqa_view_with_audit_v1",
     "project_stage_i_vqa_view_v2",

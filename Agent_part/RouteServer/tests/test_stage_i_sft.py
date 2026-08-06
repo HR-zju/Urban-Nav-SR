@@ -52,6 +52,7 @@ from mcp_server.data.stage_i_provenance import (
 )
 from mcp_server.data.stage_i_portable import relocate_stage_i_training_views_v1
 from mcp_server.data.stage_i_views import (
+    project_stage_i_reasoning_dropout_from_full_v2,
     project_stage_i_reasoning_view_v1,
     project_stage_i_reasoning_view_with_audit_v1,
     project_stage_i_vqa_view_v1,
@@ -332,6 +333,25 @@ def test_v2_full_cot_supervises_decision_and_dropout_is_parent_linked() -> None:
     assert dropout.dropout_link.dropout_reason == "assistant_reasoning_prefix"
     assert dropout.dropout_link.parent_full_cot_sample_id.endswith(":stage_i:fpv_instruction_v1")
     assert all(span.scale == 1.0 for span in dropout.loss_spans)
+
+
+def test_v2_full_cot_has_a_deterministic_no_cot_projection_primitive() -> None:
+    """The epoch compiler may derive Decision only after routing a FullCoT parent."""
+
+    full = project_stage_i_reasoning_view_v2(
+        _formal_reasoning_view(label="right_20"),
+        task_type="full_cot",
+        modality_profile_id="fpv_instruction_v1",
+        instruction_training_role="primary",
+    )
+    dropout = project_stage_i_reasoning_dropout_from_full_v2(full)
+    assert dropout.dropout_link.parent_full_cot_sample_id == full.sample_id
+    assert dropout.dropout_link.parent_full_cot_assistant_sha256 == hashlib.sha256(
+        full.assistant_text.encode("utf-8")).hexdigest()
+    assert dropout.decision.selected_action_label == "right_20"
+
+    with pytest.raises(ValueError, match="requires a V2 FullCoT parent"):
+        project_stage_i_reasoning_dropout_from_full_v2(dropout.model_dump(mode="json"))
 
 
 def test_selected_instruction_must_be_primary() -> None:

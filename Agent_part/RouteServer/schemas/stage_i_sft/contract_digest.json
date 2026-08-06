@@ -6,8 +6,8 @@
     "stage_i_training_view_v2.schema.json": "9d81a90a00ffd627d52a9ae9efcfd75d9595e6efdc2a897491ffba2411de1c3e"
   },
   "canonical_source_sha256": {
-    "src/mcp_server/contracts/stage_i_sft.py": "8a5972c159a22c3446ec211a75d9591f2bd480096a2245c419b05baef52f52e3",
-    "src/mcp_server/data/stage_i_views.py": "ef35d2082e02335c5e2dfacee04c5c69ccf603606c952bbb48d8f33042690268"
+    "src/mcp_server/contracts/stage_i_sft.py": "623b657b7e361e371c8fd30e042f7c1b176279cef65a2984d592acd111546809",
+    "src/mcp_server/data/stage_i_views.py": "6380e3a4124b5bd07b583bb6b7a2434541c550adc64a897de8264470019385af"
   },
   "instruction_provenance_schema_version": "urbannav_stage_i_instruction_provenance_v1",
   "loss_span_policy_id": "urbannav_stage_i_char_spans_v1",

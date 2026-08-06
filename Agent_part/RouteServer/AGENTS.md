@@ -40,6 +40,9 @@ SPL = RS \cdot \frac{L(P^*)}{\max(L(P^*), L(\hat P))}
   tolerance rule。
 - tool-call trace 默认作为 diagnostic，除非 benchmark 明确定义 tool-call quality metric。
 - 主 benchmark metric 集合保持精简；其他数值先作为 debug 或 slice analysis，除非明确提升。
+- 正式数据处理与评测应把可视化视为一等产物：持久保存输入/预测/GT 的关联 report、分层错误图和
+  可在本地打开的 HTML review；涉及 FPV、BEV、轨迹或 reasoning 时 review 必须能按 stable sample ID
+  定位媒体与 overlay。可视化服务只绑定 loopback，精确入口、导出路径和完整性检查写入实验记录。
 
 ## 架构与迭代管理
 
