@@ -1,0 +1,18 @@
+{
+  "artifact_sha256": {
+    "benchmark_capabilities_v1.schema.json": "3e92355b15074be7c34bafda9ab0434841feda470ab5a6acb1e2ae997a6728ca",
+    "benchmark_failure_v1.schema.json": "cdea659cc97d895c5971351b39cf9f57c74a98470a1be5e3d5792dea323ba331",
+    "benchmark_input_v1.schema.json": "f3796c13a6e352ff70e64ae1d31fbcbba428a5763055ee2b689596a9e5ed3cca",
+    "benchmark_package_v1.schema.json": "aefd3bca57bf3bb3572f96c91ef99a56c2f2d96da47d6fa8017c24694dc64e6f",
+    "benchmark_prediction_v1.schema.json": "cb073d7f2cdbf566eb04f2d19ca0782656b80fcf0b69a55c433c59f72f9be938",
+    "benchmark_profile_v1.schema.json": "789048f4f830d76c03303f180d023359607a664e9dfb4d778784768d050ee343",
+    "benchmark_reference_v1.schema.json": "5c9aa4384a7676fefe1aa092842027c61a0e9e0ac082142d0e27f2922945f21b",
+    "citywalker_to_urbannav_adapter_trace_v1.schema.json": "4486480dbda0839781f37f50e859ee8855bca1e2c2c8cc9ca8907eea2565114e"
+  },
+  "benchmark_plugin_schema_version": "urbannav_benchmark_plugin_v1",
+  "canonical_source_sha256": "88c8159320afa052d61fcfdc0aa095efa5bc3a778a2c391abb41e2cffc710526",
+  "citywalker_to_urbannav_adapter_contract_version": "citywalker_to_urbannav_adapter_contract_v1",
+  "citywalker_to_urbannav_adapter_source_sha256": "d8fa3f099c9bf6adff4a7a6a8dc5e81b83f5790ba54dbd4f5b0406f1e37c51f0",
+  "schema_version": "urbannav_benchmark_plugin_contract_artifacts_v1",
+  "semantic_contract_digest": "9d92a4989c2da0cda41168d1814b34ead1528dee5ec2f0fa5150df7c42f0b1ab"
+}

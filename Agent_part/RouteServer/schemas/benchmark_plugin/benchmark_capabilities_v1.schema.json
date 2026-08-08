@@ -1,0 +1,62 @@
+{
+  "additionalProperties": false,
+  "description": "Declare a model adapter's legal profiles and output capabilities.\n\nArgs:\n    adapter_id: Stable adapter implementation identity.\n    supported_input_profiles: Accepted input-rendering profile ids.\n    prediction_geometry_ids: Output geometry semantics supported by adapter.\n    supports_arrival: Whether a calibrated arrival score can be emitted.\n    adaptation_modes: Legal training/adaptation identities for the adapter.",
+  "properties": {
+    "adaptation_modes": {
+      "items": {
+        "enum": [
+          "zero_shot",
+          "prompt_only",
+          "head_finetune",
+          "full_finetune",
+          "reference"
+        ],
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Adaptation Modes",
+      "type": "array"
+    },
+    "adapter_id": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Adapter Id",
+      "type": "string"
+    },
+    "prediction_geometry_ids": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Prediction Geometry Ids",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "urbannav_benchmark_capabilities_v1",
+      "default": "urbannav_benchmark_capabilities_v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "supported_input_profiles": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Supported Input Profiles",
+      "type": "array"
+    },
+    "supports_arrival": {
+      "title": "Supports Arrival",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "adapter_id",
+    "supported_input_profiles",
+    "prediction_geometry_ids",
+    "supports_arrival",
+    "adaptation_modes"
+  ],
+  "title": "BenchmarkModelCapabilitiesV1",
+  "type": "object"
+}

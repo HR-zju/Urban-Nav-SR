@@ -1,0 +1,97 @@
+{
+  "$defs": {
+    "BenchmarkTimePolicyV1": {
+      "additionalProperties": false,
+      "description": "Freeze physical-time alignment and angular eligibility rules.\n\nArgs:\n    policy_id: Stable policy identity.\n    horizons_s: Ordered positive physical horizons used for comparison.\n    interpolation: Curve interpolation used by every metric suite.\n    min_angle_reference_distance_m: Minimum GT radial displacement for\n        an angle to be mathematically meaningful.",
+      "properties": {
+        "horizons_s": {
+          "items": {
+            "type": "number"
+          },
+          "minItems": 1,
+          "title": "Horizons S",
+          "type": "array"
+        },
+        "interpolation": {
+          "const": "linear_xy_v1",
+          "default": "linear_xy_v1",
+          "title": "Interpolation",
+          "type": "string"
+        },
+        "min_angle_reference_distance_m": {
+          "default": 0.001,
+          "minimum": 0.0,
+          "title": "Min Angle Reference Distance M",
+          "type": "number"
+        },
+        "policy_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Policy Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "policy_id",
+        "horizons_s"
+      ],
+      "title": "BenchmarkTimePolicyV1",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Bind one legal dataset, prediction geometry, and metric-suite set.\n\nArgs:\n    profile_id: Stable benchmark protocol identity.\n    dataset_plugin_id: Dataset plugin that materializes frozen cases.\n    model_input_profile_id: Exact public input rendering contract.\n    prediction_geometry_id: Expected output geometry semantics.\n    metric_suite_ids: Ordered metric suites evaluated by the runner.\n    time_policy: Shared physical-time alignment contract.",
+  "properties": {
+    "dataset_plugin_id": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Dataset Plugin Id",
+      "type": "string"
+    },
+    "metric_suite_ids": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Metric Suite Ids",
+      "type": "array"
+    },
+    "model_input_profile_id": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Model Input Profile Id",
+      "type": "string"
+    },
+    "prediction_geometry_id": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Prediction Geometry Id",
+      "type": "string"
+    },
+    "profile_id": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Profile Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "urbannav_benchmark_profile_v1",
+      "default": "urbannav_benchmark_profile_v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "time_policy": {
+      "$ref": "#/$defs/BenchmarkTimePolicyV1"
+    }
+  },
+  "required": [
+    "profile_id",
+    "dataset_plugin_id",
+    "model_input_profile_id",
+    "prediction_geometry_id",
+    "metric_suite_ids",
+    "time_policy"
+  ],
+  "title": "BenchmarkProfileV1",
+  "type": "object"
+}

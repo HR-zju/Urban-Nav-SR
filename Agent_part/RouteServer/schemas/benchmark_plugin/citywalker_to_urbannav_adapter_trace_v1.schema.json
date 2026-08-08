@@ -1,0 +1,181 @@
+{
+  "additionalProperties": false,
+  "description": "Public-only trace sidecar for a native CityWalker reverse-adapter run.\n\nThe sidecar is intentionally independent of canonical scorecards.  It has\nno free-form metadata, hidden reference timestamps, future trajectory, or\nevaluator loss fields.\n\nArgs:\n    sample_id: Frozen benchmark input identity.\n    benchmark_input_digest: Digest of the exact public input row.\n    native_adapter_id: Adapter implementation stamp.\n    native_adapter_version: Adapter behavior version.\n    native_checkpoint_digest: SHA256 of the native checkpoint.\n    selected_image_indices: Original input indices passed to CityWalker.\n    selected_image_roles: Roles aligned to those indices.\n    public_history_transform_id: Public history transform stamp.\n    public_scale_estimator_id: Public-only scale estimator stamp.\n    public_scale_value: Estimated scale in metres.\n    input_coordinate_projection_id: UrbanNav-FLU to CityWalker-xy stamp.\n    output_coordinate_projection_id: CityWalker-xy to UrbanNav-FLU stamp.\n    native_output_schedule_id: Explicit five-waypoint time schedule stamp.\n    native_output_count: Native point count actually produced.\n    eligibility_status: Closed adapter result status.\n    reject_reason: Closed first rejection reason when not eligible.",
+  "properties": {
+    "benchmark_input_digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Benchmark Input Digest",
+      "type": "string"
+    },
+    "eligibility_status": {
+      "enum": [
+        "eligible",
+        "input_ineligible",
+        "native_model_error",
+        "output_contract_error"
+      ],
+      "title": "Eligibility Status",
+      "type": "string"
+    },
+    "input_coordinate_projection_id": {
+      "anyOf": [
+        {
+          "maxLength": 160,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Input Coordinate Projection Id"
+    },
+    "native_adapter_id": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Native Adapter Id",
+      "type": "string"
+    },
+    "native_adapter_version": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Native Adapter Version",
+      "type": "string"
+    },
+    "native_checkpoint_digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Native Checkpoint Digest",
+      "type": "string"
+    },
+    "native_output_count": {
+      "maximum": 256,
+      "minimum": 0,
+      "title": "Native Output Count",
+      "type": "integer"
+    },
+    "native_output_schedule_id": {
+      "anyOf": [
+        {
+          "maxLength": 160,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Native Output Schedule Id"
+    },
+    "output_coordinate_projection_id": {
+      "anyOf": [
+        {
+          "maxLength": 160,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Output Coordinate Projection Id"
+    },
+    "public_history_transform_id": {
+      "anyOf": [
+        {
+          "maxLength": 160,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Public History Transform Id"
+    },
+    "public_scale_estimator_id": {
+      "anyOf": [
+        {
+          "maxLength": 160,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Public Scale Estimator Id"
+    },
+    "public_scale_value": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Public Scale Value"
+    },
+    "reject_reason": {
+      "anyOf": [
+        {
+          "enum": [
+            "insufficient_public_fpv",
+            "missing_public_history",
+            "missing_public_goal",
+            "invalid_scale",
+            "unsupported_public_input",
+            "native_model_error",
+            "output_contract_error"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reject Reason"
+    },
+    "sample_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Sample Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "citywalker_to_urbannav_adapter_contract_v1",
+      "default": "citywalker_to_urbannav_adapter_contract_v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "selected_image_indices": {
+      "default": [],
+      "items": {
+        "type": "integer"
+      },
+      "title": "Selected Image Indices",
+      "type": "array"
+    },
+    "selected_image_roles": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Selected Image Roles",
+      "type": "array"
+    }
+  },
+  "required": [
+    "sample_id",
+    "benchmark_input_digest",
+    "native_adapter_id",
+    "native_adapter_version",
+    "native_checkpoint_digest",
+    "native_output_count",
+    "eligibility_status"
+  ],
+  "title": "CityWalkerToUrbanNavAdapterTraceV1",
+  "type": "object"
+}

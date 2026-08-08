@@ -1,0 +1,159 @@
+{
+  "additionalProperties": false,
+  "description": "Store hidden geometry, task labels, and subgroup evidence for one case.\n\nArgs:\n    sample_id: Exact input identity.\n    parent_sample_id: Underlying physical-frame identity.\n    source_group_id: Stable source/session identity.\n    split_group_id: Atomic split identity.\n    split: Frozen split assignment.\n    dataset_plugin_id: Plugin that produced the reference.\n    benchmark_profile_id: Legal benchmark profile used for this row.\n    dataset_source: Dataset family for grouped reports.\n    trajectory: Cumulative local future trajectory with width two or three.\n    trajectory_timestamps_s: Strictly increasing relative timestamps.\n    trajectory_valid_mask: Valid future-point mask.\n    coordinate_frame: Versioned local coordinate convention.\n    arrival_label: Optional point-goal arrival classification label.\n    scenario_labels: Overlap-permitted external scenario memberships.\n    label_provenance: Provenance of the hidden labels.\n    field_provenance: Optional field-level provenance for mixed labels.\n    subgroup_metadata: Additional evaluator-only group keys.",
+  "properties": {
+    "arrival_label": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Arrival Label"
+    },
+    "benchmark_profile_id": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Benchmark Profile Id",
+      "type": "string"
+    },
+    "coordinate_frame": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Coordinate Frame",
+      "type": "string"
+    },
+    "dataset_plugin_id": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Dataset Plugin Id",
+      "type": "string"
+    },
+    "dataset_source": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Dataset Source",
+      "type": "string"
+    },
+    "field_provenance": {
+      "additionalProperties": {
+        "enum": [
+          "deterministic_gt",
+          "human_gold",
+          "reference_annotation"
+        ],
+        "type": "string"
+      },
+      "title": "Field Provenance",
+      "type": "object"
+    },
+    "label_provenance": {
+      "default": "deterministic_gt",
+      "enum": [
+        "deterministic_gt",
+        "human_gold",
+        "reference_annotation"
+      ],
+      "title": "Label Provenance",
+      "type": "string"
+    },
+    "parent_sample_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Parent Sample Id",
+      "type": "string"
+    },
+    "sample_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Sample Id",
+      "type": "string"
+    },
+    "scenario_labels": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Scenario Labels",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "urbannav_benchmark_reference_v1",
+      "default": "urbannav_benchmark_reference_v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_group_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Source Group Id",
+      "type": "string"
+    },
+    "split": {
+      "enum": [
+        "train",
+        "validation",
+        "test"
+      ],
+      "title": "Split",
+      "type": "string"
+    },
+    "split_group_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Split Group Id",
+      "type": "string"
+    },
+    "subgroup_metadata": {
+      "additionalProperties": true,
+      "title": "Subgroup Metadata",
+      "type": "object"
+    },
+    "trajectory": {
+      "items": {
+        "items": {
+          "type": "number"
+        },
+        "type": "array"
+      },
+      "minItems": 1,
+      "title": "Trajectory",
+      "type": "array"
+    },
+    "trajectory_timestamps_s": {
+      "items": {
+        "type": "number"
+      },
+      "minItems": 1,
+      "title": "Trajectory Timestamps S",
+      "type": "array"
+    },
+    "trajectory_valid_mask": {
+      "items": {
+        "type": "boolean"
+      },
+      "minItems": 1,
+      "title": "Trajectory Valid Mask",
+      "type": "array"
+    }
+  },
+  "required": [
+    "sample_id",
+    "parent_sample_id",
+    "source_group_id",
+    "split_group_id",
+    "split",
+    "dataset_plugin_id",
+    "benchmark_profile_id",
+    "dataset_source",
+    "trajectory",
+    "trajectory_timestamps_s",
+    "trajectory_valid_mask",
+    "coordinate_frame"
+  ],
+  "title": "BenchmarkReferenceV1",
+  "type": "object"
+}

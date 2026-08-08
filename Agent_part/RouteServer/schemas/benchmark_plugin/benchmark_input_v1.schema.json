@@ -1,0 +1,139 @@
+{
+  "$defs": {
+    "BenchmarkMessageV1": {
+      "additionalProperties": false,
+      "description": "One model-visible benchmark prompt message.\n\nArgs:\n    role: Prompt role accepted by an inference adapter.\n    content: Exact visible message content.",
+      "properties": {
+        "content": {
+          "minLength": 1,
+          "title": "Content",
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "system",
+            "user",
+            "tool",
+            "tool_response"
+          ],
+          "title": "Role",
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "content"
+      ],
+      "title": "BenchmarkMessageV1",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Store one model-visible, frozen benchmark case.\n\nArgs:\n    sample_id: Stable task identity, including any frozen point-goal draw.\n    parent_sample_id: Underlying physical-frame identity.\n    source_group_id: Stable source/session identity.\n    split_group_id: Atomic split identity.\n    split: Frozen train/validation/test assignment.\n    dataset_plugin_id: Plugin that produced the case.\n    benchmark_profile_id: Legal benchmark profile used for this row.\n    dataset_source: Dataset family for grouped reports.\n    messages: Exact model-visible prompt messages.\n    images: Ordered model-visible image paths.\n    image_roles: Semantic role for every image.\n    public_context: Typed-by-profile public numeric/context payload.\n    modality_profile_id: Exact modality rendering identity.",
+  "properties": {
+    "benchmark_profile_id": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Benchmark Profile Id",
+      "type": "string"
+    },
+    "dataset_plugin_id": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Dataset Plugin Id",
+      "type": "string"
+    },
+    "dataset_source": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Dataset Source",
+      "type": "string"
+    },
+    "image_roles": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Image Roles",
+      "type": "array"
+    },
+    "images": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Images",
+      "type": "array"
+    },
+    "messages": {
+      "items": {
+        "$ref": "#/$defs/BenchmarkMessageV1"
+      },
+      "minItems": 1,
+      "title": "Messages",
+      "type": "array"
+    },
+    "modality_profile_id": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Modality Profile Id",
+      "type": "string"
+    },
+    "parent_sample_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Parent Sample Id",
+      "type": "string"
+    },
+    "public_context": {
+      "additionalProperties": true,
+      "title": "Public Context",
+      "type": "object"
+    },
+    "sample_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Sample Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "urbannav_benchmark_input_v1",
+      "default": "urbannav_benchmark_input_v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_group_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Source Group Id",
+      "type": "string"
+    },
+    "split": {
+      "enum": [
+        "train",
+        "validation",
+        "test"
+      ],
+      "title": "Split",
+      "type": "string"
+    },
+    "split_group_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Split Group Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "sample_id",
+    "parent_sample_id",
+    "source_group_id",
+    "split_group_id",
+    "split",
+    "dataset_plugin_id",
+    "benchmark_profile_id",
+    "dataset_source",
+    "messages",
+    "modality_profile_id"
+  ],
+  "title": "BenchmarkInputV1",
+  "type": "object"
+}
