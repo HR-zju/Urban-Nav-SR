@@ -44,7 +44,7 @@ def render_direction_profile_mirror(source_text: str) -> str:
     rendered = _replace_once(
         source_text,
         "from mcp_server.contracts.reasoning import ReasonCode",
-        "from .reasoning import ReasonCode",
+        "from .contracts.reasoning import ReasonCode",
     )
     return _DIRECTION_GENERATED_HEADER + rendered
 
@@ -55,7 +55,7 @@ def render_vqa_contract_mirror(source_text: str) -> str:
     rendered = _replace_once(
         source_text,
         "from mcp_server.contracts.reasoning import ReasonCode",
-        "from .reasoning import ReasonCode",
+        "from .contracts.reasoning import ReasonCode",
     )
     return _GENERATED_HEADER + rendered
 
@@ -71,7 +71,7 @@ def render_vqa_dataset_mirror(source_text: str) -> str:
             "DirectionLabelStamp"
         ),
         "from mcp_server.contracts.reasoning import ReasonCode": (
-            "from .reasoning import ReasonCode"
+            "from .contracts.reasoning import ReasonCode"
         ),
         "from mcp_server.contracts.reasoning_dataset_v4 import (": (
             "from ._generated_reasoning_dataset_v4 import ("
@@ -95,7 +95,7 @@ def render_vqa_codec_mirror(source_text: str) -> str:
     rendered = _replace_once(
         source_text,
         "from mcp_server.contracts.vqa_v2 import (",
-        "from ._generated_vqa_v2_contract import (",
+        "from .._generated_vqa_v2_contract import (",
     )
     return _GENERATED_HEADER + rendered
 
@@ -106,7 +106,7 @@ def render_vqa_prompt_policy_mirror(source_text: str) -> str:
     rendered = source_text
     replacements = {
         "from mcp_server.agent.vqa_v2_text import (": (
-            "from .vqa_v2_codec import ("
+            "from .prompts.vqa_v2_codec import ("
         ),
         "from mcp_server.contracts.reasoning_dataset_v4 import "
         "NavObservationV4": (
@@ -172,7 +172,7 @@ def sync_vqa_v2_cross_repo(
         ),
         (
             route_root / "src/mcp_server/agent/vqa_v2_text.py",
-            ms_root / "swift/sidewalk_nav/vqa_v2_codec.py",
+            ms_root / "swift/sidewalk_nav/prompts/vqa_v2_codec.py",
             render_vqa_codec_mirror,
         ),
         (

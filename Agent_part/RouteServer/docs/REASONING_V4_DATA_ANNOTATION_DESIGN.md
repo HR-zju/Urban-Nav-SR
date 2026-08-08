@@ -185,6 +185,51 @@ FPV 12-way 到 FPV 20-way 只允许使用已保存的有限
 raw angle。strong label 不进入 teacher/student 输入，只在 composer、audit 和 training
 view 中作 identity 校验。
 
+### 3.3 `DirectionGeometrySupervisionV1`
+
+`DirectionSupervisionV4.angle_deg` 是离散候选中心，不是连续几何真值。例如
+`right_50plus` 的中心写作 $50^\circ$，但它不能代表真实角度恰为 $50^\circ$。因此 V4.6
+source 可以附带 private `direction_geometry` sidecar：
+
+```text
+raw_angle_deg                 # 上游保留的连续角度；绝不由 label center 回填
+displacement                  # 原始 stop rule 的位移审计量，可缺失
+nearest_boundary_deg
+boundary_distance_deg
+confidence                    # stop/high_confidence/boundary_ambiguous/unavailable
+angle_valid, confidence_weight, stop_rule_verified
+profile/version/label/source/derivation_version
+```
+
+对 moving candidates $a_1,\ldots,a_K$，strong label 仍由现有稳定 tie-break 量化：
+
+$$
+Q(\theta)=\arg\min_k |\theta-a_k|.
+$$
+
+相邻 bin 的边界为：
+
+$$
+b_j=\frac{a_j+a_{j+1}}{2},
+\qquad
+\delta_i^{\mathrm{boundary}}=\min_j|\theta_i-b_j|.
+$$
+
+当前审计阈值为 $2^\circ$：$\delta_i^{\mathrm{boundary}}<2^\circ$ 标记为
+`boundary_ambiguous`，否则为 `high_confidence`。`stop` 不参与角度量化；它保留
+`raw_angle_deg=null`，并通过 profile 的 displacement threshold 审计。历史
+`direction_displacement=NaN` 被显式降为缺失，令 `stop_rule_verified=false`，不会覆盖已有
+有限 raw angle。
+
+sidecar 只用于 source/view identity 校验、类内 sampling priority 和 offline metrics：
+
+- 不写入 teacher 或 student 的 system/user prompt；
+- 不写入 assistant target，不增加本轮 LM loss；
+- 不改变 12-way class quota，也不改变 strong direction；
+- 仅在同一 class 内优先 `high_confidence`/`stop`，再取 boundary 和 unavailable rows；
+- FrodoBots 没有获准强方向时不得构造该 sidecar；
+- raw angle 缺失必须显式记录为 `unavailable`，不得用候选中心伪造连续标签。
+
 ## 4. 六段字段合同
 
 所有 `ReasonCode` 是受 lower-snake-case 约束的开放 code，不是人为闭集选择题。真正闭集

@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from mcp_server.contracts.reasoning import ReasonCode
 from mcp_server.contracts.reasoning_dataset_v4 import (
+    DirectionGeometrySupervisionV1,
     DirectionContextV4,
     DirectionSupervisionV4,
     EvidenceCatalogEntryV4,
@@ -495,6 +496,7 @@ class StageIFullCoTViewV1(StageITrainingViewBaseV1):
     reasoning_target: ReasoningTargetV4
     direction_context: DirectionContextV4
     direction_supervision: DirectionSupervisionV4
+    direction_geometry: DirectionGeometrySupervisionV1 | None = None
     prompt_profile_id: str = Field(min_length=1, max_length=128)
     prompt_policy_digest: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
 
@@ -507,6 +509,10 @@ class StageIFullCoTViewV1(StageITrainingViewBaseV1):
         if str(self.reasoning_target.reasoning.decision.selected_action_label) != str(
                 self.direction_supervision.label_name):
             raise ValueError("FullCoT Decision must match strong direction")
+        _validate_stage_i_direction_geometry(
+            self.direction_geometry,
+            self.direction_supervision,
+        )
         return self
 
 
@@ -525,6 +531,7 @@ class StageIDecisionViewV1(StageITrainingViewBaseV1):
     decision: DecisionV4
     direction_context: DirectionContextV4
     direction_supervision: DirectionSupervisionV4
+    direction_geometry: DirectionGeometrySupervisionV1 | None = None
     decision_authority: Literal[
         "explicit_direction_instruction",
         "visible_bev_route",
@@ -539,6 +546,10 @@ class StageIDecisionViewV1(StageITrainingViewBaseV1):
             raise ValueError("Decision view requires only decision answerability")
         if str(self.decision.selected_action_label) != str(self.direction_supervision.label_name):
             raise ValueError("Decision-only action must match strong direction")
+        _validate_stage_i_direction_geometry(
+            self.direction_geometry,
+            self.direction_supervision,
+        )
         return self
 
 
@@ -748,6 +759,7 @@ class StageIFullCoTViewV2(StageITrainingViewBaseV2):
     reasoning_target: ReasoningTargetV4
     direction_context: DirectionContextV4
     direction_supervision: DirectionSupervisionV4
+    direction_geometry: DirectionGeometrySupervisionV1 | None = None
     prompt_profile_id: str = Field(min_length=1, max_length=128)
     prompt_policy_digest: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
 
@@ -758,6 +770,10 @@ class StageIFullCoTViewV2(StageITrainingViewBaseV2):
         if str(self.reasoning_target.reasoning.decision.selected_action_label) != str(
                 self.direction_supervision.label_name):
             raise ValueError("V2 FullCoT Decision must match strong direction")
+        _validate_stage_i_direction_geometry(
+            self.direction_geometry,
+            self.direction_supervision,
+        )
         return self
 
 
@@ -768,6 +784,7 @@ class StageIReasoningDropoutViewV2(StageITrainingViewBaseV2):
     decision: DecisionV4
     direction_context: DirectionContextV4
     direction_supervision: DirectionSupervisionV4
+    direction_geometry: DirectionGeometrySupervisionV1 | None = None
     dropout_link: StageIReasoningDropoutLinkV2
 
     @model_validator(mode="after")
@@ -776,6 +793,10 @@ class StageIReasoningDropoutViewV2(StageITrainingViewBaseV2):
             raise ValueError("reasoning dropout requires only reasoning_dropout answerability")
         if str(self.decision.selected_action_label) != str(self.direction_supervision.label_name):
             raise ValueError("reasoning dropout Decision must match strong direction")
+        _validate_stage_i_direction_geometry(
+            self.direction_geometry,
+            self.direction_supervision,
+        )
         rendered = json.dumps(self.decision.model_dump(mode="json"), ensure_ascii=False, separators=(",", ":"))
         expected = f"<Decision>{rendered}</Decision>"
         if self.assistant_text != expected:
@@ -823,6 +844,24 @@ def stage_i_projection_digest_v2(payload: dict[str, Any]) -> str:
     """Return the canonical SHA-256 digest for a V2 projection payload."""
 
     return stage_i_projection_digest_v1(payload)
+
+
+def _validate_stage_i_direction_geometry(
+    geometry: DirectionGeometrySupervisionV1 | None,
+    direction: DirectionSupervisionV4,
+) -> None:
+    """Require an optional geometry sidecar to match its strong label exactly."""
+
+    if geometry is None:
+        return
+    if (
+        geometry.profile_id != direction.profile_id
+        or geometry.profile_version != direction.profile_version
+        or geometry.label_index != direction.label_index
+        or geometry.label_name != direction.label_name
+        or geometry.source != direction.source
+    ):
+        raise ValueError("Stage I direction geometry does not match strong direction")
 
 
 def parse_stage_i_training_view_v2(payload: dict[str, Any]) -> StageITrainingViewV2:

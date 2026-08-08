@@ -321,6 +321,27 @@ def test_sidewalk_12way_projection_does_not_require_raw_angle() -> None:
     assert projected["direction_raw_angle_deg"] is None
 
 
+def test_sidewalk_projection_rederives_moving_label_from_raw_geometry() -> None:
+    """A legacy source name is admissible only after raw-angle validation."""
+
+    row = _legacy_sidewalk_12way_row(
+        label_index=5,
+        label_name="right_20",
+        raw_angle_deg=18.4,
+    )
+    row["direction_source"] = "existing_direction_name"
+
+    projected = project_reasoning_v4_fpv_direction_row(
+        row,
+        target_profile_id=FPV_DEGREE10_12WAY_TERMINAL_CENTROID_V2,
+    )
+
+    assert projected["direction_name"] == "right_20"
+    assert projected["direction_source"] == (
+        "pixel_trajectory_terminal_centroid_rule_v2"
+    )
+
+
 def test_sidewalk_12way_to_20way_requires_raw_angle() -> None:
     """A collapsed 50-plus class cannot be invented as an exact 20-way bin."""
 

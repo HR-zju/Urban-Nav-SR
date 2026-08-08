@@ -13,6 +13,7 @@ from mcp_server.contracts.direction_profile import (
     resolve_stage_a_direction_profile,
 )
 from mcp_server.contracts.reasoning_dataset_v4 import (
+    DirectionGeometrySupervisionV1,
     REASONING_SOURCE_V4_SCHEMA_VERSION,
     V4_FORBIDDEN_VISIBLE_CONTEXT_KEY_PARTS,
     BevRouteEvidenceV4,
@@ -23,6 +24,10 @@ from mcp_server.contracts.reasoning_dataset_v4 import (
     NavObservationV4,
     ReasoningSourceV4,
     reasoning_source_fingerprint_v4,
+)
+from mcp_server.data.canonical.direction_geometry import (
+    build_direction_geometry_supervision_v1,
+    direction_geometry_distribution_report,
 )
 from mcp_server.data.io.jsonl import iter_jsonl, write_jsonl_atomic
 from mcp_server.data.legacy.reasoning_v2.source import (
@@ -135,6 +140,10 @@ def build_reasoning_source_v4(
         row,
         dataset_source=dataset_source,
     )
+    direction_geometry, geometry_warnings = _direction_geometry_v1(
+        row,
+        direction=direction,
+    )
     direction_context = _direction_context_v4(
         row,
         dataset_source=dataset_source,
@@ -170,6 +179,7 @@ def build_reasoning_source_v4(
     warnings = [
         *context_warnings,
         *direction_warnings,
+        *geometry_warnings,
         *([trajectory_warning] if trajectory_warning else []),
     ]
     if modalities.history_fpv and not has_distinct_history:
@@ -181,6 +191,11 @@ def build_reasoning_source_v4(
         "direction_supervision": (
             direction.model_dump(mode="json")
             if direction is not None
+            else None
+        ),
+        "direction_geometry": (
+            direction_geometry.model_dump(mode="json")
+            if direction_geometry is not None
             else None
         ),
         "trajectory_ego_t": trajectory,
@@ -242,6 +257,9 @@ def build_reasoning_source_manifest_v4(
             f"dataset:{source.observation.dataset_source}"
         ] += 1
         counts["direction_rows"] += int(source.direction_supervision is not None)
+        counts["direction_geometry_rows"] += int(source.direction_geometry is not None)
+        if source.direction_geometry is not None:
+            counts[f"direction_geometry:{source.direction_geometry.confidence}"] += 1
         counts["system1_rows"] += int(source.trajectory_ego_t is not None)
         for name, present in source.observation.input_modalities.model_dump(
             mode="python"
@@ -253,6 +271,7 @@ def build_reasoning_source_manifest_v4(
         "input_jsonl": str(input_jsonl),
         "output_jsonl": str(output_jsonl),
         "counts": dict(counts),
+        "direction_geometry": direction_geometry_distribution_report(outputs),
         "errors": errors,
     }
 
@@ -598,6 +617,38 @@ def _direction_context_v4(
         affordance_probe_profile_id=probe_profile_id,
         affordance_probe_profile_version=str(probe["profile_version"]),
     )
+
+
+def _direction_geometry_v1(
+    row: Mapping[str, Any],
+    *,
+    direction: DirectionSupervisionV4 | None,
+) -> tuple[DirectionGeometrySupervisionV1 | None, list[str]]:
+    """Reuse or construct the private raw-angle geometry sidecar.
+
+    A missing raw angle remains explicit ``unavailable`` geometry for a valid
+    moving strong label.  The builder never substitutes a discrete candidate
+    center for missing continuous teacher geometry.
+    """
+
+    if direction is None:
+        return None, ["direction_geometry_missing_strong_direction"]
+    existing = row.get("direction_geometry")
+    if existing is not None:
+        if not isinstance(existing, Mapping):
+            raise ValueError("direction_geometry must be an object")
+        typed = DirectionGeometrySupervisionV1.model_validate(existing)
+        return typed, []
+    geometry = build_direction_geometry_supervision_v1(
+        row,
+        direction=direction,
+    )
+    warnings: list[str] = []
+    if geometry.confidence == "unavailable":
+        warnings.append("direction_geometry_raw_angle_missing")
+    if geometry.is_stop and not geometry.stop_rule_verified:
+        warnings.append("direction_geometry_stop_displacement_unverified")
+    return geometry, warnings
 
 
 def _has_explicit_v4_direction_stamp(row: Mapping[str, Any]) -> bool:

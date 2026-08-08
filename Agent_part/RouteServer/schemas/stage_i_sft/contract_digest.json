@@ -2,12 +2,12 @@
   "artifact_sha256": {
     "stage_i_instruction_provenance_v1.schema.json": "e6abb7c208d7e9e863f4bdb6830adb60de32b44014d1461e66b4e6ef62a33cc7",
     "stage_i_projection_drop_v1.schema.json": "e8157de6ebe28d9ae75922594df3233af013c3b5afa58fe01375f6bb779a1efc",
-    "stage_i_training_view_v1.schema.json": "97b4d07431be97f2f07ed6d06788d28263934269c2d0ea2fc52ec699ffd0dd59",
-    "stage_i_training_view_v2.schema.json": "9d81a90a00ffd627d52a9ae9efcfd75d9595e6efdc2a897491ffba2411de1c3e"
+    "stage_i_training_view_v1.schema.json": "64a4977651ba8ea27574d8172e2a876cd6ee5a2b31e124af7013b12d2128fbb5",
+    "stage_i_training_view_v2.schema.json": "b813548bbc80472d6f85a6bfb32f927a2f6fbf9795229bc20fb8a3ab035a70a3"
   },
   "canonical_source_sha256": {
-    "src/mcp_server/contracts/stage_i_sft.py": "623b657b7e361e371c8fd30e042f7c1b176279cef65a2984d592acd111546809",
-    "src/mcp_server/data/stage_i_views.py": "79e7429707030a8ac193ff2bc357a21be4ff16c360abb8db4993826fc156a379"
+    "src/mcp_server/contracts/stage_i_sft.py": "ffb845aadb0787116f435e213ca0bc2ef2134fd309f4f03f315ddd968705d40c",
+    "src/mcp_server/data/stage_i_views.py": "015a1bd506fb74c9e3b3e63de12cf93a9427f0965bde491dd9bfac1feade0cf8"
   },
   "instruction_provenance_schema_version": "urbannav_stage_i_instruction_provenance_v1",
   "loss_span_policy_id": "urbannav_stage_i_char_spans_v1",

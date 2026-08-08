@@ -28,6 +28,7 @@ from mcp_server.contracts.direction_profile import (
     coarse_motion_for_direction_label,
     direction_source_requires_stop,
     direction_label_names,
+    quantize_direction_angle,
     resolve_affordance_probe_profile,
     resolve_stage_a_direction_profile,
 )
@@ -72,6 +73,9 @@ REASONING_REPAIR_REQUEST_V4_SCHEMA_VERSION = (
 )
 ACTION_REVIEW_FILTER_VERSION_V4 = "reasoning_v46_lvlm_filter_v1"
 REASONING_V4_SYSTEM1_QUERY_COUNT = 16
+DIRECTION_GEOMETRY_SUPERVISION_V1_SCHEMA_VERSION = (
+    "urbannav_direction_geometry_supervision_v1"
+)
 
 V4_FORBIDDEN_VISIBLE_CONTEXT_KEY_PARTS = (
     "action_ego",
@@ -579,6 +583,134 @@ class DirectionSupervisionV4(DirectionLabelStamp):
         return self
 
 
+DirectionGeometryConfidenceV1 = Literal[
+    "stop",
+    "high_confidence",
+    "boundary_ambiguous",
+    "unavailable",
+]
+
+
+class DirectionGeometrySupervisionV1(BaseModel):
+    """Carry private continuous geometry without overloading a discrete label.
+
+    Args:
+        profile_id: Direction profile used to quantize ``raw_angle_deg``.
+        profile_version: Frozen version of that profile.
+        label_index: Strong direction index the geometry must reproduce.
+        label_name: Strong direction name the geometry must reproduce.
+        is_stop: Whether this row has the discrete stop label.
+        raw_angle_deg: Continuous pre-binning angle; absent for stop or when
+            the upstream source did not retain raw geometry.
+        displacement: Recorded terminal-reference displacement, if retained.
+        stop_threshold: Profile displacement threshold used by the producer.
+        coordinate_frame: Declared x/y convention used by the producer.
+        coordinate_unit: Unit of ``displacement``.
+        nearest_boundary_deg: Nearest midpoint between moving candidates.
+        boundary_distance_deg: Absolute distance to that midpoint.
+        boundary_ambiguity_threshold_deg: Boundary-distance threshold below
+            which this sample is sampling-ambiguous.
+        confidence: Sampling/metric confidence state, independent of language
+            supervision eligibility.
+        angle_valid: Whether a continuous non-stop angle is trustworthy.
+        confidence_weight: Future auxiliary-loss and sampling weight. Current
+            Stage-I LM loss intentionally does not consume this field.
+        stop_rule_verified: Whether retained displacement agrees with the
+            profile's stop rule. Missing displacement is represented as false.
+        source: Recorded direction producer identity.
+        derivation_version: Version of this sidecar construction rule.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[DIRECTION_GEOMETRY_SUPERVISION_V1_SCHEMA_VERSION] = (
+        DIRECTION_GEOMETRY_SUPERVISION_V1_SCHEMA_VERSION
+    )
+    profile_id: str = Field(min_length=1, max_length=128)
+    profile_version: str = Field(min_length=1, max_length=64)
+    label_index: int = Field(ge=0)
+    label_name: ReasonCode
+    is_stop: bool
+    raw_angle_deg: float | None = Field(default=None, ge=-180.0, le=180.0)
+    displacement: float | None = Field(default=None, ge=0.0)
+    stop_threshold: float = Field(ge=0.0)
+    coordinate_frame: str = Field(min_length=1, max_length=128)
+    coordinate_unit: str = Field(min_length=1, max_length=64)
+    nearest_boundary_deg: float | None = Field(default=None, ge=-180.0, le=180.0)
+    boundary_distance_deg: float | None = Field(default=None, ge=0.0, le=360.0)
+    boundary_ambiguity_threshold_deg: float = Field(gt=0.0, le=45.0)
+    confidence: DirectionGeometryConfidenceV1
+    angle_valid: bool
+    confidence_weight: float = Field(ge=0.0, le=1.0)
+    stop_rule_verified: bool
+    source: ReasonCode
+    derivation_version: str = Field(min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def validate_geometry(self) -> "DirectionGeometrySupervisionV1":
+        """Require continuous geometry to agree with its discrete profile.
+
+        The check makes the quantizer authoritative for all new sidecars while
+        leaving historical direction stamps readable when they have no sidecar.
+        """
+
+        profile = resolve_stage_a_direction_profile(self.profile_id)
+        if self.profile_version != str(profile["profile_version"]):
+            raise ValueError("direction geometry profile_version mismatch")
+        if self.label_index >= len(profile["labels"]):
+            raise ValueError("direction geometry label_index is outside profile")
+        if self.label_name != str(profile["labels"][self.label_index]):
+            raise ValueError("direction geometry label identity mismatch")
+        expected_stop = self.label_name == "stop"
+        if self.is_stop != expected_stop:
+            raise ValueError("direction geometry stop flag does not match label")
+        if self.coordinate_frame != str(profile["coordinate_frame"]):
+            raise ValueError("direction geometry coordinate_frame mismatch")
+        if self.coordinate_unit != str(profile["coordinate_unit"]):
+            raise ValueError("direction geometry coordinate_unit mismatch")
+        if not math.isclose(self.stop_threshold, float(profile["stop_threshold"]), abs_tol=1e-9):
+            raise ValueError("direction geometry stop_threshold mismatch")
+        if self.is_stop:
+            if self.raw_angle_deg is not None or self.angle_valid:
+                raise ValueError("stop geometry cannot carry a valid raw angle")
+            if self.nearest_boundary_deg is not None or self.boundary_distance_deg is not None:
+                raise ValueError("stop geometry cannot carry a boundary distance")
+            if self.confidence != "stop":
+                raise ValueError("stop geometry requires confidence=stop")
+            return self
+        if self.raw_angle_deg is None:
+            if self.angle_valid or self.confidence != "unavailable":
+                raise ValueError("missing moving geometry requires unavailable confidence")
+            if self.nearest_boundary_deg is not None or self.boundary_distance_deg is not None:
+                raise ValueError("missing moving geometry cannot carry boundaries")
+            return self
+        quantized = quantize_direction_angle(self.profile_id, self.raw_angle_deg)
+        if (quantized.label_index, quantized.label_name) != (self.label_index, self.label_name):
+            raise ValueError("raw direction geometry does not match strong label")
+        if not self.angle_valid:
+            raise ValueError("present moving geometry requires angle_valid=true")
+        if self.confidence not in {"high_confidence", "boundary_ambiguous"}:
+            raise ValueError("moving geometry requires a confidence state")
+        if not math.isclose(
+            self.nearest_boundary_deg or 0.0,
+            quantized.nearest_boundary_deg or 0.0,
+            abs_tol=1e-9,
+        ) or not math.isclose(
+            self.boundary_distance_deg or 0.0,
+            quantized.boundary_distance_deg or 0.0,
+            abs_tol=1e-9,
+        ):
+            raise ValueError("direction geometry boundary diagnostics mismatch")
+        expected_confidence = (
+            "boundary_ambiguous"
+            if float(self.boundary_distance_deg) < self.boundary_ambiguity_threshold_deg
+            else "high_confidence"
+        )
+        if self.confidence != expected_confidence:
+            raise ValueError("direction geometry confidence does not match boundary distance")
+        return self
+
+
 class ReasoningSourceV4(BaseModel):
     """Partition visible observation from private deterministic sidecars.
 
@@ -600,6 +732,7 @@ class ReasoningSourceV4(BaseModel):
     )
     observation: NavObservationV4
     direction_supervision: DirectionSupervisionV4 | None = None
+    direction_geometry: DirectionGeometrySupervisionV1 | None = None
     trajectory_ego_t: list[list[float]] | None = None
     trajectory_policy: dict[str, Any] | None = None
     action_mask: list[bool] | list[int] | None = None
@@ -643,6 +776,19 @@ class ReasoningSourceV4(BaseModel):
                 raise ValueError(
                     "direction supervision does not match public context"
                 )
+        if self.direction_geometry is not None:
+            if self.direction_supervision is None:
+                raise ValueError("direction geometry requires direction_supervision")
+            geometry = self.direction_geometry
+            direction = self.direction_supervision
+            if (
+                geometry.profile_id != direction.profile_id
+                or geometry.profile_version != direction.profile_version
+                or geometry.label_index != direction.label_index
+                or geometry.label_name != direction.label_name
+                or geometry.source != direction.source
+            ):
+                raise ValueError("direction geometry does not match direction supervision")
         expected = reasoning_source_fingerprint_v4(
             self.model_dump(
                 mode="json",
@@ -1678,6 +1824,7 @@ class ReasoningTrainingViewV4(BaseModel):
         pattern=r"^[0-9a-f]{64}$",
     )
     direction_supervision: DirectionSupervisionV4
+    direction_geometry: DirectionGeometrySupervisionV1 | None = None
     trajectory_ego_t: list[list[float]] | None = None
     trajectory_policy: dict[str, Any] | None = None
     action_mask: list[bool] | list[int] | None = None
@@ -1746,6 +1893,16 @@ class ReasoningTrainingViewV4(BaseModel):
             raise ValueError(
                 "Decision selected action must equal strong direction"
             )
+        if self.direction_geometry is not None:
+            geometry = self.direction_geometry
+            if (
+                geometry.profile_id != direction.profile_id
+                or geometry.profile_version != direction.profile_version
+                or geometry.label_index != direction.label_index
+                or geometry.label_name != direction.label_name
+                or geometry.source != direction.source
+            ):
+                raise ValueError("view direction geometry does not match strong direction")
         has_trajectory = self.trajectory_ego_t is not None
         if has_trajectory != (self.trajectory_policy is not None):
             raise ValueError(
@@ -1805,9 +1962,19 @@ def reasoning_source_fingerprint_v4(payload: dict[str, Any]) -> str:
 
     Returns:
         Lowercase SHA-256 hex digest.
+
+    Notes:
+        ``direction_geometry`` was added as an optional private sidecar after
+        the V4 source envelope had already been frozen.  Missing and explicit
+        ``null`` therefore represent the same historical payload; a populated
+        sidecar remains part of the identity.
     """
 
-    return reasoning_payload_digest_v4(payload)
+    normalized = dict(payload)
+    if normalized.get("direction_geometry") is None:
+        # 兼容旧 V4 source：缺失的 geometry 与显式 null 具有相同的冻结身份。
+        normalized.pop("direction_geometry", None)
+    return reasoning_payload_digest_v4(normalized)
 
 
 def reasoning_payload_digest_v4(payload: Any) -> str:
@@ -2151,7 +2318,10 @@ __all__ = [
     "CandidateStructureRecordV4",
     "CandidateStructureStatusV4",
     "DirectionContextV4",
+    "DirectionGeometryConfidenceV1",
+    "DirectionGeometrySupervisionV1",
     "DirectionSupervisionV4",
+    "DIRECTION_GEOMETRY_SUPERVISION_V1_SCHEMA_VERSION",
     "EvidenceCatalogEntryV4",
     "EvidenceModalityV4",
     "GroundingOutputsV4",

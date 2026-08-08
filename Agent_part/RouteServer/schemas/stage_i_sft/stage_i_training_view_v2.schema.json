@@ -227,6 +227,180 @@
       "title": "DirectionContextV4",
       "type": "object"
     },
+    "DirectionGeometrySupervisionV1": {
+      "additionalProperties": false,
+      "description": "Carry private continuous geometry without overloading a discrete label.\n\nArgs:\n    profile_id: Direction profile used to quantize ``raw_angle_deg``.\n    profile_version: Frozen version of that profile.\n    label_index: Strong direction index the geometry must reproduce.\n    label_name: Strong direction name the geometry must reproduce.\n    is_stop: Whether this row has the discrete stop label.\n    raw_angle_deg: Continuous pre-binning angle; absent for stop or when\n        the upstream source did not retain raw geometry.\n    displacement: Recorded terminal-reference displacement, if retained.\n    stop_threshold: Profile displacement threshold used by the producer.\n    coordinate_frame: Declared x/y convention used by the producer.\n    coordinate_unit: Unit of ``displacement``.\n    nearest_boundary_deg: Nearest midpoint between moving candidates.\n    boundary_distance_deg: Absolute distance to that midpoint.\n    boundary_ambiguity_threshold_deg: Boundary-distance threshold below\n        which this sample is sampling-ambiguous.\n    confidence: Sampling/metric confidence state, independent of language\n        supervision eligibility.\n    angle_valid: Whether a continuous non-stop angle is trustworthy.\n    confidence_weight: Future auxiliary-loss and sampling weight. Current\n        Stage-I LM loss intentionally does not consume this field.\n    stop_rule_verified: Whether retained displacement agrees with the\n        profile's stop rule. Missing displacement is represented as false.\n    source: Recorded direction producer identity.\n    derivation_version: Version of this sidecar construction rule.",
+      "properties": {
+        "angle_valid": {
+          "title": "Angle Valid",
+          "type": "boolean"
+        },
+        "boundary_ambiguity_threshold_deg": {
+          "exclusiveMinimum": 0.0,
+          "maximum": 45.0,
+          "title": "Boundary Ambiguity Threshold Deg",
+          "type": "number"
+        },
+        "boundary_distance_deg": {
+          "anyOf": [
+            {
+              "maximum": 360.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Boundary Distance Deg"
+        },
+        "confidence": {
+          "enum": [
+            "stop",
+            "high_confidence",
+            "boundary_ambiguous",
+            "unavailable"
+          ],
+          "title": "Confidence",
+          "type": "string"
+        },
+        "confidence_weight": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence Weight",
+          "type": "number"
+        },
+        "coordinate_frame": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Coordinate Frame",
+          "type": "string"
+        },
+        "coordinate_unit": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Coordinate Unit",
+          "type": "string"
+        },
+        "derivation_version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Derivation Version",
+          "type": "string"
+        },
+        "displacement": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Displacement"
+        },
+        "is_stop": {
+          "title": "Is Stop",
+          "type": "boolean"
+        },
+        "label_index": {
+          "minimum": 0,
+          "title": "Label Index",
+          "type": "integer"
+        },
+        "label_name": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Label Name",
+          "type": "string"
+        },
+        "nearest_boundary_deg": {
+          "anyOf": [
+            {
+              "maximum": 180.0,
+              "minimum": -180.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nearest Boundary Deg"
+        },
+        "profile_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Profile Id",
+          "type": "string"
+        },
+        "profile_version": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Profile Version",
+          "type": "string"
+        },
+        "raw_angle_deg": {
+          "anyOf": [
+            {
+              "maximum": 180.0,
+              "minimum": -180.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Raw Angle Deg"
+        },
+        "schema_version": {
+          "const": "urbannav_direction_geometry_supervision_v1",
+          "default": "urbannav_direction_geometry_supervision_v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Source",
+          "type": "string"
+        },
+        "stop_rule_verified": {
+          "title": "Stop Rule Verified",
+          "type": "boolean"
+        },
+        "stop_threshold": {
+          "minimum": 0.0,
+          "title": "Stop Threshold",
+          "type": "number"
+        }
+      },
+      "required": [
+        "profile_id",
+        "profile_version",
+        "label_index",
+        "label_name",
+        "is_stop",
+        "stop_threshold",
+        "coordinate_frame",
+        "coordinate_unit",
+        "boundary_ambiguity_threshold_deg",
+        "confidence",
+        "angle_valid",
+        "confidence_weight",
+        "stop_rule_verified",
+        "source",
+        "derivation_version"
+      ],
+      "title": "DirectionGeometrySupervisionV1",
+      "type": "object"
+    },
     "DirectionSupervisionV4": {
       "additionalProperties": false,
       "description": "Carry one complete deterministic direction label.",
@@ -662,6 +836,17 @@
         },
         "direction_context": {
           "$ref": "#/$defs/DirectionContextV4"
+        },
+        "direction_geometry": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DirectionGeometrySupervisionV1"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "direction_supervision": {
           "$ref": "#/$defs/DirectionSupervisionV4"
@@ -1184,6 +1369,17 @@
         },
         "direction_context": {
           "$ref": "#/$defs/DirectionContextV4"
+        },
+        "direction_geometry": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DirectionGeometrySupervisionV1"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "direction_supervision": {
           "$ref": "#/$defs/DirectionSupervisionV4"

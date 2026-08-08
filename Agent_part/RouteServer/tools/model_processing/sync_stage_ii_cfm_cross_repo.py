@@ -21,7 +21,7 @@ def render_stage_ii_contract_mirror(source_text: str) -> str:
 
     replacements = {
         "from mcp_server.contracts.reasoning import ReasonCode": (
-            "from .reasoning import ReasonCode"
+            "from .contracts.reasoning import ReasonCode"
         ),
         "from mcp_server.contracts.reasoning_dataset_v4 import (": (
             "from ._generated_reasoning_dataset_v4 import ("

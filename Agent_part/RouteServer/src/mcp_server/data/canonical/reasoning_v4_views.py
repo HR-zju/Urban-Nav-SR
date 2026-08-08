@@ -186,6 +186,7 @@ def build_reasoning_training_views_v4(
                 student_profile.policy_digest
             ),
             direction_supervision=direction,
+            direction_geometry=source.direction_geometry,
             trajectory_ego_t=source.trajectory_ego_t,
             trajectory_policy=source.trajectory_policy,
             action_mask=source.action_mask,

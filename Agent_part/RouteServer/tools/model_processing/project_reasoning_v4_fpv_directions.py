@@ -19,6 +19,7 @@ from mcp_server.contracts.direction_profile import (
     FPV_DEGREE10_12WAY_TERMINAL_CENTROID_V2,
     FPV_DEGREE10_TERMINAL_CENTROID_V2,
     canonical_direction_derivation_version,
+    quantize_direction_angle,
     resolve_stage_a_direction_profile,
 )
 from mcp_server.data.jsonl_io import iter_jsonl, write_jsonl_atomic
@@ -125,50 +126,48 @@ def project_reasoning_v4_fpv_direction_row(
     derivation_version = canonical_direction_derivation_version(
         target_profile_id
     )
-    expected_source = (
-        "finish_stop_rule"
-        if source_name == "stop"
-        else derivation_version
-    )
     actual_source = str(row.get("direction_source") or "").strip()
-    if actual_source != expected_source:
-        raise ValueError(
-            "source direction derivation is not canonical: "
-            f"expected={expected_source!r}, actual={actual_source!r}"
-        )
     if source_name == "stop":
+        if actual_source != "finish_stop_rule":
+            raise ValueError(
+                "stop direction requires finish_stop_rule provenance: "
+                f"actual={actual_source!r}"
+            )
         target_name = "stop"
         target_source = "finish_stop_rule"
         raw_angle = None
-    elif (
-        target_profile_id
-        == FPV_DEGREE10_12WAY_TERMINAL_CENTROID_V2
-    ):
-        target_name = source_name
-        target_source = derivation_version
+    else:
         raw_value = row.get("direction_raw_angle_deg")
+        if raw_value is None and (
+            actual_source != derivation_version
+            or target_profile_id != FPV_DEGREE10_12WAY_TERMINAL_CENTROID_V2
+        ):
+            raise ValueError(
+                "non-canonical moving direction requires direction_raw_angle_deg"
+            )
         raw_angle = (
             _required_finite_float(row, "direction_raw_angle_deg")
             if raw_value is not None
             else None
         )
-    else:
-        raw_angle = _required_finite_float(
-            row,
-            "direction_raw_angle_deg",
-        )
-        candidates = [
-            (index, float(angle))
-            for index, (name, angle) in enumerate(
-                zip(labels, profile["angles"])
+        if raw_angle is not None:
+            # 历史 label 只能作为 raw geometry 的一致性证据，不能取代重新量化。
+            source_quantized = quantize_direction_angle(
+                FPV_DEGREE10_12WAY_TERMINAL_CENTROID_V2,
+                raw_angle,
             )
-            if name != "stop" and angle is not None
-        ]
-        target_index, _ = min(
-            candidates,
-            key=lambda item: abs(item[1] - raw_angle),
-        )
-        target_name = labels[target_index]
+            if source_quantized.label_name != source_name:
+                raise ValueError(
+                    "direction_raw_angle_deg conflicts with legacy 12-way label: "
+                    f"raw={raw_angle}, label={source_name}, "
+                    f"quantized={source_quantized.label_name}"
+                )
+            target_name = quantize_direction_angle(
+                target_profile_id,
+                raw_angle,
+            ).label_name
+        else:
+            target_name = source_name
         target_source = derivation_version
     target_index = labels.index(target_name)
     target_choice = str(profile["choices"][target_index])

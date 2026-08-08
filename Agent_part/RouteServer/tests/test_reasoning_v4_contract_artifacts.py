@@ -69,7 +69,7 @@ def test_golden_valid_and_invalid_fixtures_have_parser_parity() -> None:
     sys.path.insert(0, str(MS_ROOT))
     try:
         ms_contract = importlib.import_module(
-            "swift.sidewalk_nav.reasoning_v4"
+                "swift.sidewalk_nav.prompts.reasoning_v4"
         )
         valid = _load_json("reasoning_v4_golden_valid.json")
         invalid = _load_json("reasoning_v4_golden_invalid.json")

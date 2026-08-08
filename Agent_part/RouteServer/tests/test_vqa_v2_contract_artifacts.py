@@ -71,7 +71,7 @@ def test_golden_vqa_parser_parity() -> None:
     sys.path.insert(0, str(MS_ROOT))
     try:
         ms_codec = importlib.import_module(
-            "swift.sidewalk_nav.vqa_v2_codec"
+                "swift.sidewalk_nav.prompts.vqa_v2_codec"
         )
         valid = _load("vqa_v2_golden_valid.json")
         invalid = _load("vqa_v2_golden_invalid.json")

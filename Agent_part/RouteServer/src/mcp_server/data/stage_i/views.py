@@ -466,6 +466,11 @@ def _project_full_cot_view(
         view.direction_context.model_dump(mode="json"),
         "direction_supervision":
         view.direction_supervision.model_dump(mode="json", exclude_none=True),
+        "direction_geometry": (
+            view.direction_geometry.model_dump(mode="json", exclude_none=True)
+            if view.direction_geometry is not None
+            else None
+        ),
         "prompt_profile_id":
         view.prompt_profile_id,
         "prompt_policy_digest":
@@ -529,6 +534,11 @@ def _project_decision_view(
         view.direction_context.model_dump(mode="json"),
         "direction_supervision":
         view.direction_supervision.model_dump(mode="json", exclude_none=True),
+        "direction_geometry": (
+            view.direction_geometry.model_dump(mode="json", exclude_none=True)
+            if view.direction_geometry is not None
+            else None
+        ),
         "decision_authority":
         authority,
         "metadata": {

@@ -16,13 +16,13 @@
   },
   "canonical_source_sha256": {
     "src/mcp_server/contracts/stage_ii_cfm.py": "7f3467762d575048c8337a57258d1dbe8c22152fc141c3fb224cf6ac0e43525a",
-    "src/mcp_server/data/stage_ii_context.py": "0a83d9e8c8a57ac2647619e550e27d2d1d83c5057982764d88766e7f912cd9eb",
-    "src/mcp_server/data/stage_ii_legacy_direct.py": "8b615614329e276a528e365ffde784f62d8cfd2b6461fcdfecec370426ac4bb3",
-    "src/mcp_server/data/stage_ii_raw_trajectory_v2.py": "1686eebf8cf58093fa955da93636b224cc9745733552073d8760d30658529139",
-    "src/mcp_server/data/stage_ii_sources.py": "2f75c2b516fe31d891bced02e745bdd5ec3044547bb5bc81b93be75938af7696",
-    "src/mcp_server/data/stage_ii_trajectory.py": "9ddf967e4e99c88b03d5afb4b160d68af3edb0d7e9be31e535b6ec8e12f06069",
-    "src/mcp_server/data/stage_ii_trajectory_v2_corpus.py": "01504015332020920f3f2953613795db109b6e55133f3d795a1ac54de321be3e",
-    "src/mcp_server/data/stage_ii_views.py": "b95e84ab3906b5866adec977cd962b2dedf9e577035e703de5374507df27e9ad"
+    "src/mcp_server/data/stage_ii_context.py": "e98fd4fa7c0b0276c3e03e800b1141ec10fa6522e9c6223d0c14cd9416768de0",
+    "src/mcp_server/data/stage_ii_legacy_direct.py": "46cc9c6c2bc256bff0aad87f7067528c7df56430dd042b6192b6c21d7b368aec",
+    "src/mcp_server/data/stage_ii_raw_trajectory_v2.py": "a18bee709cac3766db3982282c03c14a22c2d3668fa601f860efc0f9120ad61b",
+    "src/mcp_server/data/stage_ii_sources.py": "1fa7e30bf8ef886fbdd672808c4ca5ba4a68b371b86823c71fd8f88c4577b3fe",
+    "src/mcp_server/data/stage_ii_trajectory.py": "256f1f42f579564208346c1657fbd30ea4fd67a19308dfabd45f1bced7a21470",
+    "src/mcp_server/data/stage_ii_trajectory_v2_corpus.py": "71860346c450270b3dc2dd4a1773325df529eb38b7e1a4281bdce7a8416efa94",
+    "src/mcp_server/data/stage_ii_views.py": "64731d4c8e18709cb99d92681538ca93c508800141f52f662a84fab044e67b79"
   },
   "context_cache_schema_version": "urbannav_stage_ii_context_cache_v1",
   "legacy_direct_target_schema_version": "urbannav_stage_ii_legacy_direct_target_v1",

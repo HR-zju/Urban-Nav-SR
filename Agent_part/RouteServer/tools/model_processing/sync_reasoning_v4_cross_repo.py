@@ -30,7 +30,7 @@ def render_direction_profile_mirror(source_text: str) -> str:
         )
     return _DIRECTION_GENERATED_HEADER + source_text.replace(
         expected,
-        "from .reasoning import ReasonCode",
+        "from .contracts.reasoning import ReasonCode",
     )
 
 
@@ -44,7 +44,7 @@ def render_reasoning_v4_contract_mirror(source_text: str) -> str:
         raise ValueError("canonical ReasonCode import is missing or ambiguous")
     return _GENERATED_HEADER + source_text.replace(
         expected,
-        "from .reasoning import ReasonCode",
+        "from .contracts.reasoning import ReasonCode",
     )
 
 
@@ -58,7 +58,7 @@ def render_reasoning_v4_dataset_contract_mirror(
             "from ._generated_direction_profile import ("
         ),
         "from mcp_server.contracts.reasoning import ReasonCode": (
-            "from .reasoning import ReasonCode"
+            "from .contracts.reasoning import ReasonCode"
         ),
         "from mcp_server.contracts.reasoning_v4 import (": (
             "from ._generated_reasoning_v4_contract import ("
@@ -102,7 +102,7 @@ def render_reasoning_v4_compact_mirror(source_text: str) -> str:
 
     replacements = {
         "from mcp_server.agent.reasoning_v4_text import (": (
-            "from .reasoning_v4_codec import ("
+            "from .prompts.reasoning_v4_codec import ("
         ),
         "from mcp_server.contracts.direction_profile import (": (
             "from ._generated_direction_profile import ("
@@ -162,7 +162,7 @@ def sync_reasoning_v4_cross_repo(
         ),
         (
             route_root
-            / "src/mcp_server/data/reasoning_v4_compact.py",
+            / "src/mcp_server/data/canonical/reasoning_v4_compact.py",
             ms_root
             / "swift/sidewalk_nav/_generated_reasoning_v4_compact.py",
             render_reasoning_v4_compact_mirror,

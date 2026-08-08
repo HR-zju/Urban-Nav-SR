@@ -485,6 +485,97 @@ class DirectionLabelStamp(BaseModel):
         return self
 
 
+@dataclass(frozen=True)
+class DirectionAngleQuantization:
+    """Describe the continuous-angle geometry of one registered direction profile.
+
+    Args:
+        label_index: Selected moving-label index in the registered profile.
+        label_name: Selected moving-label name.
+        label_angle_deg: Discrete candidate center retained by the legacy
+            direction-choice contract.
+        nearest_boundary_deg: Midpoint to the nearest adjacent moving
+            candidate, or ``None`` when the profile has no boundary.
+        boundary_distance_deg: Absolute distance from the raw angle to that
+            boundary, in degrees.
+
+    The quantizer is deliberately separate from :class:`DirectionLabelStamp`:
+    the stamp stores a discrete candidate center, while this object preserves
+    continuous teacher geometry for sampling and offline evaluation.
+    """
+
+    label_index: int
+    label_name: str
+    label_angle_deg: float
+    nearest_boundary_deg: float | None
+    boundary_distance_deg: float | None
+
+
+def quantize_direction_angle(
+    profile_id: str,
+    raw_angle_deg: float,
+) -> DirectionAngleQuantization:
+    r"""Quantize a finite moving angle with the profile's stable tie rule.
+
+    For registered moving centers :math:`a_1,\ldots,a_K`, the selected class
+    is the first registry entry minimizing :math:`|\theta-a_k|`.  Preserving
+    the registry order on exact ties keeps this helper compatible with the
+    existing terminal-centroid projectors.  Boundary distances are measured to
+    the ordered-center midpoints
+
+    \[
+    b_j=\frac{a_j+a_{j+1}}{2}.
+    \]
+
+    Args:
+        profile_id: Exact approved Stage-A direction profile.
+        raw_angle_deg: Continuous angle in the profile's declared frame.
+
+    Returns:
+        Stable quantization plus the nearest class-boundary diagnostic.
+
+    Raises:
+        ValueError: If the profile has no moving candidates or the angle is
+            outside the finite canonical range.
+    """
+
+    angle = float(raw_angle_deg)
+    if not -180.0 <= angle <= 180.0:
+        raise ValueError("direction raw_angle_deg must be within [-180, 180]")
+    profile = resolve_stage_a_direction_profile(profile_id)
+    moving = [
+        (index, str(label), float(center))
+        for index, (label, center) in enumerate(
+            zip(profile["labels"], profile["angles"])
+        )
+        if center is not None
+    ]
+    if not moving:
+        raise ValueError("direction profile has no moving candidates")
+    selected_index, selected_name, selected_center = min(
+        moving,
+        key=lambda item: (abs(angle - item[2]), item[0]),
+    )
+    ordered_centers = sorted(item[2] for item in moving)
+    boundaries = [
+        (left + right) / 2.0
+        for left, right in zip(ordered_centers, ordered_centers[1:])
+    ]
+    if not boundaries:
+        nearest_boundary = None
+        boundary_distance = None
+    else:
+        nearest_boundary = min(boundaries, key=lambda value: (abs(angle - value), value))
+        boundary_distance = abs(angle - nearest_boundary)
+    return DirectionAngleQuantization(
+        label_index=selected_index,
+        label_name=selected_name,
+        label_angle_deg=selected_center,
+        nearest_boundary_deg=nearest_boundary,
+        boundary_distance_deg=boundary_distance,
+    )
+
+
 def resolve_stage_a_direction_profile(
     profile_id: str,
     *,
@@ -931,6 +1022,7 @@ def direction_source_requires_stop(source: str) -> bool:
 
 __all__ = [
     "AffordanceProbeCandidate",
+    "DirectionAngleQuantization",
     "DirectionComparisonFacts",
     "DirectionLabelStamp",
     "DIRECTION_PROFILE_REGISTRY_V1",
@@ -950,6 +1042,7 @@ __all__ = [
     "canonical_direction_derivation_version",
     "canonical_direction_source_codes",
     "direction_source_requires_stop",
+    "quantize_direction_angle",
     "coarse_motion_for_direction_label",
     "direction_comparison_facts",
     "direction_compatibility_class",
