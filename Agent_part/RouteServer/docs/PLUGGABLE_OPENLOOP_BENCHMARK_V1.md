@@ -74,6 +74,13 @@ CityWalker 原生模型也可使用 `citywalker_reference_callback_v1`；callbac
 
 投影入口是 `tools/evaluation/build_urbannav_plugin_benchmark.py`，接收 legacy input/reference JSONL，固定 split/profile 后写出同一类 `inputs.jsonl`、`references.jsonl` 和 `package.json`；因此 CityWalker benchmark 和 UrbanNav 自有 benchmark 进入完全相同的 adapter/evaluator 接口。
 
+除 legacy projection 外，`language_waypoint_dataset_plugin` 提供新的条件消融 package：
+`fpv_only`、`fpv_language`、`fpv_waypoint` 与 `fpv_language_waypoint`。它要求语言文本来自
+验收的 anchor-visible annotation，waypoint 来自独立 planner/GPS route，未来 odometry 永远只写入
+hidden reference。具体 typed contracts、归一化和 CLI 见
+[LANGUAGE_WAYPOINT_BENCHMARK_V1.md](./LANGUAGE_WAYPOINT_BENCHMARK_V1.md)。该模块目前只完成
+preprocessing/adapter smoke；不表示已有真实 waypoint 数据或 condition-aware 模型训练结果。
+
 ## CityWalker 原生模型评测 UrbanNav
 
 `CityWalkerToUrbanNavAdapterV1` 是独立于 `citywalker_reference_callback_v1` 的反向 adapter；后者仍只适用于“外部调用者已经算好 CityWalker trajectory”的薄序列化桥，不能承担本节的 input-adaptation、尺度审计或 native inference。

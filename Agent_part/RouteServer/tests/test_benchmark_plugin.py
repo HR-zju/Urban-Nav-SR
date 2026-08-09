@@ -82,10 +82,11 @@ def test_plugin_input_rejects_hidden_target_key():
 
 
 def test_dataset_plugin_registry_has_citywalker_and_urbannav():
-    """The first release must expose both legal dataset plugins explicitly."""
+    """The registry must expose every legal RouteServer-owned plugin explicitly."""
 
     assert registered_benchmark_dataset_plugin_ids_v1() == (
         'citywalker_teleop_v1',
+        'urbannav_language_waypoint_v1',
         'urbannav_stage_ii_projection_v1',
     )
 

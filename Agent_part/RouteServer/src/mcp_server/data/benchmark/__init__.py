@@ -4,6 +4,13 @@ from mcp_server.data.benchmark.citywalker_dataset_plugin import (
     CityWalkerDatasetPluginV1,
     citywalker_default_profile_v1,
 )
+from mcp_server.data.benchmark.language_waypoint_dataset_plugin import (
+    LanguageWaypointDatasetPluginV1,
+    build_language_goal_candidates_v1,
+    build_language_waypoint_package_v1,
+    build_waypoint_guidance_manifest_v1,
+    language_waypoint_default_profile_v1,
+)
 from mcp_server.data.benchmark.urbannav_dataset_plugin import (
     UrbanNavDatasetPluginV1,
     urbannav_stage_ii_default_profile_v1,
@@ -12,8 +19,13 @@ from mcp_server.data.benchmark.registry import get_benchmark_dataset_plugin_v1
 
 __all__ = [
     "CityWalkerDatasetPluginV1",
+    "LanguageWaypointDatasetPluginV1",
     "UrbanNavDatasetPluginV1",
+    "build_language_goal_candidates_v1",
+    "build_language_waypoint_package_v1",
+    "build_waypoint_guidance_manifest_v1",
     "citywalker_default_profile_v1",
     "get_benchmark_dataset_plugin_v1",
+    "language_waypoint_default_profile_v1",
     "urbannav_stage_ii_default_profile_v1",
 ]

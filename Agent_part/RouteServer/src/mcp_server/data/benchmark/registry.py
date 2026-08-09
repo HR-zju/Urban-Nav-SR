@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 from mcp_server.data.benchmark.citywalker_dataset_plugin import CityWalkerDatasetPluginV1
+from mcp_server.data.benchmark.language_waypoint_dataset_plugin import (
+    LanguageWaypointDatasetPluginV1,
+)
 from mcp_server.data.benchmark.urbannav_dataset_plugin import UrbanNavDatasetPluginV1
 from mcp_server.eval.openloop.benchmark_plugin_base import BenchmarkDatasetPluginV1
 
 
 _DATASET_PLUGINS_V1: dict[str, BenchmarkDatasetPluginV1] = {
     CityWalkerDatasetPluginV1.plugin_id: CityWalkerDatasetPluginV1(),
+    LanguageWaypointDatasetPluginV1.plugin_id: LanguageWaypointDatasetPluginV1(),
     UrbanNavDatasetPluginV1.plugin_id: UrbanNavDatasetPluginV1(),
 }
 
