@@ -40,7 +40,7 @@
     }
   },
   "additionalProperties": false,
-  "description": "Bind one legal dataset, prediction geometry, and metric-suite set.\n\nArgs:\n    profile_id: Stable benchmark protocol identity.\n    dataset_plugin_id: Dataset plugin that materializes frozen cases.\n    model_input_profile_id: Exact public input rendering contract.\n    prediction_geometry_id: Expected output geometry semantics.\n    metric_suite_ids: Ordered metric suites evaluated by the runner.\n    time_policy: Shared physical-time alignment contract.",
+  "description": "Bind one legal dataset, prediction geometry, and metric-suite set.\n\nArgs:\n    profile_id: Stable benchmark protocol identity.\n    dataset_plugin_id: Dataset plugin that materializes frozen cases.\n    model_input_profile_id: Exact public input rendering contract.\n    prediction_geometry_id: Expected output geometry semantics.\n    metric_suite_ids: Ordered metric suites evaluated by the runner.\n    time_policy: Shared physical-time alignment contract.\n    minimum_success_coverage: Minimum full-denominator successful-prediction\n        fraction required for a formal runner to report ``passed``.",
   "properties": {
     "dataset_plugin_id": {
       "maxLength": 160,
@@ -55,6 +55,13 @@
       "minItems": 1,
       "title": "Metric Suite Ids",
       "type": "array"
+    },
+    "minimum_success_coverage": {
+      "default": 1.0,
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Minimum Success Coverage",
+      "type": "number"
     },
     "model_input_profile_id": {
       "maxLength": 160,

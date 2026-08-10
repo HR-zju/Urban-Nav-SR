@@ -18,7 +18,10 @@ from mcp_server.eval.openloop.benchmark_plugin_review_base import (
     load_benchmark_native_adapter_traces_v1,
     summarize_benchmark_native_adapter_funnel_v1,
 )
-from mcp_server.eval.openloop.benchmark_plugin_runner import evaluate_benchmark_plugin_v1
+from mcp_server.eval.openloop.benchmark_plugin_runner import (
+    benchmark_evaluation_admission_v1,
+    evaluate_benchmark_plugin_v1,
+)
 from mcp_server.eval.openloop.openloop_reporting import write_openloop_scorecard_v1
 
 
@@ -45,6 +48,13 @@ def main() -> int:
         "fail unless the optional trace sidecar has one bound row per input",
     )
     parser.add_argument("--output-root", required=True)
+    parser.add_argument(
+        "--minimum-successful-predictions",
+        type=int,
+        default=1,
+        help=("absolute prediction admission floor; the default prevents an "
+              "all-failure ledger from being reported as passed"),
+    )
     parser.add_argument("--title",
                         default="UrbanNav pluggable benchmark scorecard")
     args = parser.parse_args()
@@ -65,6 +75,13 @@ def main() -> int:
     )
     output = Path(args.output_root).expanduser().resolve()
     output.mkdir(parents=True, exist_ok=True)
+    admission = benchmark_evaluation_admission_v1(
+        profile=package.benchmark_profile,
+        reference_count=len(references),
+        prediction_count=len(predictions),
+        minimum_successful_predictions=args.minimum_successful_predictions,
+    )
+    report['evaluation_admission'] = admission
     write_openloop_scorecard_v1(
         report,
         json_path=output / "scorecard.json",
@@ -107,6 +124,10 @@ def main() -> int:
         adapter_trace_funnel=adapter_trace_funnel,
         coverage_horizons_s=package.benchmark_profile.time_policy.horizons_s,
     )
+    (output / 'evaluation_admission.json').write_text(
+        json.dumps(admission, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding='utf-8',
+    )
     print(
         json.dumps(
             {
@@ -123,7 +144,7 @@ def main() -> int:
             ensure_ascii=False,
             indent=2,
         ))
-    return 0
+    return 0 if admission['status'] == 'passed' else 2
 
 
 if __name__ == "__main__":

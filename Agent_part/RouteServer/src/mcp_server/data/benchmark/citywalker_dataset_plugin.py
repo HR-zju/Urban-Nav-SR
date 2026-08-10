@@ -31,6 +31,7 @@ from mcp_server.eval.openloop.benchmark_plugin_package import (
     build_benchmark_package_manifest_v1,
     write_benchmark_rows_v1,
 )
+from mcp_server.eval.openloop.benchmark_plugin_media import build_benchmark_media_manifest_v1
 
 
 CITYWALKER_DATASET_PLUGIN_ID_V1 = "citywalker_teleop_v1"
@@ -203,9 +204,17 @@ def build_citywalker_benchmark_package_v1(
         raise FileNotFoundError(f"CityWalker package has {len(missing_images)} missing prompt images: {preview}")
     input_path = output / "inputs.jsonl"
     reference_path = output / "references.jsonl"
+    media_manifest_path = output / "media_manifest.jsonl"
     manifest_path = output / "package.json"
     write_benchmark_rows_v1(input_path, inputs)
     write_benchmark_rows_v1(reference_path, references)
+    media_manifest_report = None
+    if not missing_images:
+        media_manifest_report = build_benchmark_media_manifest_v1(
+            inputs=inputs,
+            source_root=image_root,
+            output_jsonl=media_manifest_path,
+        )
     manifest = build_benchmark_package_manifest_v1(
         package_id=package_id,
         profile=profile,
@@ -213,6 +222,7 @@ def build_citywalker_benchmark_package_v1(
         input_jsonl=input_path,
         reference_jsonl=reference_path,
         output_json=manifest_path,
+        media_manifest_jsonl=(None if media_manifest_report is None else media_manifest_path),
         source_fingerprints=source_fingerprints,
     )
     return {
@@ -225,6 +235,7 @@ def build_citywalker_benchmark_package_v1(
         "reference_count": len(references),
         "missing_prompt_image_count": len(missing_images),
         "allow_missing_images": allow_missing_images,
+        "media_manifest": media_manifest_report,
         "source_fingerprints": source_fingerprints,
     }
 

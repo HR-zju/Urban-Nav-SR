@@ -57,6 +57,57 @@ def evaluate_benchmark_plugin_v1(
     }
 
 
+def benchmark_evaluation_admission_v1(
+    *,
+    profile: BenchmarkProfileV1,
+    reference_count: int,
+    prediction_count: int,
+    minimum_successful_predictions: int = 1,
+) -> dict[str, object]:
+    """Decide whether a formal benchmark runner may report ``passed``.
+
+    The evaluator still writes a complete scorecard for all explicit failures,
+    but an all-failure ledger is an operational failure rather than a valid
+    model result.  Let ``N`` be the frozen denominator and ``P`` successful
+    predictions.  Admission requires ``P >= minimum_successful_predictions``
+    and ``P / N >= profile.minimum_success_coverage``.
+
+    Args:
+        profile: Frozen benchmark profile declaring minimum success coverage.
+        reference_count: Full frozen denominator ``N``.
+        prediction_count: Successful prediction count ``P``.
+        minimum_successful_predictions: Absolute nonzero/smoke guard.
+
+    Returns:
+        JSON-compatible passed or failed-inference-coverage gate report.
+
+    Raises:
+        ValueError: If counts or the requested minimum are invalid.
+    """
+
+    if reference_count <= 0:
+        raise ValueError('benchmark reference_count must be positive')
+    if prediction_count < 0 or prediction_count > reference_count:
+        raise ValueError('benchmark prediction_count must be within frozen denominator')
+    if minimum_successful_predictions < 1:
+        raise ValueError('minimum_successful_predictions must be positive')
+    success_coverage = prediction_count / reference_count
+    count_passed = prediction_count >= minimum_successful_predictions
+    coverage_passed = success_coverage >= profile.minimum_success_coverage
+    passed = count_passed and coverage_passed
+    return {
+        'schema_version': 'urbannav_benchmark_evaluation_admission_v1',
+        'status': 'passed' if passed else 'failed_inference_coverage',
+        'reference_count': reference_count,
+        'successful_prediction_count': prediction_count,
+        'success_coverage': success_coverage,
+        'minimum_successful_predictions': minimum_successful_predictions,
+        'minimum_success_coverage': profile.minimum_success_coverage,
+        'count_passed': count_passed,
+        'coverage_passed': coverage_passed,
+    }
+
+
 def _validate_runner_ledgers_v1(
     profile: BenchmarkProfileV1,
     inputs: dict[str, BenchmarkInputV1],
@@ -91,4 +142,4 @@ def _validate_runner_ledgers_v1(
             raise ValueError(f"failure input digest mismatch: {sample_id}")
 
 
-__all__ = ["evaluate_benchmark_plugin_v1"]
+__all__ = ["benchmark_evaluation_admission_v1", "evaluate_benchmark_plugin_v1"]

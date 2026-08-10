@@ -141,6 +141,46 @@ conda run -n UrbanNav env PYTHONPATH=.:src python \
 目前本仓只完成了 synthetic contract/package/ledger smoke；尚未给定实际 CityWalker config/checkpoint 路径，因此尚未声称完成
 native GPU smoke 或完整 UrbanNav validation。
 
+## 可迁移媒体与运行前准入
+
+`BenchmarkInputV1.images` 是冻结的**逻辑路径**，而不是运行机器的文件定位协议。对于包含图像的
+formal package，builder 会在 package 根目录写入 `media_manifest.jsonl`，其每项严格绑定：
+
+```text
+logical_path -> relative_path + byte_size + sha256
+```
+
+运行机器只能将 `relative_path` 解析到显式、只读的 `media_root`。模型侧使用已校验的物理路径加载
+图片，但 prediction 的 `input_digest` 始终从未改写的 frozen input 计算；因此复制到另一台机器不会
+改变 benchmark identity。不得把 server 的绝对路径回写到 `inputs.jsonl`，也不得用 media mirror
+替换 package 内的逻辑路径。
+
+在任何 GPU 或模型加载前，先对**完整 package**执行 byte-level preflight：
+
+```bash
+python -m swift.sidewalk_nav.cli.preflight_benchmark_plugin_media \
+  --package-json /volumes/.../citywalker_validation/package.json \
+  --media-root /volumes/.../citywalker_media_mirror \
+  --media-audit-json /volumes/.../run/media_preflight.json
+```
+
+preflight 必须解析 package 已绑定的 manifest、验证所有 required media 的大小和 SHA256，并且要求
+manifest 与 package 的可见图像集合精确一致。任一缺失、错字节、digest 漂移或路径逃逸都会将 audit
+状态写为 `failed_missing_media` 并以非零状态退出，禁止分片 GPU 推理。分片 runner 可重复对本 shard 做同一校验，但不能替代 full-package
+preflight。
+
+RouteServer evaluator 会始终保留全分母 scorecard/review 用于诊断，但只有同时满足以下条件才会返回
+`passed`：
+
+```text
+all required media resolved
+AND smoke successful_prediction_count > 0
+AND full success_coverage >= profile.minimum_success_coverage
+```
+
+否则会写出 `evaluation_admission.json`，状态为 `failed_inference_coverage`，并以非零状态退出；外层
+runner 不得再写 finished/passed receipt。
+
 ## 使用顺序
 
 先构建 package，之后任意 model adapter 只读取其 `inputs.jsonl`：
@@ -155,12 +195,16 @@ conda run -n UrbanNav env PYTHONPATH=.:src python \
   --package-id citywalker_test_v1
 ```
 
-ms-swift direct CFM inference writes prediction/failure ledgers (checkpoint digest 必须是实际 immutable digest)：
+ms-swift direct CFM inference writes prediction/failure ledgers (checkpoint digest 必须是实际 immutable digest)。
+formal 图像 package 必须传 `--package-json`，使 input 和 media manifest 由同一 package 原子绑定：
 
 ```bash
 python -m swift.sidewalk_nav.cli.infer_benchmark_plugin \
   --model <base-model> --checkpoint-dir <stage-ii-checkpoint> \
-  --input-jsonl /volumes/.../citywalker_test_v1/inputs.jsonl \
+  --package-json /volumes/.../citywalker_test_v1/package.json \
+  --media-root /volumes/.../citywalker_media_mirror \
+  --media-audit-json /volumes/.../run/shard_media_preflight.json \
+  --require-media-manifest \
   --prediction-jsonl /volumes/.../predictions.jsonl \
   --failure-jsonl /volumes/.../failures.jsonl \
   --run-audit-json /volumes/.../run_audit.json \

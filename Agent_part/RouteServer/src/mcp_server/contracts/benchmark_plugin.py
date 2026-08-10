@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from pathlib import PurePosixPath
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -21,6 +22,7 @@ BENCHMARK_INPUT_SCHEMA_VERSION = "urbannav_benchmark_input_v1"
 BENCHMARK_REFERENCE_SCHEMA_VERSION = "urbannav_benchmark_reference_v1"
 BENCHMARK_PREDICTION_SCHEMA_VERSION = "urbannav_benchmark_prediction_v1"
 BENCHMARK_FAILURE_SCHEMA_VERSION = "urbannav_benchmark_failure_v1"
+BENCHMARK_MEDIA_MANIFEST_SCHEMA_VERSION = "urbannav_benchmark_media_manifest_v1"
 BENCHMARK_PACKAGE_SCHEMA_VERSION = "urbannav_benchmark_package_v1"
 BENCHMARK_PROFILE_SCHEMA_VERSION = "urbannav_benchmark_profile_v1"
 BENCHMARK_CAPABILITIES_SCHEMA_VERSION = "urbannav_benchmark_capabilities_v1"
@@ -111,6 +113,8 @@ class BenchmarkProfileV1(BaseModel):
         prediction_geometry_id: Expected output geometry semantics.
         metric_suite_ids: Ordered metric suites evaluated by the runner.
         time_policy: Shared physical-time alignment contract.
+        minimum_success_coverage: Minimum full-denominator successful-prediction
+            fraction required for a formal runner to report ``passed``.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -122,6 +126,7 @@ class BenchmarkProfileV1(BaseModel):
     prediction_geometry_id: str = Field(min_length=1, max_length=160)
     metric_suite_ids: tuple[str, ...] = Field(min_length=1)
     time_policy: BenchmarkTimePolicyV1
+    minimum_success_coverage: float = Field(default=1.0, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
     def validate_metric_suites(self) -> "BenchmarkProfileV1":
@@ -131,6 +136,8 @@ class BenchmarkProfileV1(BaseModel):
             raise ValueError("metric_suite_ids cannot contain an empty value")
         if len(set(self.metric_suite_ids)) != len(self.metric_suite_ids):
             raise ValueError("metric_suite_ids must be unique")
+        if not math.isfinite(self.minimum_success_coverage):
+            raise ValueError("minimum_success_coverage must be finite")
         return self
 
 
@@ -321,6 +328,41 @@ class BenchmarkFailureV1(BaseModel):
     input_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class BenchmarkMediaManifestEntryV1(BaseModel):
+    """Bind one frozen logical image path to portable verified media bytes.
+
+    The logical path remains part of :class:`BenchmarkInputV1` and therefore
+    its input digest.  ``relative_path`` is only a runtime locator below an
+    explicitly supplied read-only media root; it never changes the canonical
+    input or prediction identity.
+
+    Args:
+        logical_path: Exact ordered image string appearing in frozen inputs.
+        relative_path: Safe POSIX path below a runtime-supplied media root.
+        byte_size: Exact file size in bytes.
+        sha256: SHA256 of the resolved file bytes.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[BENCHMARK_MEDIA_MANIFEST_SCHEMA_VERSION] = BENCHMARK_MEDIA_MANIFEST_SCHEMA_VERSION
+    logical_path: str = Field(min_length=1, max_length=2048)
+    relative_path: str = Field(min_length=1, max_length=1024)
+    byte_size: int = Field(ge=0)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def validate_relative_path(self) -> "BenchmarkMediaManifestEntryV1":
+        """Reject absolute, traversal, and platform-ambiguous media paths."""
+
+        if "\\" in self.relative_path:
+            raise ValueError("media relative_path must use POSIX separators")
+        relative = PurePosixPath(self.relative_path)
+        if relative.is_absolute() or not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
+            raise ValueError("media relative_path must be a safe non-empty relative path")
+        return self
+
+
 class BenchmarkPackageManifestV1(BaseModel):
     """Bind one immutable input/reference pair to a benchmark profile.
 
@@ -334,6 +376,11 @@ class BenchmarkPackageManifestV1(BaseModel):
         reference_digest: SHA256 of the reference artifact.
         input_count: Input row count.
         reference_count: Reference row count.
+        media_manifest_path: Optional manifest JSONL path relative to this
+            package.  Its entries bind logical image paths to portable bytes.
+        media_manifest_digest: SHA256 of the optional manifest JSONL.
+        media_manifest_count: Unique media entry count in the optional
+            manifest.
         source_fingerprints: Dataset/source evidence retained with the package.
     """
 
@@ -349,6 +396,9 @@ class BenchmarkPackageManifestV1(BaseModel):
     reference_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     input_count: int = Field(ge=1)
     reference_count: int = Field(ge=1)
+    media_manifest_path: str | None = Field(default=None, min_length=1, max_length=1024)
+    media_manifest_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    media_manifest_count: int | None = Field(default=None, ge=1)
     source_fingerprints: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -357,6 +407,13 @@ class BenchmarkPackageManifestV1(BaseModel):
 
         if self.input_count != self.reference_count:
             raise ValueError("benchmark package input/reference counts must match")
+        media_fields = (
+            self.media_manifest_path,
+            self.media_manifest_digest,
+            self.media_manifest_count,
+        )
+        if any(item is None for item in media_fields) and any(item is not None for item in media_fields):
+            raise ValueError("benchmark package media manifest fields must be all present or all absent")
         return self
 
 
@@ -459,6 +516,7 @@ BENCHMARK_PLUGIN_CONTRACT_DIGEST = benchmark_plugin_digest_v1(
         "reference": BENCHMARK_REFERENCE_SCHEMA_VERSION,
         "prediction": BENCHMARK_PREDICTION_SCHEMA_VERSION,
         "failure": BENCHMARK_FAILURE_SCHEMA_VERSION,
+        "media_manifest": BENCHMARK_MEDIA_MANIFEST_SCHEMA_VERSION,
         "package": BENCHMARK_PACKAGE_SCHEMA_VERSION,
         "profile": BENCHMARK_PROFILE_SCHEMA_VERSION,
     }
@@ -470,6 +528,7 @@ __all__ = [
     "BENCHMARK_CAPABILITIES_SCHEMA_VERSION",
     "BENCHMARK_FAILURE_SCHEMA_VERSION",
     "BENCHMARK_INPUT_SCHEMA_VERSION",
+    "BENCHMARK_MEDIA_MANIFEST_SCHEMA_VERSION",
     "BENCHMARK_PACKAGE_SCHEMA_VERSION",
     "BENCHMARK_PLUGIN_CONTRACT_DIGEST",
     "BENCHMARK_PLUGIN_SCHEMA_VERSION",
@@ -479,6 +538,7 @@ __all__ = [
     "BenchmarkFailureV1",
     "BenchmarkInputV1",
     "BenchmarkMessageV1",
+    "BenchmarkMediaManifestEntryV1",
     "BenchmarkModelCapabilitiesV1",
     "BenchmarkPackageManifestV1",
     "BenchmarkPredictionV1",

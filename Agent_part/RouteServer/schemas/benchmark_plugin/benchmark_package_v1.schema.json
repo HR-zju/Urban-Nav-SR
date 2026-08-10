@@ -2,7 +2,7 @@
   "$defs": {
     "BenchmarkProfileV1": {
       "additionalProperties": false,
-      "description": "Bind one legal dataset, prediction geometry, and metric-suite set.\n\nArgs:\n    profile_id: Stable benchmark protocol identity.\n    dataset_plugin_id: Dataset plugin that materializes frozen cases.\n    model_input_profile_id: Exact public input rendering contract.\n    prediction_geometry_id: Expected output geometry semantics.\n    metric_suite_ids: Ordered metric suites evaluated by the runner.\n    time_policy: Shared physical-time alignment contract.",
+      "description": "Bind one legal dataset, prediction geometry, and metric-suite set.\n\nArgs:\n    profile_id: Stable benchmark protocol identity.\n    dataset_plugin_id: Dataset plugin that materializes frozen cases.\n    model_input_profile_id: Exact public input rendering contract.\n    prediction_geometry_id: Expected output geometry semantics.\n    metric_suite_ids: Ordered metric suites evaluated by the runner.\n    time_policy: Shared physical-time alignment contract.\n    minimum_success_coverage: Minimum full-denominator successful-prediction\n        fraction required for a formal runner to report ``passed``.",
       "properties": {
         "dataset_plugin_id": {
           "maxLength": 160,
@@ -17,6 +17,13 @@
           "minItems": 1,
           "title": "Metric Suite Ids",
           "type": "array"
+        },
+        "minimum_success_coverage": {
+          "default": 1.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Minimum Success Coverage",
+          "type": "number"
         },
         "model_input_profile_id": {
           "maxLength": 160,
@@ -97,7 +104,7 @@
     }
   },
   "additionalProperties": false,
-  "description": "Bind one immutable input/reference pair to a benchmark profile.\n\nArgs:\n    package_id: Human-readable frozen package identity.\n    benchmark_profile: Full profile, including metric and time policies.\n    split: Package split.\n    input_path: Input JSONL path relative to this manifest.\n    reference_path: Hidden reference JSONL path relative to this manifest.\n    input_digest: SHA256 of the input artifact.\n    reference_digest: SHA256 of the reference artifact.\n    input_count: Input row count.\n    reference_count: Reference row count.\n    source_fingerprints: Dataset/source evidence retained with the package.",
+  "description": "Bind one immutable input/reference pair to a benchmark profile.\n\nArgs:\n    package_id: Human-readable frozen package identity.\n    benchmark_profile: Full profile, including metric and time policies.\n    split: Package split.\n    input_path: Input JSONL path relative to this manifest.\n    reference_path: Hidden reference JSONL path relative to this manifest.\n    input_digest: SHA256 of the input artifact.\n    reference_digest: SHA256 of the reference artifact.\n    input_count: Input row count.\n    reference_count: Reference row count.\n    media_manifest_path: Optional manifest JSONL path relative to this\n        package.  Its entries bind logical image paths to portable bytes.\n    media_manifest_digest: SHA256 of the optional manifest JSONL.\n    media_manifest_count: Unique media entry count in the optional\n        manifest.\n    source_fingerprints: Dataset/source evidence retained with the package.",
   "properties": {
     "benchmark_profile": {
       "$ref": "#/$defs/BenchmarkProfileV1"
@@ -117,6 +124,46 @@
       "minLength": 1,
       "title": "Input Path",
       "type": "string"
+    },
+    "media_manifest_count": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Media Manifest Count"
+    },
+    "media_manifest_digest": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Media Manifest Digest"
+    },
+    "media_manifest_path": {
+      "anyOf": [
+        {
+          "maxLength": 1024,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Media Manifest Path"
     },
     "package_id": {
       "maxLength": 200,

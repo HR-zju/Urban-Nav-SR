@@ -1,0 +1,42 @@
+{
+  "additionalProperties": false,
+  "description": "Bind one frozen logical image path to portable verified media bytes.\n\nThe logical path remains part of :class:`BenchmarkInputV1` and therefore\nits input digest.  ``relative_path`` is only a runtime locator below an\nexplicitly supplied read-only media root; it never changes the canonical\ninput or prediction identity.\n\nArgs:\n    logical_path: Exact ordered image string appearing in frozen inputs.\n    relative_path: Safe POSIX path below a runtime-supplied media root.\n    byte_size: Exact file size in bytes.\n    sha256: SHA256 of the resolved file bytes.",
+  "properties": {
+    "byte_size": {
+      "minimum": 0,
+      "title": "Byte Size",
+      "type": "integer"
+    },
+    "logical_path": {
+      "maxLength": 2048,
+      "minLength": 1,
+      "title": "Logical Path",
+      "type": "string"
+    },
+    "relative_path": {
+      "maxLength": 1024,
+      "minLength": 1,
+      "title": "Relative Path",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "urbannav_benchmark_media_manifest_v1",
+      "default": "urbannav_benchmark_media_manifest_v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "logical_path",
+    "relative_path",
+    "byte_size",
+    "sha256"
+  ],
+  "title": "BenchmarkMediaManifestEntryV1",
+  "type": "object"
+}

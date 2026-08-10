@@ -8,6 +8,7 @@ import pytest
 
 from mcp_server.contracts.benchmark_plugin import (
     BenchmarkInputV1,
+    BenchmarkMediaManifestEntryV1,
     BenchmarkMessageV1,
     BenchmarkPredictionV1,
     BenchmarkReferenceV1,
@@ -21,7 +22,11 @@ from mcp_server.eval.openloop.benchmark_plugin_package import (
     load_benchmark_package_v1,
     write_benchmark_rows_v1,
 )
-from mcp_server.eval.openloop.benchmark_plugin_runner import evaluate_benchmark_plugin_v1
+from mcp_server.eval.openloop.benchmark_plugin_media import build_benchmark_media_manifest_v1
+from mcp_server.eval.openloop.benchmark_plugin_runner import (
+    benchmark_evaluation_admission_v1,
+    evaluate_benchmark_plugin_v1,
+)
 
 
 def _profile():
@@ -155,3 +160,73 @@ def test_plugin_runner_reports_missing_prediction_as_coverage_drop():
     assert geometry['reference_count'] == 1
     assert geometry['success_coverage'] == 0.0
     assert geometry['horizons']['1s']['valid_prediction_count'] == 0
+
+
+def test_media_manifest_binds_portable_bytes_without_rewriting_input_digest(
+        tmp_path: Path):
+    """A package must bind logical paths to exact portable image bytes."""
+
+    media_root = tmp_path / 'media'
+    image = media_root / 'traj_10' / 'forward_0001.jpg'
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b'public-citywalker-frame')
+    payload = _input().model_dump(mode='json')
+    payload['images'] = [str(image)]
+    input_row = BenchmarkInputV1.model_validate(payload)
+    reference = _reference()
+    inputs = tmp_path / 'inputs.jsonl'
+    references = tmp_path / 'references.jsonl'
+    media_manifest = tmp_path / 'media_manifest.jsonl'
+    package_json = tmp_path / 'package.json'
+    write_benchmark_rows_v1(inputs, [input_row])
+    write_benchmark_rows_v1(references, [reference])
+    media_report = build_benchmark_media_manifest_v1(
+        inputs=[input_row],
+        source_root=media_root,
+        output_jsonl=media_manifest,
+    )
+    build_benchmark_package_manifest_v1(
+        package_id='portable-media',
+        profile=_profile(),
+        split='test',
+        input_jsonl=inputs,
+        reference_jsonl=references,
+        output_json=package_json,
+        media_manifest_jsonl=media_manifest,
+    )
+    package, loaded_inputs, _ = load_benchmark_package_v1(package_json)
+    assert package.media_manifest_path == 'media_manifest.jsonl'
+    assert package.media_manifest_digest == media_report['media_manifest_digest']
+    assert package.media_manifest_count == 1
+    assert input_digest_v1(loaded_inputs[input_row.sample_id]) == input_digest_v1(input_row)
+
+
+def test_media_manifest_rejects_path_traversal():
+    """Runtime media entries must never escape an execution mirror root."""
+
+    with pytest.raises(ValueError, match='safe non-empty relative'):
+        BenchmarkMediaManifestEntryV1(
+            logical_path='/logical/frame.jpg',
+            relative_path='../escape.jpg',
+            byte_size=1,
+            sha256='a' * 64,
+        )
+
+
+def test_evaluation_admission_rejects_all_failure_ledger():
+    """An evaluator scorecard may exist, but a zero-success run cannot pass."""
+
+    profile = _profile()
+    failed = benchmark_evaluation_admission_v1(
+        profile=profile,
+        reference_count=8,
+        prediction_count=0,
+    )
+    passed = benchmark_evaluation_admission_v1(
+        profile=profile,
+        reference_count=8,
+        prediction_count=8,
+    )
+    assert failed['status'] == 'failed_inference_coverage'
+    assert failed['success_coverage'] == 0.0
+    assert passed['status'] == 'passed'

@@ -14,6 +14,7 @@ from mcp_server.contracts.benchmark_plugin import (
     BENCHMARK_PLUGIN_SCHEMA_VERSION,
     BenchmarkFailureV1,
     BenchmarkInputV1,
+    BenchmarkMediaManifestEntryV1,
     BenchmarkModelCapabilitiesV1,
     BenchmarkPackageManifestV1,
     BenchmarkPredictionV1,
@@ -35,6 +36,8 @@ _MODELS = {
     BenchmarkPredictionV1,
     "benchmark_failure_v1.schema.json":
     BenchmarkFailureV1,
+    "benchmark_media_manifest_entry_v1.schema.json":
+    BenchmarkMediaManifestEntryV1,
     "benchmark_profile_v1.schema.json":
     BenchmarkProfileV1,
     "benchmark_package_v1.schema.json":

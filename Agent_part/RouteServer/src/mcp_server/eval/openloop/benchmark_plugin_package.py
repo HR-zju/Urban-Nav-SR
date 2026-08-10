@@ -19,6 +19,10 @@ from mcp_server.contracts.benchmark_plugin import (
 )
 from mcp_server.data.io.jsonl import iter_jsonl, write_jsonl_atomic
 from mcp_server.eval.openloop.benchmark_plugin_base import BenchmarkJoinedRowV1
+from mcp_server.eval.openloop.benchmark_plugin_media import (
+    audit_benchmark_media_manifest_coverage_v1,
+    load_benchmark_media_manifest_v1,
+)
 
 
 T = TypeVar("T", bound=BaseModel)
@@ -51,6 +55,7 @@ def build_benchmark_package_manifest_v1(
     input_jsonl: str | Path,
     reference_jsonl: str | Path,
     output_json: str | Path,
+    media_manifest_jsonl: str | Path | None = None,
     source_fingerprints: dict[str, str] | None = None,
 ) -> BenchmarkPackageManifestV1:
     """Validate a visible/hidden pair and freeze one package manifest.
@@ -62,6 +67,9 @@ def build_benchmark_package_manifest_v1(
         input_jsonl: Model-visible JSONL artifact.
         reference_jsonl: Hidden reference JSONL artifact.
         output_json: Manifest destination.
+        media_manifest_jsonl: Optional strict logical-path to media-byte
+            manifest.  When supplied it is bound into the package and must
+            cover every input image exactly.
         source_fingerprints: Optional source artifact evidence.
 
     Returns:
@@ -91,6 +99,18 @@ def build_benchmark_package_manifest_v1(
             raise ValueError(f"reference profile differs from package: {reference.sample_id}")
         if reference.dataset_plugin_id != profile.dataset_plugin_id:
             raise ValueError(f"reference dataset plugin differs from profile: {reference.sample_id}")
+    media_manifest_path: Path | None = None
+    media_manifest_digest: str | None = None
+    media_manifest_count: int | None = None
+    if media_manifest_jsonl is not None:
+        media_manifest_path = Path(media_manifest_jsonl).expanduser().resolve()
+        entries = load_benchmark_media_manifest_v1(media_manifest_path)
+        audit_benchmark_media_manifest_coverage_v1(
+            inputs=inputs.values(),
+            entries=entries,
+        )
+        media_manifest_digest = artifact_sha256_v1(media_manifest_path)
+        media_manifest_count = len(entries)
     payload = BenchmarkPackageManifestV1(
         package_id=package_id,
         benchmark_profile=profile,
@@ -101,6 +121,11 @@ def build_benchmark_package_manifest_v1(
         reference_digest=artifact_sha256_v1(reference_path),
         input_count=len(inputs),
         reference_count=len(references),
+        media_manifest_path=(None if media_manifest_path is None else
+                             _relative_path(output_path.parent,
+                                            media_manifest_path)),
+        media_manifest_digest=media_manifest_digest,
+        media_manifest_count=media_manifest_count,
         source_fingerprints=dict(source_fingerprints or {}),
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -139,6 +164,20 @@ def load_benchmark_package_v1(
     if len(inputs) != package.input_count or len(references) != package.reference_count:
         raise ValueError("benchmark plugin package count differs from artifacts")
     _audit_input_reference_identity(inputs, references)
+    if package.media_manifest_path is not None:
+        assert package.media_manifest_digest is not None
+        assert package.media_manifest_count is not None
+        media_manifest_path = _resolve_relative(package_path.parent,
+                                                package.media_manifest_path)
+        if artifact_sha256_v1(media_manifest_path) != package.media_manifest_digest:
+            raise ValueError("benchmark plugin media manifest digest mismatch")
+        entries = load_benchmark_media_manifest_v1(media_manifest_path)
+        if len(entries) != package.media_manifest_count:
+            raise ValueError("benchmark plugin media manifest count differs from artifact")
+        audit_benchmark_media_manifest_coverage_v1(
+            inputs=inputs.values(),
+            entries=entries,
+        )
     return package, inputs, references
 
 
