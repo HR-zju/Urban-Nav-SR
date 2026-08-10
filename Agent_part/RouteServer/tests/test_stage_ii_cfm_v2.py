@@ -28,9 +28,11 @@ from mcp_server.data.stage_ii_route_pool_v2 import (
 )
 from mcp_server.data.stage_ii_trajectory import build_stage_ii_trajectory_qc_v2
 from mcp_server.data.stage_ii_views import (
+    project_stage_ii_cfm_view_v1_from_stage_i_v2,
     project_stage_ii_cfm_view_v2,
     project_stage_ii_cfm_view_with_audit_v2,
 )
+from tools.model_processing.build_stage_ii_cfm_views import build_stage_ii_cfm_views
 
 from test_stage_i_sft import _formal_reasoning_view
 
@@ -93,6 +95,27 @@ def _trajectory_v2() -> StageIITrajectoryTargetV2:
     }
     payload["target_digest"] = stage_ii_digest_v1(payload)
     return StageIITrajectoryTargetV2.model_validate(payload)
+
+
+def _trajectory_v1():
+    """Return the retained clean 16-point target used by the compatibility path."""
+
+    from mcp_server.data.stage_ii_trajectory import build_stage_ii_trajectory_target_v1
+
+    return build_stage_ii_trajectory_target_v1(
+        sample_id="sidewalk:trajectory-test",
+        dataset_source="sidewalk",
+        raw_trajectory=[
+            [0.0, index * 0.125, index * 0.125, 1.0]
+            for index in range(21)
+        ],
+        action_mask=[True] * 21,
+        source_format="ego_xy_t_speed_right_front_v1",
+        trajectory_source="dataset_pose_trajectory",
+        allowed_trajectory_sources={"dataset_pose_trajectory"},
+        yaw_source="path_tangent",
+        max_source_step_m=3.0,
+    )
 
 
 def _decision_text(full) -> str:
@@ -171,6 +194,91 @@ def test_stage_ii_v2_reasoning_plus_decision_route_is_closed() -> None:
     assert len(view.trajectory_target.trajectory_ego_t) == 32
     assert len(view.pass_t_input_digest) == 64
     assert "assistant_text" not in view.model_dump(mode="json")
+
+
+def test_stage_i_v2_full_cot_can_feed_the_frozen_clean_cfm_v1_contract() -> None:
+    """Keep V2 prompt lineage separate from the existing 16-point geometry truth."""
+
+    full = _stage_i_full_v2()
+    target = _trajectory_v1()
+    assert target.accepted and target.target is not None
+    reasoning = _cache(full, "reasoning_grounding", full.assistant_text)
+    decision = _cache(full, "decision", _decision_text(full))
+
+    view = project_stage_ii_cfm_view_v1_from_stage_i_v2(
+        full,
+        trajectory_target=target.target,
+        reasoning_context=reasoning,
+        decision_context=decision,
+        review_status="not_required",
+    )
+
+    assert view.training_contract == "stage_ii_cfm_v1"
+    assert view.parent_stage_i_sample_id == full.sample_id
+    assert view.trajectory_target.valid_step_count == 16
+    assert view.reasoning_context.projected_input_digest == decision.projected_input_digest
+
+
+def test_bulk_builder_accepts_v2_full_cot_with_the_clean_v1_target(
+    tmp_path: Path,
+) -> None:
+    """The source builder must retain the V2 parent rather than silently skipping it."""
+
+    from test_stage_ii_cfm import _source_registry_payload
+
+    full = _stage_i_full_v2()
+    reasoning = _cache(full, "reasoning_grounding", full.assistant_text)
+    decision = _cache(full, "decision", _decision_text(full))
+    raw_target = {
+        "stage_i_sample_id": full.sample_id,
+        "trajectory_ego_t": [
+            [0.0, index * 0.125, index * 0.125, 1.0]
+            for index in range(21)
+        ],
+        "action_mask": [True] * 21,
+        "source_format": "ego_xy_t_speed_right_front_v1",
+        "trajectory_source": "dataset_pose_trajectory",
+        "yaw_source": "path_tangent",
+        "review_status": "not_required",
+    }
+    paths = {
+        "stage_i": tmp_path / "stage_i.jsonl",
+        "trajectory": tmp_path / "trajectory.jsonl",
+        "reasoning": tmp_path / "reasoning.jsonl",
+        "decision": tmp_path / "decision.jsonl",
+        "registry": tmp_path / "registry.json",
+        "views": tmp_path / "views.jsonl",
+        "qc": tmp_path / "qc.jsonl",
+        "drops": tmp_path / "drops.jsonl",
+        "references": tmp_path / "references.jsonl",
+        "eligible": tmp_path / "eligible.jsonl",
+    }
+    _write_jsonl(paths["stage_i"], [full.model_dump(mode="json", exclude_none=True)])
+    _write_jsonl(paths["trajectory"], [raw_target])
+    _write_jsonl(paths["reasoning"], [reasoning.model_dump(mode="json", exclude_none=True)])
+    _write_jsonl(paths["decision"], [decision.model_dump(mode="json", exclude_none=True)])
+    paths["registry"].write_text(
+        json.dumps(_source_registry_payload(sidewalk_sources=("dataset_pose_trajectory",))),
+        encoding="utf-8",
+    )
+
+    report = build_stage_ii_cfm_views(
+        stage_i_jsonl=paths["stage_i"],
+        trajectory_jsonl=paths["trajectory"],
+        reasoning_cache_jsonl=paths["reasoning"],
+        decision_cache_jsonl=paths["decision"],
+        trajectory_source_registry_json=paths["registry"],
+        output_view_jsonl=paths["views"],
+        output_qc_jsonl=paths["qc"],
+        output_drop_jsonl=paths["drops"],
+        output_reference_jsonl=paths["references"],
+        output_eligible_jsonl=paths["eligible"],
+        max_source_step_m=3.0,
+    )
+
+    assert report["counts"]["output_views"] == 1
+    assert report["counts"]["eligible_references"] == 1
+    assert paths["drops"].read_text(encoding="utf-8") == ""
 
 
 def test_stage_ii_v2_decision_only_requires_signed_dropout_absence() -> None:

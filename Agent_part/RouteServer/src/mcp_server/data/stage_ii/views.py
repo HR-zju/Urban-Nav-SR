@@ -158,6 +158,125 @@ def project_stage_ii_cfm_view_v1(
     return StageIICFMTrainingViewV1.model_validate(payload)
 
 
+def project_stage_ii_cfm_view_v1_from_stage_i_v2(
+    stage_i_view: StageIFullCoTViewV2 | Mapping[str, Any],
+    *,
+    trajectory_target: StageIITrajectoryTargetV1 | Mapping[str, Any],
+    reasoning_context: StageIIContextCacheV1 | Mapping[str, Any],
+    decision_context: StageIIContextCacheV1 | Mapping[str, Any],
+    review_status: str,
+) -> StageIICFMTrainingViewV1:
+    """Project a V2 FullCoT parent into the unchanged 16-point CFM contract.
+
+    The compatibility boundary is deliberately narrow: only a formal V2
+    FullCoT parent is accepted, Pass-R/Pass-D still bind the exact visible
+    input digest, and the target remains the independent 16-step CFM truth.
+    It does not reinterpret a V2 target as V1 or promote a reasoning-dropout
+    route into a FullCoT parent.
+
+    Args:
+        stage_i_view: Current V2 FullCoT source view.
+        trajectory_target: Existing clean 16-step metric FLU target.
+        reasoning_context: Accepted target-free Pass-R cache.
+        decision_context: Accepted target-free Pass-D cache.
+        review_status: Resolved review admission state.
+
+    Returns:
+        A validated V1 CFM exchange view with explicit V2-parent lineage
+        retained in its external build report.
+
+    Raises:
+        ValueError: If source, target, cache, or review identities drift.
+    """
+
+    typed = (
+        parse_stage_i_training_view_v2(dict(stage_i_view))
+        if isinstance(stage_i_view, Mapping)
+        else stage_i_view
+    )
+    if not isinstance(typed, StageIFullCoTViewV2):
+        raise ValueError("Stage II V1 compatibility requires a V2 FullCoT input view")
+    target = (
+        trajectory_target
+        if isinstance(trajectory_target, StageIITrajectoryTargetV1)
+        else StageIITrajectoryTargetV1.model_validate(trajectory_target)
+    )
+    reasoning = (
+        reasoning_context
+        if isinstance(reasoning_context, StageIIContextCacheV1)
+        else StageIIContextCacheV1.model_validate(reasoning_context)
+    )
+    decision = (
+        decision_context
+        if isinstance(decision_context, StageIIContextCacheV1)
+        else StageIIContextCacheV1.model_validate(decision_context)
+    )
+    if typed.parent_audit_id is None:
+        raise ValueError("Stage II V1 compatibility requires a resolved formal action audit")
+    if review_status not in {"not_required", "resolved"}:
+        raise ValueError("Stage II V1 compatibility excludes pending or rejected review")
+    input_digest = stage_ii_projected_input_digest_from_stage_i_v2(typed)
+    for cache, kind in ((reasoning, "reasoning_grounding"), (decision, "decision")):
+        identities = (
+            cache.parse_status == "accepted",
+            cache.context_kind == kind,
+            cache.projected_input_digest == input_digest,
+            cache.sample_id == typed.sample_id,
+            cache.source_group_id == typed.source_group_id,
+            cache.split_group_id == typed.split_group_id,
+            cache.dataset_source == typed.dataset_source,
+            cache.modality_profile_id == typed.modality_profile_id,
+            cache.parent_source_fingerprint == typed.parent_source_fingerprint,
+        )
+        if not all(identities):
+            raise ValueError(f"Stage II V1 compatibility {kind} cache identity mismatch")
+    payload: dict[str, Any] = {
+        "schema_version": STAGE_II_CFM_TRAINING_VIEW_SCHEMA_VERSION,
+        "training_contract": STAGE_II_TRAINING_CONTRACT_ID,
+        "sample_id": f"{typed.sample_id}:stage_ii_cfm",
+        "source_group_id": typed.source_group_id,
+        "split_group_id": typed.split_group_id,
+        "dataset_source": typed.dataset_source,
+        "modality_profile_id": typed.modality_profile_id,
+        "native_availability": typed.native_availability.model_dump(mode="json"),
+        "training_selection": typed.training_selection.model_dump(mode="json"),
+        "modality_state": typed.modality_state.model_dump(mode="json"),
+        "instruction_training_role": typed.instruction_training_role,
+        "images": list(typed.images),
+        "image_roles": list(typed.image_roles),
+        "instruction": typed.instruction,
+        "model_visible_context": dict(typed.model_visible_context),
+        "evidence_catalog": [
+            item.model_dump(mode="json", exclude_none=True)
+            for item in typed.evidence_catalog
+        ],
+        "input_modalities": typed.input_modalities.model_dump(mode="json"),
+        "reasoning_context": reasoning.model_dump(mode="json", exclude_none=True),
+        "decision_context": decision.model_dump(mode="json", exclude_none=True),
+        "trajectory_target": target.model_dump(mode="json"),
+        "direction_context": typed.direction_context.model_dump(mode="json"),
+        "private_direction_supervision": typed.direction_supervision.model_dump(
+            mode="json",
+            exclude_none=True,
+        ),
+        "parent_stage_i_sample_id": typed.sample_id,
+        "parent_source_fingerprint": typed.parent_source_fingerprint,
+        "parent_audit_id": typed.parent_audit_id,
+        "formal_training_eligible": True,
+        "review_status": review_status,
+        "loss_mask": {
+            "lm": False,
+            "system1_action": True,
+            "trajectory": False,
+            "segmentation": False,
+        },
+        "projection_policy_id": STAGE_II_PROJECTION_POLICY_ID,
+        "projection_policy_version": STAGE_II_PROJECTION_POLICY_VERSION,
+    }
+    payload["view_digest"] = stage_ii_digest_v1(payload)
+    return StageIICFMTrainingViewV1.model_validate(payload)
+
+
 def project_stage_ii_cfm_view_v2(
     stage_i_view: StageITrainingViewV2 | Mapping[str, Any],
     *,
@@ -427,6 +546,7 @@ __all__ = [
     "build_stage_ii_projection_drop_v1",
     "build_stage_ii_projection_drop_v2",
     "project_stage_ii_cfm_view_v1",
+    "project_stage_ii_cfm_view_v1_from_stage_i_v2",
     "project_stage_ii_cfm_view_v2",
     "project_stage_ii_cfm_view_with_audit_v2",
 ]

@@ -10,6 +10,7 @@ from mcp_server.contracts.openloop_benchmark import OpenLoopReferenceV1
 from mcp_server.contracts.stage_i_sft import (
     StageIDecisionViewV1,
     StageIFullCoTViewV1,
+    StageIFullCoTViewV2,
     StageIVQAViewV1,
     parse_stage_i_training_view_v1,
 )
@@ -115,13 +116,15 @@ def build_stage_i_openloop_reference_v1(
 
 
 def build_stage_ii_openloop_reference_from_parent_v1(
-    stage_i_view: StageIFullCoTViewV1,
+    stage_i_view: StageIFullCoTViewV1 | StageIFullCoTViewV2,
     trajectory_target: StageIITrajectoryTargetV1,
 ) -> OpenLoopReferenceV1:
     """Build a Stage II reference before Pass-R/Pass-D survivor filtering.
 
     Args:
-        stage_i_view: Formal FullCoT input defining public case identity.
+        stage_i_view: Formal V1 or V2-envelope FullCoT input defining public
+            case identity.  The name remains V1 because the reference stores
+            the frozen CFM-V1 trajectory target, not the Stage-I envelope.
         trajectory_target: Valid deterministic metric-FLU target.
 
     Returns:

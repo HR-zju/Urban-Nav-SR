@@ -9,7 +9,12 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from mcp_server.contracts.stage_i_sft import parse_stage_i_training_view_v1
+from mcp_server.contracts.stage_i_sft import (
+    StageIFullCoTViewV1,
+    StageIFullCoTViewV2,
+    parse_stage_i_training_view_v1,
+    parse_stage_i_training_view_v2,
+)
 from mcp_server.contracts.stage_ii_cfm import StageIIContextCacheV1
 from mcp_server.data.stage_ii_sources import (
     load_stage_ii_trajectory_source_registry_v1,
@@ -21,6 +26,7 @@ from mcp_server.data.stage_ii_trajectory import build_stage_ii_trajectory_target
 from mcp_server.data.stage_ii_views import (
     build_stage_ii_projection_drop_v1,
     project_stage_ii_cfm_view_v1,
+    project_stage_ii_cfm_view_v1_from_stage_i_v2,
 )
 
 
@@ -40,6 +46,7 @@ def build_stage_ii_cfm_views(
     output_reference_jsonl: str | Path | None = None,
     output_eligible_jsonl: str | Path | None = None,
     denominator_only: bool = False,
+    max_source_step_m: float | None = None,
 ) -> dict[str, Any]:
     """Join exact identities and emit accepted views plus QC/drop audits.
 
@@ -56,6 +63,10 @@ def build_stage_ii_cfm_views(
         output_eligible_jsonl: Optional public eligible-case identities.
         denominator_only: Build target-eligible references and identities
             without reading or filtering on Pass-R/Pass-D context caches.
+        max_source_step_m: Optional deterministic adjacent-source-pose bound
+            applied before trajectory resampling.  A bounded admission profile
+            must pass this explicitly; ``None`` preserves the historical V1
+            construction behavior.
 
     Returns:
         Deterministic input/output counts and artifact paths.
@@ -86,8 +97,8 @@ def build_stage_ii_cfm_views(
     counts: Counter[str] = Counter()
     for raw_view in _iter_jsonl(stage_i_jsonl):
         counts["input_rows"] += 1
-        typed = parse_stage_i_training_view_v1(raw_view)
-        if typed.task_type != "full_cot":
+        typed = _parse_full_cot(raw_view)
+        if typed is None:
             counts["skipped_non_full_cot"] += 1
             continue
         try:
@@ -113,6 +124,7 @@ def build_stage_ii_cfm_views(
                 trajectory_source=str(raw_target.get("trajectory_source") or ""),
                 allowed_trajectory_sources=source_spec.allowed_trajectory_sources,
                 yaw_source=yaw_source,
+                max_source_step_m=max_source_step_m,
             )
             qc_rows.append(build.qc.model_dump(mode="json"))
             counts[f"trajectory_qc:{build.qc.status}"] += 1
@@ -148,7 +160,12 @@ def build_stage_ii_cfm_views(
                 raise ValueError("reasoning_context_cache_missing")
             if cache_key not in decisions:
                 raise ValueError("decision_context_cache_missing")
-            view = project_stage_ii_cfm_view_v1(
+            projector = (
+                project_stage_ii_cfm_view_v1
+                if isinstance(typed, StageIFullCoTViewV1)
+                else project_stage_ii_cfm_view_v1_from_stage_i_v2
+            )
+            view = projector(
                 typed,
                 trajectory_target=build.target,
                 reasoning_context=reasoning[cache_key],
@@ -195,6 +212,7 @@ def build_stage_ii_cfm_views(
                 else None
             ),
             "trajectory_source_registry_json": str(trajectory_source_registry_json),
+            "max_source_step_m": max_source_step_m,
         },
         "outputs": {
             "view_jsonl": str(output_view_jsonl),
@@ -226,6 +244,19 @@ def _index_unique(rows, key: str) -> dict[str, dict[str, Any]]:
             raise ValueError(f"missing or duplicate {key}: {identity!r}")
         result[identity] = row
     return result
+
+
+def _parse_full_cot(
+    payload: Mapping[str, Any],
+) -> StageIFullCoTViewV1 | StageIFullCoTViewV2 | None:
+    """Parse one V1/V2 Stage-I row and retain only formal FullCoT parents."""
+
+    schema_version = str(payload.get("schema_version") or "")
+    if schema_version == "urbannav_stage_i_training_view_v2":
+        typed = parse_stage_i_training_view_v2(dict(payload))
+        return typed if isinstance(typed, StageIFullCoTViewV2) else None
+    typed = parse_stage_i_training_view_v1(dict(payload))
+    return typed if isinstance(typed, StageIFullCoTViewV1) else None
 
 
 def _index_cache(path: str | Path, kind: str):
@@ -289,6 +320,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-reference-jsonl", type=Path)
     parser.add_argument("--output-eligible-jsonl", type=Path)
     parser.add_argument("--denominator-only", action="store_true")
+    parser.add_argument("--max-source-step-m", type=float)
     parser.add_argument("--report-json", type=Path)
     return parser.parse_args(argv)
 
@@ -309,6 +341,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         output_reference_jsonl=args.output_reference_jsonl,
         output_eligible_jsonl=args.output_eligible_jsonl,
         denominator_only=args.denominator_only,
+        max_source_step_m=args.max_source_step_m,
     )
     rendered = json.dumps(report, ensure_ascii=False, indent=2)
     if args.report_json is not None:
