@@ -1,6 +1,6 @@
 # UrbanNav 数据集标注状态
 
-更新时间：2026-08-04 16:41 CST。
+更新时间：2026-08-09 17:36 CST。
 
 本文维护服务器上 Reasoning V4.6 Compact FullCoT 与 VQA V2 的运行快照。它是运行证据索引，不替代
 [`REASONING_V4_DATA_ANNOTATION_DESIGN.md`](REASONING_V4_DATA_ANNOTATION_DESIGN.md)
@@ -22,6 +22,35 @@
 禁止把 `record_complete`、`all_sections_accepted`、`candidate_structurally_valid` 和
 `formal_training_eligible` 当成同一个计数。训练只消费明确导出的 formal view；原始
 annotation JSONL 不是默认训练 manifest。
+
+### 1.1 2026-08-09 可通行几何/训练可用性 smoke
+
+新增的 `LocalTraversabilityGeometryV1` 与 `NavigationTrainabilityFilterV1` 是 FullCoT/VQA 之外的
+只读 sidecar。它们目前仅完成 $4 \times 150 = 600$ 条真实 Qwen 122B smoke，尚未改变任何
+source、FullCoT、VQA、formal view 或训练编译器输入。
+
+| 项目 | 当前状态 | 证据 |
+| --- | --- | --- |
+| 四边形 geometry | 第一轮 $542/600$ accepted；V1.2 repair 仅重跑 $58$ 条非 accepted row，恢复 $34$ 条 | 私有 run root 的 `geometry/` 与 `geometry_repair_v1_2/` ledger |
+| 场景 suitability | Stage I/VQA 候选 $522/600$；scene rejected $78/600$，其中 EgoWalk indoor 类占主要部分 | `suitability/` 与 `views/` |
+| Stage II motion QC | $0/600$ eligible | 此 smoke 的 V4 source 未绑定精确 `StageIITrajectorySidecarV2`；这不是视觉拒绝结论 |
+| 全量运行 | **已获人工 smoke 质量批准，待启动** | 服务端缺少完整 $4\mathrm{s}/32$ V2 sidecar；不得以旧 $2\mathrm{s}/16$ ledger 替代 |
+
+运行根目录：
+
+```text
+/lpai/volumes/mind-eb-bd-ga/suh/UrbanNavigation/runs/
+navigation_quality_v1_qwen122b_smoke_20260809/stratified_4x150_r2
+```
+
+汇总 receipt 为 `navigation_quality_run_report.json`。筛选合同、repair 结果、人工 gate 和 review
+位置见 [DATASET_QUALITY_FILTER_V1.md](DATASET_QUALITY_FILTER_V1.md)。在该 gate 通过前，不得将
+`views/stage_i_eligible.jsonl`、`views/vqa_eligible.jsonl` 或任何 repair accepted row 接入训练。
+
+2026-08-09 用户已确认 geometry/suitability smoke 的质量可接受，并批准启动全量语言目标与质量
+过滤。全量 queue 将写入新的 run root，先使用两个 122B 服务对存在可信 V2 sidecar 的 parent 标注
+`LanguageGoalAnnotationV1`，再运行 geometry/filter sidecar。原始 source、媒体和既有 FullCoT/VQA
+不做删除、移动或原地修改；暂未同步到服务端的完整 V2 sidecar 是当前唯一启动前置条件。
 
 ## 2. 当前服务器与模型
 

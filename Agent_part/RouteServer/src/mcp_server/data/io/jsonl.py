@@ -2,11 +2,32 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
 from pathlib import Path
 from typing import Any, Iterable, Iterator
+
+
+def file_sha256(path: str | Path) -> str:
+    """Return the SHA-256 digest of one immutable local artifact.
+
+    Args:
+        path: Existing file whose bytes must be fingerprinted.
+
+    Returns:
+        Lowercase hexadecimal SHA-256 digest.
+
+    Raises:
+        FileNotFoundError: If the requested artifact does not exist.
+    """
+
+    digest = hashlib.sha256()
+    with Path(path).expanduser().open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def iter_jsonl(path: str | Path) -> Iterator[dict[str, Any]]:
@@ -89,4 +110,4 @@ def append_jsonl_row(handle: Any, row: dict[str, Any]) -> None:
     handle.flush()
 
 
-__all__ = ["append_jsonl_row", "iter_jsonl", "write_jsonl_atomic"]
+__all__ = ["append_jsonl_row", "file_sha256", "iter_jsonl", "write_jsonl_atomic"]

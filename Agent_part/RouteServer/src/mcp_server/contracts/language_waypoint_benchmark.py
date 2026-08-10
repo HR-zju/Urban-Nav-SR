@@ -17,6 +17,8 @@ LANGUAGE_GOAL_ANNOTATION_SCHEMA_VERSION = "urbannav_language_goal_annotation_v1"
 LANGUAGE_GOAL_CANDIDATE_SCHEMA_VERSION = "urbannav_language_goal_candidate_v1"
 WAYPOINT_GUIDANCE_SCHEMA_VERSION = "urbannav_waypoint_guidance_v1"
 LANGUAGE_WAYPOINT_BUILD_CONFIG_VERSION = "urbannav_language_waypoint_build_config_v1"
+NATIVE_PLANNER_ANCHOR_SCHEMA_VERSION = "urbannav_native_planner_anchor_v1"
+NATIVE_PLANNER_ROUTE_LOG_SCHEMA_VERSION = "urbannav_native_planner_route_log_v1"
 
 LanguageInstructionTypeV1 = Literal[
     "landmark_object_goal",
@@ -282,6 +284,130 @@ class PlannerRouteRecordWgs84V1(BaseModel):
     along_track_m: float | None = None
     cross_track_m: float | None = None
     reroute: bool = False
+
+
+class NativePlannerAnchorV1(BaseModel):
+    """One timestamped native localization anchor for a planner-route join.
+
+    A localization anchor is not route guidance.  It only records the current
+    WGS84 pose that a separately logged planner route must match.  ``available``
+    becomes true only when both current position and compass heading are known.
+
+    Args:
+        anchor_id: Stable native-adapter output identity.
+        parent_sample_id: Canonical physical parent receiving a potential route.
+        dataset_source: Dataset identity used to prevent cross-dataset joins.
+        source_record_id: Native record identity used by the planner log.
+        observation_timestamp_s: Anchor observation time in Unix seconds.
+        current_wgs84: Native current GPS position when available.
+        current_heading_rad: Compass heading, clockwise from north, when known.
+        available: Whether this anchor is eligible for a planner-route join.
+        reason: Deterministic availability or rejection reason.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[NATIVE_PLANNER_ANCHOR_SCHEMA_VERSION] = (
+        NATIVE_PLANNER_ANCHOR_SCHEMA_VERSION
+    )
+    anchor_id: str = Field(min_length=1, max_length=256)
+    parent_sample_id: str = Field(min_length=1, max_length=480)
+    dataset_source: str = Field(min_length=1, max_length=128)
+    source_record_id: str = Field(min_length=1, max_length=480)
+    observation_timestamp_s: float = Field(ge=0.0)
+    current_wgs84: Wgs84CoordinateV1 | None = None
+    current_heading_rad: float | None = None
+    localization_source: Literal[
+        "native_gps_past_bearing",
+        "native_gnss_heading",
+        "operator_pose",
+        "unavailable",
+    ] = "unavailable"
+    raw_clip_id: str | None = Field(default=None, max_length=480)
+    raw_frame_index: int | None = Field(default=None, ge=0)
+    available: bool
+    reason: str = Field(min_length=1, max_length=160)
+
+    @model_validator(mode="after")
+    def validate_availability(self) -> "NativePlannerAnchorV1":
+        """Require a finite complete pose whenever planner joining is enabled."""
+
+        if self.current_heading_rad is not None and not math.isfinite(self.current_heading_rad):
+            raise ValueError("current_heading_rad must be finite when supplied")
+        if self.available:
+            if self.current_wgs84 is None or self.current_heading_rad is None:
+                raise ValueError("available native planner anchor requires WGS84 and heading")
+            if self.localization_source == "unavailable":
+                raise ValueError("available native planner anchor requires a localization source")
+        return self
+
+
+class NativePlannerRouteLogV1(BaseModel):
+    """A dataset-native planner response before it is joined to an anchor.
+
+    This contract intentionally does not contain trajectory target fields.  A
+    producer must write the original planner request identity, version, route
+    time, destination, and polyline so an offline builder can reject stale or
+    mismatched guidance deterministically.
+
+    Args:
+        route_log_id: Stable planner response identity.
+        dataset_source: Dataset identity of the observation that requested it.
+        source_record_id: Native observation identifier used for the join.
+        plan_timestamp_s: Unix time when the planner produced the route.
+        current_wgs84: Position supplied to the planner request.
+        current_heading_rad: Compass heading supplied to the planner request.
+        goal_wgs84: Explicit planner destination.
+        planner_polyline_wgs84: Ordered independent route geometry.
+        planner_id: Provider identity, never a generic inferred label.
+        route_version: Provider route or request version.
+        datum: Geodetic datum of the coordinates.
+        source_kind: Route provenance class.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[NATIVE_PLANNER_ROUTE_LOG_SCHEMA_VERSION] = (
+        NATIVE_PLANNER_ROUTE_LOG_SCHEMA_VERSION
+    )
+    route_log_id: str = Field(min_length=1, max_length=256)
+    dataset_source: str = Field(min_length=1, max_length=128)
+    source_record_id: str = Field(min_length=1, max_length=480)
+    plan_timestamp_s: float = Field(ge=0.0)
+    current_wgs84: Wgs84CoordinateV1
+    current_heading_rad: float
+    goal_wgs84: Wgs84CoordinateV1
+    planner_polyline_wgs84: list[Wgs84CoordinateV1] = Field(min_length=2)
+    planner_id: str = Field(min_length=1, max_length=160)
+    route_version: str = Field(min_length=1, max_length=160)
+    datum: str = Field(min_length=1, max_length=64)
+    source_kind: Literal["map_planner", "gps_route", "human_route"]
+    independent_of_future_target: Literal[True] = True
+    reroute: bool = False
+
+    @model_validator(mode="after")
+    def validate_heading(self) -> "NativePlannerRouteLogV1":
+        """Reject non-finite planner request headings before geometry conversion."""
+
+        if not math.isfinite(self.current_heading_rad):
+            raise ValueError("planner route current_heading_rad must be finite")
+        return self
+
+
+class NativePlannerAdapterConfigV1(BaseModel):
+    """Fail-closed consistency thresholds for native planner-route joins.
+
+    Args:
+        max_plan_age_s: Largest allowed age from route creation to observation.
+        max_origin_distance_m: Largest GPS mismatch between anchor and planner request.
+        max_heading_delta_rad: Largest compass-heading mismatch at the join.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    max_plan_age_s: float = Field(default=10.0, gt=0.0)
+    max_origin_distance_m: float = Field(default=15.0, gt=0.0)
+    max_heading_delta_rad: float = Field(default=math.pi / 4.0, gt=0.0, le=math.pi)
 
 
 class LanguageWaypointBenchmarkBuildConfigV1(BaseModel):
@@ -607,6 +733,11 @@ __all__ = [
     "LanguageGoalCandidateV1",
     "LanguageWaypointBenchmarkBuildConfigV1",
     "MetricPoint2DV1",
+    "NATIVE_PLANNER_ANCHOR_SCHEMA_VERSION",
+    "NATIVE_PLANNER_ROUTE_LOG_SCHEMA_VERSION",
+    "NativePlannerAdapterConfigV1",
+    "NativePlannerAnchorV1",
+    "NativePlannerRouteLogV1",
     "PlannerRouteRecordWgs84V1",
     "build_waypoint_guidance_from_record_v1",
     "WaypointGuidanceProvenanceV1",
