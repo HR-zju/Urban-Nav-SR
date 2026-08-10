@@ -15,6 +15,7 @@ from mcp_server.contracts.direction_profile import (
     resolve_affordance_probe_profile,
     resolve_stage_a_direction_profile,
 )
+from mcp_server.contracts.local_traversability_geometry import LocalTraversabilityGeometryV1
 from mcp_server.contracts.reasoning_dataset_v4 import (
     REASONING_SOURCE_V4_SCHEMA_VERSION,
     DirectionContextV4,
@@ -31,6 +32,10 @@ from mcp_server.data.quality.review import (
 )
 from mcp_server.data.quality.retry import build_geometry_retry_source_manifest_v1
 from mcp_server.data.quality.reports import summarize_navigation_quality_run_v1
+from mcp_server.data.quality.scene_events import (
+    project_citywalker_scene_event_tags_v1,
+    write_citywalker_scene_event_tags_v1,
+)
 from mcp_server.data.quality.smoke import (
     NavigationQualitySmokeConfigV1,
     _source_strata_hints_v1,
@@ -360,6 +365,124 @@ def test_quality_batch_views_and_reviews_are_sidecar_only(tmp_path: Path) -> Non
     assert "teacher-only" in suitability_html.read_text(encoding="utf-8")
 
 
+def test_scene_event_projection_uses_sidecars_without_inventing_action_target_audit(tmp_path: Path) -> None:
+    """CityWalker-compatible event tags retain evidence and unavailable states."""
+
+    source = _source(tmp_path)
+    source_path = tmp_path / "source.jsonl"
+    geometry_path = tmp_path / "geometry.jsonl"
+    geometry_decisions = tmp_path / "geometry.decisions.jsonl"
+    filter_path = tmp_path / "filter.jsonl"
+    filter_decisions = tmp_path / "filter.decisions.jsonl"
+    write_jsonl_atomic(source_path, [source.model_dump(mode="json")])
+    config = NavigationQualityBatchConfigV1(concurrency=1, max_retries=0, progress_interval=0)
+    asyncio.run(
+        label_traversability_geometry_sources_v1(
+            source_jsonl=source_path,
+            geometry_jsonl=geometry_path,
+            decisions_jsonl=geometry_decisions,
+            config=config,
+            backend_factory=lambda _index, _key: _FakeQualityBackend(),
+        )
+    )
+    asyncio.run(
+        filter_navigation_trainability_sources_v1(
+            source_jsonl=source_path,
+            filter_jsonl=filter_path,
+            decisions_jsonl=filter_decisions,
+            config=config,
+            backend_factory=lambda _index, _key: _FakeQualityBackend(),
+        )
+    )
+    geometry = LocalTraversabilityGeometryV1.model_validate(next(iter_jsonl(geometry_path)))
+    filter_row = next(iter_jsonl(filter_path))
+    motion = filter_row["motion_scene_assessment"]
+    motion.update(
+        {
+            "crowd_density_near_path": "dense",
+            "corridor_occupancy": "shared",
+            "visible_stop_cue": "crossing_wait",
+        }
+    )
+    filter_row["motion_scene_assessment"] = motion
+    # The projection consumes only already available evidence.  This local
+    # fixture changes visible assessment values without calling an LVLM again.
+    from mcp_server.contracts.navigation_trainability import NavigationTrainabilityFilterV1
+
+    trainability_filter = NavigationTrainabilityFilterV1.model_validate(filter_row)
+    turning_source = source.model_copy(
+        update={"direction_supervision": SimpleNamespace(label_name="left_20")}
+    )
+    tags = project_citywalker_scene_event_tags_v1(
+        source=turning_source,
+        trainability_filter=trainability_filter,
+        geometry=geometry,
+    )
+    states = {tag.name: tag.state for tag in tags.tags}
+    assert states == {
+        "crowd": "present",
+        "person_close_by": "present",
+        "turn": "present",
+        "action_target_mismatch": "unavailable",
+        "crossing": "present",
+        "other": "absent",
+    }
+    action_target = next(tag for tag in tags.tags if tag.name == "action_target_mismatch")
+    assert action_target.evidence_refs == ()
+    assert action_target.reason_codes == ("independent_action_target_audit_not_available",)
+
+
+def test_scene_event_writer_aligns_current_source_revisions(tmp_path: Path) -> None:
+    """The writer emits a complete ordered vector and a coverage receipt."""
+
+    source = _source(tmp_path)
+    source_path = tmp_path / "source.jsonl"
+    geometry_path = tmp_path / "geometry.jsonl"
+    geometry_decisions = tmp_path / "geometry.decisions.jsonl"
+    filter_path = tmp_path / "filter.jsonl"
+    filter_decisions = tmp_path / "filter.decisions.jsonl"
+    output_path = tmp_path / "events" / "scene_event_tags.jsonl"
+    write_jsonl_atomic(source_path, [source.model_dump(mode="json")])
+    config = NavigationQualityBatchConfigV1(concurrency=1, max_retries=0, progress_interval=0)
+    asyncio.run(
+        label_traversability_geometry_sources_v1(
+            source_jsonl=source_path,
+            geometry_jsonl=geometry_path,
+            decisions_jsonl=geometry_decisions,
+            config=config,
+            backend_factory=lambda _index, _key: _FakeQualityBackend(),
+        )
+    )
+    asyncio.run(
+        filter_navigation_trainability_sources_v1(
+            source_jsonl=source_path,
+            filter_jsonl=filter_path,
+            decisions_jsonl=filter_decisions,
+            config=config,
+            backend_factory=lambda _index, _key: _FakeQualityBackend(),
+        )
+    )
+    report = write_citywalker_scene_event_tags_v1(
+        source_jsonl=source_path,
+        filter_jsonl=filter_path,
+        geometry_jsonl=geometry_path,
+        output_jsonl=output_path,
+    )
+    row = next(iter_jsonl(output_path))
+    assert report["output_count"] == 1
+    assert report["filter_missing_count"] == 0
+    assert [tag["name"] for tag in row["tags"]] == [
+        "crowd",
+        "person_close_by",
+        "turn",
+        "action_target_mismatch",
+        "crossing",
+        "other",
+    ]
+    assert report["tag_state_counts"]["action_target_mismatch"] == {"unavailable": 1}
+    assert source.model_dump(mode="json") == next(iter_jsonl(source_path))
+
+
 def test_geometry_review_includes_parser_failures_without_polygon_overlay(tmp_path: Path) -> None:
     """Failed LVLM geometry attempts remain inspectable instead of disappearing."""
 
@@ -480,6 +603,7 @@ def test_quality_run_report_aggregates_read_only_ledgers(tmp_path: Path) -> None
     (dataset_root / "source").mkdir(parents=True)
     (dataset_root / "geometry").mkdir()
     (dataset_root / "suitability").mkdir()
+    (dataset_root / "events").mkdir()
     (dataset_root / "views").mkdir()
     write_jsonl_atomic(dataset_root / "source" / "smoke.jsonl", [source.model_dump(mode="json")])
     (dataset_root / "source" / "smoke_selection.json").write_text(
@@ -523,6 +647,21 @@ def test_quality_run_report_aggregates_read_only_ledgers(tmp_path: Path) -> None
         ),
         encoding="utf-8",
     )
+    write_jsonl_atomic(
+        dataset_root / "events" / "scene_event_tags.jsonl",
+        [
+            {
+                "tags": [
+                    {"name": "crowd", "state": "present"},
+                    {"name": "person_close_by", "state": "absent"},
+                    {"name": "turn", "state": "present"},
+                    {"name": "action_target_mismatch", "state": "unavailable"},
+                    {"name": "crossing", "state": "absent"},
+                    {"name": "other", "state": "absent"},
+                ]
+            }
+        ],
+    )
     report = summarize_navigation_quality_run_v1(
         run_root=tmp_path / "run",
         output_json=tmp_path / "run" / "quality_report.json",
@@ -530,6 +669,7 @@ def test_quality_run_report_aggregates_read_only_ledgers(tmp_path: Path) -> None
     assert report["totals"]["source_selected_count"] == 1
     assert report["totals"]["geometry_error_code_counts"]["quadrilateral_area_too_small"] == 1
     assert report["totals"]["suitability_status_counts"]["quarantine"] == 1
+    assert report["totals"]["scene_event_state_counts_by_tag"]["crowd"] == {"present": 1}
     assert source.model_dump(mode="json") == list(iter_jsonl(dataset_root / "source" / "smoke.jsonl"))[0]
 
 

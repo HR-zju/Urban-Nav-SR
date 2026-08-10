@@ -24,6 +24,7 @@ from mcp_server.contracts.benchmark_plugin import (
     BenchmarkReferenceV1,
     BenchmarkTimePolicyV1,
 )
+from mcp_server.contracts.scene_event_tags import CITYWALKER_COMPATIBLE_SCENE_EVENT_TAG_ORDER_V1
 from mcp_server.eval.openloop.benchmark_plugin_base import BenchmarkDatasetPluginV1
 from mcp_server.eval.openloop.benchmark_plugin_package import (
     artifact_sha256_v1,
@@ -36,14 +37,9 @@ CITYWALKER_DATASET_PLUGIN_ID_V1 = "citywalker_teleop_v1"
 CITYWALKER_INPUT_PROFILE_ID_V1 = "citywalker_fpv_pose_goal_prompt_v1"
 CITYWALKER_PREDICTION_GEOMETRY_ID_V1 = "citywalker_current_pose_xy_v1"
 CITYWALKER_COORDINATE_FRAME_V1 = "citywalker_current_pose_x_right_y_front_v1"
-CITYWALKER_CATEGORY_ORDER_V1 = (
-    "crowd",
-    "person_close_by",
-    "turn",
-    "action_target_mismatch",
-    "crossing",
-    "other",
-)
+# CityWalker human labels and UrbanNav's derived audit tags share names/order,
+# but differ in provenance.  Keep this alias for public-package compatibility.
+CITYWALKER_CATEGORY_ORDER_V1 = CITYWALKER_COMPATIBLE_SCENE_EVENT_TAG_ORDER_V1
 
 _SPLIT_SEQUENCE_IDS = {
     "train": tuple(range(1, 9)),

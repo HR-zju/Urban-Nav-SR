@@ -7,6 +7,10 @@ from mcp_server.data.quality.review import (
 )
 from mcp_server.data.quality.retry import build_geometry_retry_source_manifest_v1
 from mcp_server.data.quality.reports import summarize_navigation_quality_run_v1
+from mcp_server.data.quality.scene_events import (
+    project_citywalker_scene_event_tags_v1,
+    write_citywalker_scene_event_tags_v1,
+)
 from mcp_server.data.quality.smoke import (
     NavigationQualitySmokeConfigV1,
     build_navigation_quality_smoke_manifest_v1,
@@ -29,9 +33,11 @@ __all__ = [
     "NavigationTrainabilityPolicyV1",
     "NavigationTrainabilityViewConfigV1",
     "derive_navigation_trainability_v1",
+    "project_citywalker_scene_event_tags_v1",
     "summarize_reasoning_source_motion_v1",
     "summarize_navigation_quality_run_v1",
     "write_navigation_trainability_review_html_v1",
     "write_navigation_trainability_views_v1",
+    "write_citywalker_scene_event_tags_v1",
     "write_traversability_geometry_review_html_v1",
 ]

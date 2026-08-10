@@ -54,7 +54,7 @@ register_source() {
   local dataset="$1"
   local source_jsonl="$2"
   local root="${RUN_ROOT}/${dataset}"
-  mkdir -p "${root}"/{source,geometry,suitability,views,review}
+  mkdir -p "${root}"/{source,geometry,suitability,views,events,review}
   ln -sfn "${source_jsonl}" "${root}/source/source.jsonl"
   SOURCE_JSONL="${source_jsonl}" OUTPUT_JSON="${root}/source/source_selection.json" "${PYTHON_BIN}" - <<'PY'
 import json
@@ -127,6 +127,19 @@ for pair in "sidewalk_main:sidewalk" "sidewalk_extra:sidewalk" "foxglove:foxglov
   run_suitability "${dataset}" "${sidecar_dataset}" &
 done
 wait
+
+# CityWalker-compatible slice tags are a deterministic read-only projection of
+# completed sidecars; they never invoke another model or alter source/media.
+for dataset in sidewalk_main sidewalk_extra foxglove egowalk; do
+  root="${RUN_ROOT}/${dataset}"
+  "${PYTHON_BIN}" "${ROUTESERVER_ROOT}/tools/model_processing/project_citywalker_scene_event_tags.py" \
+    --source-jsonl "${root}/source/source.jsonl" \
+    --filter-jsonl "${root}/suitability/filter.jsonl" \
+    --geometry-jsonl "${root}/geometry/geometry.jsonl" \
+    --output-jsonl "${root}/events/scene_event_tags.jsonl" \
+    --report-json "${root}/events/report.json" \
+    >"${root}/events/run.log" 2>&1
+done
 
 "${PYTHON_BIN}" "${ROUTESERVER_ROOT}/tools/evaluation/summarize_navigation_quality_run.py" \
   --run-root "${RUN_ROOT}" --output-json "${RUN_ROOT}/navigation_quality_run_report.json" \

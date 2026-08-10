@@ -8,6 +8,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from mcp_server.contracts.scene_event_tags import CITYWALKER_COMPATIBLE_SCENE_EVENT_TAG_ORDER_V1
 from mcp_server.data.io.jsonl import iter_jsonl
 
 
@@ -74,6 +75,7 @@ def _summarize_dataset_v1(dataset_root: Path) -> dict[str, Any]:
     geometry_decisions = list(_iter_optional_jsonl_v1(dataset_root / "geometry" / "decisions.jsonl"))
     geometry_rows = list(_iter_optional_jsonl_v1(dataset_root / "geometry" / "geometry.jsonl"))
     filter_rows = list(_iter_optional_jsonl_v1(dataset_root / "suitability" / "filter.jsonl"))
+    event_rows = list(_iter_optional_jsonl_v1(dataset_root / "events" / "scene_event_tags.jsonl"))
     view_report = _load_optional_json_v1(dataset_root / "views" / "report.json")
     source_selection = _load_optional_json_v1(dataset_root / "source" / "source_selection.json")
     if not source_selection:
@@ -153,6 +155,18 @@ def _summarize_dataset_v1(dataset_root: Path) -> dict[str, Any]:
             "direction_counts_by_status": direction_by_status,
             "stop_counts_by_status": Counter(view_report.get("stop_counts_by_status") or {}),
         },
+        "scene_events": {
+            "annotation_count": len(event_rows),
+            "state_counts_by_tag": {
+                label: Counter(
+                    str(tag.get("state", "unknown"))
+                    for row in event_rows
+                    for tag in row.get("tags", [])
+                    if isinstance(tag, dict) and tag.get("name") == label
+                )
+                for label in CITYWALKER_COMPATIBLE_SCENE_EVENT_TAG_ORDER_V1
+            },
+        },
     }
 
 
@@ -219,6 +233,8 @@ def _empty_counts_v1() -> dict[str, Any]:
         "eligibility_counts": Counter(),
         "direction_counts_by_status": {},
         "stop_counts_by_status": Counter(),
+        "scene_event_annotation_count": 0,
+        "scene_event_state_counts_by_tag": {},
     }
 
 
@@ -229,6 +245,7 @@ def _merge_counts_v1(total: dict[str, Any], dataset: dict[str, Any]) -> None:
     total["geometry_decision_count"] += dataset["geometry"]["decision_count"]
     total["geometry_annotation_count"] += dataset["geometry"]["annotation_count"]
     total["suitability_filter_count"] += dataset["suitability"]["filter_count"]
+    total["scene_event_annotation_count"] += dataset["scene_events"]["annotation_count"]
     mappings = (
         ("geometry_decision_status_counts", dataset["geometry"]["decision_status_counts"]),
         ("geometry_error_code_counts", dataset["geometry"]["error_code_counts"]),
@@ -246,6 +263,8 @@ def _merge_counts_v1(total: dict[str, Any], dataset: dict[str, Any]) -> None:
         total[name].update(counts)
     for status, counts in dataset["views"]["direction_counts_by_status"].items():
         total["direction_counts_by_status"].setdefault(status, Counter()).update(counts)
+    for label, counts in dataset["scene_events"]["state_counts_by_tag"].items():
+        total["scene_event_state_counts_by_tag"].setdefault(label, Counter()).update(counts)
 
 
 def _serialize_counts_v1(value: Any) -> Any:

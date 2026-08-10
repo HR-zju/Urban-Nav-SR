@@ -90,7 +90,7 @@ build_smoke() {
   local source_jsonl="$2"
   local dataset_source="$3"
   local root="${RUN_ROOT}/${dataset}"
-  mkdir -p "${root}/source" "${root}/geometry" "${root}/suitability" "${root}/views" "${root}/review"
+  mkdir -p "${root}/source" "${root}/geometry" "${root}/suitability" "${root}/views" "${root}/events" "${root}/review"
   "${PYTHON_BIN}" "${ROUTE_SERVER_ROOT}/tools/model_processing/build_navigation_quality_smoke.py" \
     --source-jsonl "${source_jsonl}" \
     --dataset-source "${dataset_source}" \
@@ -117,6 +117,22 @@ for dataset in sidewalk_main sidewalk_extra foxglove egowalk; do
   run_suitability "${dataset}" "${!sidecar_var:-}" &
 done
 wait
+
+# 事件标签仅从已经完成的 sidecar 读取，不增加 LVLM 调用或修改 smoke source。
+for dataset in sidewalk_main sidewalk_extra foxglove egowalk; do
+  root="${RUN_ROOT}/${dataset}"
+  "${PYTHON_BIN}" "${ROUTE_SERVER_ROOT}/tools/model_processing/project_citywalker_scene_event_tags.py" \
+    --source-jsonl "${root}/source/smoke.jsonl" \
+    --filter-jsonl "${root}/suitability/filter.jsonl" \
+    --geometry-jsonl "${root}/geometry/geometry.jsonl" \
+    --output-jsonl "${root}/events/scene_event_tags.jsonl" \
+    --report-json "${root}/events/report.json" \
+    >"${root}/events/run.log" 2>&1
+done
+
+"${PYTHON_BIN}" "${ROUTE_SERVER_ROOT}/tools/evaluation/summarize_navigation_quality_run.py" \
+  --run-root "${RUN_ROOT}" --output-json "${RUN_ROOT}/navigation_quality_run_report.json" \
+  >"${RUN_ROOT}/navigation_quality_summary.log" 2>&1
 
 for dataset in sidewalk_main sidewalk_extra foxglove egowalk; do
   root="${RUN_ROOT}/${dataset}"

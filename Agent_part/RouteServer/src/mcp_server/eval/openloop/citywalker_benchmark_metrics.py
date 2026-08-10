@@ -6,6 +6,7 @@ import math
 from typing import Any, Sequence
 
 from mcp_server.contracts.benchmark_plugin import BenchmarkProfileV1
+from mcp_server.contracts.scene_event_tags import CITYWALKER_COMPATIBLE_SCENE_EVENT_TAG_ORDER_V1
 from mcp_server.eval.openloop.benchmark_plugin_base import (
     BenchmarkJoinedRowV1,
     BenchmarkMetricPluginV1,
@@ -19,14 +20,9 @@ from mcp_server.eval.openloop.benchmark_plugin_metrics import (
 )
 
 
-CITYWALKER_SCENARIO_LABELS_V1 = (
-    "crowd",
-    "person_close_by",
-    "turn",
-    "action_target_mismatch",
-    "crossing",
-    "other",
-)
+# This benchmark still reads original CityWalker reference labels.  The shared
+# taxonomy only guarantees stable slice names, not equal annotation provenance.
+CITYWALKER_SCENARIO_LABELS_V1 = CITYWALKER_COMPATIBLE_SCENE_EVENT_TAG_ORDER_V1
 
 
 class CityWalkerMetricPluginV1(BenchmarkMetricPluginV1):

@@ -2,10 +2,12 @@
 
 ## 1. 目的和边界
 
-本模块为现有 `ReasoningSourceV4` 新增两个**独立、只读 sidecar**：
+本模块为现有 `ReasoningSourceV4` 新增三个**独立、只读 sidecar**：
 
 1. `LocalTraversabilityGeometryV1`：当前 FPV 中的局部可通行、条件通行、阻塞和禁止区域；
 2. `NavigationTrainabilityFilterV1`：场景是否属于室外步行导航语料，以及记录运动与时序 FPV 是否一致。
+3. `SceneEventTagsV1`：从前两类 sidecar 和 teacher-only direction audit 投影出的 CityWalker-compatible
+   多标签场景切片。
 
 它们不会修改原始 source、媒体文件、V4.6 FullCoT、VQA 或旧 language-goal manifest。任何训练使用都只能读取
 本模块导出的新 view，不能把 sidecar 字段原地写回 V4 source。
@@ -75,6 +77,36 @@ QC 优先使用可选的 `StageIITrajectorySidecarV2`，以 `sample_id/source_gr
 写回 source，也不会出现在 student prompt。未提供可信 V2 sidecar 时，模块只完成 geometry/current-scene 筛选，
 并将该行明确标为 Stage II 不可用，而不是臆造时序运动结论。
 
+### 2.3 `SceneEventTagsV1`
+
+代码：[scene_event_tags.py](../src/mcp_server/contracts/scene_event_tags.py) 与
+[scene_events.py](../src/mcp_server/data/quality/scene_events.py)。该层不调用 LVLM：它只在 geometry 与
+suitability 完成后，按 source fingerprint 对齐当前 sidecar，确定性写出六个**可重叠**标签的三态结果：
+
+| 标签 | `present` 的最小证据 | 不可推断的边界 |
+| --- | --- | --- |
+| `crowd` | near-path `moderate/dense`，或 geometry 中有 `pedestrian_cluster` | 不从轨迹速度推断人群 |
+| `person_close_by` | shared/blocked corridor 且有可见人群，或 `pedestrian_cluster` | 不把普通 sparse crowd 一律判为近距离交互 |
+| `turn` | teacher-only 强方向为左/右，或 recorded motion 为 `turning` | 仅作 audit/slice，绝不写回 student 输入 |
+| `crossing` | `red_light/crossing_wait`，或 geometry 中有 `crosswalk` | 不从 stop 标签单独推断路口 |
+| `other` | 明确的非 `outdoor_pedestrian_supported` scene class | 不把 `unknown` 伪装成负例 |
+| `action_target_mismatch` | 需要未来独立 action/target audit | 当前 V1 固定为 `unavailable`，不从 trajectory 或 direction 猜造 |
+
+每个标签均为 `present`、`absent` 或 `unavailable`：`absent` 仅表示对应 sidecar 已提供足够证据但未触发；
+`unavailable` 表示缺少独立证据，训练和分析不得把它当作负标签。标签名与 CityWalker 公共类别顺序一致，方便
+slice 对齐；但 UrbanNav 投影不是 CityWalker 的人工标注，不可与其 reference label 混合训练或直接比较比例。
+
+可单独执行投影，不会改变任何输入 ledger：
+
+```bash
+python tools/model_processing/project_citywalker_scene_event_tags.py \
+  --source-jsonl "$RUN_ROOT/source/smoke.jsonl" \
+  --filter-jsonl "$RUN_ROOT/suitability/filter.jsonl" \
+  --geometry-jsonl "$RUN_ROOT/geometry/geometry.jsonl" \
+  --output-jsonl "$RUN_ROOT/events/scene_event_tags.jsonl" \
+  --report-json "$RUN_ROOT/events/report.json"
+```
+
 ## 3. 两个独立 LVLM profile
 
 | profile | 图像输入 | private motion | 作用 |
@@ -114,6 +146,8 @@ indoor_or_transit, stop, high_speed, dense_crowd, ordinary_sidewalk, turn
   suitability/filter.jsonl
   suitability/decisions.jsonl
   suitability/report.json
+  events/scene_event_tags.jsonl
+  events/report.json
   views/{accepted,quarantine,rejected,pending_retry}.jsonl
   views/{stage_i_eligible,stage_ii_eligible,vqa_eligible}.jsonl
   reports/*.json
@@ -208,7 +242,8 @@ python tools/evaluation/summarize_navigation_quality_run.py \
 ```
 
 该 receipt 分别统计 geometry parser error、区域 role/surface、scene suitability、motion QC、
-Stage eligibility 和按 disposition 划分的方向分布。它不把 `quarantine` 解释为 reject，也不改变任何 source 或 sidecar。
+Stage eligibility、按 disposition 划分的方向分布，以及各 scene-event 标签的 `present/absent/unavailable`
+分布。它不把 `quarantine` 解释为 reject，也不改变任何 source 或 sidecar。
 
 ## 6. 人工 gate 与全量运行
 
