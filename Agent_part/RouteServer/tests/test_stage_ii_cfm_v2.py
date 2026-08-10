@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from mcp_server.agent.reasoning_v4_text import render_reasoning_section_v4
 from mcp_server.contracts.stage_ii_cfm import (
+    StageIICFMDirectLatentViewV1,
     StageIICFMTrainingViewV2,
     StageIIContextProducerV1,
     StageIIProjectionDropV2,
@@ -31,6 +32,7 @@ from mcp_server.data.stage_ii_views import (
     project_stage_ii_cfm_view_v1_from_stage_i_v2,
     project_stage_ii_cfm_view_v2,
     project_stage_ii_cfm_view_with_audit_v2,
+    project_stage_ii_direct_latent_view_from_stage_i_v2,
 )
 from tools.model_processing.build_stage_ii_cfm_views import build_stage_ii_cfm_views
 
@@ -219,6 +221,30 @@ def test_stage_i_v2_full_cot_can_feed_the_frozen_clean_cfm_v1_contract() -> None
     assert view.reasoning_context.projected_input_digest == decision.projected_input_digest
 
 
+def test_current_v4_direct_latent_view_is_cacheless_and_fails_closed() -> None:
+    """Direct latent must not be a V1 view with cache fields blanked out."""
+
+    full = _stage_i_full_v2()
+    target = _trajectory_v1()
+    assert target.accepted and target.target is not None
+    view = project_stage_ii_direct_latent_view_from_stage_i_v2(
+        full,
+        trajectory_target=target.target,
+        review_status="not_required",
+    )
+
+    payload = view.model_dump(mode="json", exclude_none=True)
+    assert view.sample_id == f"{full.sample_id}:stage_ii_direct_latent"
+    assert view.direct_latent_profile_id == "reasoning_v4_6_direct_latent_v1"
+    assert "reasoning_context" not in payload
+    assert "decision_context" not in payload
+    assert len(view.projected_input_digest) == 64
+
+    payload["reasoning_context"] = {}
+    with pytest.raises(ValidationError):
+        StageIICFMDirectLatentViewV1.model_validate(payload)
+
+
 def test_bulk_builder_accepts_v2_full_cot_with_the_clean_v1_target(
     tmp_path: Path,
 ) -> None:
@@ -279,6 +305,55 @@ def test_bulk_builder_accepts_v2_full_cot_with_the_clean_v1_target(
     assert report["counts"]["output_views"] == 1
     assert report["counts"]["eligible_references"] == 1
     assert paths["drops"].read_text(encoding="utf-8") == ""
+
+
+def test_bulk_builder_direct_latent_requires_no_context_cache_inputs(tmp_path: Path) -> None:
+    """The direct CLI route materializes the same parent without Pass R/D."""
+
+    from test_stage_ii_cfm import _source_registry_payload
+
+    full = _stage_i_full_v2()
+    raw_target = {
+        "stage_i_sample_id": full.sample_id,
+        "trajectory_ego_t": [
+            [0.0, index * 0.125, index * 0.125, 1.0]
+            for index in range(21)
+        ],
+        "action_mask": [True] * 21,
+        "source_format": "ego_xy_t_speed_right_front_v1",
+        "trajectory_source": "dataset_pose_trajectory",
+        "yaw_source": "path_tangent",
+        "review_status": "not_required",
+    }
+    stage_i_path = tmp_path / "stage_i.jsonl"
+    trajectory_path = tmp_path / "trajectory.jsonl"
+    registry_path = tmp_path / "registry.json"
+    _write_jsonl(stage_i_path, [full.model_dump(mode="json", exclude_none=True)])
+    _write_jsonl(trajectory_path, [raw_target])
+    registry_path.write_text(
+        json.dumps(_source_registry_payload(sidewalk_sources=("dataset_pose_trajectory",))),
+        encoding="utf-8",
+    )
+    report = build_stage_ii_cfm_views(
+        stage_i_jsonl=stage_i_path,
+        trajectory_jsonl=trajectory_path,
+        reasoning_cache_jsonl=None,
+        decision_cache_jsonl=None,
+        trajectory_source_registry_json=registry_path,
+        output_view_jsonl=tmp_path / "views.jsonl",
+        output_qc_jsonl=tmp_path / "qc.jsonl",
+        output_drop_jsonl=tmp_path / "drops.jsonl",
+        direct_latent=True,
+        max_source_step_m=3.0,
+    )
+
+    assert report["mode"] == "direct_latent"
+    assert report["counts"]["output_views"] == 1
+    assert report["counts"]["direct_latent_rows"] == 1
+    payload = json.loads((tmp_path / "views.jsonl").read_text(encoding="utf-8"))
+    assert payload["sample_id"].endswith(":stage_ii_direct_latent")
+    assert "reasoning_context" not in payload
+    assert "decision_context" not in payload
 
 
 def test_stage_ii_v2_decision_only_requires_signed_dropout_absence() -> None:

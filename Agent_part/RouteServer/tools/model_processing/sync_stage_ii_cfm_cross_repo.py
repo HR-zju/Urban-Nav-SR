@@ -75,6 +75,7 @@ def sync_stage_ii_cfm_cross_repo(
         "stage_ii_legacy_direct_target_v1.schema.json",
         "stage_ii_cfm_training_view_v1.schema.json",
         "stage_ii_cfm_training_view_v2.schema.json",
+        "stage_ii_direct_latent_view_v1.schema.json",
         "stage_ii_projection_drop_v1.schema.json",
         "stage_ii_projection_drop_v2.schema.json",
         "contract_digest.json",

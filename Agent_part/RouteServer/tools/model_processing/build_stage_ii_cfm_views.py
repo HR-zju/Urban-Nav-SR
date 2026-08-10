@@ -27,6 +27,7 @@ from mcp_server.data.stage_ii_views import (
     build_stage_ii_projection_drop_v1,
     project_stage_ii_cfm_view_v1,
     project_stage_ii_cfm_view_v1_from_stage_i_v2,
+    project_stage_ii_direct_latent_view_from_stage_i_v2,
 )
 
 
@@ -46,6 +47,7 @@ def build_stage_ii_cfm_views(
     output_reference_jsonl: str | Path | None = None,
     output_eligible_jsonl: str | Path | None = None,
     denominator_only: bool = False,
+    direct_latent: bool = False,
     max_source_step_m: float | None = None,
 ) -> dict[str, Any]:
     """Join exact identities and emit accepted views plus QC/drop audits.
@@ -63,6 +65,10 @@ def build_stage_ii_cfm_views(
         output_eligible_jsonl: Optional public eligible-case identities.
         denominator_only: Build target-eligible references and identities
             without reading or filtering on Pass-R/Pass-D context caches.
+        direct_latent: Build current-V4 cacheless direct-latent training views.
+            This route accepts only V2 FullCoT parents and rejects supplied
+            Pass-R/Pass-D artifacts, so the exchange contract cannot silently
+            regress into a predicted-context run.
         max_source_step_m: Optional deterministic adjacent-source-pose bound
             applied before trajectory resampling.  A bounded admission profile
             must pass this explicitly; ``None`` preserves the historical V1
@@ -75,11 +81,20 @@ def build_stage_ii_cfm_views(
         ValueError: If a global registry or unique-index invariant is invalid.
     """
 
+    if denominator_only and direct_latent:
+        raise ValueError("denominator_only and direct_latent are mutually exclusive")
+    if direct_latent and (
+        reasoning_cache_jsonl is not None or decision_cache_jsonl is not None
+    ):
+        raise ValueError(
+            "direct_latent must not receive Pass-R/Pass-D cache artifacts"
+        )
+
     source_registry = load_stage_ii_trajectory_source_registry_v1(
         trajectory_source_registry_json
     )
     trajectories = _index_unique(_iter_jsonl(trajectory_jsonl), "stage_i_sample_id")
-    if denominator_only:
+    if denominator_only or direct_latent:
         reasoning = {}
         decisions = {}
     else:
@@ -155,23 +170,33 @@ def build_stage_ii_cfm_views(
             if denominator_only:
                 counts["denominator_only_rows"] += 1
                 continue
-            cache_key = (typed.sample_id, typed.modality_profile_id)
-            if cache_key not in reasoning:
-                raise ValueError("reasoning_context_cache_missing")
-            if cache_key not in decisions:
-                raise ValueError("decision_context_cache_missing")
-            projector = (
-                project_stage_ii_cfm_view_v1
-                if isinstance(typed, StageIFullCoTViewV1)
-                else project_stage_ii_cfm_view_v1_from_stage_i_v2
-            )
-            view = projector(
-                typed,
-                trajectory_target=build.target,
-                reasoning_context=reasoning[cache_key],
-                decision_context=decisions[cache_key],
-                review_status=review_status,
-            )
+            if direct_latent:
+                if not isinstance(typed, StageIFullCoTViewV2):
+                    raise ValueError("direct_latent_requires_stage_i_full_cot_v2")
+                view = project_stage_ii_direct_latent_view_from_stage_i_v2(
+                    typed,
+                    trajectory_target=build.target,
+                    review_status=review_status,
+                )
+                counts["direct_latent_rows"] += 1
+            else:
+                cache_key = (typed.sample_id, typed.modality_profile_id)
+                if cache_key not in reasoning:
+                    raise ValueError("reasoning_context_cache_missing")
+                if cache_key not in decisions:
+                    raise ValueError("decision_context_cache_missing")
+                projector = (
+                    project_stage_ii_cfm_view_v1
+                    if isinstance(typed, StageIFullCoTViewV1)
+                    else project_stage_ii_cfm_view_v1_from_stage_i_v2
+                )
+                view = projector(
+                    typed,
+                    trajectory_target=build.target,
+                    reasoning_context=reasoning[cache_key],
+                    decision_context=decisions[cache_key],
+                    review_status=review_status,
+                )
         except (KeyError, TypeError, ValueError) as exc:
             drop = build_stage_ii_projection_drop_v1(
                 parent_sample_id=typed.sample_id,
@@ -212,6 +237,7 @@ def build_stage_ii_cfm_views(
                 else None
             ),
             "trajectory_source_registry_json": str(trajectory_source_registry_json),
+            "direct_latent": direct_latent,
             "max_source_step_m": max_source_step_m,
         },
         "outputs": {
@@ -229,7 +255,13 @@ def build_stage_ii_cfm_views(
                 else None
             ),
         },
-        "mode": "denominator_only" if denominator_only else "complete_view",
+        "mode": (
+            "denominator_only"
+            if denominator_only
+            else "direct_latent"
+            if direct_latent
+            else "complete_view"
+        ),
         "counts": dict(counts),
     }
 
@@ -320,6 +352,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-reference-jsonl", type=Path)
     parser.add_argument("--output-eligible-jsonl", type=Path)
     parser.add_argument("--denominator-only", action="store_true")
+    parser.add_argument("--direct-latent", action="store_true")
     parser.add_argument("--max-source-step-m", type=float)
     parser.add_argument("--report-json", type=Path)
     return parser.parse_args(argv)
@@ -341,6 +374,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         output_reference_jsonl=args.output_reference_jsonl,
         output_eligible_jsonl=args.output_eligible_jsonl,
         denominator_only=args.denominator_only,
+        direct_latent=args.direct_latent,
         max_source_step_m=args.max_source_step_m,
     )
     rendered = json.dumps(report, ensure_ascii=False, indent=2)

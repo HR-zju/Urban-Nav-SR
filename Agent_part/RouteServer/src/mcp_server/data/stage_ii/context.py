@@ -19,6 +19,7 @@ from mcp_server.contracts.stage_ii_cfm import (
     StageIIReasoningAbsentV2,
     StageIIReasoningPresentV2,
     stage_ii_digest_v1,
+    stage_ii_projected_input_digest_v1,
 )
 from mcp_server.contracts.stage_i_sft import (
     StageIFullCoTViewV2,
@@ -26,41 +27,6 @@ from mcp_server.contracts.stage_i_sft import (
     StageITrainingViewV2,
     parse_stage_i_training_view_v2,
 )
-
-
-def stage_ii_projected_input_digest_v1(
-    *,
-    images: list[str],
-    image_roles: list[str],
-    instruction: str | None,
-    model_visible_context: Mapping[str, Any],
-    evidence_catalog: list[Mapping[str, Any]],
-    input_modalities: Mapping[str, Any],
-) -> str:
-    """Fingerprint the exact student-visible input before Pass R/D/T.
-
-    Args:
-        images: Ordered projected media references.
-        image_roles: Semantic role aligned with every image.
-        instruction: Optional visible instruction.
-        model_visible_context: Additional safe visible context.
-        evidence_catalog: Prompt-visible evidence inventory.
-        input_modalities: Canonical projected modality flags.
-
-    Returns:
-        Canonical SHA-256 input digest shared by all three passes.
-    """
-
-    return stage_ii_digest_v1(
-        {
-            "images": images,
-            "image_roles": image_roles,
-            "instruction": instruction,
-            "model_visible_context": dict(model_visible_context),
-            "evidence_catalog": evidence_catalog,
-            "input_modalities": dict(input_modalities),
-        }
-    )
 
 
 def build_stage_ii_context_cache_v1(

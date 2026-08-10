@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from typing import Annotated, Any, Literal, Union
+from typing import Annotated, Any, Literal, Mapping, Union
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
@@ -52,6 +52,15 @@ STAGE_II_TRAJECTORY_QC_SCHEMA_VERSION = (
 STAGE_II_CFM_TRAINING_VIEW_SCHEMA_VERSION = (
     "urbannav_stage_ii_cfm_training_view_v1"
 )
+STAGE_II_DIRECT_LATENT_VIEW_SCHEMA_VERSION = (
+    "urbannav_stage_ii_direct_latent_view_v1"
+)
+STAGE_II_V46_DIRECT_LATENT_PROFILE_ID = "reasoning_v4_6_direct_latent_v1"
+STAGE_II_V46_DIRECT_LATENT_PROFILE_VERSION = "1.0"
+STAGE_II_DIRECT_LATENT_PROJECTION_POLICY_ID = (
+    "urbannav_stage_ii_direct_latent_projection_v1"
+)
+STAGE_II_DIRECT_LATENT_PROJECTION_POLICY_VERSION = "1.0"
 STAGE_II_V2_TRAINING_CONTRACT_ID = "stage_ii_cfm_v2"
 STAGE_II_REASONING_CONTEXT_V2_SCHEMA_VERSION = (
     "urbannav_stage_ii_reasoning_context_v2"
@@ -1245,6 +1254,156 @@ class StageIICFMTrainingViewV1(BaseModel):
         return self
 
 
+class StageIICFMDirectLatentViewV1(BaseModel):
+    """Exchange one current-V4 direct-latent Pass-T row.
+
+    This profile deliberately contains no Pass-R or Pass-D cache.  It is the
+    direct-latent baseline for measuring whether the frozen Stage-I visual and
+    language representation alone can condition the isolated trajectory
+    queries.  The metric trajectory and strong direction remain private
+    sidecars and never become prompt text.
+
+    Args:
+        schema_version: Exact direct-latent exchange schema stamp.
+        training_contract: Shared CFM-V1 math contract.
+        direct_latent_profile_id: Current-V4 cacheless profile identity.
+        direct_latent_profile_version: Exact direct-latent profile version.
+        sample_id: Unique direct-latent Stage-II row identity.
+        source_group_id: Parent source group.
+        split_group_id: Leakage-safe split group.
+        dataset_source: Dataset family.
+        modality_profile_id: Exact student-visible modality profile.
+        native_availability: Native optional-modality availability.
+        training_selection: Modalities retained by this projection.
+        modality_state: Native/dropout state for every modality.
+        instruction_training_role: Frozen instruction provenance.
+        images: Ordered model-visible media references.
+        image_roles: One semantic role per image.
+        instruction: Optional model-visible instruction.
+        model_visible_context: Additional safe visible context.
+        evidence_catalog: Prompt-visible evidence inventory.
+        input_modalities: Canonical modality flags.
+        projected_input_digest: Digest of the exact visible observation.
+        trajectory_target: Private metric CFM truth.
+        direction_context: Public action vocabulary only.
+        private_direction_supervision: Private sampler/evaluator stamp.
+        parent_stage_i_sample_id: Formal V4 FullCoT parent identity.
+        parent_source_fingerprint: Immutable parent source fingerprint.
+        parent_audit_id: Resolved action-reconciliation audit.
+        formal_training_eligible: Formal admission marker.
+        review_status: Completed human-review state.
+        loss_mask: CFM-only loss route.
+        projection_policy_id: Direct-latent projection policy identity.
+        projection_policy_version: Direct-latent projection policy version.
+        view_digest: SHA-256 over all other view fields.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[STAGE_II_DIRECT_LATENT_VIEW_SCHEMA_VERSION] = (
+        STAGE_II_DIRECT_LATENT_VIEW_SCHEMA_VERSION
+    )
+    training_contract: Literal[STAGE_II_TRAINING_CONTRACT_ID] = (
+        STAGE_II_TRAINING_CONTRACT_ID
+    )
+    direct_latent_profile_id: Literal[STAGE_II_V46_DIRECT_LATENT_PROFILE_ID] = (
+        STAGE_II_V46_DIRECT_LATENT_PROFILE_ID
+    )
+    direct_latent_profile_version: Literal[
+        STAGE_II_V46_DIRECT_LATENT_PROFILE_VERSION
+    ] = STAGE_II_V46_DIRECT_LATENT_PROFILE_VERSION
+    sample_id: str = Field(min_length=1, max_length=480)
+    source_group_id: str = Field(min_length=1, max_length=240)
+    split_group_id: str = Field(min_length=1, max_length=240)
+    dataset_source: str = Field(min_length=1, max_length=128)
+    modality_profile_id: StageIModalityProfileIdV1
+    native_availability: StageIModalityAvailabilityV1
+    training_selection: StageIModalitySelectionV1
+    modality_state: StageIModalityStateV1
+    instruction_training_role: StageIInstructionTrainingRoleV1
+    images: list[str] = Field(min_length=1, max_length=16)
+    image_roles: list[str] = Field(min_length=1, max_length=16)
+    instruction: str | None = Field(default=None, min_length=1, max_length=4096)
+    model_visible_context: dict[str, Any] = Field(default_factory=dict)
+    evidence_catalog: list[EvidenceCatalogEntryV4] = Field(min_length=1, max_length=64)
+    input_modalities: InputModalitiesV4
+    projected_input_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    trajectory_target: StageIITrajectoryTargetV1
+    direction_context: DirectionContextV4
+    private_direction_supervision: DirectionSupervisionV4
+    parent_stage_i_sample_id: str = Field(min_length=1, max_length=480)
+    parent_source_fingerprint: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    parent_audit_id: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    formal_training_eligible: Literal[True] = True
+    review_status: Literal["not_required", "resolved"]
+    loss_mask: StageIILossMaskV1 = Field(default_factory=StageIILossMaskV1)
+    projection_policy_id: Literal[STAGE_II_DIRECT_LATENT_PROJECTION_POLICY_ID] = (
+        STAGE_II_DIRECT_LATENT_PROJECTION_POLICY_ID
+    )
+    projection_policy_version: Literal[
+        STAGE_II_DIRECT_LATENT_PROJECTION_POLICY_VERSION
+    ] = STAGE_II_DIRECT_LATENT_PROJECTION_POLICY_VERSION
+    view_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+    @model_validator(mode="after")
+    def validate_view(self) -> "StageIICFMDirectLatentViewV1":
+        """Require a cacheless visible input and stable private sidecars."""
+
+        if len(self.images) != len(self.image_roles):
+            raise ValueError("Stage II direct-latent images and image_roles must align")
+        if self.image_roles.count("fpv.current") != 1:
+            raise ValueError("Stage II direct-latent requires exactly one fpv.current")
+        if len(set(self.image_roles)) != len(self.image_roles):
+            raise ValueError("Stage II direct-latent image_roles must be unique")
+        if self.sample_id != f"{self.parent_stage_i_sample_id}:stage_ii_direct_latent":
+            raise ValueError("Stage II direct-latent sample identity mismatch")
+        if (
+            self.private_direction_supervision.profile_id
+            != self.direction_context.action_profile_id
+            or self.private_direction_supervision.profile_version
+            != self.direction_context.action_profile_version
+        ):
+            raise ValueError("Stage II direct-latent private direction/profile mismatch")
+        forbidden = _find_private_prompt_keys(self.model_visible_context)
+        if forbidden:
+            raise ValueError(f"Stage II direct-latent private visible keys: {forbidden}")
+        expected_input_digest = stage_ii_projected_input_digest_v1(
+            images=self.images,
+            image_roles=self.image_roles,
+            instruction=self.instruction,
+            model_visible_context=self.model_visible_context,
+            evidence_catalog=[
+                item.model_dump(mode="json", exclude_none=True)
+                for item in self.evidence_catalog
+            ],
+            input_modalities=self.input_modalities.model_dump(mode="json"),
+        )
+        if self.projected_input_digest != expected_input_digest:
+            raise ValueError("Stage II direct-latent projected_input_digest mismatch")
+        expected = stage_ii_digest_v1(
+            self.model_dump(mode="json", exclude={"view_digest"})
+        )
+        if self.view_digest != expected:
+            raise ValueError("Stage II direct-latent view_digest mismatch")
+        return self
+
+
 class StageIICFMTrainingViewV2(BaseModel):
     """Exchange one four-second CFM row under an explicit reasoning route.
 
@@ -1612,6 +1771,40 @@ def stage_ii_digest_v1(payload: Any) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def stage_ii_projected_input_digest_v1(
+    *,
+    images: list[str],
+    image_roles: list[str],
+    instruction: str | None,
+    model_visible_context: Mapping[str, Any],
+    evidence_catalog: list[Mapping[str, Any]],
+    input_modalities: Mapping[str, Any],
+) -> str:
+    """Fingerprint the exact prompt-visible observation before any Stage II pass.
+
+    Args:
+        images: Ordered projected media references.
+        image_roles: Semantic role aligned with every image.
+        instruction: Optional model-visible instruction.
+        model_visible_context: Additional safe visible context.
+        evidence_catalog: Prompt-visible evidence inventory.
+        input_modalities: Canonical projected modality flags.
+
+    Returns:
+        Canonical SHA-256 digest shared by cache-bearing and direct-latent
+        Stage II profiles.
+    """
+
+    return stage_ii_digest_v1({
+        "images": images,
+        "image_roles": image_roles,
+        "instruction": instruction,
+        "model_visible_context": dict(model_visible_context),
+        "evidence_catalog": [dict(item) for item in evidence_catalog],
+        "input_modalities": dict(input_modalities),
+    })
+
+
 def _drop_none_values(value: Any) -> Any:
     """Remove JSON null fields recursively while preserving list order."""
 
@@ -1650,6 +1843,9 @@ def _find_private_prompt_keys(value: Any, *, path: str = "") -> list[str]:
 
 
 __all__ = [
+    "STAGE_II_DIRECT_LATENT_PROJECTION_POLICY_ID",
+    "STAGE_II_DIRECT_LATENT_PROJECTION_POLICY_VERSION",
+    "STAGE_II_DIRECT_LATENT_VIEW_SCHEMA_VERSION",
     "STAGE_II_CFM_TRAINING_VIEW_V2_SCHEMA_VERSION",
     "STAGE_II_CFM_TRAINING_VIEW_SCHEMA_VERSION",
     "STAGE_II_CONTEXT_CACHE_SCHEMA_VERSION",
@@ -1675,6 +1871,8 @@ __all__ = [
     "STAGE_II_TEMPORAL_RESAMPLING_V2_ID",
     "STAGE_II_TRAINING_CONTRACT_ID",
     "STAGE_II_V2_TRAINING_CONTRACT_ID",
+    "STAGE_II_V46_DIRECT_LATENT_PROFILE_ID",
+    "STAGE_II_V46_DIRECT_LATENT_PROFILE_VERSION",
     "STAGE_II_TRAJECTORY_SOURCE_REGISTRY_ID",
     "STAGE_II_TRAJECTORY_SOURCE_REGISTRY_SCHEMA_VERSION",
     "STAGE_II_TRAJECTORY_SOURCE_REGISTRY_VERSION",
@@ -1692,6 +1890,7 @@ __all__ = [
     "STAGE_II_MAX_SOURCE_STEP_M_V2",
     "STAGE_II_MAX_SOURCE_YAW_RATE_RAD_S_V2",
     "StageIICFMTrainingViewV1",
+    "StageIICFMDirectLatentViewV1",
     "StageIICFMTrainingViewV2",
     "StageIIContextCacheV1",
     "StageIIContextModeV2",
@@ -1716,5 +1915,6 @@ __all__ = [
     "StageIITrajectoryTargetV1",
     "StageIITrajectoryTargetV2",
     "stage_ii_digest_v1",
+    "stage_ii_projected_input_digest_v1",
     "stage_ii_pass_t_input_digest_v2",
 ]
