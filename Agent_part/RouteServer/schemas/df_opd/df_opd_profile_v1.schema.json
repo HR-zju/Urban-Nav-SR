@@ -1,0 +1,64 @@
+{
+  "additionalProperties": false,
+  "description": "Freeze one independent DF-OPD horizon/query checkpoint profile.\n\nArgs:\n    profile_id: Public, versioned profile identity.\n    target_horizon_steps: Trajectory/action target length ``T``.\n    query_count: Forced trajectory-query count ``Q``.\n    dt_sec: Time step in seconds.\n    action_dim: FLU pose dimensions, fixed to three in V1.\n    flow_solver: Deployment ODE solver identity.\n    default_flow_steps: Fixed default Euler step count.",
+  "properties": {
+    "action_dim": {
+      "const": 3,
+      "default": 3,
+      "title": "Action Dim",
+      "type": "integer"
+    },
+    "default_flow_steps": {
+      "const": 5,
+      "default": 5,
+      "title": "Default Flow Steps",
+      "type": "integer"
+    },
+    "dt_sec": {
+      "const": 0.125,
+      "default": 0.125,
+      "title": "Dt Sec",
+      "type": "number"
+    },
+    "flow_solver": {
+      "const": "euler_v1",
+      "default": "euler_v1",
+      "title": "Flow Solver",
+      "type": "string"
+    },
+    "profile_id": {
+      "enum": [
+        "df_opd_2s16_q16_v1",
+        "df_opd_4s32_q16_v1"
+      ],
+      "title": "Profile Id",
+      "type": "string"
+    },
+    "query_count": {
+      "const": 16,
+      "default": 16,
+      "title": "Query Count",
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "df_opd_profile_v1",
+      "default": "df_opd_profile_v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "target_horizon_steps": {
+      "enum": [
+        16,
+        32
+      ],
+      "title": "Target Horizon Steps",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "profile_id",
+    "target_horizon_steps"
+  ],
+  "title": "DFOPDProfileV1",
+  "type": "object"
+}

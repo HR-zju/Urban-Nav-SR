@@ -1,0 +1,38 @@
+{
+  "artifact_sha256": {
+    "df_opd_canonical_sample_v1.schema.json": "5a6604eef1ff1ca523bc697d0b5d24f06ec73414d15864461ef4562bb78ed932",
+    "df_opd_profile_v1.schema.json": "143e31850f7f035ff19c47b0826fb451a3c421d98f4323d3c804c12705b70a97"
+  },
+  "canonical_sample_schema_version": "urbannav_df_opd_canonical_sample_v1",
+  "canonical_source_sha256": "a2053559ea362d72fbeaec46dfc6a9a04f97d900ae75f9f786e91ce312b617e0",
+  "profile_schema_version": "df_opd_profile_v1",
+  "profiles": {
+    "df_opd_2s16_q16_v1": {
+      "profile": {
+        "action_dim": 3,
+        "default_flow_steps": 5,
+        "dt_sec": 0.125,
+        "flow_solver": "euler_v1",
+        "profile_id": "df_opd_2s16_q16_v1",
+        "query_count": 16,
+        "schema_version": "df_opd_profile_v1",
+        "target_horizon_steps": 16
+      },
+      "profile_digest": "bbdf354dd0a56566931f846bc65a509364323fec445f515db832602ef5863b76"
+    },
+    "df_opd_4s32_q16_v1": {
+      "profile": {
+        "action_dim": 3,
+        "default_flow_steps": 5,
+        "dt_sec": 0.125,
+        "flow_solver": "euler_v1",
+        "profile_id": "df_opd_4s32_q16_v1",
+        "query_count": 16,
+        "schema_version": "df_opd_profile_v1",
+        "target_horizon_steps": 32
+      },
+      "profile_digest": "b9fd45fbd086d29a624d54492f2cd599d4021fadb16d7b84a841811ace3a57ae"
+    }
+  },
+  "schema_version": "urbannav_df_opd_contract_artifacts_v1"
+}

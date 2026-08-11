@@ -1,0 +1,260 @@
+{
+  "$defs": {
+    "DFOPDProfileV1": {
+      "additionalProperties": false,
+      "description": "Freeze one independent DF-OPD horizon/query checkpoint profile.\n\nArgs:\n    profile_id: Public, versioned profile identity.\n    target_horizon_steps: Trajectory/action target length ``T``.\n    query_count: Forced trajectory-query count ``Q``.\n    dt_sec: Time step in seconds.\n    action_dim: FLU pose dimensions, fixed to three in V1.\n    flow_solver: Deployment ODE solver identity.\n    default_flow_steps: Fixed default Euler step count.",
+      "properties": {
+        "action_dim": {
+          "const": 3,
+          "default": 3,
+          "title": "Action Dim",
+          "type": "integer"
+        },
+        "default_flow_steps": {
+          "const": 5,
+          "default": 5,
+          "title": "Default Flow Steps",
+          "type": "integer"
+        },
+        "dt_sec": {
+          "const": 0.125,
+          "default": 0.125,
+          "title": "Dt Sec",
+          "type": "number"
+        },
+        "flow_solver": {
+          "const": "euler_v1",
+          "default": "euler_v1",
+          "title": "Flow Solver",
+          "type": "string"
+        },
+        "profile_id": {
+          "enum": [
+            "df_opd_2s16_q16_v1",
+            "df_opd_4s32_q16_v1"
+          ],
+          "title": "Profile Id",
+          "type": "string"
+        },
+        "query_count": {
+          "const": 16,
+          "default": 16,
+          "title": "Query Count",
+          "type": "integer"
+        },
+        "schema_version": {
+          "const": "df_opd_profile_v1",
+          "default": "df_opd_profile_v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "target_horizon_steps": {
+          "enum": [
+            16,
+            32
+          ],
+          "title": "Target Horizon Steps",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "profile_id",
+        "target_horizon_steps"
+      ],
+      "title": "DFOPDProfileV1",
+      "type": "object"
+    },
+    "DFOPDTeacherViewV1": {
+      "additionalProperties": false,
+      "description": "Canonical paired Teacher media, separated from Student-visible media.\n\nArgs:\n    condition: T0, TC, TS, or audit-only TO privilege condition.\n    images: Full ordered Teacher media sequence.\nimage_roles: Roles aligned one-to-one with ``images``.\ncue_class: Coarse cue category; absent only for T0.\nprivilege_policy_digest: Exact cue-rendering policy SHA-256.\ncue_artifact_sha256: SHA-256 of the rendered private cue; absent only for\n    T0 because no cue image exists in that condition.",
+      "properties": {
+        "condition": {
+          "enum": [
+            "same_input_t0",
+            "correct_privilege_tc",
+            "shuffled_privilege_ts",
+            "exact_future_oracle_to"
+          ],
+          "title": "Condition",
+          "type": "string"
+        },
+        "cue_artifact_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cue Artifact Sha256"
+        },
+        "cue_class": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cue Class"
+        },
+        "image_roles": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Image Roles",
+          "type": "array"
+        },
+        "images": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Images",
+          "type": "array"
+        },
+        "privilege_policy_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Privilege Policy Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "condition",
+        "images",
+        "image_roles",
+        "privilege_policy_digest"
+      ],
+      "title": "DFOPDTeacherViewV1",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "One immutable canonical DF-OPD sample before physical training export.\n\nArgs:\n    sample_id: Stable canonical sample identity.\n    source_group_id: Leakage-control group identity.\n    split_group_id: Frozen train/eval split identity.\n    dataset_source: Dataset family.\n    profile: Target/checkpoint profile.\n    images: Student-visible media only.\n    image_roles: Roles paired with Student media.\n    decision_target: Canonical GT Decision retained for replay only.\n    trajectory_ego_t: Metric FLU cumulative future pose target.\n    action_mask: Valid prefix mask for target points.\n    teacher_views: All four T0/TC/TS/TO Teacher media views, keyed by\n        their explicit condition and kept separate from Student media.\n    canonical_digest: SHA-256 over every other field.",
+  "properties": {
+    "action_mask": {
+      "items": {
+        "type": "boolean"
+      },
+      "maxItems": 32,
+      "minItems": 16,
+      "title": "Action Mask",
+      "type": "array"
+    },
+    "canonical_digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Canonical Digest",
+      "type": "string"
+    },
+    "dataset_source": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Dataset Source",
+      "type": "string"
+    },
+    "decision_target": {
+      "maxLength": 2000,
+      "minLength": 1,
+      "title": "Decision Target",
+      "type": "string"
+    },
+    "image_roles": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Image Roles",
+      "type": "array"
+    },
+    "images": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Images",
+      "type": "array"
+    },
+    "profile": {
+      "$ref": "#/$defs/DFOPDProfileV1"
+    },
+    "sample_id": {
+      "maxLength": 480,
+      "minLength": 1,
+      "title": "Sample Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "urbannav_df_opd_canonical_sample_v1",
+      "default": "urbannav_df_opd_canonical_sample_v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_group_id": {
+      "maxLength": 240,
+      "minLength": 1,
+      "title": "Source Group Id",
+      "type": "string"
+    },
+    "split_group_id": {
+      "maxLength": 240,
+      "minLength": 1,
+      "title": "Split Group Id",
+      "type": "string"
+    },
+    "teacher_views": {
+      "items": {
+        "$ref": "#/$defs/DFOPDTeacherViewV1"
+      },
+      "maxItems": 4,
+      "minItems": 4,
+      "title": "Teacher Views",
+      "type": "array"
+    },
+    "trajectory_ego_t": {
+      "items": {
+        "maxItems": 3,
+        "minItems": 3,
+        "prefixItems": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "number"
+          }
+        ],
+        "type": "array"
+      },
+      "maxItems": 32,
+      "minItems": 16,
+      "title": "Trajectory Ego T",
+      "type": "array"
+    }
+  },
+  "required": [
+    "sample_id",
+    "source_group_id",
+    "split_group_id",
+    "dataset_source",
+    "profile",
+    "images",
+    "image_roles",
+    "decision_target",
+    "trajectory_ego_t",
+    "action_mask",
+    "teacher_views",
+    "canonical_digest"
+  ],
+  "title": "DFOPDCanonicalSampleV1",
+  "type": "object"
+}
