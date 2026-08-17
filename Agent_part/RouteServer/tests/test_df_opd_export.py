@@ -465,7 +465,16 @@ def test_teacher_evaluation_export_allows_ts_to_and_omits_replay_targets(tmp_pat
     write_jsonl_atomic(canonical_path, [sample.model_dump(mode="json")])
     write_jsonl_atomic(
         messages_path,
-        [{"sample_id": sample.sample_id, "messages": [{"role": "user", "content": "go"}]}],
+        [{
+            "sample_id": sample.sample_id,
+            "messages": [{
+                "role": "system",
+                "content": "source system",
+            }, {
+                "role": "user",
+                "content": "<TASK_TRAJECTORY_CFM_DIRECT_LATENT> go [TRAJ_0] [TRAJ_15]",
+            }],
+        }],
     )
 
     report = build_df_opd_teacher_eval_manifest_v1(
@@ -482,6 +491,9 @@ def test_teacher_evaluation_export_allows_ts_to_and_omits_replay_targets(tmp_pat
     assert row["image_roles"][-1] == DF_OPD_ORACLE_CUE_ROLE
     assert row["private_artifact"] is True
     assert row["df_opd_evaluation_only"] is True
+    assert "[TRAJ_" not in json.dumps(row["messages"], ensure_ascii=False)
+    assert "<Decision>" in row["messages"][0]["content"]
+    assert row["messages"][1]["content"].startswith("<TASK_DECISION>")
     assert all(key not in row for key in ("decision_target", "trajectory_ego_t", "action_mask"))
     assert report["private_artifact"] is True
     assert report["evaluation_only"] is True

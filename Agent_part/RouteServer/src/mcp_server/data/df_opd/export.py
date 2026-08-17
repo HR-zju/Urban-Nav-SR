@@ -420,6 +420,11 @@ def build_df_opd_teacher_eval_manifest_v1(
             messages = messages_by_sample_id.pop(sample.sample_id)
         except KeyError as exc:
             raise ValueError(f"missing Student messages for canonical sample {sample.sample_id!r}") from exc
+        # Teacher evaluation follows the same Decision -> trajectory path as
+        # D-to-T.  Frozen Stage-II source rows may carry their training query
+        # suffix; compile a Decision-visible prompt before inference, which
+        # appends isolated ``[TRAJ_i]`` queries after the Decision cache.
+        messages = build_df_opd_dtot_student_messages(messages)
         _verify_private_cue_artifact(sample, cue_root, teacher_condition)
         row = sample.to_teacher_evaluation_physical_row(
             messages=messages,
