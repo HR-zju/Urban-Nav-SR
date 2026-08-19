@@ -492,6 +492,20 @@ CFM condition-mode metric 和 checkpoint sidecar。CFM loss 在 valid trajectory
 3. 再把 System 1 的 `hybrid` memory 变体接入每个控制 tick 的新视觉特征，检验快速视觉纠偏；
 4. 最后才进入实物 replay、独立 safety supervisor 与有限速度的 closed-loop 验证。
 
+### 7.5 Cached trajectory-query 双频扩展
+
+双频扩展不新增独立语义查询或语义 projector，而是复用已有 `[TRAJ_i]` hidden states。其
+canonical mode 为 `cached_traj_query_v1`，由 `StageIICachedTrajQueryBindingV1` 绑定 query
+观测时间、action 观测时间、query age 和 modality profile。训练 pair 另由
+`StageIICachedTrajQueryObservationV1` 与 `StageIICachedTrajQueryTrainingViewV1` 表达：query
+observation 只含模型可见输入，action view 才含轨迹 target；两者必须来自同一 source/split，且
+query 时间不能晚于 action 时间。
+
+`traj_query_only` 仍是旧 checkpoint 和旧 manifest 的默认路径。cached contract 只证明输入、
+时间和条件接口闭合，不证明已有权重已经学会使用 fast visual memory；在真实 paired batch、
+checkpoint 训练和 shuffle ablation 完成前，不得把它描述成已验收的 direction-conditioned
+部署能力。
+
 当前 V1 虽有 `traj_query_only` prompt 和 System1 condition 的基础设施，但 prompt builder 仍固定
 要求 accepted R/D context，且 V1 使用 2 秒/16 步 target。它不能作为已完成的 no-CoT 4 秒双系统
 实现，也不能直接加载 V2.1 sidecar。

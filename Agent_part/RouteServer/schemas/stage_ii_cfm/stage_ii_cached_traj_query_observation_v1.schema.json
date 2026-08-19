@@ -1,0 +1,343 @@
+{
+  "$defs": {
+    "BevRouteEvidenceV4": {
+      "additionalProperties": false,
+      "description": "Describe presentation properties of one prompt-visible BEV.\n\nThese fields are retained at the reusable observation boundary for VQA V2\ncompatibility.  Reasoning V4.6 never treats them as route-progress,\ntraversability, clearance, or collision-safety supervision.\n\nArgs:\n    frame: Declared BEV presentation frame.\n    ego_forward: Display direction corresponding to ego forward.\n    route_overlay_visible: Whether a route overlay is rendered.\n    route_direction_authority: Whether clear orientation may support a\n        visible task direction.\n    route_progress_authority: Legacy observation metadata ignored by\n        Reasoning V4.6.\n    route_terminal_marker_visible: Legacy presentation metadata ignored by\n        Reasoning V4.6.\n    route_endpoint_semantics: Legacy endpoint provenance ignored by\n        Reasoning V4.6.\n    local_safety_authority: Always false in Stage-A.\n    producer_contract_id: Versioned upstream producer identity.\n    producer_contract_version: Exact upstream producer version.",
+      "properties": {
+        "ego_forward": {
+          "default": "unknown",
+          "enum": [
+            "up",
+            "right",
+            "down",
+            "left",
+            "unknown"
+          ],
+          "title": "Ego Forward",
+          "type": "string"
+        },
+        "frame": {
+          "default": "unknown",
+          "enum": [
+            "ego",
+            "north_up",
+            "unknown"
+          ],
+          "title": "Frame",
+          "type": "string"
+        },
+        "local_safety_authority": {
+          "const": false,
+          "default": false,
+          "title": "Local Safety Authority",
+          "type": "boolean"
+        },
+        "producer_contract_id": {
+          "default": "unknown",
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Producer Contract Id",
+          "type": "string"
+        },
+        "producer_contract_version": {
+          "default": "unknown",
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Producer Contract Version",
+          "type": "string"
+        },
+        "route_direction_authority": {
+          "default": "none",
+          "enum": [
+            "none",
+            "visual_conditional"
+          ],
+          "title": "Route Direction Authority",
+          "type": "string"
+        },
+        "route_endpoint_semantics": {
+          "default": "unknown",
+          "enum": [
+            "planned_navigation_goal",
+            "recorded_clip_endpoint",
+            "crop_boundary",
+            "unknown"
+          ],
+          "title": "Route Endpoint Semantics",
+          "type": "string"
+        },
+        "route_overlay_visible": {
+          "default": false,
+          "title": "Route Overlay Visible",
+          "type": "boolean"
+        },
+        "route_progress_authority": {
+          "default": "none",
+          "enum": [
+            "none",
+            "visual_conditional"
+          ],
+          "title": "Route Progress Authority",
+          "type": "string"
+        },
+        "route_terminal_marker_visible": {
+          "default": false,
+          "title": "Route Terminal Marker Visible",
+          "type": "boolean"
+        }
+      },
+      "title": "BevRouteEvidenceV4",
+      "type": "object"
+    },
+    "EvidenceCatalogEntryV4": {
+      "additionalProperties": false,
+      "description": "Describe one prompt-visible raw input item.\n\nArgs:\n    ref: Stable input-envelope reference.\n    modality: Input modality.\n    summary: Optional prompt-visible summary.\n    attributes: Prompt-visible producer metadata.\n    bev_route_evidence: Optional BEV presentation declaration.",
+      "properties": {
+        "attributes": {
+          "additionalProperties": true,
+          "title": "Attributes",
+          "type": "object"
+        },
+        "bev_route_evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BevRouteEvidenceV4"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "modality": {
+          "enum": [
+            "instruction",
+            "fpv",
+            "bev",
+            "goal",
+            "goal_image",
+            "pixel_goal",
+            "waypoint"
+          ],
+          "title": "Modality",
+          "type": "string"
+        },
+        "ref": {
+          "maxLength": 160,
+          "minLength": 5,
+          "pattern": "^(instruction|fpv|bev|goal|waypoint)\\.[a-z0-9_]+$",
+          "title": "Ref",
+          "type": "string"
+        },
+        "summary": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Summary"
+        }
+      },
+      "required": [
+        "ref",
+        "modality"
+      ],
+      "title": "EvidenceCatalogEntryV4",
+      "type": "object"
+    },
+    "InputModalitiesV4": {
+      "additionalProperties": false,
+      "description": "Record which Stage-A inputs are present.\n\nArgs:\n    fpv: Current FPV is mandatory.\n    history_fpv: One or more history FPV images are input only.\n    instruction: An instruction is visible.\n    bev: A BEV image is visible.\n    goal_image: A goal image is visible.\n    pixel_goal: A pixel goal is visible.\n    waypoint: A waypoint is visible.",
+      "properties": {
+        "bev": {
+          "default": false,
+          "title": "Bev",
+          "type": "boolean"
+        },
+        "fpv": {
+          "const": true,
+          "default": true,
+          "title": "Fpv",
+          "type": "boolean"
+        },
+        "goal_image": {
+          "default": false,
+          "title": "Goal Image",
+          "type": "boolean"
+        },
+        "history_fpv": {
+          "default": false,
+          "title": "History Fpv",
+          "type": "boolean"
+        },
+        "instruction": {
+          "default": false,
+          "title": "Instruction",
+          "type": "boolean"
+        },
+        "pixel_goal": {
+          "default": false,
+          "title": "Pixel Goal",
+          "type": "boolean"
+        },
+        "waypoint": {
+          "default": false,
+          "title": "Waypoint",
+          "type": "boolean"
+        }
+      },
+      "title": "InputModalitiesV4",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Model-visible observation used to produce one cached query state.\n\nThis record intentionally contains no trajectory target or private action\nsupervision. It is paired with a later action view by the training-view\ncontract below.",
+  "properties": {
+    "bev_timestamp_sec": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Bev Timestamp Sec"
+    },
+    "dataset_source": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Dataset Source",
+      "type": "string"
+    },
+    "evidence_catalog": {
+      "items": {
+        "$ref": "#/$defs/EvidenceCatalogEntryV4"
+      },
+      "maxItems": 64,
+      "minItems": 1,
+      "title": "Evidence Catalog",
+      "type": "array"
+    },
+    "frame_timestamps_sec": {
+      "items": {
+        "type": "number"
+      },
+      "maxItems": 16,
+      "minItems": 1,
+      "title": "Frame Timestamps Sec",
+      "type": "array"
+    },
+    "image_roles": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 16,
+      "minItems": 1,
+      "title": "Image Roles",
+      "type": "array"
+    },
+    "images": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 16,
+      "minItems": 1,
+      "title": "Images",
+      "type": "array"
+    },
+    "input_modalities": {
+      "$ref": "#/$defs/InputModalitiesV4"
+    },
+    "instruction": {
+      "anyOf": [
+        {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Instruction"
+    },
+    "modality_profile_id": {
+      "enum": [
+        "fpv_current_v1",
+        "fpv_temporal_v1",
+        "fpv_instruction_v1",
+        "fpv_bev_v1",
+        "fpv_instruction_bev_v1",
+        "fpv_temporal_instruction_v1",
+        "fpv_temporal_bev_v1",
+        "fpv_temporal_instruction_bev_v1"
+      ],
+      "title": "Modality Profile Id",
+      "type": "string"
+    },
+    "model_visible_context": {
+      "additionalProperties": true,
+      "title": "Model Visible Context",
+      "type": "object"
+    },
+    "observation_timestamp_sec": {
+      "title": "Observation Timestamp Sec",
+      "type": "number"
+    },
+    "sample_id": {
+      "maxLength": 480,
+      "minLength": 1,
+      "title": "Sample Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "urbannav_stage_ii_cached_traj_query_observation_v1",
+      "default": "urbannav_stage_ii_cached_traj_query_observation_v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_group_id": {
+      "maxLength": 240,
+      "minLength": 1,
+      "title": "Source Group Id",
+      "type": "string"
+    },
+    "split_group_id": {
+      "maxLength": 240,
+      "minLength": 1,
+      "title": "Split Group Id",
+      "type": "string"
+    },
+    "view_digest": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "View Digest",
+      "type": "string"
+    }
+  },
+  "required": [
+    "sample_id",
+    "source_group_id",
+    "split_group_id",
+    "dataset_source",
+    "modality_profile_id",
+    "images",
+    "image_roles",
+    "evidence_catalog",
+    "input_modalities",
+    "frame_timestamps_sec",
+    "observation_timestamp_sec",
+    "view_digest"
+  ],
+  "title": "StageIICachedTrajQueryObservationV1",
+  "type": "object"
+}

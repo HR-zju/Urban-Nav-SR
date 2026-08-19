@@ -313,6 +313,52 @@
       "title": "InputModalitiesV4",
       "type": "object"
     },
+    "StageIICachedTrajQueryBindingV1": {
+      "additionalProperties": false,
+      "description": "Bind an existing ``[TRAJ_i]`` cache to a later action observation.\n\nThis is a timing contract only.  The query tensor and fast visual memory\nremain ms-swift runtime tensors; no new semantic token is introduced.",
+      "properties": {
+        "action_observation_timestamp_sec": {
+          "title": "Action Observation Timestamp Sec",
+          "type": "number"
+        },
+        "condition_mode": {
+          "const": "cached_traj_query_v1",
+          "default": "cached_traj_query_v1",
+          "title": "Condition Mode",
+          "type": "string"
+        },
+        "modality_profile_id": {
+          "enum": [
+            "fpv_current_v1",
+            "fpv_temporal_v1",
+            "fpv_instruction_v1",
+            "fpv_bev_v1",
+            "fpv_instruction_bev_v1",
+            "fpv_temporal_instruction_v1",
+            "fpv_temporal_bev_v1",
+            "fpv_temporal_instruction_bev_v1"
+          ],
+          "title": "Modality Profile Id",
+          "type": "string"
+        },
+        "query_age_sec": {
+          "title": "Query Age Sec",
+          "type": "number"
+        },
+        "query_source_timestamp_sec": {
+          "title": "Query Source Timestamp Sec",
+          "type": "number"
+        }
+      },
+      "required": [
+        "query_source_timestamp_sec",
+        "action_observation_timestamp_sec",
+        "query_age_sec",
+        "modality_profile_id"
+      ],
+      "title": "StageIICachedTrajQueryBindingV1",
+      "type": "object"
+    },
     "StageIIContextCacheV1": {
       "additionalProperties": false,
       "description": "Store one strict Pass-R or Pass-D result for an exact input projection.\n\nArgs:\n    schema_version: Exact cache schema stamp.\n    cache_id: Stable context-kind-specific cache identity.\n    sample_id: Parent Stage I FullCoT sample identity.\n    source_group_id: Parent source group.\n    split_group_id: Leakage-safe split group.\n    dataset_source: Dataset family.\n    modality_profile_id: Exact projected modality combination.\n    parent_source_fingerprint: Immutable parent source digest.\n    projected_input_digest: Digest of every model-visible input.\n    context_kind: Independent reasoning-grounding or Decision pass.\n    section_names: Exact canonical section sequence.\n    producer: Frozen model/prompt/parser/generation identity.\n    raw_generation: Original output retained for audit only.\n    canonical_text: Strict parsed text exposed to Pass T.\n    parse_status: Accepted or rejected parser state.\n    errors: Bounded parser error codes.\n    cache_digest: SHA-256 over all other cache fields.",
@@ -1225,6 +1271,17 @@
   "additionalProperties": false,
   "description": "Exchange one four-second CFM row under an explicit reasoning route.\n\nV2 keeps the observation and accepted standalone Decision visible on both\nroutes.  The reasoning field is a discriminated union: either an accepted\nPass-R cache or a cryptographically linked Stage I dropout absence.  Query\ncount is deliberately not part of this data view because ms-swift owns the\nindependent ``Q`` profile while the target remains fixed at ``T=32``.",
   "properties": {
+    "cached_traj_query": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StageIICachedTrajQueryBindingV1"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "context_mode": {
       "enum": [
         "reasoning_plus_decision",
@@ -1454,8 +1511,11 @@
       "type": "string"
     },
     "system1_condition_mode": {
-      "const": "traj_query_only",
       "default": "traj_query_only",
+      "enum": [
+        "traj_query_only",
+        "cached_traj_query_v1"
+      ],
       "title": "System1 Condition Mode",
       "type": "string"
     },

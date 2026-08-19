@@ -11,6 +11,8 @@ from typing import Any, Sequence
 
 from mcp_server.contracts.stage_ii_cfm import (
     STAGE_II_CFM_TRAINING_VIEW_V2_SCHEMA_VERSION,
+    STAGE_II_CACHED_TRAJ_QUERY_OBSERVATION_SCHEMA_VERSION,
+    STAGE_II_CACHED_TRAJ_QUERY_TRAINING_VIEW_SCHEMA_VERSION,
     STAGE_II_CFM_TRAINING_VIEW_SCHEMA_VERSION,
     STAGE_II_CONTEXT_CACHE_SCHEMA_VERSION,
     STAGE_II_DIRECT_LATENT_VIEW_SCHEMA_VERSION,
@@ -36,6 +38,8 @@ from mcp_server.contracts.stage_ii_cfm import (
     STAGE_II_TRAJECTORY_TARGET_V2_SCHEMA_VERSION,
     StageIICFMTrainingViewV1,
     StageIICFMTrainingViewV2,
+    StageIICachedTrajQueryObservationV1,
+    StageIICachedTrajQueryTrainingViewV1,
     StageIICFMDirectLatentViewV1,
     StageIIContextCacheV1,
     StageIILegacyDirectTargetV1,
@@ -63,6 +67,8 @@ ARTIFACT_FILENAMES = (
     "stage_ii_legacy_direct_target_v1.schema.json",
     "stage_ii_cfm_training_view_v1.schema.json",
     "stage_ii_cfm_training_view_v2.schema.json",
+    "stage_ii_cached_traj_query_observation_v1.schema.json",
+    "stage_ii_cached_traj_query_training_view_v1.schema.json",
     "stage_ii_direct_latent_view_v1.schema.json",
     "stage_ii_projection_drop_v1.schema.json",
     "stage_ii_projection_drop_v2.schema.json",
@@ -91,6 +97,12 @@ def build_stage_ii_cfm_contract_artifacts() -> dict[str, Any]:
         ),
         "stage_ii_cfm_training_view_v1.schema.json": StageIICFMTrainingViewV1.model_json_schema(),
         "stage_ii_cfm_training_view_v2.schema.json": StageIICFMTrainingViewV2.model_json_schema(),
+        "stage_ii_cached_traj_query_observation_v1.schema.json": (
+            StageIICachedTrajQueryObservationV1.model_json_schema()
+        ),
+        "stage_ii_cached_traj_query_training_view_v1.schema.json": (
+            StageIICachedTrajQueryTrainingViewV1.model_json_schema()
+        ),
         "stage_ii_direct_latent_view_v1.schema.json": (
             StageIICFMDirectLatentViewV1.model_json_schema()
         ),
@@ -119,6 +131,12 @@ def build_stage_ii_cfm_contract_artifacts() -> dict[str, Any]:
         "training_view_schema_version": STAGE_II_CFM_TRAINING_VIEW_SCHEMA_VERSION,
         "training_view_v2_schema_version": (
             STAGE_II_CFM_TRAINING_VIEW_V2_SCHEMA_VERSION
+        ),
+        "cached_traj_query_observation_schema_version": (
+            STAGE_II_CACHED_TRAJ_QUERY_OBSERVATION_SCHEMA_VERSION
+        ),
+        "cached_traj_query_training_view_schema_version": (
+            STAGE_II_CACHED_TRAJ_QUERY_TRAINING_VIEW_SCHEMA_VERSION
         ),
         "direct_latent_view_schema_version": STAGE_II_DIRECT_LATENT_VIEW_SCHEMA_VERSION,
         "projection_drop_v2_schema_version": STAGE_II_PROJECTION_DROP_V2_SCHEMA_VERSION,

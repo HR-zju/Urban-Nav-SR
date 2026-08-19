@@ -1,7 +1,9 @@
 {
   "artifact_sha256": {
+    "stage_ii_cached_traj_query_observation_v1.schema.json": "267bf83ddf7939cf06b17bd39605f278b67c9f4314f2500d9b326782e1c8708e",
+    "stage_ii_cached_traj_query_training_view_v1.schema.json": "0474f75114e36977f85514075468936fb713787a62d74c675527f6d67cd39774",
     "stage_ii_cfm_training_view_v1.schema.json": "bf661841c35ac13f7c64a52695d2067c2d03e61e02403a5325289e74a7ba2676",
-    "stage_ii_cfm_training_view_v2.schema.json": "ae634a6970858aeeae84c144eb2d3dd740ab1eef61b2d4c53a3f9123a3e3985a",
+    "stage_ii_cfm_training_view_v2.schema.json": "5ee3c7047e0210b72cc2fd538c45bbbd4b49e3c35647e193a1b974252799f14f",
     "stage_ii_context_cache_v1.schema.json": "28c34e111ed8aa783f00bcb790772bff6cfa86da53846fecbf982f64058bbe75",
     "stage_ii_direct_latent_view_v1.schema.json": "450be14713955a39213154908e038c0b7ca033230153545c79350e46f777afae",
     "stage_ii_legacy_direct_target_v1.schema.json": "fc79c6f9146b53034bdcf5a5b58e1765b4f474a1122b2994c72a66e43d343610",
@@ -15,8 +17,10 @@
     "stage_ii_trajectory_target_v1.schema.json": "627296b87443477211647f8f83f8c0d57e9fd1ca60698fefe32b050decafc3c9",
     "stage_ii_trajectory_target_v2.schema.json": "5e8f45a6bc700719c8ff7d93310aa969682317d391b2bb2190c3a72c424f8a0e"
   },
+  "cached_traj_query_observation_schema_version": "urbannav_stage_ii_cached_traj_query_observation_v1",
+  "cached_traj_query_training_view_schema_version": "urbannav_stage_ii_cached_traj_query_training_view_v1",
   "canonical_source_sha256": {
-    "src/mcp_server/contracts/stage_ii_cfm.py": "c0cf14094a84ea059514c3ee695171afcda4706464a7721e6cb9ff8bd96434b2",
+    "src/mcp_server/contracts/stage_ii_cfm.py": "b2d505a48a79d2df8488c2bd05e75ece76ea35e4a1314d1600de9fb7f6a4ad10",
     "src/mcp_server/data/stage_ii_context.py": "e98fd4fa7c0b0276c3e03e800b1141ec10fa6522e9c6223d0c14cd9416768de0",
     "src/mcp_server/data/stage_ii_legacy_direct.py": "46cc9c6c2bc256bff0aad87f7067528c7df56430dd042b6192b6c21d7b368aec",
     "src/mcp_server/data/stage_ii_raw_trajectory_v2.py": "a18bee709cac3766db3982282c03c14a22c2d3668fa601f860efc0f9120ad61b",
