@@ -1,0 +1,89 @@
+{
+  "additionalProperties": false,
+  "description": "Bind a target-free slow observation to a later action observation.\n\nThe two observations may use different modality profiles and different\nphysical source groups.  The binding carries only the causal timing and\nstable-condition identity; it never contains a trajectory target.",
+  "properties": {
+    "action_modality_profile_id": {
+      "enum": [
+        "fpv_current_v1",
+        "fpv_temporal_v1",
+        "fpv_instruction_v1",
+        "fpv_bev_v1",
+        "fpv_instruction_bev_v1",
+        "fpv_temporal_instruction_v1",
+        "fpv_temporal_bev_v1",
+        "fpv_temporal_instruction_bev_v1"
+      ],
+      "title": "Action Modality Profile Id",
+      "type": "string"
+    },
+    "action_observation_timestamp_sec": {
+      "title": "Action Observation Timestamp Sec",
+      "type": "number"
+    },
+    "action_source_group_id": {
+      "maxLength": 240,
+      "minLength": 1,
+      "title": "Action Source Group Id",
+      "type": "string"
+    },
+    "condition_digest": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Condition Digest",
+      "type": "string"
+    },
+    "condition_mode": {
+      "const": "cached_traj_query_v2",
+      "default": "cached_traj_query_v2",
+      "title": "Condition Mode",
+      "type": "string"
+    },
+    "query_age_sec": {
+      "title": "Query Age Sec",
+      "type": "number"
+    },
+    "query_modality_profile_id": {
+      "enum": [
+        "fpv_current_v1",
+        "fpv_temporal_v1",
+        "fpv_instruction_v1",
+        "fpv_bev_v1",
+        "fpv_instruction_bev_v1",
+        "fpv_temporal_instruction_v1",
+        "fpv_temporal_bev_v1",
+        "fpv_temporal_instruction_bev_v1"
+      ],
+      "title": "Query Modality Profile Id",
+      "type": "string"
+    },
+    "query_source_group_id": {
+      "maxLength": 240,
+      "minLength": 1,
+      "title": "Query Source Group Id",
+      "type": "string"
+    },
+    "query_source_timestamp_sec": {
+      "title": "Query Source Timestamp Sec",
+      "type": "number"
+    },
+    "schema_version": {
+      "const": "urbannav_stage_ii_cached_traj_query_binding_v2",
+      "default": "urbannav_stage_ii_cached_traj_query_binding_v2",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "query_source_timestamp_sec",
+    "action_observation_timestamp_sec",
+    "query_age_sec",
+    "query_source_group_id",
+    "action_source_group_id",
+    "query_modality_profile_id",
+    "action_modality_profile_id",
+    "condition_digest"
+  ],
+  "title": "StageIICachedTrajQueryBindingV2",
+  "type": "object"
+}

@@ -69,6 +69,16 @@ STAGE_II_CACHED_TRAJ_QUERY_OBSERVATION_SCHEMA_VERSION = (
 STAGE_II_CACHED_TRAJ_QUERY_TRAINING_VIEW_SCHEMA_VERSION = (
     "urbannav_stage_ii_cached_traj_query_training_view_v1"
 )
+STAGE_II_CACHED_TRAJ_QUERY_CONDITION_MODE_V2 = "cached_traj_query_v2"
+STAGE_II_CACHED_TRAJ_QUERY_BINDING_V2_SCHEMA_VERSION = (
+    "urbannav_stage_ii_cached_traj_query_binding_v2"
+)
+STAGE_II_CACHED_TRAJ_QUERY_TRAINING_VIEW_V2_SCHEMA_VERSION = (
+    "urbannav_stage_ii_cached_traj_query_training_view_v2"
+)
+STAGE_II_CACHED_TRAJ_QUERY_SOURCE_VIEW_V2_SCHEMA_VERSION = (
+    "urbannav_stage_ii_cached_traj_query_source_view_v2"
+)
 STAGE_II_REASONING_CONTEXT_V2_SCHEMA_VERSION = (
     "urbannav_stage_ii_reasoning_context_v2"
 )
@@ -1719,13 +1729,23 @@ class StageIICachedTrajQueryObservationV1(BaseModel):
             values.append(self.bev_timestamp_sec)
         if any(not math.isfinite(float(value)) for value in values):
             raise ValueError("cached query observation timestamps must be finite")
-        if any(
-            left > right
-            for left, right in zip(
-                self.frame_timestamps_sec, self.frame_timestamps_sec[1:]
-            )
-        ):
-            raise ValueError("cached query observation frame timestamps must be ordered")
+        fpv_timestamps = [
+            timestamp
+            for role, timestamp in zip(self.image_roles, self.frame_timestamps_sec)
+            if role.startswith("fpv.")
+        ]
+        if any(left > right for left, right in zip(fpv_timestamps, fpv_timestamps[1:])):
+            raise ValueError("cached query observation FPV timestamps must be ordered")
+        bev_indices = [
+            index for index, role in enumerate(self.image_roles) if role == "bev.current"
+        ]
+        if bev_indices:
+            if self.bev_timestamp_sec is None:
+                raise ValueError("cached query observation bev.current requires bev_timestamp_sec")
+            if abs(self.frame_timestamps_sec[bev_indices[0]] - self.bev_timestamp_sec) > 1e-6:
+                raise ValueError("cached query observation BEV timestamp does not match its media slot")
+        elif self.bev_timestamp_sec is not None:
+            raise ValueError("cached query observation bev_timestamp_sec requires bev.current")
         if any(value > self.observation_timestamp_sec + 1e-6 for value in self.frame_timestamps_sec):
             raise ValueError("cached query observation cannot contain future FPV frames")
         if (
@@ -1772,13 +1792,15 @@ class StageIICachedTrajQueryTrainingViewV1(BaseModel):
         if target_view.system1_condition_mode != "traj_query_only":
             raise ValueError("cached pair action_view must start from traj_query_only V2 view")
         identities = (
-            query.source_group_id == action.source_group_id == target_view.source_group_id,
+            action.source_group_id == target_view.source_group_id,
             query.split_group_id == action.split_group_id == target_view.split_group_id,
             query.dataset_source == action.dataset_source == target_view.dataset_source,
             query.modality_profile_id == action.modality_profile_id == target_view.modality_profile_id,
             action.images == target_view.images,
-            action.image_roles == target_view.image_roles,
-            action.instruction == target_view.instruction,
+            query.image_roles == action.image_roles == target_view.image_roles,
+            query.instruction == action.instruction == target_view.instruction,
+            query.model_visible_context == action.model_visible_context == target_view.model_visible_context,
+            query.input_modalities == action.input_modalities == target_view.input_modalities,
         )
         if not all(identities):
             raise ValueError("cached pair source/action identity or visible inputs disagree")
@@ -1798,6 +1820,186 @@ class StageIICachedTrajQueryTrainingViewV1(BaseModel):
         )
         if self.view_digest != expected:
             raise ValueError("cached pair view_digest mismatch")
+        return self
+
+
+class StageIICachedTrajQueryBindingV2(BaseModel):
+    """Bind a target-free slow observation to a later action observation.
+
+    The two observations may use different modality profiles and different
+    physical source groups.  The binding carries only the causal timing and
+    stable-condition identity; it never contains a trajectory target.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[STAGE_II_CACHED_TRAJ_QUERY_BINDING_V2_SCHEMA_VERSION] = (
+        STAGE_II_CACHED_TRAJ_QUERY_BINDING_V2_SCHEMA_VERSION
+    )
+    condition_mode: Literal[STAGE_II_CACHED_TRAJ_QUERY_CONDITION_MODE_V2] = (
+        STAGE_II_CACHED_TRAJ_QUERY_CONDITION_MODE_V2
+    )
+    query_source_timestamp_sec: float
+    action_observation_timestamp_sec: float
+    query_age_sec: float
+    query_source_group_id: str = Field(min_length=1, max_length=240)
+    action_source_group_id: str = Field(min_length=1, max_length=240)
+    query_modality_profile_id: StageIModalityProfileIdV1
+    action_modality_profile_id: StageIModalityProfileIdV1
+    condition_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+    @model_validator(mode="after")
+    def validate_causal_binding(self) -> "StageIICachedTrajQueryBindingV2":
+        """Require causal timestamps and an internally consistent query age."""
+
+        values = (
+            self.query_source_timestamp_sec,
+            self.action_observation_timestamp_sec,
+            self.query_age_sec,
+        )
+        if any(not math.isfinite(float(value)) for value in values):
+            raise ValueError("cached trajectory-query V2 timestamps must be finite")
+        if self.query_source_timestamp_sec > self.action_observation_timestamp_sec:
+            raise ValueError("cached trajectory-query V2 cannot come from the future")
+        expected_age = (
+            self.action_observation_timestamp_sec
+            - self.query_source_timestamp_sec
+        )
+        if abs(self.query_age_sec - expected_age) > 1e-4:
+            raise ValueError("cached trajectory-query V2 age does not match timestamps")
+        if self.query_age_sec < 0.0:
+            raise ValueError("cached trajectory-query V2 age must be non-negative")
+        return self
+
+
+class StageIICachedTrajQueryTrainingViewV2(BaseModel):
+    """Pair target-free query input with current action input and a 4s/32 target.
+
+    This view deliberately bypasses Pass-R and Pass-D.  Those caches belong to
+    the legacy explicit-text reasoning route; the V2 action condition is built
+    from the query hidden states and current visual memory in ms-swift.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[STAGE_II_CACHED_TRAJ_QUERY_TRAINING_VIEW_V2_SCHEMA_VERSION] = (
+        STAGE_II_CACHED_TRAJ_QUERY_TRAINING_VIEW_V2_SCHEMA_VERSION
+    )
+    training_contract: Literal[STAGE_II_V2_TRAINING_CONTRACT_ID] = (
+        STAGE_II_V2_TRAINING_CONTRACT_ID
+    )
+    condition_mode: Literal[STAGE_II_CACHED_TRAJ_QUERY_CONDITION_MODE_V2] = (
+        STAGE_II_CACHED_TRAJ_QUERY_CONDITION_MODE_V2
+    )
+    sample_id: str = Field(min_length=1, max_length=560)
+    source_group_id: str = Field(min_length=1, max_length=240)
+    split_group_id: str = Field(min_length=1, max_length=240)
+    dataset_source: str = Field(min_length=1, max_length=128)
+    query_source: StageIICachedTrajQueryObservationV1
+    action_observation: StageIICachedTrajQueryObservationV1
+    temporal_binding: StageIICachedTrajQueryBindingV2
+    trajectory_target: StageIITrajectoryTargetV2
+    provenance: dict[str, Any] = Field(default_factory=dict)
+    formal_training_eligible: Literal[True] = True
+    loss_mask: StageIILossMaskV1 = Field(default_factory=StageIILossMaskV1)
+    view_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+    @model_validator(mode="after")
+    def validate_training_view(self) -> "StageIICachedTrajQueryTrainingViewV2":
+        """Close pair identity, target isolation, timing and digest invariants."""
+
+        query = self.query_source
+        action = self.action_observation
+        binding = self.temporal_binding
+        if query.split_group_id != self.split_group_id or action.split_group_id != self.split_group_id:
+            raise ValueError("cached trajectory-query V2 split identity mismatch")
+        if query.dataset_source != self.dataset_source or action.dataset_source != self.dataset_source:
+            raise ValueError("cached trajectory-query V2 dataset identity mismatch")
+        if action.source_group_id != self.source_group_id:
+            raise ValueError("cached trajectory-query V2 action source identity mismatch")
+        if binding.query_source_group_id != query.source_group_id:
+            raise ValueError("cached trajectory-query V2 query source binding mismatch")
+        if binding.action_source_group_id != action.source_group_id:
+            raise ValueError("cached trajectory-query V2 action source binding mismatch")
+        if binding.query_modality_profile_id != query.modality_profile_id:
+            raise ValueError("cached trajectory-query V2 query profile mismatch")
+        if binding.action_modality_profile_id != action.modality_profile_id:
+            raise ValueError("cached trajectory-query V2 action profile mismatch")
+        if abs(binding.query_source_timestamp_sec - query.observation_timestamp_sec) > 1e-4:
+            raise ValueError("cached trajectory-query V2 query timestamp mismatch")
+        if abs(binding.action_observation_timestamp_sec - action.observation_timestamp_sec) > 1e-4:
+            raise ValueError("cached trajectory-query V2 action timestamp mismatch")
+        if self.sample_id != f"{self.source_group_id}:cached_traj_query_v2":
+            raise ValueError("cached trajectory-query V2 sample_id mismatch")
+        if self.loss_mask != StageIILossMaskV1():
+            raise ValueError("cached trajectory-query V2 requires the CFM-only loss mask")
+        target_source = str(self.provenance.get("trajectory_source_group_id") or "")
+        if target_source and target_source != self.source_group_id:
+            raise ValueError("cached trajectory-query V2 target provenance mismatch")
+        expected = stage_ii_digest_v1(
+            self.model_dump(mode="json", exclude={"view_digest"})
+        )
+        if self.view_digest != expected:
+            raise ValueError("cached trajectory-query V2 view_digest mismatch")
+        return self
+
+
+class StageIICachedTrajQuerySourceViewV2(BaseModel):
+    """Carry visible Stage-I input and one accepted private trajectory target.
+
+    This is the materializer input, not a model prompt row.  It deliberately
+    contains no reasoning or Decision cache; the paired view is formed later
+    from two target-free observations and the action-side target.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[STAGE_II_CACHED_TRAJ_QUERY_SOURCE_VIEW_V2_SCHEMA_VERSION] = (
+        STAGE_II_CACHED_TRAJ_QUERY_SOURCE_VIEW_V2_SCHEMA_VERSION
+    )
+    training_contract: Literal[STAGE_II_V2_TRAINING_CONTRACT_ID] = (
+        STAGE_II_V2_TRAINING_CONTRACT_ID
+    )
+    sample_id: str = Field(min_length=1, max_length=560)
+    source_group_id: str = Field(min_length=1, max_length=240)
+    split_group_id: str = Field(min_length=1, max_length=240)
+    dataset_source: str = Field(min_length=1, max_length=128)
+    observation: StageIICachedTrajQueryObservationV1
+    trajectory_target: StageIITrajectoryTargetV2
+    provenance: dict[str, Any] = Field(default_factory=dict)
+    formal_training_eligible: Literal[True] = True
+    view_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+    @model_validator(mode="after")
+    def validate_source_view(self) -> "StageIICachedTrajQuerySourceViewV2":
+        """Close source identity without admitting hidden text caches."""
+
+        if self.source_group_id != self.observation.source_group_id:
+            raise ValueError("cached-query V2 source identity mismatch")
+        if self.split_group_id != self.observation.split_group_id:
+            raise ValueError("cached-query V2 source split identity mismatch")
+        if self.dataset_source != self.observation.dataset_source:
+            raise ValueError("cached-query V2 source dataset identity mismatch")
+        target_source = str(self.provenance.get("trajectory_source_group_id") or "")
+        if target_source and target_source != self.source_group_id:
+            raise ValueError("cached-query V2 source target provenance mismatch")
+        expected = stage_ii_digest_v1(
+            self.model_dump(mode="json", exclude={"view_digest"})
+        )
+        if self.view_digest != expected:
+            raise ValueError("cached-query V2 source view_digest mismatch")
         return self
 
 
@@ -2047,8 +2249,12 @@ __all__ = [
     "STAGE_II_CFM_TRAINING_VIEW_SCHEMA_VERSION",
     "STAGE_II_CONTEXT_CACHE_SCHEMA_VERSION",
     "STAGE_II_CACHED_TRAJ_QUERY_CONDITION_MODE",
+    "STAGE_II_CACHED_TRAJ_QUERY_CONDITION_MODE_V2",
+    "STAGE_II_CACHED_TRAJ_QUERY_BINDING_V2_SCHEMA_VERSION",
     "STAGE_II_CACHED_TRAJ_QUERY_OBSERVATION_SCHEMA_VERSION",
     "STAGE_II_CACHED_TRAJ_QUERY_TRAINING_VIEW_SCHEMA_VERSION",
+    "STAGE_II_CACHED_TRAJ_QUERY_TRAINING_VIEW_V2_SCHEMA_VERSION",
+    "STAGE_II_CACHED_TRAJ_QUERY_SOURCE_VIEW_V2_SCHEMA_VERSION",
     "STAGE_II_GROUNDING_SECTION_NAMES",
     "STAGE_II_HORIZON_SECONDS",
     "STAGE_II_HORIZON_SECONDS_V2",
@@ -2093,8 +2299,11 @@ __all__ = [
     "StageIICFMDirectLatentViewV1",
     "StageIICFMTrainingViewV2",
     "StageIICachedTrajQueryBindingV1",
+    "StageIICachedTrajQueryBindingV2",
     "StageIICachedTrajQueryObservationV1",
     "StageIICachedTrajQueryTrainingViewV1",
+    "StageIICachedTrajQueryTrainingViewV2",
+    "StageIICachedTrajQuerySourceViewV2",
     "StageIIContextCacheV1",
     "StageIIContextModeV2",
     "StageIIConditionModeV2",

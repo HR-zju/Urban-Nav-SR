@@ -16,8 +16,11 @@ from mcp_server.contracts.stage_i_sft import (
 )
 from mcp_server.contracts.stage_ii_cfm import (
     STAGE_II_CACHED_TRAJ_QUERY_CONDITION_MODE,
+    STAGE_II_CACHED_TRAJ_QUERY_CONDITION_MODE_V2,
     STAGE_II_CACHED_TRAJ_QUERY_OBSERVATION_SCHEMA_VERSION,
+    STAGE_II_CACHED_TRAJ_QUERY_SOURCE_VIEW_V2_SCHEMA_VERSION,
     STAGE_II_CACHED_TRAJ_QUERY_TRAINING_VIEW_SCHEMA_VERSION,
+    STAGE_II_CACHED_TRAJ_QUERY_TRAINING_VIEW_V2_SCHEMA_VERSION,
     STAGE_II_CFM_TRAINING_VIEW_V2_SCHEMA_VERSION,
     STAGE_II_CFM_TRAINING_VIEW_SCHEMA_VERSION,
     STAGE_II_DIRECT_LATENT_PROJECTION_POLICY_ID,
@@ -37,8 +40,11 @@ from mcp_server.contracts.stage_ii_cfm import (
     StageIICFMTrainingViewV1,
     StageIICFMTrainingViewV2,
     StageIICachedTrajQueryBindingV1,
+    StageIICachedTrajQueryBindingV2,
     StageIICachedTrajQueryObservationV1,
+    StageIICachedTrajQuerySourceViewV2,
     StageIICachedTrajQueryTrainingViewV1,
+    StageIICachedTrajQueryTrainingViewV2,
     StageIIContextCacheV1,
     StageIIProjectionDropV1,
     StageIIProjectionDropV2,
@@ -58,7 +64,7 @@ from mcp_server.data.stage_ii.context import (
 
 
 def build_stage_ii_cached_traj_query_observation_v1(
-    view: StageIICFMTrainingViewV2 | Mapping[str, Any],
+    view: StageIICFMTrainingViewV2 | StageITrainingViewV2 | Mapping[str, Any],
     *,
     observation_timestamp_sec: float,
     frame_timestamps_sec: list[float],
@@ -66,13 +72,21 @@ def build_stage_ii_cached_traj_query_observation_v1(
 ) -> StageIICachedTrajQueryObservationV1:
     """Project one V2 view into target-free input for a slow query pass."""
 
-    typed = (
-        view
-        if isinstance(view, StageIICFMTrainingViewV2)
-        else StageIICFMTrainingViewV2.model_validate(view)
-    )
-    if typed.system1_condition_mode != "traj_query_only":
-        raise ValueError("cached query observation requires a legacy V2 action view")
+    if isinstance(view, StageIICFMTrainingViewV2):
+        typed: Any = view
+        if typed.system1_condition_mode != "traj_query_only":
+            raise ValueError(
+                "cached query observation requires a traj_query_only action view"
+            )
+    elif isinstance(view, (StageIFullCoTViewV2, StageIReasoningDropoutViewV2)):
+        typed = view
+    elif isinstance(view, Mapping) and view.get("task_type") in {
+        "full_cot",
+        "reasoning_dropout",
+    }:
+        typed = parse_stage_i_training_view_v2(dict(view))
+    else:
+        typed = StageIICFMTrainingViewV2.model_validate(view)
     payload = {
         "schema_version": STAGE_II_CACHED_TRAJ_QUERY_OBSERVATION_SCHEMA_VERSION,
         "sample_id": typed.sample_id,
@@ -95,6 +109,63 @@ def build_stage_ii_cached_traj_query_observation_v1(
     }
     payload["view_digest"] = stage_ii_digest_v1(payload)
     return StageIICachedTrajQueryObservationV1.model_validate(payload)
+
+
+def build_stage_ii_cached_traj_query_source_view_v2(
+    stage_i_view: StageITrainingViewV2 | Mapping[str, Any],
+    *,
+    trajectory_target: StageIITrajectoryTargetV2 | Mapping[str, Any],
+    observation_timestamp_sec: float,
+    frame_timestamps_sec: list[float],
+    bev_timestamp_sec: float | None = None,
+    provenance: Mapping[str, Any] | None = None,
+) -> StageIICachedTrajQuerySourceViewV2:
+    """Bind one Stage-I visible row to an accepted private trajectory target.
+
+    This is the pure-latent V2 source boundary.  It reads only the Stage-I
+    model-visible envelope and the independently validated trajectory sidecar;
+    Pass-R and Pass-D caches are intentionally not accepted here.
+    """
+
+    typed = (
+        parse_stage_i_training_view_v2(dict(stage_i_view))
+        if isinstance(stage_i_view, Mapping)
+        else stage_i_view
+    )
+    if not isinstance(typed, (StageIFullCoTViewV2, StageIReasoningDropoutViewV2)):
+        raise ValueError("cached-query V2 source requires a Stage-I reasoning row")
+    target = (
+        trajectory_target
+        if isinstance(trajectory_target, StageIITrajectoryTargetV2)
+        else StageIITrajectoryTargetV2.model_validate(trajectory_target)
+    )
+    observation = build_stage_ii_cached_traj_query_observation_v1(
+        typed,
+        observation_timestamp_sec=observation_timestamp_sec,
+        frame_timestamps_sec=frame_timestamps_sec,
+        bev_timestamp_sec=bev_timestamp_sec,
+    )
+    payload: dict[str, Any] = {
+        "schema_version": (
+            STAGE_II_CACHED_TRAJ_QUERY_SOURCE_VIEW_V2_SCHEMA_VERSION
+        ),
+        "training_contract": STAGE_II_V2_TRAINING_CONTRACT_ID,
+        "sample_id": f"{typed.source_group_id}:cached_source_v2",
+        "source_group_id": typed.source_group_id,
+        "split_group_id": typed.split_group_id,
+        "dataset_source": typed.dataset_source,
+        "observation": observation.model_dump(mode="json"),
+        "trajectory_target": target.model_dump(mode="json"),
+        "provenance": dict(provenance or {}),
+        "formal_training_eligible": True,
+    }
+    payload["provenance"].setdefault(
+        "trajectory_source_group_id", typed.source_group_id
+    )
+    payload["view_digest"] = stage_ii_digest_v1(
+        {key: value for key, value in payload.items() if key != "view_digest"}
+    )
+    return StageIICachedTrajQuerySourceViewV2.model_validate(payload)
 
 
 def build_stage_ii_cached_traj_query_training_view_v1(
@@ -120,8 +191,6 @@ def build_stage_ii_cached_traj_query_training_view_v1(
         if isinstance(query_source_view, StageIICFMTrainingViewV2)
         else StageIICFMTrainingViewV2.model_validate(query_source_view)
     )
-    if action.source_group_id != query.source_group_id:
-        raise ValueError("cached pair requires one source_group_id")
     if action.split_group_id != query.split_group_id:
         raise ValueError("cached pair requires one split_group_id")
     if action.dataset_source != query.dataset_source:
@@ -159,6 +228,95 @@ def build_stage_ii_cached_traj_query_training_view_v1(
     }
     payload["view_digest"] = stage_ii_digest_v1(payload)
     return StageIICachedTrajQueryTrainingViewV1.model_validate(payload)
+
+
+def build_stage_ii_cached_traj_query_training_view_v2(
+    query_source: StageIICachedTrajQueryObservationV1 | Mapping[str, Any],
+    action_observation: StageIICachedTrajQueryObservationV1 | Mapping[str, Any],
+    *,
+    trajectory_target: StageIITrajectoryTargetV2 | Mapping[str, Any],
+    condition_digest: str,
+    provenance: Mapping[str, Any] | None = None,
+) -> StageIICachedTrajQueryTrainingViewV2:
+    """Build one Pass-R/Pass-D-free cached-query training view.
+
+    The input observations are already projected from model-visible source
+    rows.  This function only binds their causal relationship to the private
+    4-second, 32-step target; it never creates a target from prompt text.
+
+    Args:
+        query_source: Target-free observation used by the slow path.
+        action_observation: Current observation used by the fast path.
+        trajectory_target: Accepted private 4-second trajectory target.
+        condition_digest: Digest of stable navigation conditions shared by both
+            observations.
+        provenance: Optional private lineage metadata.
+
+    Returns:
+        A validated V2 cached-query training view.
+
+    Raises:
+        ValueError: If the observations, timing, target, or condition digest
+            cannot form one immutable pair.
+    """
+
+    query = (
+        query_source
+        if isinstance(query_source, StageIICachedTrajQueryObservationV1)
+        else StageIICachedTrajQueryObservationV1.model_validate(query_source)
+    )
+    action = (
+        action_observation
+        if isinstance(action_observation, StageIICachedTrajQueryObservationV1)
+        else StageIICachedTrajQueryObservationV1.model_validate(action_observation)
+    )
+    target = (
+        trajectory_target
+        if isinstance(trajectory_target, StageIITrajectoryTargetV2)
+        else StageIITrajectoryTargetV2.model_validate(trajectory_target)
+    )
+    if query.dataset_source != action.dataset_source:
+        raise ValueError("cached trajectory-query V2 requires one dataset_source")
+    if query.split_group_id != action.split_group_id:
+        raise ValueError("cached trajectory-query V2 requires one split_group_id")
+    if not re.fullmatch(r"[0-9a-f]{64}", condition_digest):
+        raise ValueError("cached trajectory-query V2 condition_digest must be SHA256")
+    binding = StageIICachedTrajQueryBindingV2(
+        condition_mode=STAGE_II_CACHED_TRAJ_QUERY_CONDITION_MODE_V2,
+        query_source_timestamp_sec=query.observation_timestamp_sec,
+        action_observation_timestamp_sec=action.observation_timestamp_sec,
+        query_age_sec=(
+            action.observation_timestamp_sec - query.observation_timestamp_sec
+        ),
+        query_source_group_id=query.source_group_id,
+        action_source_group_id=action.source_group_id,
+        query_modality_profile_id=query.modality_profile_id,
+        action_modality_profile_id=action.modality_profile_id,
+        condition_digest=condition_digest,
+    )
+    payload = {
+        "schema_version": STAGE_II_CACHED_TRAJ_QUERY_TRAINING_VIEW_V2_SCHEMA_VERSION,
+        "training_contract": STAGE_II_V2_TRAINING_CONTRACT_ID,
+        "condition_mode": STAGE_II_CACHED_TRAJ_QUERY_CONDITION_MODE_V2,
+        "sample_id": f"{action.source_group_id}:{STAGE_II_CACHED_TRAJ_QUERY_CONDITION_MODE_V2}",
+        "source_group_id": action.source_group_id,
+        "split_group_id": action.split_group_id,
+        "dataset_source": action.dataset_source,
+        "query_source": query.model_dump(mode="json"),
+        "action_observation": action.model_dump(mode="json"),
+        "temporal_binding": binding.model_dump(mode="json"),
+        "trajectory_target": target.model_dump(mode="json"),
+        "provenance": dict(provenance or {}),
+        "formal_training_eligible": True,
+        "loss_mask": {
+            "lm": False,
+            "system1_action": True,
+            "trajectory": False,
+            "segmentation": False,
+        },
+    }
+    payload["view_digest"] = stage_ii_digest_v1(payload)
+    return StageIICachedTrajQueryTrainingViewV2.model_validate(payload)
 
 
 def project_stage_ii_cfm_view_v1(
@@ -501,6 +659,7 @@ def project_stage_ii_cfm_view_v2(
     reasoning_context: StageIIContextCacheV1 | Mapping[str, Any] | None,
     decision_context: StageIIContextCacheV1 | Mapping[str, Any],
     review_status: str,
+    split_group_id: str | None = None,
 ) -> StageIICFMTrainingViewV2:
     """Build one V2 CFM view from exactly one Stage I reasoning route.
 
@@ -564,7 +723,7 @@ def project_stage_ii_cfm_view_v2(
             f"{parent_stage_i_sample_id}:stage_ii_cfm_v2:{context_mode}"
         ),
         "source_group_id": typed.source_group_id,
-        "split_group_id": typed.split_group_id,
+        "split_group_id": split_group_id or typed.split_group_id,
         "dataset_source": typed.dataset_source,
         "modality_profile_id": typed.modality_profile_id,
         "native_availability": typed.native_availability.model_dump(mode="json"),

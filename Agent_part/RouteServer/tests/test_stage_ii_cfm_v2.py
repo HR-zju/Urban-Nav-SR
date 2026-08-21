@@ -307,6 +307,61 @@ def test_bulk_builder_accepts_v2_full_cot_with_the_clean_v1_target(
     assert paths["drops"].read_text(encoding="utf-8") == ""
 
 
+def test_bulk_builder_accepts_v2_sidecar_and_emits_current_v2_view(
+    tmp_path: Path,
+) -> None:
+    """The 4s/32 source sidecar must join the V4 parent by source identity."""
+
+    from test_stage_ii_cfm import _source_registry_payload
+
+    full = _stage_i_full_v2()
+    reasoning = _cache(full, "reasoning_grounding", full.assistant_text)
+    decision = _cache(full, "decision", _decision_text(full))
+    sidecar_payload = _trajectory_sidecar_v2(full).model_dump(mode="json")
+    sidecar_payload["split_group_id"] = (
+        f"{full.dataset_source}:{full.split_group_id}"
+    )
+    sidecar_payload.pop("sidecar_digest", None)
+    sidecar_payload["sidecar_digest"] = stage_ii_digest_v1(sidecar_payload)
+    sidecar = StageIITrajectorySidecarV2.model_validate(sidecar_payload)
+    paths = {
+        "stage_i": tmp_path / "stage_i.jsonl",
+        "trajectory": tmp_path / "trajectory_sidecars_v2.jsonl",
+        "reasoning": tmp_path / "reasoning.jsonl",
+        "decision": tmp_path / "decision.jsonl",
+        "registry": tmp_path / "registry.json",
+        "views": tmp_path / "views.jsonl",
+        "qc": tmp_path / "qc.jsonl",
+        "drops": tmp_path / "drops.jsonl",
+    }
+    _write_jsonl(paths["stage_i"], [full.model_dump(mode="json", exclude_none=True)])
+    _write_jsonl(paths["trajectory"], [sidecar.model_dump(mode="json")])
+    _write_jsonl(paths["reasoning"], [reasoning.model_dump(mode="json", exclude_none=True)])
+    _write_jsonl(paths["decision"], [decision.model_dump(mode="json", exclude_none=True)])
+    paths["registry"].write_text(
+        json.dumps(_source_registry_payload()) + "\n",
+        encoding="utf-8",
+    )
+
+    report = build_stage_ii_cfm_views(
+        stage_i_jsonl=paths["stage_i"],
+        trajectory_jsonl=paths["trajectory"],
+        reasoning_cache_jsonl=paths["reasoning"],
+        decision_cache_jsonl=paths["decision"],
+        trajectory_source_registry_json=paths["registry"],
+        output_view_jsonl=paths["views"],
+        output_qc_jsonl=paths["qc"],
+        output_drop_jsonl=paths["drops"],
+    )
+
+    payload = json.loads(paths["views"].read_text(encoding="utf-8"))
+    assert report["counts"]["output_views"] == 1
+    assert payload["schema_version"] == "urbannav_stage_ii_cfm_training_view_v2"
+    assert payload["trajectory_target"]["valid_step_count"] == 32
+    assert payload["split_group_id"] == full.split_group_id
+    assert paths["drops"].read_text(encoding="utf-8") == ""
+
+
 def test_bulk_builder_direct_latent_requires_no_context_cache_inputs(tmp_path: Path) -> None:
     """The direct CLI route materializes the same parent without Pass R/D."""
 

@@ -1,0 +1,689 @@
+{
+  "$defs": {
+    "BevRouteEvidenceV4": {
+      "additionalProperties": false,
+      "description": "Describe presentation properties of one prompt-visible BEV.\n\nThese fields are retained at the reusable observation boundary for VQA V2\ncompatibility.  Reasoning V4.6 never treats them as route-progress,\ntraversability, clearance, or collision-safety supervision.\n\nArgs:\n    frame: Declared BEV presentation frame.\n    ego_forward: Display direction corresponding to ego forward.\n    route_overlay_visible: Whether a route overlay is rendered.\n    route_direction_authority: Whether clear orientation may support a\n        visible task direction.\n    route_progress_authority: Legacy observation metadata ignored by\n        Reasoning V4.6.\n    route_terminal_marker_visible: Legacy presentation metadata ignored by\n        Reasoning V4.6.\n    route_endpoint_semantics: Legacy endpoint provenance ignored by\n        Reasoning V4.6.\n    local_safety_authority: Always false in Stage-A.\n    producer_contract_id: Versioned upstream producer identity.\n    producer_contract_version: Exact upstream producer version.",
+      "properties": {
+        "ego_forward": {
+          "default": "unknown",
+          "enum": [
+            "up",
+            "right",
+            "down",
+            "left",
+            "unknown"
+          ],
+          "title": "Ego Forward",
+          "type": "string"
+        },
+        "frame": {
+          "default": "unknown",
+          "enum": [
+            "ego",
+            "north_up",
+            "unknown"
+          ],
+          "title": "Frame",
+          "type": "string"
+        },
+        "local_safety_authority": {
+          "const": false,
+          "default": false,
+          "title": "Local Safety Authority",
+          "type": "boolean"
+        },
+        "producer_contract_id": {
+          "default": "unknown",
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Producer Contract Id",
+          "type": "string"
+        },
+        "producer_contract_version": {
+          "default": "unknown",
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Producer Contract Version",
+          "type": "string"
+        },
+        "route_direction_authority": {
+          "default": "none",
+          "enum": [
+            "none",
+            "visual_conditional"
+          ],
+          "title": "Route Direction Authority",
+          "type": "string"
+        },
+        "route_endpoint_semantics": {
+          "default": "unknown",
+          "enum": [
+            "planned_navigation_goal",
+            "recorded_clip_endpoint",
+            "crop_boundary",
+            "unknown"
+          ],
+          "title": "Route Endpoint Semantics",
+          "type": "string"
+        },
+        "route_overlay_visible": {
+          "default": false,
+          "title": "Route Overlay Visible",
+          "type": "boolean"
+        },
+        "route_progress_authority": {
+          "default": "none",
+          "enum": [
+            "none",
+            "visual_conditional"
+          ],
+          "title": "Route Progress Authority",
+          "type": "string"
+        },
+        "route_terminal_marker_visible": {
+          "default": false,
+          "title": "Route Terminal Marker Visible",
+          "type": "boolean"
+        }
+      },
+      "title": "BevRouteEvidenceV4",
+      "type": "object"
+    },
+    "EvidenceCatalogEntryV4": {
+      "additionalProperties": false,
+      "description": "Describe one prompt-visible raw input item.\n\nArgs:\n    ref: Stable input-envelope reference.\n    modality: Input modality.\n    summary: Optional prompt-visible summary.\n    attributes: Prompt-visible producer metadata.\n    bev_route_evidence: Optional BEV presentation declaration.",
+      "properties": {
+        "attributes": {
+          "additionalProperties": true,
+          "title": "Attributes",
+          "type": "object"
+        },
+        "bev_route_evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BevRouteEvidenceV4"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "modality": {
+          "enum": [
+            "instruction",
+            "fpv",
+            "bev",
+            "goal",
+            "goal_image",
+            "pixel_goal",
+            "waypoint"
+          ],
+          "title": "Modality",
+          "type": "string"
+        },
+        "ref": {
+          "maxLength": 160,
+          "minLength": 5,
+          "pattern": "^(instruction|fpv|bev|goal|waypoint)\\.[a-z0-9_]+$",
+          "title": "Ref",
+          "type": "string"
+        },
+        "summary": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Summary"
+        }
+      },
+      "required": [
+        "ref",
+        "modality"
+      ],
+      "title": "EvidenceCatalogEntryV4",
+      "type": "object"
+    },
+    "InputModalitiesV4": {
+      "additionalProperties": false,
+      "description": "Record which Stage-A inputs are present.\n\nArgs:\n    fpv: Current FPV is mandatory.\n    history_fpv: One or more history FPV images are input only.\n    instruction: An instruction is visible.\n    bev: A BEV image is visible.\n    goal_image: A goal image is visible.\n    pixel_goal: A pixel goal is visible.\n    waypoint: A waypoint is visible.",
+      "properties": {
+        "bev": {
+          "default": false,
+          "title": "Bev",
+          "type": "boolean"
+        },
+        "fpv": {
+          "const": true,
+          "default": true,
+          "title": "Fpv",
+          "type": "boolean"
+        },
+        "goal_image": {
+          "default": false,
+          "title": "Goal Image",
+          "type": "boolean"
+        },
+        "history_fpv": {
+          "default": false,
+          "title": "History Fpv",
+          "type": "boolean"
+        },
+        "instruction": {
+          "default": false,
+          "title": "Instruction",
+          "type": "boolean"
+        },
+        "pixel_goal": {
+          "default": false,
+          "title": "Pixel Goal",
+          "type": "boolean"
+        },
+        "waypoint": {
+          "default": false,
+          "title": "Waypoint",
+          "type": "boolean"
+        }
+      },
+      "title": "InputModalitiesV4",
+      "type": "object"
+    },
+    "StageIICachedTrajQueryObservationV1": {
+      "additionalProperties": false,
+      "description": "Model-visible observation used to produce one cached query state.\n\nThis record intentionally contains no trajectory target or private action\nsupervision. It is paired with a later action view by the training-view\ncontract below.",
+      "properties": {
+        "bev_timestamp_sec": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bev Timestamp Sec"
+        },
+        "dataset_source": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Dataset Source",
+          "type": "string"
+        },
+        "evidence_catalog": {
+          "items": {
+            "$ref": "#/$defs/EvidenceCatalogEntryV4"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Evidence Catalog",
+          "type": "array"
+        },
+        "frame_timestamps_sec": {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Frame Timestamps Sec",
+          "type": "array"
+        },
+        "image_roles": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Image Roles",
+          "type": "array"
+        },
+        "images": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Images",
+          "type": "array"
+        },
+        "input_modalities": {
+          "$ref": "#/$defs/InputModalitiesV4"
+        },
+        "instruction": {
+          "anyOf": [
+            {
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Instruction"
+        },
+        "modality_profile_id": {
+          "enum": [
+            "fpv_current_v1",
+            "fpv_temporal_v1",
+            "fpv_instruction_v1",
+            "fpv_bev_v1",
+            "fpv_instruction_bev_v1",
+            "fpv_temporal_instruction_v1",
+            "fpv_temporal_bev_v1",
+            "fpv_temporal_instruction_bev_v1"
+          ],
+          "title": "Modality Profile Id",
+          "type": "string"
+        },
+        "model_visible_context": {
+          "additionalProperties": true,
+          "title": "Model Visible Context",
+          "type": "object"
+        },
+        "observation_timestamp_sec": {
+          "title": "Observation Timestamp Sec",
+          "type": "number"
+        },
+        "sample_id": {
+          "maxLength": 480,
+          "minLength": 1,
+          "title": "Sample Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "urbannav_stage_ii_cached_traj_query_observation_v1",
+          "default": "urbannav_stage_ii_cached_traj_query_observation_v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_group_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Group Id",
+          "type": "string"
+        },
+        "split_group_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Split Group Id",
+          "type": "string"
+        },
+        "view_digest": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "View Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sample_id",
+        "source_group_id",
+        "split_group_id",
+        "dataset_source",
+        "modality_profile_id",
+        "images",
+        "image_roles",
+        "evidence_catalog",
+        "input_modalities",
+        "frame_timestamps_sec",
+        "observation_timestamp_sec",
+        "view_digest"
+      ],
+      "title": "StageIICachedTrajQueryObservationV1",
+      "type": "object"
+    },
+    "StageIITrajectoryPolicyV2": {
+      "additionalProperties": false,
+      "description": "Freeze the strict four-second metric trajectory data policy.\n\nV2 is a data-only contract for the future decoupled latent-plan/CFM model.\nIt intentionally does not alter the executable V1 training view or its\n16-query head.  Every accepted row contains the complete 4-second horizon;\nsuffix padding is forbidden. Source speed remains an audited statistic;\nexceeding 6 m/s does not reject a row because speed alone cannot\ndistinguish real fast motion from source-specific sampling behavior.\n\nArgs:\n    source_adapter_id: Versioned raw-pose adapter used for this dataset.\n    trajectory_source: Dataset-owned odometry or pose provenance.\n    raw_timestamp_unit: Unit of the raw pose clock before conversion.\n    yaw_offset_deg: Fixed odom-to-base rotation used only for XY projection.",
+      "properties": {
+        "axis_names": {
+          "default": [
+            "x_forward_m",
+            "y_left_m",
+            "yaw_rel_ccw_rad"
+          ],
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "const": "x_forward_m",
+              "type": "string"
+            },
+            {
+              "const": "y_left_m",
+              "type": "string"
+            },
+            {
+              "const": "yaw_rel_ccw_rad",
+              "type": "string"
+            }
+          ],
+          "title": "Axis Names",
+          "type": "array"
+        },
+        "coordinate_frame": {
+          "const": "current_ego_flu",
+          "default": "current_ego_flu",
+          "title": "Coordinate Frame",
+          "type": "string"
+        },
+        "full_horizon_required": {
+          "const": true,
+          "default": true,
+          "title": "Full Horizon Required",
+          "type": "boolean"
+        },
+        "horizon_seconds": {
+          "const": 4.0,
+          "default": 4.0,
+          "title": "Horizon Seconds",
+          "type": "number"
+        },
+        "horizon_steps": {
+          "const": 32,
+          "default": 32,
+          "title": "Horizon Steps",
+          "type": "integer"
+        },
+        "max_source_gap_sec": {
+          "const": 0.5,
+          "default": 0.5,
+          "title": "Max Source Gap Sec",
+          "type": "number"
+        },
+        "max_source_step_m": {
+          "const": 3.0,
+          "default": 3.0,
+          "title": "Max Source Step M",
+          "type": "number"
+        },
+        "max_source_yaw_rate_rad_s": {
+          "const": 4.0,
+          "default": 4.0,
+          "title": "Max Source Yaw Rate Rad S",
+          "type": "number"
+        },
+        "normalized": {
+          "const": false,
+          "default": false,
+          "title": "Normalized",
+          "type": "boolean"
+        },
+        "policy_id": {
+          "const": "urbannav_stage_ii_metric_flu_4s_32_speed_audit_v2_1",
+          "default": "urbannav_stage_ii_metric_flu_4s_32_speed_audit_v2_1",
+          "title": "Policy Id",
+          "type": "string"
+        },
+        "policy_version": {
+          "const": "2.1",
+          "default": "2.1",
+          "title": "Policy Version",
+          "type": "string"
+        },
+        "raw_timestamp_unit": {
+          "enum": [
+            "nanosecond",
+            "millisecond"
+          ],
+          "title": "Raw Timestamp Unit",
+          "type": "string"
+        },
+        "representation": {
+          "const": "cumulative_relative_pose",
+          "default": "cumulative_relative_pose",
+          "title": "Representation",
+          "type": "string"
+        },
+        "source_adapter_id": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Source Adapter Id",
+          "type": "string"
+        },
+        "source_format": {
+          "const": "ego_pose_xyt_flu_timed_v1",
+          "default": "ego_pose_xyt_flu_timed_v1",
+          "title": "Source Format",
+          "type": "string"
+        },
+        "source_speed_audit_threshold_mps": {
+          "const": 6.0,
+          "default": 6.0,
+          "title": "Source Speed Audit Threshold Mps",
+          "type": "number"
+        },
+        "source_speed_qc_mode": {
+          "const": "audit_only",
+          "default": "audit_only",
+          "title": "Source Speed Qc Mode",
+          "type": "string"
+        },
+        "target_dt_sec": {
+          "const": 0.125,
+          "default": 0.125,
+          "title": "Target Dt Sec",
+          "type": "number"
+        },
+        "target_field": {
+          "const": "trajectory_ego_t",
+          "default": "trajectory_ego_t",
+          "title": "Target Field",
+          "type": "string"
+        },
+        "target_format": {
+          "const": "ego_pose_xyt_flu_v1",
+          "default": "ego_pose_xyt_flu_v1",
+          "title": "Target Format",
+          "type": "string"
+        },
+        "temporal_resampling_id": {
+          "const": "linear_xy_shortest_yaw_4s_32_v2",
+          "default": "linear_xy_shortest_yaw_4s_32_v2",
+          "title": "Temporal Resampling Id",
+          "type": "string"
+        },
+        "trajectory_source": {
+          "maxLength": 96,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Trajectory Source",
+          "type": "string"
+        },
+        "units": {
+          "default": [
+            "meter",
+            "meter",
+            "radian"
+          ],
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "const": "meter",
+              "type": "string"
+            },
+            {
+              "const": "meter",
+              "type": "string"
+            },
+            {
+              "const": "radian",
+              "type": "string"
+            }
+          ],
+          "title": "Units",
+          "type": "array"
+        },
+        "yaw_offset_deg": {
+          "title": "Yaw Offset Deg",
+          "type": "number"
+        },
+        "yaw_source": {
+          "const": "odometry",
+          "default": "odometry",
+          "title": "Yaw Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_adapter_id",
+        "trajectory_source",
+        "raw_timestamp_unit",
+        "yaw_offset_deg"
+      ],
+      "title": "StageIITrajectoryPolicyV2",
+      "type": "object"
+    },
+    "StageIITrajectoryTargetV2": {
+      "additionalProperties": false,
+      "description": "Carry one complete 4-second, 32-step metric FLU target.",
+      "properties": {
+        "action_mask": {
+          "items": {
+            "type": "boolean"
+          },
+          "maxItems": 32,
+          "minItems": 32,
+          "title": "Action Mask",
+          "type": "array"
+        },
+        "policy": {
+          "$ref": "#/$defs/StageIITrajectoryPolicyV2"
+        },
+        "schema_version": {
+          "const": "urbannav_stage_ii_trajectory_target_v2_1",
+          "default": "urbannav_stage_ii_trajectory_target_v2_1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_target_digest": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Target Digest",
+          "type": "string"
+        },
+        "target_digest": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Target Digest",
+          "type": "string"
+        },
+        "trajectory_ego_t": {
+          "items": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "maxItems": 32,
+          "minItems": 32,
+          "title": "Trajectory Ego T",
+          "type": "array"
+        },
+        "valid_step_count": {
+          "const": 32,
+          "default": 32,
+          "title": "Valid Step Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "trajectory_ego_t",
+        "action_mask",
+        "policy",
+        "source_target_digest",
+        "target_digest"
+      ],
+      "title": "StageIITrajectoryTargetV2",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Carry visible Stage-I input and one accepted private trajectory target.\n\nThis is the materializer input, not a model prompt row.  It deliberately\ncontains no reasoning or Decision cache; the paired view is formed later\nfrom two target-free observations and the action-side target.",
+  "properties": {
+    "dataset_source": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Dataset Source",
+      "type": "string"
+    },
+    "formal_training_eligible": {
+      "const": true,
+      "default": true,
+      "title": "Formal Training Eligible",
+      "type": "boolean"
+    },
+    "observation": {
+      "$ref": "#/$defs/StageIICachedTrajQueryObservationV1"
+    },
+    "provenance": {
+      "additionalProperties": true,
+      "title": "Provenance",
+      "type": "object"
+    },
+    "sample_id": {
+      "maxLength": 560,
+      "minLength": 1,
+      "title": "Sample Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "urbannav_stage_ii_cached_traj_query_source_view_v2",
+      "default": "urbannav_stage_ii_cached_traj_query_source_view_v2",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_group_id": {
+      "maxLength": 240,
+      "minLength": 1,
+      "title": "Source Group Id",
+      "type": "string"
+    },
+    "split_group_id": {
+      "maxLength": 240,
+      "minLength": 1,
+      "title": "Split Group Id",
+      "type": "string"
+    },
+    "training_contract": {
+      "const": "stage_ii_cfm_v2",
+      "default": "stage_ii_cfm_v2",
+      "title": "Training Contract",
+      "type": "string"
+    },
+    "trajectory_target": {
+      "$ref": "#/$defs/StageIITrajectoryTargetV2"
+    },
+    "view_digest": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "View Digest",
+      "type": "string"
+    }
+  },
+  "required": [
+    "sample_id",
+    "source_group_id",
+    "split_group_id",
+    "dataset_source",
+    "observation",
+    "trajectory_target",
+    "view_digest"
+  ],
+  "title": "StageIICachedTrajQuerySourceViewV2",
+  "type": "object"
+}
