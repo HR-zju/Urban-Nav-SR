@@ -1,5 +1,10 @@
 # UrbanNav Stage II CFM canonical data contract
 
+本合同的 `cached_traj_query_v2` 集中设计见
+[STAGE_II_CACHED_TRAJ_QUERY_V2_DESIGN.md](./STAGE_II_CACHED_TRAJ_QUERY_V2_DESIGN.md)。
+本文继续作为 Stage II canonical data contract；V2 双频数据构造、pair 绑定和验收状态
+以该设计文档为索引入口。
+
 ## 1. 边界与结论
 
 Stage II 不重新标注 FullCoT、VQA、Decision 或 direction。它复用 Stage I formal
