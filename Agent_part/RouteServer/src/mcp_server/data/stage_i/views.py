@@ -27,9 +27,13 @@ from mcp_server.contracts.stage_i_sft import (
     StageILossSpanV1,
     StageILossSpanV2,
     StageIModalityAvailabilityV1,
+    StageIModalityAvailabilityV2,
     StageIModalityProfileIdV1,
+    StageIModalityProfileIdV2,
     StageIModalitySelectionV1,
+    StageIModalitySelectionV2,
     StageIModalityStateV1,
+    StageIModalityStateV2,
     StageIProjectionDropV1,
     StageIVQAViewV1,
     StageIVQAViewV2,
@@ -106,12 +110,86 @@ STAGE_I_MODALITY_PROFILES_V1 = {
 
 
 @dataclass(frozen=True)
+class StageIModalityProfileV2:
+    """Describe one V2 Stage I profile, including optional waypoint input."""
+
+    profile_id: StageIModalityProfileIdV2
+    history_fpv: bool
+    instruction: bool
+    bev: bool
+    waypoint: bool
+
+    def selection(self) -> StageIModalitySelectionV2:
+        """Return the exact V2 retained-input selection."""
+
+        return StageIModalitySelectionV2(
+            history_fpv=self.history_fpv,
+            instruction=self.instruction,
+            bev=self.bev,
+            waypoint=self.waypoint,
+        )
+
+
+_PROFILE_ROWS_V2 = tuple(
+    (
+        (
+            "fpv_waypoint_v2"
+            if profile_id == "fpv_current_v1"
+            else f"{profile_id.removesuffix('_v1')}_waypoint_v2"
+        ),
+        history_fpv,
+        instruction,
+        bev,
+        True,
+    )
+    for profile_id, history_fpv, instruction, bev in _PROFILE_ROWS
+)
+STAGE_I_MODALITY_PROFILES_V2 = {
+    profile_id:
+    StageIModalityProfileV2(
+        profile_id=profile_id,  # type: ignore[arg-type]
+        history_fpv=history_fpv,
+        instruction=instruction,
+        bev=bev,
+        waypoint=False,
+    )
+    for profile_id, history_fpv, instruction, bev in _PROFILE_ROWS
+} | {
+    profile_id:
+    StageIModalityProfileV2(
+        profile_id=profile_id,  # type: ignore[arg-type]
+        history_fpv=history_fpv,
+        instruction=instruction,
+        bev=bev,
+        waypoint=True,
+    )
+    for profile_id, history_fpv, instruction, bev, _waypoint in _PROFILE_ROWS_V2
+}
+
+
+@dataclass(frozen=True)
 class _ProjectedInputsV1:
     """Hold one internally validated prompt-visible input projection."""
 
     availability: StageIModalityAvailabilityV1
     selection: StageIModalitySelectionV1
     states: StageIModalityStateV1
+    instruction_training_role: StageIInstructionTrainingRoleV1
+    images: list[str]
+    image_roles: list[str]
+    instruction: str | None
+    model_visible_context: dict[str, Any]
+    evidence_catalog: list[EvidenceCatalogEntryV4]
+    input_modalities: InputModalitiesV4
+
+
+@dataclass(frozen=True)
+class _ProjectedInputsV2:
+    """Hold one V2 prompt-visible projection without dropping waypoints."""
+
+    availability: StageIModalityAvailabilityV2
+    selection: StageIModalitySelectionV2
+    states: StageIModalityStateV2
     instruction_training_role: StageIInstructionTrainingRoleV1
     images: list[str]
     image_roles: list[str]
@@ -140,6 +218,18 @@ def get_stage_i_modality_profile_v1(
     except KeyError as exc:
         raise ValueError(
             f"unsupported Stage I modality profile: {profile_id}") from exc
+
+
+def get_stage_i_modality_profile_v2(
+    profile_id: str,
+) -> StageIModalityProfileV2:
+    """Resolve one V2 profile without changing the V1 registry."""
+
+    try:
+        return STAGE_I_MODALITY_PROFILES_V2[profile_id]
+    except KeyError as exc:
+        raise ValueError(
+            f"unsupported Stage I V2 modality profile: {profile_id}") from exc
 
 
 def project_stage_i_reasoning_view_v1(
@@ -635,6 +725,129 @@ def _project_visible_inputs(
     )
 
 
+def _project_visible_inputs_v2(
+    *,
+    images: Iterable[str],
+    image_roles: Iterable[str],
+    instruction: str | None,
+    model_visible_context: Mapping[str, Any],
+    evidence_catalog: Iterable[EvidenceCatalogEntryV4],
+    input_modalities: InputModalitiesV4,
+    profile: StageIModalityProfileV2,
+    instruction_training_role: StageIInstructionTrainingRoleV1,
+) -> _ProjectedInputsV2:
+    """Project V2 inputs while retaining a declared waypoint condition."""
+
+    availability = StageIModalityAvailabilityV2(
+        history_fpv=input_modalities.history_fpv,
+        instruction=input_modalities.instruction,
+        bev=input_modalities.bev,
+        goal_image=input_modalities.goal_image,
+        pixel_goal=input_modalities.pixel_goal,
+        waypoint=input_modalities.waypoint,
+    )
+    selection = profile.selection()
+    for name in ("history_fpv", "instruction", "bev", "waypoint"):
+        if getattr(selection, name) and not getattr(availability, name):
+            raise ValueError(f"selected Stage I V2 modality is not native: {name}")
+    role = _normalize_instruction_role(
+        available=availability.instruction,
+        selected=selection.instruction,
+        requested=instruction_training_role,
+    )
+    pairs = list(zip(images, image_roles))
+    kept_pairs = [
+        (path, image_role) for path, image_role in pairs
+        if image_role == "fpv.current"
+        or (selection.history_fpv and image_role.startswith("fpv.history_"))
+        or (selection.bev and image_role.startswith("bev."))
+    ]
+    kept_evidence: list[EvidenceCatalogEntryV4] = []
+    for item in evidence_catalog:
+        ref = str(item.ref)
+        if item.modality == "fpv":
+            if not ref.startswith("fpv.history_") or selection.history_fpv:
+                kept_evidence.append(item)
+        elif item.modality == "bev" and selection.bev:
+            kept_evidence.append(item)
+        elif item.modality == "instruction" and selection.instruction:
+            kept_evidence.append(item)
+        elif item.modality == "waypoint" and selection.waypoint:
+            kept_evidence.append(item)
+
+    unsupported_context = sorted(
+        set(model_visible_context) - {"goal", "pixel_goal", "waypoint", "waypoints"}
+    )
+    if unsupported_context:
+        raise ValueError(
+            f"unsupported Stage I V2 visible context keys: {unsupported_context}"
+        )
+    waypoint_key = (
+        "waypoint" if "waypoint" in model_visible_context else "waypoints"
+    )
+    if selection.waypoint:
+        waypoint_context = model_visible_context.get(waypoint_key)
+        if not isinstance(waypoint_context, Mapping):
+            raise ValueError(
+                "selected Stage I V2 waypoint requires visible waypoint context"
+            )
+        if isinstance(waypoint_context, Mapping):
+            waypoint_status = waypoint_context.get("waypoint_input")
+            if not isinstance(waypoint_status, Mapping):
+                raise ValueError(
+                    "Stage I V2 waypoint requires waypoint_input provenance"
+                )
+            if waypoint_status.get("available") is not True:
+                raise ValueError("Stage I V2 waypoint input is not available")
+            if waypoint_status.get("independent_of_future_target") is not True:
+                raise ValueError(
+                    "Stage I V2 waypoint input must be independent of future target"
+                )
+    elif "waypoint" in model_visible_context or "waypoints" in model_visible_context:
+        raise ValueError("Stage I V2 waypoint context requires waypoint selection")
+    if "goal" in model_visible_context or "pixel_goal" in model_visible_context:
+        raise ValueError("Stage I V2 goal context is not enabled by this profile")
+    visible_context = {
+        key: value
+        for key, value in model_visible_context.items()
+        if key in {"waypoint", "waypoints"}
+    }
+    states = StageIModalityStateV2(
+        **{
+            name:
+            _modality_state(getattr(availability, name), getattr(selection, name))
+            for name in (
+                "history_fpv",
+                "instruction",
+                "bev",
+                "goal_image",
+                "pixel_goal",
+                "waypoint",
+            )
+        }
+    )
+    projected_modalities = InputModalitiesV4(
+        history_fpv=selection.history_fpv,
+        instruction=selection.instruction,
+        bev=selection.bev,
+        goal_image=False,
+        pixel_goal=False,
+        waypoint=selection.waypoint,
+    )
+    return _ProjectedInputsV2(
+        availability=availability,
+        selection=selection,
+        states=states,
+        instruction_training_role=role,
+        images=[path for path, _ in kept_pairs],
+        image_roles=[image_role for _, image_role in kept_pairs],
+        instruction=instruction if selection.instruction else None,
+        model_visible_context=visible_context,
+        evidence_catalog=kept_evidence,
+        input_modalities=projected_modalities,
+    )
+
+
 def _normalize_instruction_role(
     *,
     available: bool,
@@ -821,6 +1034,19 @@ def projected_profile_id(projected: _ProjectedInputsV1) -> str:
     return matches[0]
 
 
+def projected_profile_id_v2(projected: _ProjectedInputsV2) -> str:
+    """Resolve the unique registered V2 profile for one selection."""
+
+    matches = [
+        profile.profile_id
+        for profile in STAGE_I_MODALITY_PROFILES_V2.values()
+        if profile.selection() == projected.selection
+    ]
+    if len(matches) != 1:
+        raise RuntimeError("Stage I V2 selection does not map to one profile")
+    return matches[0]
+
+
 def _base_payload(
     *,
     task_type: str,
@@ -902,6 +1128,59 @@ def _base_payload(
     }
 
 
+def _base_payload_v2(
+    *,
+    task_type: str,
+    sample_id: str,
+    source_group_id: str,
+    split_group_id: str,
+    dataset_source: str,
+    profile: StageIModalityProfileV2,
+    projected: _ProjectedInputsV2,
+    assistant_text: str,
+    loss_spans: list[dict[str, Any]],
+    parent_artifact_kind: str,
+    parent_sample_id: str,
+    parent_source_fingerprint: str,
+    parent_audit_id: str | None,
+    answerability: StageIAnswerabilityV2,
+) -> dict[str, Any]:
+    """Build the V2 common envelope for the retained input projection."""
+
+    return {
+        "schema_version": STAGE_I_TRAINING_VIEW_V2_SCHEMA_VERSION,
+        "task_type": task_type,
+        "sample_id": sample_id,
+        "source_group_id": source_group_id,
+        "split_group_id": split_group_id,
+        "dataset_source": dataset_source,
+        "modality_profile_id": profile.profile_id,
+        "native_availability": projected.availability.model_dump(mode="json"),
+        "training_selection": projected.selection.model_dump(mode="json"),
+        "modality_state": projected.states.model_dump(mode="json"),
+        "instruction_training_role": projected.instruction_training_role,
+        "answerability": answerability.model_dump(mode="json"),
+        "images": list(projected.images),
+        "image_roles": list(projected.image_roles),
+        "instruction": projected.instruction,
+        "model_visible_context": dict(projected.model_visible_context),
+        "evidence_catalog": [
+            item.model_dump(mode="json", exclude_none=True)
+            for item in projected.evidence_catalog
+        ],
+        "input_modalities": projected.input_modalities.model_dump(mode="json"),
+        "assistant_text": assistant_text,
+        "loss_span_policy_id": STAGE_I_LOSS_SPAN_POLICY_V2_ID,
+        "loss_spans": loss_spans,
+        "parent_artifact_kind": parent_artifact_kind,
+        "parent_sample_id": parent_sample_id,
+        "parent_source_fingerprint": parent_source_fingerprint,
+        "parent_audit_id": parent_audit_id,
+        "projection_policy_id": STAGE_I_PROJECTION_POLICY_V2_ID,
+        "projection_policy_version": STAGE_I_PROJECTION_POLICY_V2_VERSION,
+    }
+
+
 def _finalize_view(model_type, payload: dict[str, Any]):
     """Attach the canonical projection digest and validate the final model."""
 
@@ -913,6 +1192,77 @@ def _finalize_view(model_type, payload: dict[str, Any]):
     return model_type.model_validate(normalized)
 
 
+def _project_full_cot_view_v2(
+    view: ReasoningTrainingViewV4,
+    *,
+    projected: _ProjectedInputsV2,
+    parent_source_fingerprint: str,
+) -> StageIFullCoTViewV2:
+    """Build V2 FullCoT after retaining every selected native condition."""
+
+    availability = projected.availability.model_dump(mode="python")
+    selection = projected.selection.model_dump(mode="python")
+    for name in (
+        "history_fpv",
+        "instruction",
+        "bev",
+        "goal_image",
+        "pixel_goal",
+        "waypoint",
+    ):
+        if bool(availability[name]) != bool(selection[name]):
+            raise ValueError(f"full_cot_answerability_failed:dropped_native_{name}")
+    parent_evidence_refs = {str(item.ref) for item in view.evidence_catalog}
+    projected_evidence_refs = {str(item.ref) for item in projected.evidence_catalog}
+    if projected_evidence_refs != parent_evidence_refs:
+        raise ValueError("full_cot_answerability_failed:evidence_catalog_changed")
+    profile = get_stage_i_modality_profile_v2(projected_profile_id_v2(projected))
+    action = str(view.direction_supervision.label_name)
+    assistant_text = view.assistant_text
+    payload = {
+        **_base_payload_v2(
+            task_type="full_cot",
+            sample_id=f"{view.sample_id}:stage_i:{profile.profile_id}",
+            source_group_id=view.source_group_id,
+            split_group_id=view.split_group_id,
+            dataset_source=view.dataset_source,
+            profile=profile,
+            projected=projected,
+            assistant_text=assistant_text,
+            loss_spans=_full_loss_span_v2(assistant_text, "full_cot"),
+            parent_artifact_kind="reasoning_v4_6",
+            parent_sample_id=view.sample_id,
+            parent_source_fingerprint=parent_source_fingerprint,
+            parent_audit_id=view.audit_id,
+            answerability=StageIAnswerabilityV2(
+                full_cot=True,
+                reasons=("all_native_modalities_retained", "canonical_full_cot_reused"),
+            ),
+        ),
+        "reasoning_target": view.reasoning_target.model_dump(
+            mode="json", exclude_none=True
+        ),
+        "direction_context": view.direction_context.model_dump(mode="json"),
+        "direction_supervision": view.direction_supervision.model_dump(
+            mode="json", exclude_none=True
+        ),
+        "direction_geometry": (
+            view.direction_geometry.model_dump(mode="json", exclude_none=True)
+            if view.direction_geometry is not None
+            else None
+        ),
+        "prompt_profile_id": view.prompt_profile_id,
+        "prompt_policy_digest": view.prompt_policy_digest,
+        "metadata": {
+            "source_view_schema_version": view.schema_version,
+            "action_supervision_location": "decision.selected_action_label",
+        },
+    }
+    if action != str(view.reasoning_target.reasoning.decision.selected_action_label):
+        raise ValueError("V2 FullCoT Decision does not match strong direction")
+    return _finalize_view_v2(StageIFullCoTViewV2, payload)
+
+
 def project_stage_i_reasoning_view_v2(
     view: ReasoningTrainingViewV4 | Mapping[str, Any],
     *,
@@ -922,25 +1272,38 @@ def project_stage_i_reasoning_view_v2(
 ) -> StageIFullCoTViewV2 | StageIReasoningDropoutViewV2:
     """Project one formal FullCoT parent into the V2 training contract.
 
-    The V1 projector is reused only for its proven input/provenance gate.  V2
-    then replaces the action-masked span policy with one all-target span.  A
-    dropout row is never independently admitted: it is derived from the same
-    validated V2 FullCoT object in this call.
+    V2 owns its modality projection.  V1 remains available for legacy rows and
+    is not used as an intermediate because its waypoint selection is disabled.
+    A dropout row is derived from the same validated V2 FullCoT object.
     """
 
     if task_type not in {"full_cot", "reasoning_dropout"}:
         raise ValueError(
             f"unsupported Stage I V2 Reasoning task_type: {task_type}")
-    legacy_full = project_stage_i_reasoning_view_v1(
-        view,
-        task_type="full_cot",
-        modality_profile_id=modality_profile_id,
+    typed = view if isinstance(view, ReasoningTrainingViewV4) else ReasoningTrainingViewV4.model_validate(view)
+    if typed.release_track != "formal_training" or not typed.artifact_training_eligible:
+        raise ValueError("Stage I accepts only formal training-ready Reasoning views")
+    if typed.audit_id is None:
+        raise ValueError("Stage I Reasoning projection requires action audit_id")
+    parent_source_fingerprint = str(typed.metadata.get("source_fingerprint") or "")
+    if len(parent_source_fingerprint) != 64:
+        raise ValueError("Stage I Reasoning parent source_fingerprint is missing")
+    profile = get_stage_i_modality_profile_v2(modality_profile_id)
+    projected = _project_visible_inputs_v2(
+        images=typed.images,
+        image_roles=typed.image_roles,
+        instruction=typed.instruction,
+        model_visible_context=typed.model_visible_context,
+        evidence_catalog=typed.evidence_catalog,
+        input_modalities=typed.input_modalities,
+        profile=profile,
         instruction_training_role=instruction_training_role,
     )
-    if not isinstance(legacy_full, StageIFullCoTViewV1):
-        raise RuntimeError(
-            "V2 FullCoT projection did not produce a FullCoT parent")
-    full = upgrade_stage_i_full_cot_view_v2(legacy_full)
+    full = _project_full_cot_view_v2(
+        typed,
+        projected=projected,
+        parent_source_fingerprint=parent_source_fingerprint,
+    )
     if task_type == "full_cot":
         return full
     return project_reasoning_dropout_from_full_v2(full)
@@ -1197,8 +1560,11 @@ def _finalize_view_v2(model_type, payload: dict[str, Any]):
 
 __all__ = [
     "STAGE_I_MODALITY_PROFILES_V1",
+    "STAGE_I_MODALITY_PROFILES_V2",
     "StageIModalityProfileV1",
+    "StageIModalityProfileV2",
     "get_stage_i_modality_profile_v1",
+    "get_stage_i_modality_profile_v2",
     "project_stage_i_reasoning_view_v1",
     "project_stage_i_reasoning_view_with_audit_v1",
     "project_stage_i_reasoning_view_v2",

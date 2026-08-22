@@ -3,10 +3,10 @@
     "stage_i_instruction_provenance_v1.schema.json": "e6abb7c208d7e9e863f4bdb6830adb60de32b44014d1461e66b4e6ef62a33cc7",
     "stage_i_projection_drop_v1.schema.json": "e8157de6ebe28d9ae75922594df3233af013c3b5afa58fe01375f6bb779a1efc",
     "stage_i_training_view_v1.schema.json": "64a4977651ba8ea27574d8172e2a876cd6ee5a2b31e124af7013b12d2128fbb5",
-    "stage_i_training_view_v2.schema.json": "b813548bbc80472d6f85a6bfb32f927a2f6fbf9795229bc20fb8a3ab035a70a3"
+    "stage_i_training_view_v2.schema.json": "271ba649398f47899bce5d1e93c9b974fc4c82a45a2371ba21d93eed986bf388"
   },
   "canonical_source_sha256": {
-    "src/mcp_server/contracts/stage_i_sft.py": "ffb845aadb0787116f435e213ca0bc2ef2134fd309f4f03f315ddd968705d40c",
+    "src/mcp_server/contracts/stage_i_sft.py": "2aa3cbe5873d260f9ca78739b84017d7bc757b053b3bd70b30b019dc311ac584",
     "src/mcp_server/data/stage_i_views.py": "015a1bd506fb74c9e3b3e63de12cf93a9427f0965bde491dd9bfac1feade0cf8"
   },
   "instruction_provenance_schema_version": "urbannav_stage_i_instruction_provenance_v1",

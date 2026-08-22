@@ -16,6 +16,7 @@ from mcp_server.contracts.stage_i_sft import (
 )
 from mcp_server.contracts.stage_ii_cfm import (
     StageIITrajectoryTargetV1,
+    StageIITrajectoryTargetV2,
 )
 from mcp_server.data.io.jsonl import iter_jsonl, write_jsonl_atomic
 
@@ -117,7 +118,7 @@ def build_stage_i_openloop_reference_v1(
 
 def build_stage_ii_openloop_reference_from_parent_v1(
     stage_i_view: StageIFullCoTViewV1 | StageIFullCoTViewV2,
-    trajectory_target: StageIITrajectoryTargetV1,
+    trajectory_target: StageIITrajectoryTargetV1 | StageIITrajectoryTargetV2,
 ) -> OpenLoopReferenceV1:
     """Build a Stage II reference before Pass-R/Pass-D survivor filtering.
 
@@ -125,7 +126,9 @@ def build_stage_ii_openloop_reference_from_parent_v1(
         stage_i_view: Formal V1 or V2-envelope FullCoT input defining public
             case identity.  The name remains V1 because the reference stores
             the frozen CFM-V1 trajectory target, not the Stage-I envelope.
-        trajectory_target: Valid deterministic metric-FLU target.
+        trajectory_target: Valid deterministic metric-FLU target, either the
+            retained 16-point compatibility target or the current 32-point
+            V2 target.
 
     Returns:
         Hidden trajectory reference on the complete eligible denominator.

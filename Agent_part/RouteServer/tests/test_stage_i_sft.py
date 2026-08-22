@@ -394,6 +394,44 @@ def test_v2_full_cot_has_a_deterministic_no_cot_projection_primitive() -> None:
             dropout.model_dump(mode="json"))
 
 
+def test_v2_waypoint_profile_retains_independent_visible_condition() -> None:
+    """V2 waypoint input reaches the prompt contract without target leakage."""
+
+    payload = _formal_reasoning_view(label="left_20").model_dump(mode="json")
+    payload["input_modalities"]["waypoint"] = True
+    payload["evidence_catalog"].append({
+        "ref": "waypoint.active",
+        "modality": "waypoint",
+        "summary": "independent planner route",
+    })
+    payload["model_visible_context"] = {
+        "waypoint": {
+            "goal_geometry": {
+                "schema_version": "urbannav_goal_geometry_v2",
+                "coordinate_frame": "current_ego_flu",
+                "points": [{"x": 8.0, "y": 1.0, "kind": "goal"}],
+            },
+            "waypoint_input": {
+                "available": True,
+                "independent_of_future_target": True,
+                "source": "independent_gps_route",
+            },
+        }
+    }
+    source = ReasoningTrainingViewV4.model_validate(payload)
+    projected = project_stage_i_reasoning_view_v2(
+        source,
+        task_type="full_cot",
+        modality_profile_id="fpv_instruction_waypoint_v2",
+        instruction_training_role="primary",
+    )
+
+    assert projected.training_selection.waypoint is True
+    assert projected.input_modalities.waypoint is True
+    assert "waypoint" in projected.model_visible_context
+    assert any(item.modality == "waypoint" for item in projected.evidence_catalog)
+
+
 def test_v2_batch_materializes_parents_but_not_dropout_rows(
         tmp_path: Path) -> None:
     """The epoch compiler, not the source pool, owns dropout selection."""

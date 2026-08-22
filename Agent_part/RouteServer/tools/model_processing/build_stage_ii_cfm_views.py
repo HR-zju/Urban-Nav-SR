@@ -15,7 +15,13 @@ from mcp_server.contracts.stage_i_sft import (
     parse_stage_i_training_view_v1,
     parse_stage_i_training_view_v2,
 )
-from mcp_server.contracts.stage_ii_cfm import StageIIContextCacheV1
+from mcp_server.contracts.stage_ii_cfm import (
+    StageIIContextCacheV1,
+    StageIITrajectorySidecarV2,
+    StageIITrajectoryTargetV1,
+    StageIITrajectoryTargetV2,
+    STAGE_II_TRAJECTORY_SIDECAR_V2_SCHEMA_VERSION,
+)
 from mcp_server.data.stage_ii_sources import (
     load_stage_ii_trajectory_source_registry_v1,
 )
@@ -27,6 +33,7 @@ from mcp_server.data.stage_ii_views import (
     build_stage_ii_projection_drop_v1,
     project_stage_ii_cfm_view_v1,
     project_stage_ii_cfm_view_v1_from_stage_i_v2,
+    project_stage_ii_cfm_view_v2,
     project_stage_ii_direct_latent_view_from_stage_i_v2,
 )
 
@@ -93,7 +100,7 @@ def build_stage_ii_cfm_views(
     source_registry = load_stage_ii_trajectory_source_registry_v1(
         trajectory_source_registry_json
     )
-    trajectories = _index_unique(_iter_jsonl(trajectory_jsonl), "stage_i_sample_id")
+    trajectories = _index_trajectory_inputs(trajectory_jsonl)
     if denominator_only or direct_latent:
         reasoning = {}
         decisions = {}
@@ -117,40 +124,24 @@ def build_stage_ii_cfm_views(
             counts["skipped_non_full_cot"] += 1
             continue
         try:
-            raw_target = trajectories[typed.sample_id]
+            raw_target = _trajectory_input_for_view(trajectories, typed)
             try:
                 source_spec = source_registry.dataset(typed.dataset_source)
             except KeyError as exc:
                 raise ValueError("trajectory_source_registry_missing")
             if source_spec.status != "enabled":
                 raise ValueError("trajectory_dataset_disabled")
-            source_format = str(raw_target.get("source_format") or "")
-            yaw_source = str(raw_target.get("yaw_source") or "")
-            if source_format != source_spec.source_format:
-                raise ValueError("trajectory_source_format_registry_mismatch")
-            if yaw_source != source_spec.yaw_source:
-                raise ValueError("trajectory_yaw_source_registry_mismatch")
-            build = build_stage_ii_trajectory_target_v1(
-                sample_id=typed.sample_id,
-                dataset_source=typed.dataset_source,
-                raw_trajectory=raw_target["trajectory_ego_t"],
-                action_mask=raw_target.get("action_mask"),
-                source_format=source_format,
-                trajectory_source=str(raw_target.get("trajectory_source") or ""),
-                allowed_trajectory_sources=source_spec.allowed_trajectory_sources,
-                yaw_source=yaw_source,
+            target, qc, review_status, is_v2_sidecar, resolved_split_group_id = _resolve_trajectory_input(
+                typed,
+                raw_target,
+                source_spec=source_spec,
                 max_source_step_m=max_source_step_m,
             )
-            qc_rows.append(build.qc.model_dump(mode="json"))
-            counts[f"trajectory_qc:{build.qc.status}"] += 1
-            if build.target is None:
-                raise ValueError(str(build.qc.reason_codes[0]))
-            review_status = str(raw_target.get("review_status") or "")
-            if review_status not in {"not_required", "resolved"}:
-                raise ValueError("trajectory_review_not_resolved")
+            qc_rows.append(qc)
+            counts[f"trajectory_qc:{qc['status']}"] += 1
             reference = build_stage_ii_openloop_reference_from_parent_v1(
                 typed,
-                build.target,
+                target,
             )
             references.append(
                 reference.model_dump(mode="json", exclude_none=True)
@@ -171,11 +162,15 @@ def build_stage_ii_cfm_views(
                 counts["denominator_only_rows"] += 1
                 continue
             if direct_latent:
+                if is_v2_sidecar:
+                    raise ValueError(
+                        "direct_latent does not support Stage II V2 sidecars"
+                    )
                 if not isinstance(typed, StageIFullCoTViewV2):
                     raise ValueError("direct_latent_requires_stage_i_full_cot_v2")
                 view = project_stage_ii_direct_latent_view_from_stage_i_v2(
                     typed,
-                    trajectory_target=build.target,
+                    trajectory_target=target,
                     review_status=review_status,
                 )
                 counts["direct_latent_rows"] += 1
@@ -185,18 +180,30 @@ def build_stage_ii_cfm_views(
                     raise ValueError("reasoning_context_cache_missing")
                 if cache_key not in decisions:
                     raise ValueError("decision_context_cache_missing")
-                projector = (
-                    project_stage_ii_cfm_view_v1
-                    if isinstance(typed, StageIFullCoTViewV1)
-                    else project_stage_ii_cfm_view_v1_from_stage_i_v2
-                )
-                view = projector(
-                    typed,
-                    trajectory_target=build.target,
-                    reasoning_context=reasoning[cache_key],
-                    decision_context=decisions[cache_key],
-                    review_status=review_status,
-                )
+                if is_v2_sidecar:
+                    if not isinstance(typed, StageIFullCoTViewV2):
+                        raise ValueError("Stage II V2 sidecar requires V2 FullCoT")
+                    view = project_stage_ii_cfm_view_v2(
+                        typed,
+                        trajectory_target=target,
+                        reasoning_context=reasoning[cache_key],
+                        decision_context=decisions[cache_key],
+                        review_status=review_status,
+                        split_group_id=resolved_split_group_id,
+                    )
+                else:
+                    projector = (
+                        project_stage_ii_cfm_view_v1
+                        if isinstance(typed, StageIFullCoTViewV1)
+                        else project_stage_ii_cfm_view_v1_from_stage_i_v2
+                    )
+                    view = projector(
+                        typed,
+                        trajectory_target=target,
+                        reasoning_context=reasoning[cache_key],
+                        decision_context=decisions[cache_key],
+                        review_status=review_status,
+                    )
         except (KeyError, TypeError, ValueError) as exc:
             drop = build_stage_ii_projection_drop_v1(
                 parent_sample_id=typed.sample_id,
@@ -262,6 +269,13 @@ def build_stage_ii_cfm_views(
             if direct_latent
             else "complete_view"
         ),
+        "join_contract": {
+            "split_group_key": (
+                "dataset_qualified(stage_i.split_group_id) == "
+                "dataset_qualified(trajectory.split_group_id)"
+            ),
+            "split_identity_adapter_id": "dataset_qualified_split_group_v1",
+        },
         "counts": dict(counts),
     }
 
@@ -276,6 +290,128 @@ def _index_unique(rows, key: str) -> dict[str, dict[str, Any]]:
             raise ValueError(f"missing or duplicate {key}: {identity!r}")
         result[identity] = row
     return result
+
+
+def _index_trajectory_inputs(path: str | Path) -> dict[str, dict[str, Any]]:
+    """Index legacy targets or V2 sidecars without changing legacy keys."""
+
+    result: dict[str, dict[str, Any]] = {}
+    for row in _iter_jsonl(path):
+        if row.get("schema_version") == STAGE_II_TRAJECTORY_SIDECAR_V2_SCHEMA_VERSION:
+            sidecar = StageIITrajectorySidecarV2.model_validate(row)
+            key = sidecar.source_group_id
+        else:
+            key = str(row.get("stage_i_sample_id") or "")
+            if not key:
+                raise ValueError("trajectory input lacks stage_i_sample_id or V2 sidecar schema")
+        if key in result:
+            raise ValueError(f"duplicate trajectory input identity: {key}")
+        result[key] = row
+    return result
+
+
+def _trajectory_input_for_view(
+    trajectories: Mapping[str, Mapping[str, Any]],
+    stage_i_view: StageIFullCoTViewV1 | StageIFullCoTViewV2,
+) -> Mapping[str, Any]:
+    """Resolve old exact identity first, then the V2 source-group identity."""
+
+    exact = trajectories.get(stage_i_view.sample_id)
+    by_source = trajectories.get(stage_i_view.source_group_id)
+    if exact is not None and by_source is not None and exact != by_source:
+        raise ValueError("conflicting trajectory input identities for Stage I parent")
+    if exact is not None:
+        return exact
+    if by_source is not None:
+        return by_source
+    raise KeyError(stage_i_view.sample_id)
+
+
+def _resolve_trajectory_input(
+    stage_i_view: StageIFullCoTViewV1 | StageIFullCoTViewV2,
+    raw_target: Mapping[str, Any],
+    *,
+    source_spec: Any,
+    max_source_step_m: float | None,
+) -> tuple[
+    StageIITrajectoryTargetV1 | StageIITrajectoryTargetV2,
+    dict[str, Any],
+    str,
+    bool,
+    str,
+]:
+    """Validate either a legacy target or a canonical V2 sidecar."""
+
+    if raw_target.get("schema_version") == STAGE_II_TRAJECTORY_SIDECAR_V2_SCHEMA_VERSION:
+        sidecar = StageIITrajectorySidecarV2.model_validate(raw_target)
+        if (
+            sidecar.source_group_id != stage_i_view.source_group_id
+            or sidecar.dataset_source != stage_i_view.dataset_source
+        ):
+            raise ValueError("Stage II V2 sidecar/source identity mismatch")
+        if _dataset_qualified_split_group(
+            dataset_source=sidecar.dataset_source,
+            split_group_id=sidecar.split_group_id,
+        ) != _dataset_qualified_split_group(
+            dataset_source=stage_i_view.dataset_source,
+            split_group_id=stage_i_view.split_group_id,
+        ):
+            raise ValueError("Stage II V2 sidecar/source identity mismatch")
+        target = sidecar.trajectory_target
+        # V2 sidecars carry their own timed-pose policy.  The registry fields
+        # used by the legacy V1 target builder describe a different raw-row
+        # contract and must not silently reinterpret this target.
+        # Keep the Stage-I split in the emitted view so existing Pass-R/Pass-D
+        # caches remain bound to the exact observation identity.  The explicit
+        # dataset-qualified adapter is only a join comparison rule.
+        return (
+            target,
+            sidecar.trajectory_qc.model_dump(mode="json"),
+            "not_required",
+            True,
+            stage_i_view.split_group_id,
+        )
+
+    source_format = str(raw_target.get("source_format") or "")
+    yaw_source = str(raw_target.get("yaw_source") or "")
+    if source_format != source_spec.source_format:
+        raise ValueError("trajectory_source_format_registry_mismatch")
+    if yaw_source != source_spec.yaw_source:
+        raise ValueError("trajectory_yaw_source_registry_mismatch")
+    build = build_stage_ii_trajectory_target_v1(
+        sample_id=stage_i_view.sample_id,
+        dataset_source=stage_i_view.dataset_source,
+        raw_trajectory=raw_target["trajectory_ego_t"],
+        action_mask=raw_target.get("action_mask"),
+        source_format=source_format,
+        trajectory_source=str(raw_target.get("trajectory_source") or ""),
+        allowed_trajectory_sources=source_spec.allowed_trajectory_sources,
+        yaw_source=yaw_source,
+        max_source_step_m=max_source_step_m,
+    )
+    if build.target is None:
+        raise ValueError(str(build.qc.reason_codes[0]))
+    review_status = str(raw_target.get("review_status") or "")
+    if review_status not in {"not_required", "resolved"}:
+        raise ValueError("trajectory_review_not_resolved")
+    return (
+        build.target,
+        build.qc.model_dump(mode="json"),
+        review_status,
+        False,
+        stage_i_view.split_group_id,
+    )
+
+
+def _dataset_qualified_split_group(
+    *,
+    dataset_source: str,
+    split_group_id: str,
+) -> str:
+    """Apply the explicit V4-to-V2 split identity compatibility rule."""
+
+    prefix = f"{dataset_source}:"
+    return split_group_id if split_group_id.startswith(prefix) else prefix + split_group_id
 
 
 def _parse_full_cot(

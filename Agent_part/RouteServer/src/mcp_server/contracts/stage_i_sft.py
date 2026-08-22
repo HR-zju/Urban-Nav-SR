@@ -62,6 +62,24 @@ StageIModalityProfileIdV1 = Literal[
     "fpv_temporal_bev_v1",
     "fpv_temporal_instruction_bev_v1",
 ]
+StageIModalityProfileIdV2 = Literal[
+    "fpv_current_v1",
+    "fpv_temporal_v1",
+    "fpv_instruction_v1",
+    "fpv_bev_v1",
+    "fpv_instruction_bev_v1",
+    "fpv_temporal_instruction_v1",
+    "fpv_temporal_bev_v1",
+    "fpv_temporal_instruction_bev_v1",
+    "fpv_waypoint_v2",
+    "fpv_temporal_waypoint_v2",
+    "fpv_instruction_waypoint_v2",
+    "fpv_bev_waypoint_v2",
+    "fpv_instruction_bev_waypoint_v2",
+    "fpv_temporal_instruction_waypoint_v2",
+    "fpv_temporal_bev_waypoint_v2",
+    "fpv_temporal_instruction_bev_waypoint_v2",
+]
 StageIParentArtifactKindV1 = Literal["reasoning_v4_6", "vqa_v2_0"]
 StageILossChannelV1 = Literal["full_cot", "vqa", "decision"]
 StageIVQALabelSourceV1 = Literal["derived_gt", "lvlm_weak", "external_gt"]
@@ -226,6 +244,20 @@ class StageIModalitySelectionV1(BaseModel):
     waypoint: Literal[False] = False
 
 
+class StageIModalitySelectionV2(BaseModel):
+    """Record V2 retained inputs without silently disabling waypoints."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    current_fpv: Literal[True] = True
+    history_fpv: bool = False
+    instruction: bool = False
+    bev: bool = False
+    goal_image: Literal[False] = False
+    pixel_goal: Literal[False] = False
+    waypoint: bool = False
+
+
 class StageIModalityStateV1(BaseModel):
     """Expose whether each optional modality is present, absent, or dropped.
 
@@ -246,6 +278,14 @@ class StageIModalityStateV1(BaseModel):
     goal_image: StageIModalityStateValueV1
     pixel_goal: StageIModalityStateValueV1
     waypoint: StageIModalityStateValueV1
+
+
+class StageIModalityAvailabilityV2(StageIModalityAvailabilityV1):
+    """Record V2 native availability, including an optional waypoint input."""
+
+
+class StageIModalityStateV2(StageIModalityStateV1):
+    """Expose V2 present/missing/dropout state for optional waypoints."""
 
 
 class StageIAnswerabilityV1(BaseModel):
@@ -708,10 +748,10 @@ class StageITrainingViewBaseV2(BaseModel):
     source_group_id: str = Field(min_length=1, max_length=240)
     split_group_id: str = Field(min_length=1, max_length=240)
     dataset_source: str = Field(min_length=1, max_length=128)
-    modality_profile_id: StageIModalityProfileIdV1
-    native_availability: StageIModalityAvailabilityV1
-    training_selection: StageIModalitySelectionV1
-    modality_state: StageIModalityStateV1
+    modality_profile_id: StageIModalityProfileIdV2
+    native_availability: StageIModalityAvailabilityV2
+    training_selection: StageIModalitySelectionV2
+    modality_state: StageIModalityStateV2
     instruction_training_role: StageIInstructionTrainingRoleV1
     answerability: StageIAnswerabilityV2
     images: list[str] = Field(min_length=1, max_length=16)
@@ -739,6 +779,64 @@ class StageITrainingViewBaseV2(BaseModel):
             raise ValueError("Stage I V2 images and image_roles must be aligned and unique")
         if self.image_roles.count("fpv.current") != 1:
             raise ValueError("Stage I V2 requires exactly one fpv.current")
+        availability = self.native_availability.model_dump(mode="python")
+        selection = self.training_selection.model_dump(mode="python")
+        states = self.modality_state.model_dump(mode="python")
+        for name in (
+            "history_fpv",
+            "instruction",
+            "bev",
+            "goal_image",
+            "pixel_goal",
+            "waypoint",
+        ):
+            if selection[name] and not availability[name]:
+                raise ValueError(f"selected Stage I V2 modality is not native: {name}")
+            expected = (
+                "present"
+                if selection[name]
+                else "training_dropout"
+                if availability[name]
+                else "native_missing"
+            )
+            if states[name] != expected:
+                raise ValueError(
+                    f"Stage I V2 modality_state mismatch: {name}={states[name]}, expected={expected}"
+                )
+        if selection["goal_image"] or selection["pixel_goal"]:
+            raise ValueError("unsupported Stage I V2 modality was selected")
+        flags = self.input_modalities.model_dump(mode="python")
+        for name, flag_name in {
+            "history_fpv": "history_fpv",
+            "instruction": "instruction",
+            "bev": "bev",
+            "goal_image": "goal_image",
+            "pixel_goal": "pixel_goal",
+            "waypoint": "waypoint",
+        }.items():
+            if bool(flags[flag_name]) != bool(selection[name]):
+                raise ValueError(f"Stage I V2 input_modalities mismatch: {name}")
+        if (self.instruction is not None) != bool(selection["instruction"]):
+            raise ValueError("Stage I V2 instruction visibility mismatch")
+        if selection["instruction"] and self.instruction_training_role != "primary":
+            raise ValueError("selected Stage I V2 instruction must have training_role=primary")
+        if not availability["instruction"] and self.instruction_training_role != "not_present":
+            raise ValueError("missing instruction requires training_role=not_present")
+        if availability["instruction"] and self.instruction_training_role == "not_present":
+            raise ValueError("native instruction cannot use training_role=not_present")
+        visible_context = self.model_visible_context
+        unsupported_context = sorted(
+            set(visible_context) - {"goal", "pixel_goal", "waypoint", "waypoints"}
+        )
+        if unsupported_context:
+            raise ValueError(
+                f"unsupported Stage I V2 visible context keys: {unsupported_context}"
+            )
+        waypoint_context = visible_context.get("waypoint", visible_context.get("waypoints"))
+        if selection["waypoint"] and not isinstance(waypoint_context, dict):
+            raise ValueError("selected Stage I V2 waypoint requires visible waypoint context")
+        if not selection["waypoint"] and waypoint_context is not None:
+            raise ValueError("Stage I V2 waypoint context requires waypoint selection")
         cursor = 0
         for span in self.loss_spans:
             if span.start != cursor or span.end > len(self.assistant_text):
@@ -954,6 +1052,10 @@ __all__ = [
     "StageIModalityProfileIdV1",
     "StageIModalitySelectionV1",
     "StageIModalityStateV1",
+    "StageIModalityAvailabilityV2",
+    "StageIModalityProfileIdV2",
+    "StageIModalitySelectionV2",
+    "StageIModalityStateV2",
     "StageIProjectionDropV1",
     "StageITaskTypeV1",
     "StageITaskTypeV2",

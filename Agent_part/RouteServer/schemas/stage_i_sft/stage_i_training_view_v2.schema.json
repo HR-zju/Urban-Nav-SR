@@ -934,13 +934,21 @@
             "fpv_instruction_bev_v1",
             "fpv_temporal_instruction_v1",
             "fpv_temporal_bev_v1",
-            "fpv_temporal_instruction_bev_v1"
+            "fpv_temporal_instruction_bev_v1",
+            "fpv_waypoint_v2",
+            "fpv_temporal_waypoint_v2",
+            "fpv_instruction_waypoint_v2",
+            "fpv_bev_waypoint_v2",
+            "fpv_instruction_bev_waypoint_v2",
+            "fpv_temporal_instruction_waypoint_v2",
+            "fpv_temporal_bev_waypoint_v2",
+            "fpv_temporal_instruction_bev_waypoint_v2"
           ],
           "title": "Modality Profile Id",
           "type": "string"
         },
         "modality_state": {
-          "$ref": "#/$defs/StageIModalityStateV1"
+          "$ref": "#/$defs/StageIModalityStateV2"
         },
         "model_visible_context": {
           "additionalProperties": true,
@@ -948,7 +956,7 @@
           "type": "object"
         },
         "native_availability": {
-          "$ref": "#/$defs/StageIModalityAvailabilityV1"
+          "$ref": "#/$defs/StageIModalityAvailabilityV2"
         },
         "parent_annotation_id": {
           "anyOf": [
@@ -1066,7 +1074,7 @@
           "type": "string"
         },
         "training_selection": {
-          "$ref": "#/$defs/StageIModalitySelectionV1"
+          "$ref": "#/$defs/StageIModalitySelectionV2"
         }
       },
       "required": [
@@ -1137,9 +1145,9 @@
       "title": "StageILossSpanV2",
       "type": "object"
     },
-    "StageIModalityAvailabilityV1": {
+    "StageIModalityAvailabilityV2": {
       "additionalProperties": false,
-      "description": "Record native optional-modality availability before training dropout.\n\nArgs:\n    current_fpv: Current FPV is mandatory for every Stage I view.\n    history_fpv: At least one history FPV image is native input.\n    instruction: A prompt-visible instruction is native input.\n    bev: A prompt-visible BEV image is native input.\n    goal_image: A goal image exists but is unsupported in Stage I v1.\n    pixel_goal: A pixel goal exists but is unsupported in Stage I v1.\n    waypoint: A waypoint exists but is dormant in Stage I v1.",
+      "description": "Record V2 native availability, including an optional waypoint input.",
       "properties": {
         "bev": {
           "default": false,
@@ -1178,12 +1186,12 @@
           "type": "boolean"
         }
       },
-      "title": "StageIModalityAvailabilityV1",
+      "title": "StageIModalityAvailabilityV2",
       "type": "object"
     },
-    "StageIModalitySelectionV1": {
+    "StageIModalitySelectionV2": {
       "additionalProperties": false,
-      "description": "Record the optional modalities retained by one training view.\n\nArgs:\n    current_fpv: Current FPV is always retained.\n    history_fpv: Retain native history FPV images.\n    instruction: Retain the native instruction.\n    bev: Retain native BEV images.\n    goal_image: Always false in Stage I v1.\n    pixel_goal: Always false in Stage I v1.\n    waypoint: Always false in Stage I v1.",
+      "description": "Record V2 retained inputs without silently disabling waypoints.",
       "properties": {
         "bev": {
           "default": false,
@@ -1219,18 +1227,17 @@
           "type": "boolean"
         },
         "waypoint": {
-          "const": false,
           "default": false,
           "title": "Waypoint",
           "type": "boolean"
         }
       },
-      "title": "StageIModalitySelectionV1",
+      "title": "StageIModalitySelectionV2",
       "type": "object"
     },
-    "StageIModalityStateV1": {
+    "StageIModalityStateV2": {
       "additionalProperties": false,
-      "description": "Expose whether each optional modality is present, absent, or dropped.\n\nArgs:\n    history_fpv: State of history FPV.\n    instruction: State of the instruction.\n    bev: State of BEV.\n    goal_image: State of goal-image input.\n    pixel_goal: State of pixel-goal input.\n    waypoint: State of waypoint input.",
+      "description": "Expose V2 present/missing/dropout state for optional waypoints.",
       "properties": {
         "bev": {
           "enum": [
@@ -1295,7 +1302,7 @@
         "pixel_goal",
         "waypoint"
       ],
-      "title": "StageIModalityStateV1",
+      "title": "StageIModalityStateV2",
       "type": "object"
     },
     "StageIReasoningDropoutLinkV2": {
@@ -1470,13 +1477,21 @@
             "fpv_instruction_bev_v1",
             "fpv_temporal_instruction_v1",
             "fpv_temporal_bev_v1",
-            "fpv_temporal_instruction_bev_v1"
+            "fpv_temporal_instruction_bev_v1",
+            "fpv_waypoint_v2",
+            "fpv_temporal_waypoint_v2",
+            "fpv_instruction_waypoint_v2",
+            "fpv_bev_waypoint_v2",
+            "fpv_instruction_bev_waypoint_v2",
+            "fpv_temporal_instruction_waypoint_v2",
+            "fpv_temporal_bev_waypoint_v2",
+            "fpv_temporal_instruction_bev_waypoint_v2"
           ],
           "title": "Modality Profile Id",
           "type": "string"
         },
         "modality_state": {
-          "$ref": "#/$defs/StageIModalityStateV1"
+          "$ref": "#/$defs/StageIModalityStateV2"
         },
         "model_visible_context": {
           "additionalProperties": true,
@@ -1484,7 +1499,7 @@
           "type": "object"
         },
         "native_availability": {
-          "$ref": "#/$defs/StageIModalityAvailabilityV1"
+          "$ref": "#/$defs/StageIModalityAvailabilityV2"
         },
         "parent_annotation_id": {
           "anyOf": [
@@ -1586,7 +1601,7 @@
           "type": "string"
         },
         "training_selection": {
-          "$ref": "#/$defs/StageIModalitySelectionV1"
+          "$ref": "#/$defs/StageIModalitySelectionV2"
         }
       },
       "required": [
@@ -1751,13 +1766,21 @@
             "fpv_instruction_bev_v1",
             "fpv_temporal_instruction_v1",
             "fpv_temporal_bev_v1",
-            "fpv_temporal_instruction_bev_v1"
+            "fpv_temporal_instruction_bev_v1",
+            "fpv_waypoint_v2",
+            "fpv_temporal_waypoint_v2",
+            "fpv_instruction_waypoint_v2",
+            "fpv_bev_waypoint_v2",
+            "fpv_instruction_bev_waypoint_v2",
+            "fpv_temporal_instruction_waypoint_v2",
+            "fpv_temporal_bev_waypoint_v2",
+            "fpv_temporal_instruction_bev_waypoint_v2"
           ],
           "title": "Modality Profile Id",
           "type": "string"
         },
         "modality_state": {
-          "$ref": "#/$defs/StageIModalityStateV1"
+          "$ref": "#/$defs/StageIModalityStateV2"
         },
         "model_visible_context": {
           "additionalProperties": true,
@@ -1765,7 +1788,7 @@
           "type": "object"
         },
         "native_availability": {
-          "$ref": "#/$defs/StageIModalityAvailabilityV1"
+          "$ref": "#/$defs/StageIModalityAvailabilityV2"
         },
         "parent_annotation_id": {
           "anyOf": [
@@ -1902,7 +1925,7 @@
           "type": "string"
         },
         "training_selection": {
-          "$ref": "#/$defs/StageIModalitySelectionV1"
+          "$ref": "#/$defs/StageIModalitySelectionV2"
         }
       },
       "required": [
