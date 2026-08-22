@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from mcp_server.contracts.df_opd import (
     DFOPDCanonicalSampleV1,
     DFOPDProfileV1,
@@ -15,6 +17,8 @@ from mcp_server.contracts.df_opd import (
 from mcp_server.contracts.df_opd_certification import DFOPDTeacherCertificationScoreV1
 from mcp_server.contracts.df_opd_review import DFOPDTeacherReviewPredictionV1
 from mcp_server.data.df_opd.review import build_df_opd_private_review_bundle_v1
+from mcp_server.data.df_opd.student_review import build_df_opd_student_review_bundle_v1
+from tools.evaluation.evaluate_df_opd_student import validate_planned_visualization_manifest
 from mcp_server.data.io.jsonl import file_sha256, write_jsonl_atomic
 
 
@@ -154,3 +158,165 @@ def test_private_review_bundle_links_local_media_and_never_becomes_public(tmp_pa
     assert "Private DF-OPD four-view review" in page
     assert "exact oracle" in page
     assert "do not publish" in page
+
+
+def test_student_review_bundle_renders_gt_and_student_trajectory(tmp_path):
+    """Student review keeps the canonical identity and renders both trajectories."""
+
+    sample = _canonical(tmp_path)
+    canonical_path = tmp_path / "canonical.jsonl"
+    prediction_path = tmp_path / "student-predictions.jsonl"
+    html_path = tmp_path / "student-review.html"
+    manifest_path = tmp_path / "student-review.manifest.json"
+    visualization_index_path = tmp_path / "visualization_index.json"
+    write_jsonl_atomic(canonical_path, [sample.model_dump(mode="json")])
+    write_jsonl_atomic(prediction_path, [{
+        "sample_id": sample.sample_id,
+        "canonical_digest": sample.canonical_digest,
+        "df_opd_profile_id": sample.profile.profile_id,
+        "df_opd_profile_digest": sample.profile.profile_digest,
+        "decision": sample.decision_target,
+        "trajectory_ego_t": [list(point) for point in sample.trajectory_ego_t],
+        "latency_ms": 10.0,
+    }])
+
+    receipt = build_df_opd_student_review_bundle_v1(
+        canonical_path, [prediction_path], html_path, manifest_path, media_root=tmp_path,
+        visualization_index_json=visualization_index_path, run_id="run-1", run_root=tmp_path,
+    )
+
+    page = html_path.read_text(encoding="utf-8")
+    visualization_index = json.loads(visualization_index_path.read_text(encoding="utf-8"))
+    assert receipt["private_artifact"] is True
+    assert "Private DF-OPD Student review" in page
+    assert "GT (green) / Student (blue)" in page
+    assert "ADE (m)" in page
+    assert "FDE (m)" in page
+    assert "ADE_T" in page
+    assert "file:///" in page
+    assert visualization_index["phase"] == "finished"
+    assert visualization_index["run_id"] == "run-1"
+    assert {item["id"] for item in visualization_index["artifacts"]} == {
+        "student_review_html",
+    }
+    assert receipt["visualization_index"] == str(visualization_index_path.resolve())
+
+
+def test_student_review_bundle_arguments_are_all_bound_to_finished_index(tmp_path):
+    """The evaluation output contract binds scorecard, review, receipt, and index."""
+
+    sample = _canonical(tmp_path)
+    canonical_path = tmp_path / "canonical.jsonl"
+    prediction_path = tmp_path / "student-predictions.jsonl"
+    html_path = tmp_path / "student-review.html"
+    receipt_path = tmp_path / "student-review.receipt.json"
+    index_path = tmp_path / "visualization_index.json"
+    scorecard_path = tmp_path / "scorecard.json"
+    scorecard_path.write_text("{}\n", encoding="utf-8")
+    write_jsonl_atomic(canonical_path, [sample.model_dump(mode="json")])
+    write_jsonl_atomic(prediction_path, [{
+        "sample_id": sample.sample_id,
+        "canonical_digest": sample.canonical_digest,
+        "df_opd_profile_id": sample.profile.profile_id,
+        "df_opd_profile_digest": sample.profile.profile_digest,
+        "decision": sample.decision_target,
+        "trajectory_ego_t": [list(point) for point in sample.trajectory_ego_t],
+    }])
+
+    receipt = build_df_opd_student_review_bundle_v1(
+        canonical_path, [prediction_path], html_path, receipt_path,
+        visualization_index_json=index_path, scorecard_json=scorecard_path,
+        run_id="eval-1", run_root=tmp_path,
+    )
+
+    assert html_path.is_file()
+    assert receipt_path.is_file()
+    assert index_path.is_file()
+    assert receipt["visualization_index_sha256"]
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    assert {item["id"] for item in index["artifacts"]} == {"scorecard", "student_review_html"}
+
+
+def test_planned_visualization_manifest_binds_evaluation_identity(tmp_path):
+    """The evaluator accepts only the planned manifest for the same run."""
+
+    path = tmp_path / "visualization_manifest.json"
+    path.write_text(
+        json.dumps({
+            "schema_version": "research_visualization_manifest_v1",
+            "run_id": "eval-1",
+            "run_kind": "evaluation",
+            "phase": "planned",
+            "run_root": str(tmp_path.resolve()),
+            "planned_outputs": [
+                {"id": "scorecard", "path": str((tmp_path / "scorecard.json").resolve())},
+                {"id": "student_review_html", "path": str((tmp_path / "student_review.html").resolve())},
+            ],
+        }),
+        encoding="utf-8",
+    )
+    manifest = validate_planned_visualization_manifest(
+        path,
+        run_id="eval-1",
+        run_root=tmp_path,
+        required_outputs={
+            "scorecard": tmp_path / "scorecard.json",
+            "student_review_html": tmp_path / "student_review.html",
+        },
+    )
+    assert manifest["phase"] == "planned"
+
+def test_planned_visualization_manifest_rejects_invalid_json_shapes(tmp_path):
+    """Malformed JSON objects fail as contract errors, not incidental tracebacks."""
+
+    path = tmp_path / "invalid_visualization_manifest.json"
+    path.write_text(
+        json.dumps({
+            "schema_version": "research_visualization_manifest_v1",
+            "run_id": "eval-1",
+            "run_kind": "evaluation",
+            "phase": "planned",
+            "run_root": str(tmp_path.resolve()),
+            "planned_outputs": {"scorecard": "wrong-shape"},
+        }),
+        encoding="utf-8",
+    )
+    try:
+        validate_planned_visualization_manifest(
+            path,
+            run_id="eval-1",
+            run_root=tmp_path,
+            required_outputs={"scorecard": tmp_path / "scorecard.json"},
+        )
+    except ValueError as exc:
+        assert "planned_outputs" in str(exc) or "planned output" in str(exc)
+    else:
+        raise AssertionError("invalid planned_outputs shape was accepted")
+
+def test_student_review_rejects_unknown_review_selection(tmp_path):
+    """Review selection must refer to the same canonical sample set."""
+
+    sample = _canonical(tmp_path)
+    canonical_path = tmp_path / "canonical.jsonl"
+    prediction_path = tmp_path / "student-predictions.jsonl"
+    selection_path = tmp_path / "selection.jsonl"
+    write_jsonl_atomic(canonical_path, [sample.model_dump(mode="json")])
+    write_jsonl_atomic(prediction_path, [{
+        "sample_id": sample.sample_id,
+        "canonical_digest": sample.canonical_digest,
+        "df_opd_profile_id": sample.profile.profile_id,
+        "df_opd_profile_digest": sample.profile.profile_digest,
+        "decision": sample.decision_target,
+        "trajectory_ego_t": [list(point) for point in sample.trajectory_ego_t],
+    }])
+    write_jsonl_atomic(selection_path, [{"sample_id": "missing-sample"}])
+
+    try:
+        build_df_opd_student_review_bundle_v1(
+            canonical_path, [prediction_path], tmp_path / "review.html",
+            tmp_path / "receipt.json", review_selection_jsonl=selection_path,
+        )
+    except ValueError as exc:
+        assert "unknown sample_id" in str(exc)
+    else:
+        raise AssertionError("unknown review sample_id was accepted")
