@@ -5,11 +5,12 @@ from __future__ import annotations
 import pytest
 
 from mcp_server.contracts.df_opd import DF_OPD_PROFILE_2S16, DF_OPD_PROFILES_V1
-from mcp_server.contracts.df_opd_certification import DFOPDTeacherCertificationScoreV1
+from mcp_server.contracts.df_opd_certification import (DFOPDTeacherCertificationScoreV1,
+                                                        DFOPDTeacherCertificationScoreV2)
 from mcp_server.data.io.jsonl import write_jsonl_atomic
 from mcp_server.eval.df_opd_teacher import (
     certify_df_opd_teacher_jsonl_v1,
-    certify_df_opd_teacher_v1,
+    certify_df_opd_teacher_jsonl_v2, certify_df_opd_teacher_v1, certify_df_opd_teacher_v2,
 )
 
 
@@ -112,3 +113,87 @@ def test_certification_jsonl_writes_compact_report_and_review_selection(tmp_path
     assert len(report["score_jsonl_sha256"]) == 64
     assert len(report["high_conflict_jsonl_sha256"]) == 64
     assert "decision_target" not in report
+
+
+def _score_rows_v2() -> list[DFOPDTeacherCertificationScoreV2]:
+    """Build paired V5 Decision-only rows with a positive TC/probe signal."""
+
+    profile = DF_OPD_PROFILES_V1[DF_OPD_PROFILE_2S16]
+    condition_values = {
+        "same_input_t0": False,
+        "correct_privilege_tc": True,
+        "shuffled_privilege_ts": False,
+        "exact_future_oracle_to": True,
+    }
+    rows = []
+    for index in range(3):
+        for condition, correct in condition_values.items():
+            rows.append(
+                DFOPDTeacherCertificationScoreV2(
+                    sample_id=f"sample-{index}",
+                    source_group_id=f"group-{index}",
+                    canonical_digest=f"{index + 1:064x}",
+                    profile_id=profile.profile_id,
+                    profile_digest=profile.profile_digest,
+                    dataset_fingerprint=_DATASET_DIGEST,
+                    checkpoint_digest=_CHECKPOINT_DIGEST,
+                    prediction_manifest_digest=_PREDICTION_DIGEST,
+                    seed=17,
+                    condition=condition,
+                    decision_strict_parse=correct,
+                    decision_correct=correct,
+                    decision_ce=0.1 if correct else 1.0,
+                    recoverability_probe_correct=correct if condition == "correct_privilege_tc" else None,
+                    context_conflict_score=float(index),
+                ))
+    return rows
+
+
+def test_v2_certification_promotes_on_decision_and_recoverability_only():
+    report, _ = certify_df_opd_teacher_v2(
+        _score_rows_v2(),
+        bootstrap_seed=23,
+        bootstrap_replicates=200,
+    )
+
+    assert report["evaluation_mode"] == "no_cot_decision_v1"
+    assert report["promotion_gate"]["status"] == "passed"
+    assert report["promotion_gate"]["student_opd_eligible"] is True
+    assert report["paired_comparisons"]["tc_minus_t0_decision_accuracy"]["ci95"]["lower"] > 0.0
+    assert report["paired_comparisons"]["recoverability_probe"]["metric_pairs"] == 3
+    assert report["paired_comparisons"]["to_minus_tc_decision_accuracy"]["metric_pairs"] == 3
+
+
+def test_v2_certification_rejects_missing_probe_or_condition_coverage():
+    rows = [row for row in _score_rows_v2() if row.condition != "exact_future_oracle_to"]
+    report, _ = certify_df_opd_teacher_v2(rows, bootstrap_seed=23, bootstrap_replicates=100)
+    assert report["promotion_gate"]["status"] == "insufficient_evidence"
+
+    rows = _score_rows_v2()
+    rows[1] = rows[1].model_copy(update={"decision_correct": False, "decision_strict_parse": False})
+    report, _ = certify_df_opd_teacher_v2(rows, bootstrap_seed=23, bootstrap_replicates=100)
+    assert report["promotion_gate"]["status"] == "failed"
+    assert report["promotion_gate"]["student_opd_eligible"] is False
+    assert report["promotion_gate"]["student_opd_eligible"] is False
+
+    rows = _score_rows_v2()
+    rows[1] = rows[1].model_copy(update={"recoverability_probe_correct": None})
+    report, _ = certify_df_opd_teacher_v2(rows, bootstrap_seed=23, bootstrap_replicates=100)
+    assert report["promotion_gate"]["status"] == "insufficient_evidence"
+
+
+def test_v2_certification_jsonl_writes_v2_report(tmp_path):
+    scores_path = tmp_path / "scores-v2.jsonl"
+    report_path = tmp_path / "report-v2.json"
+    write_jsonl_atomic(scores_path, [row.model_dump(mode="json") for row in _score_rows_v2()])
+
+    report = certify_df_opd_teacher_jsonl_v2(
+        scores_path,
+        report_path,
+        bootstrap_seed=23,
+        bootstrap_replicates=100,
+    )
+
+    assert report_path.is_file()
+    assert report["schema_version"] == "urbannav_df_opd_teacher_certification_report_v2"
+    assert len(report["score_jsonl_sha256"]) == 64

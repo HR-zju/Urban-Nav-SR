@@ -16,6 +16,7 @@ from mcp_server.contracts.df_opd import DF_OPD_PROFILES_V1, DFOPDTeacherConditio
 
 
 DF_OPD_TEACHER_CERTIFICATION_SCORE_SCHEMA_VERSION = "urbannav_df_opd_teacher_certification_score_v1"
+DF_OPD_TEACHER_CERTIFICATION_SCORE_SCHEMA_VERSION_V2 = "urbannav_df_opd_teacher_certification_score_v2"
 
 
 class DFOPDTeacherCertificationScoreV1(BaseModel):
@@ -119,7 +120,60 @@ class DFOPDTeacherCertificationScoreV1(BaseModel):
         return self
 
 
+class DFOPDTeacherCertificationScoreV2(BaseModel):
+    """Decision-only score row for the V5 Teacher promotion gate.
+
+    V2 intentionally removes trajectory metrics.  Continuous action quality
+    belongs to Student CFM/Recovery validation; this contract measures only
+    whether privileged TC improves the canonical no-CoT Decision and whether
+    that privilege is recoverable from the Student observation.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[DF_OPD_TEACHER_CERTIFICATION_SCORE_SCHEMA_VERSION_V2] = (
+        DF_OPD_TEACHER_CERTIFICATION_SCORE_SCHEMA_VERSION_V2
+    )
+    sample_id: str = Field(min_length=1, max_length=480)
+    source_group_id: str = Field(min_length=1, max_length=240)
+    canonical_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    profile_id: str = Field(min_length=1, max_length=128)
+    profile_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    dataset_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    checkpoint_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    prediction_manifest_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    seed: int
+    condition: DFOPDTeacherConditionV1
+    evaluation_mode: Literal["no_cot_decision_v1"] = "no_cot_decision_v1"
+    decision_strict_parse: bool
+    decision_correct: bool
+    decision_ce: float | None = Field(default=None, ge=0.0)
+    recoverability_probe_correct: bool | None = None
+    context_conflict_score: float | None = Field(default=None, ge=0.0)
+
+    @model_validator(mode="after")
+    def validate_score(self) -> "DFOPDTeacherCertificationScoreV2":
+        """Require the V2 identity and finite Decision-only diagnostics."""
+
+        try:
+            profile = DF_OPD_PROFILES_V1[self.profile_id]
+        except KeyError as exc:
+            raise ValueError(f"unknown DF-OPD profile_id: {self.profile_id!r}") from exc
+        if self.profile_digest != profile.profile_digest:
+            raise ValueError("DF-OPD certification profile_digest mismatch")
+        if not self.decision_strict_parse and self.decision_correct:
+            raise ValueError("Decision cannot be correct after strict-parse rejection")
+        for name, value in (
+                ("decision_ce", self.decision_ce),
+                ("context_conflict_score", self.context_conflict_score)):
+            if value is not None and not math.isfinite(value):
+                raise ValueError(f"{name} must be finite when present")
+        return self
+
+
 __all__ = [
     "DFOPDTeacherCertificationScoreV1",
+    "DFOPDTeacherCertificationScoreV2",
     "DF_OPD_TEACHER_CERTIFICATION_SCORE_SCHEMA_VERSION",
+    "DF_OPD_TEACHER_CERTIFICATION_SCORE_SCHEMA_VERSION_V2",
 ]

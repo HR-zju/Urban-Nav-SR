@@ -20,12 +20,14 @@ from mcp_server.contracts.df_opd import (
     DFOPDTeacherConditionV1,
     df_opd_digest_v1,
 )
-from mcp_server.contracts.df_opd_certification import DFOPDTeacherCertificationScoreV1
+from mcp_server.contracts.df_opd_certification import (DFOPDTeacherCertificationScoreV1,
+                                                        DFOPDTeacherCertificationScoreV2)
 from mcp_server.contracts.df_opd_review import DFOPDTeacherReviewPredictionV1
 from mcp_server.contracts.reasoning_v4 import DecisionV4
 from mcp_server.data.io.jsonl import file_sha256, iter_jsonl, write_jsonl_atomic
 
 DF_OPD_TEACHER_EVIDENCE_RECEIPT_SCHEMA_V1 = "urbannav_df_opd_teacher_evidence_receipt_v1"
+DF_OPD_TEACHER_EVIDENCE_RECEIPT_SCHEMA_V2 = "urbannav_df_opd_teacher_evidence_receipt_v2"
 _CONDITIONS: tuple[DFOPDTeacherConditionV1, ...] = (
     "same_input_t0",
     "correct_privilege_tc",
@@ -46,6 +48,14 @@ _FORBIDDEN_LEDGER_FIELDS = {
     "canonical_full_cot",
     "df_opd_privilege_policy_digest",
     "df_opd_teacher_cue_sha256",
+}
+_V2_FORBIDDEN_LEDGER_FIELDS = _FORBIDDEN_LEDGER_FIELDS | {
+    "trajectory_ego_t",
+    "trajectory",
+    "trajectory_valid",
+    "trajectory_ade_m",
+    "trajectory_fde_m",
+    "direction_error_deg",
 }
 
 
@@ -144,6 +154,87 @@ def build_df_opd_teacher_evidence_v1(
     return receipt
 
 
+def build_df_opd_teacher_decision_evidence_v2(
+    canonical_jsonl: str | Path,
+    inference_jsonls: Sequence[str | Path],
+    score_jsonl: str | Path,
+    review_prediction_jsonl: str | Path,
+    receipt_json: str | Path,
+    *,
+    dataset_fingerprint: str,
+    checkpoint_digest: str,
+    seed: int,
+) -> dict[str, Any]:
+    """Build V2 Decision-only certification evidence from private ledgers."""
+
+    _require_digest(dataset_fingerprint, "dataset_fingerprint")
+    _require_digest(checkpoint_digest, "checkpoint_digest")
+    canonical_path = Path(canonical_jsonl).expanduser().resolve()
+    inference_paths = _resolve_inference_paths(inference_jsonls)
+    score_path = Path(score_jsonl).expanduser().resolve()
+    review_path = Path(review_prediction_jsonl).expanduser().resolve()
+    receipt_path = Path(receipt_json).expanduser().resolve()
+    canonical = _read_canonical_rows(canonical_path)
+    ledgers = _read_private_ledgers(
+        inference_paths,
+        canonical,
+        forbidden_fields=_V2_FORBIDDEN_LEDGER_FIELDS,
+    )
+    _require_complete_condition_matrix(canonical, ledgers)
+    prediction_manifest_digest = df_opd_digest_v1({
+        "inference_jsonl_sha256": sorted(file_sha256(path) for path in inference_paths),
+    })
+
+    scores: list[dict[str, Any]] = []
+    reviews: list[dict[str, Any]] = []
+    for sample_id, sample in canonical.items():
+        expected_decision = _parse_strict_decision(sample.decision_target)
+        if expected_decision is None:
+            raise ValueError(f"canonical sample {sample_id!r} has non-canonical decision_target")
+        for condition in _CONDITIONS:
+            score, review = _score_decision_one(
+                sample,
+                condition=condition,
+                ledger=ledgers[(sample_id, condition)],
+                expected_decision=expected_decision,
+                dataset_fingerprint=dataset_fingerprint,
+                checkpoint_digest=checkpoint_digest,
+                prediction_manifest_digest=prediction_manifest_digest,
+                seed=seed,
+            )
+            scores.append(score.model_dump(mode="json"))
+            reviews.append(review.model_dump(mode="json"))
+
+    write_jsonl_atomic(score_path, scores)
+    write_jsonl_atomic(review_path, reviews)
+    receipt = {
+        "schema_version": DF_OPD_TEACHER_EVIDENCE_RECEIPT_SCHEMA_V2,
+        "private_artifact": True,
+        "evaluation_mode": "no_cot_decision_v1",
+        "canonical_jsonl": str(canonical_path),
+        "canonical_jsonl_sha256": file_sha256(canonical_path),
+        "inference_jsonls": [str(path) for path in inference_paths],
+        "inference_jsonl_sha256": [file_sha256(path) for path in inference_paths],
+        "prediction_manifest_digest": prediction_manifest_digest,
+        "dataset_fingerprint": dataset_fingerprint,
+        "checkpoint_digest": checkpoint_digest,
+        "seed": int(seed),
+        "score_jsonl": str(score_path),
+        "score_jsonl_sha256": file_sha256(score_path),
+        "review_prediction_jsonl": str(review_path),
+        "review_prediction_jsonl_sha256": file_sha256(review_path),
+        "counts": {
+            "canonical_samples": len(canonical),
+            "inference_rows": len(ledgers),
+            "score_rows": len(scores),
+            "review_prediction_rows": len(reviews),
+            **dict(sorted(Counter(item["condition"] for item in scores).items())),
+        },
+    }
+    _write_json_atomic(receipt_path, receipt)
+    return receipt
+
+
 def _resolve_inference_paths(values: Sequence[str | Path]) -> list[Path]:
     """Resolve one non-empty, unique set of private inference ledgers."""
 
@@ -178,6 +269,8 @@ def _read_canonical_rows(path: Path) -> dict[str, DFOPDCanonicalSampleV1]:
 def _read_private_ledgers(
     paths: Sequence[Path],
     canonical: Mapping[str, DFOPDCanonicalSampleV1],
+    *,
+    forbidden_fields: set[str] | frozenset[str] = _FORBIDDEN_LEDGER_FIELDS,
 ) -> dict[tuple[str, DFOPDTeacherConditionV1], Mapping[str, Any]]:
     """Validate and index private inference rows by sample and condition."""
 
@@ -186,7 +279,7 @@ def _read_private_ledgers(
         for line_number, row in enumerate(iter_jsonl(path), start=1):
             if row.get("private_artifact") is not True or row.get("evaluation_only") is not True:
                 raise ValueError(f"Teacher inference row is not private/evaluation-only: {path}:{line_number}")
-            forbidden = _find_forbidden_ledger_field(row)
+            forbidden = _find_forbidden_ledger_field(row, forbidden_fields=forbidden_fields)
             if forbidden is not None:
                 raise ValueError(f"Teacher inference ledger leaked forbidden field {forbidden!r}: {path}:{line_number}")
             sample_id = row.get("sample_id")
@@ -238,6 +331,10 @@ def _score_one(
 ) -> tuple[DFOPDTeacherCertificationScoreV1, DFOPDTeacherReviewPredictionV1]:
     """Compute strict tuple and valid-prefix trajectory metrics for one row."""
 
+    row_checkpoint_digest = ledger.get("teacher_checkpoint_digest")
+    if row_checkpoint_digest is not None and row_checkpoint_digest != checkpoint_digest:
+        raise ValueError("Teacher inference checkpoint digest differs from the evidence run identity")
+
     raw_decision = ledger.get("decision")
     raw_trajectory = ledger.get("trajectory_ego_t")
     if ledger.get("failure_code") is not None:
@@ -283,19 +380,84 @@ def _score_one(
     return score, review
 
 
-def _find_forbidden_ledger_field(value: Any) -> str | None:
+def _score_decision_one(
+    sample: DFOPDCanonicalSampleV1,
+    *,
+    condition: DFOPDTeacherConditionV1,
+    ledger: Mapping[str, Any],
+    expected_decision: DecisionV4,
+    dataset_fingerprint: str,
+    checkpoint_digest: str,
+    prediction_manifest_digest: str,
+    seed: int,
+) -> tuple[DFOPDTeacherCertificationScoreV2, DFOPDTeacherReviewPredictionV1]:
+    """Score one no-CoT Decision ledger without consuming trajectory output."""
+
+    row_checkpoint_digest = ledger.get("teacher_checkpoint_digest")
+    if row_checkpoint_digest is not None and row_checkpoint_digest != checkpoint_digest:
+        raise ValueError("Teacher inference checkpoint digest differs from the evidence run identity")
+
+    if ledger.get("evaluation_mode") != "no_cot_decision_v1":
+        raise ValueError("V2 Teacher evidence requires no_cot_decision_v1 ledgers")
+    raw_decision = ledger.get("decision")
+    if ledger.get("failure_code") is not None:
+        if raw_decision is not None:
+            raise ValueError("failed Teacher inference ledger must not retain Decision output")
+        raw_decision = None
+    predicted_decision = _parse_strict_decision(raw_decision)
+    metadata = ledger.get("action_metadata")
+    if not isinstance(metadata, Mapping):
+        metadata = {}
+    probe = ledger.get("recoverability_probe_correct", metadata.get("recoverability_probe_correct"))
+    if probe is not None and not isinstance(probe, bool):
+        raise ValueError("recoverability_probe_correct must be boolean when present")
+    score = DFOPDTeacherCertificationScoreV2(
+        sample_id=sample.sample_id,
+        source_group_id=sample.source_group_id,
+        canonical_digest=sample.canonical_digest,
+        profile_id=sample.profile.profile_id,
+        profile_digest=sample.profile.profile_digest,
+        dataset_fingerprint=dataset_fingerprint,
+        checkpoint_digest=checkpoint_digest,
+        prediction_manifest_digest=prediction_manifest_digest,
+        seed=int(seed),
+        condition=condition,
+        decision_strict_parse=predicted_decision is not None,
+        decision_correct=predicted_decision == expected_decision,
+        decision_ce=ledger.get("decision_ce", metadata.get("decision_ce")),
+        recoverability_probe_correct=probe,
+        context_conflict_score=ledger.get("context_conflict_score", metadata.get("context_conflict_score")),
+    )
+    review = DFOPDTeacherReviewPredictionV1(
+        sample_id=sample.sample_id,
+        canonical_digest=sample.canonical_digest,
+        profile_id=sample.profile.profile_id,
+        profile_digest=sample.profile.profile_digest,
+        condition=condition,
+        decision_text=raw_decision if isinstance(raw_decision, str) else None,
+        trajectory_ego_t=None,
+        trajectory_valid=False,
+    )
+    return score, review
+
+
+def _find_forbidden_ledger_field(
+    value: Any,
+    *,
+    forbidden_fields: set[str] | frozenset[str] = _FORBIDDEN_LEDGER_FIELDS,
+) -> str | None:
     """Return the first prompt/media/GT field retained in an evidence ledger."""
 
     if isinstance(value, Mapping):
         for key, item in value.items():
-            if str(key) in _FORBIDDEN_LEDGER_FIELDS:
+            if str(key) in forbidden_fields:
                 return str(key)
-            nested = _find_forbidden_ledger_field(item)
+            nested = _find_forbidden_ledger_field(item, forbidden_fields=forbidden_fields)
             if nested is not None:
                 return nested
     elif isinstance(value, (list, tuple)):
         for item in value:
-            nested = _find_forbidden_ledger_field(item)
+            nested = _find_forbidden_ledger_field(item, forbidden_fields=forbidden_fields)
             if nested is not None:
                 return nested
     return None
@@ -413,6 +575,8 @@ def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
 
 
 __all__ = [
+    "DF_OPD_TEACHER_EVIDENCE_RECEIPT_SCHEMA_V2",
+    "build_df_opd_teacher_decision_evidence_v2",
     "DF_OPD_TEACHER_EVIDENCE_RECEIPT_SCHEMA_V1",
     "build_df_opd_teacher_evidence_v1",
 ]

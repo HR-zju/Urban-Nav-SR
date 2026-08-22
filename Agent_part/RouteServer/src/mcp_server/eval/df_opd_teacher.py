@@ -18,12 +18,13 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from mcp_server.contracts.df_opd_certification import (
-    DFOPDTeacherCertificationScoreV1,
+    DFOPDTeacherCertificationScoreV1, DFOPDTeacherCertificationScoreV2,
 )
 from mcp_server.data.io.jsonl import file_sha256, iter_jsonl, write_jsonl_atomic
 
 
 DF_OPD_TEACHER_CERTIFICATION_REPORT_SCHEMA_V1 = "urbannav_df_opd_teacher_certification_report_v1"
+DF_OPD_TEACHER_CERTIFICATION_REPORT_SCHEMA_V2 = "urbannav_df_opd_teacher_certification_report_v2"
 _CONDITIONS = (
     "same_input_t0",
     "correct_privilege_tc",
@@ -193,12 +194,162 @@ def certify_df_opd_teacher_jsonl_v1(
     return report
 
 
+def certify_df_opd_teacher_v2(
+    score_rows: Iterable[DFOPDTeacherCertificationScoreV2 | Mapping[str, Any]],
+    *,
+    bootstrap_seed: int,
+    bootstrap_replicates: int = 1000,
+    recoverability_chance_baseline: float = 0.5,
+    high_conflict_limit: int = 50,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Evaluate the V5 Decision-only Teacher promotion evidence.
+
+    The gate requires paired TC improvement over both T0 and TS and a
+    recoverability probe above the frozen chance baseline.  TO remains an
+    audit comparison and does not block promotion.
+    """
+
+    if int(bootstrap_replicates) <= 0:
+        raise ValueError("bootstrap_replicates must be positive")
+    if not 0.0 <= float(recoverability_chance_baseline) <= 1.0:
+        raise ValueError("recoverability_chance_baseline must be in [0, 1]")
+    if int(high_conflict_limit) < 0:
+        raise ValueError("high_conflict_limit cannot be negative")
+    rows = [_parse_score_row_v2(row) for row in score_rows]
+    if not rows:
+        raise ValueError("DF-OPD Teacher V2 certification requires at least one score row")
+    run_identity = _validate_run_identity(rows)
+    grouped = _group_paired_rows(rows)
+    complete_sample_ids = sorted(
+        sample_id for sample_id, conditions in grouped.items() if set(conditions) == set(_CONDITIONS))
+    incomplete = [
+        {"sample_id": sample_id, "conditions": sorted(conditions)}
+        for sample_id, conditions in sorted(grouped.items())
+        if set(conditions) != set(_CONDITIONS)
+    ]
+    by_condition = {
+        condition: [row for row in rows if row.condition == condition]
+        for condition in _CONDITIONS
+    }
+    comparisons = {
+        name: _paired_comparison(
+            grouped,
+            complete_sample_ids,
+            left_condition=left,
+            right_condition=right,
+            metric_name="decision_correct",
+            higher_is_better=True,
+            bootstrap_seed=int(bootstrap_seed),
+            bootstrap_replicates=int(bootstrap_replicates),
+            comparison_name=name,
+        )
+        for name, left, right in (
+            ("tc_minus_t0_decision_accuracy", "correct_privilege_tc", "same_input_t0"),
+            ("tc_minus_ts_decision_accuracy", "correct_privilege_tc", "shuffled_privilege_ts"),
+            ("to_minus_tc_decision_accuracy", "exact_future_oracle_to", "correct_privilege_tc"),
+        )
+    }
+    probe_values = [
+        float(bool(grouped[sample_id]["correct_privilege_tc"].recoverability_probe_correct))
+        - float(recoverability_chance_baseline)
+        for sample_id in complete_sample_ids
+        if grouped[sample_id]["correct_privilege_tc"].recoverability_probe_correct is not None
+    ]
+    probe_interval = _bootstrap_mean_interval(
+        probe_values,
+        seed=_derived_seed(int(bootstrap_seed), "recoverability_probe"),
+        replicates=int(bootstrap_replicates),
+    )
+    comparisons["recoverability_probe"] = {
+        "metric": "recoverability_probe_correct",
+        "chance_baseline": float(recoverability_chance_baseline),
+        "expected_pairs": len(complete_sample_ids),
+        "metric_pairs": len(probe_values),
+        "mean_delta": sum(probe_values) / len(probe_values) if probe_values else None,
+        "ci95": probe_interval,
+    }
+    gate = _certification_gate_v2(
+        comparisons,
+        complete_sample_count=len(complete_sample_ids),
+        incomplete_count=len(incomplete),
+    )
+    selection = _high_conflict_selection(grouped, complete_sample_ids, int(high_conflict_limit))
+    report = {
+        "schema_version": DF_OPD_TEACHER_CERTIFICATION_REPORT_SCHEMA_V2,
+        "run_identity": run_identity,
+        "evaluation_mode": "no_cot_decision_v1",
+        "bootstrap": {
+            "seed": int(bootstrap_seed),
+            "replicates": int(bootstrap_replicates),
+            "confidence_interval": "percentile_95",
+            "paired_resampling_unit": "sample_id",
+        },
+        "recoverability": {
+            "chance_baseline": float(recoverability_chance_baseline),
+        },
+        "coverage": {
+            "score_rows": len(rows),
+            "paired_complete_samples": len(complete_sample_ids),
+            "incomplete_samples": incomplete,
+            "condition_rows": {condition: len(by_condition[condition]) for condition in _CONDITIONS},
+        },
+        "condition_metrics": {
+            condition: _condition_metrics_v2(by_condition[condition])
+            for condition in _CONDITIONS
+        },
+        "paired_comparisons": comparisons,
+        "promotion_gate": gate,
+        "review_selection_count": len(selection),
+    }
+    return report, selection
+
+
+def certify_df_opd_teacher_jsonl_v2(
+    score_jsonl: str | Path,
+    report_json: str | Path,
+    *,
+    high_conflict_jsonl: str | Path | None = None,
+    bootstrap_seed: int,
+    bootstrap_replicates: int = 1000,
+    recoverability_chance_baseline: float = 0.5,
+    high_conflict_limit: int = 50,
+) -> dict[str, Any]:
+    """Persist a V2 Decision-only certification report and review selection."""
+
+    report, selection = certify_df_opd_teacher_v2(
+        iter_jsonl(score_jsonl),
+        bootstrap_seed=bootstrap_seed,
+        bootstrap_replicates=bootstrap_replicates,
+        recoverability_chance_baseline=recoverability_chance_baseline,
+        high_conflict_limit=high_conflict_limit,
+    )
+    report = dict(report)
+    report["score_jsonl"] = str(Path(score_jsonl).expanduser().resolve())
+    report["score_jsonl_sha256"] = file_sha256(score_jsonl)
+    report["report_json"] = str(Path(report_json).expanduser().resolve())
+    if high_conflict_jsonl is not None:
+        selection_path = Path(high_conflict_jsonl).expanduser().resolve()
+        write_jsonl_atomic(selection_path, selection)
+        report["high_conflict_jsonl"] = str(selection_path)
+        report["high_conflict_jsonl_sha256"] = file_sha256(selection_path)
+    _write_json_atomic(Path(report_json).expanduser().resolve(), report)
+    return report
+
+
 def _parse_score_row(value: DFOPDTeacherCertificationScoreV1 | Mapping[str, Any]) -> DFOPDTeacherCertificationScoreV1:
     """Accept an immutable score object or validate its JSON-safe payload."""
 
     if isinstance(value, DFOPDTeacherCertificationScoreV1):
         return value
     return DFOPDTeacherCertificationScoreV1.model_validate(value)
+
+
+def _parse_score_row_v2(value: DFOPDTeacherCertificationScoreV2 | Mapping[str, Any]) -> DFOPDTeacherCertificationScoreV2:
+    """Accept one validated V2 Decision-only score row."""
+
+    if isinstance(value, DFOPDTeacherCertificationScoreV2):
+        return value
+    return DFOPDTeacherCertificationScoreV2.model_validate(value)
 
 
 def _validate_run_identity(rows: Sequence[DFOPDTeacherCertificationScoreV1]) -> dict[str, Any]:
@@ -252,6 +403,19 @@ def _condition_metrics(rows: Sequence[DFOPDTeacherCertificationScoreV1]) -> dict
         "direction_error_deg": _mean_metric(rows, "direction_error_deg"),
         "turn_fde_m": _mean_metric([row for row in rows if row.is_turn], "trajectory_fde_m"),
         "stop_fde_m": _mean_metric([row for row in rows if row.is_stop], "trajectory_fde_m"),
+        "recoverability_probe_accuracy": _mean_metric(rows, "recoverability_probe_correct"),
+        "context_conflict_score": _mean_metric(rows, "context_conflict_score"),
+    }
+
+
+def _condition_metrics_v2(rows: Sequence[DFOPDTeacherCertificationScoreV2]) -> dict[str, Any]:
+    """Summarize Decision-only metrics with explicit denominators."""
+
+    return {
+        "rows": len(rows),
+        "strict_parse_rate": _mean_metric(rows, "decision_strict_parse"),
+        "decision_accuracy": _mean_metric(rows, "decision_correct"),
+        "decision_ce": _mean_metric(rows, "decision_ce"),
         "recoverability_probe_accuracy": _mean_metric(rows, "recoverability_probe_correct"),
         "context_conflict_score": _mean_metric(rows, "context_conflict_score"),
     }
@@ -394,6 +558,57 @@ def _certification_gate(
     }
 
 
+def _certification_gate_v2(
+    comparisons: Mapping[str, Mapping[str, Any]],
+    *,
+    complete_sample_count: int,
+    incomplete_count: int,
+) -> dict[str, Any]:
+    """Apply the V5 Decision-only promotion gate."""
+
+    required = (
+        "tc_minus_t0_decision_accuracy",
+        "tc_minus_ts_decision_accuracy",
+        "recoverability_probe",
+    )
+    if complete_sample_count == 0 or incomplete_count:
+        return {
+            "status": "insufficient_evidence",
+            "student_opd_eligible": False,
+            "reasons": ["certification requires complete paired T0/TC/TS/TO rows for every sample"],
+        }
+    coverage_failures = [
+        name for name in required
+        if comparisons[name]["metric_pairs"] != comparisons[name]["expected_pairs"]
+        or comparisons[name]["ci95"] is None
+    ]
+    if coverage_failures:
+        return {
+            "status": "insufficient_evidence",
+            "student_opd_eligible": False,
+            "reasons": [f"missing Decision/probe coverage: {', '.join(coverage_failures)}"],
+        }
+    failed = [
+        name for name in required
+        if float(comparisons[name]["ci95"]["lower"]) <= 0.0
+    ]
+    if failed:
+        return {
+            "status": "failed",
+            "student_opd_eligible": False,
+            "reasons": [f"V5 Teacher advantage is not positive at CI95: {name}" for name in failed],
+        }
+    return {
+        "status": "passed",
+        "student_opd_eligible": True,
+        "reasons": [
+            "TC beats T0 and TS on paired no-CoT Decision accuracy",
+            "privilege recoverability probe is above the frozen chance baseline",
+            "TO is retained as audit evidence and does not define the promotion gate",
+        ],
+    }
+
+
 def _high_conflict_selection(
     grouped: Mapping[str, Mapping[str, DFOPDTeacherCertificationScoreV1]],
     complete_sample_ids: Sequence[str],
@@ -445,6 +660,9 @@ def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
 
 __all__ = [
     "DF_OPD_TEACHER_CERTIFICATION_REPORT_SCHEMA_V1",
+    "DF_OPD_TEACHER_CERTIFICATION_REPORT_SCHEMA_V2",
+    "certify_df_opd_teacher_jsonl_v2",
+    "certify_df_opd_teacher_v2",
     "certify_df_opd_teacher_jsonl_v1",
     "certify_df_opd_teacher_v1",
 ]

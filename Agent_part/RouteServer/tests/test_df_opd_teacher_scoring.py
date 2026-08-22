@@ -15,7 +15,8 @@ from mcp_server.contracts.df_opd import (
     df_opd_digest_v1,
 )
 from mcp_server.data.io.jsonl import iter_jsonl, write_jsonl_atomic
-from mcp_server.eval.df_opd_teacher_scoring import build_df_opd_teacher_evidence_v1
+from mcp_server.eval.df_opd_teacher_scoring import (build_df_opd_teacher_decision_evidence_v2,
+                                                     build_df_opd_teacher_evidence_v1)
 
 _DATASET_DIGEST = "a" * 64
 _CHECKPOINT_DIGEST = "b" * 64
@@ -105,6 +106,23 @@ def _ledger(sample: DFOPDCanonicalSampleV1, condition: str) -> dict:
     }
 
 
+def _ledger_v2(sample: DFOPDCanonicalSampleV1, condition: str) -> dict:
+    """Return a Decision-only private ledger row for V2 evidence."""
+
+    return {
+        "sample_id": sample.sample_id,
+        "canonical_digest": sample.canonical_digest,
+        "df_opd_profile_id": sample.profile.profile_id,
+        "df_opd_profile_digest": sample.profile.profile_digest,
+        "df_opd_teacher_condition": condition,
+        "private_artifact": True,
+        "evaluation_only": True,
+        "evaluation_mode": "no_cot_decision_v1",
+        "decision": _DECISION,
+        "recoverability_probe_correct": condition == "correct_privilege_tc",
+    }
+
+
 def test_teacher_evidence_bridge_requires_complete_pairing_and_writes_score_review(tmp_path):
     sample = _canonical()
     canonical_path = tmp_path / "canonical.jsonl"
@@ -180,6 +198,81 @@ def test_teacher_evidence_bridge_rejects_prompt_or_gt_leak_in_private_ledger(tmp
             score_path,
             review_path,
             receipt_path,
+            dataset_fingerprint=_DATASET_DIGEST,
+            checkpoint_digest=_CHECKPOINT_DIGEST,
+            seed=17,
+        )
+
+
+def test_teacher_decision_evidence_v2_writes_decision_only_scores(tmp_path):
+    sample = _canonical()
+    canonical_path = tmp_path / "canonical.jsonl"
+    inference_path = tmp_path / "inference-v2.jsonl"
+    score_path = tmp_path / "scores-v2.jsonl"
+    review_path = tmp_path / "review-v2.jsonl"
+    receipt_path = tmp_path / "receipt-v2.json"
+    write_jsonl_atomic(canonical_path, [sample.model_dump(mode="json")])
+    write_jsonl_atomic(inference_path, [_ledger_v2(sample, condition) for condition in _CONDITIONS])
+
+    receipt = build_df_opd_teacher_decision_evidence_v2(
+        canonical_path,
+        [inference_path],
+        score_path,
+        review_path,
+        receipt_path,
+        dataset_fingerprint=_DATASET_DIGEST,
+        checkpoint_digest=_CHECKPOINT_DIGEST,
+        seed=17,
+    )
+
+    scores = list(iter_jsonl(score_path))
+    reviews = list(iter_jsonl(review_path))
+    assert receipt["evaluation_mode"] == "no_cot_decision_v1"
+    assert all(row["schema_version"].endswith("_v2") for row in scores)
+    assert all("trajectory_ego_t" not in row for row in scores)
+    assert all(row["trajectory_ego_t"] is None for row in reviews)
+
+
+def test_teacher_decision_evidence_v2_rejects_trajectory_prediction_fields(tmp_path):
+    sample = _canonical()
+    canonical_path = tmp_path / "canonical.jsonl"
+    inference_path = tmp_path / "inference-v2.jsonl"
+    paths = [tmp_path / name for name in ("scores.jsonl", "review.jsonl", "receipt.json")]
+    rows = [_ledger_v2(sample, condition) for condition in _CONDITIONS]
+    rows[0]["trajectory_ego_t"] = [[0.0, 0.0, 0.0] for _ in range(16)]
+    write_jsonl_atomic(canonical_path, [sample.model_dump(mode="json")])
+    write_jsonl_atomic(inference_path, rows)
+
+    with pytest.raises(ValueError, match="trajectory_ego_t"):
+        build_df_opd_teacher_decision_evidence_v2(
+            canonical_path,
+            [inference_path],
+            paths[0],
+            paths[1],
+            paths[2],
+            dataset_fingerprint=_DATASET_DIGEST,
+            checkpoint_digest=_CHECKPOINT_DIGEST,
+            seed=17,
+        )
+
+
+def test_teacher_decision_evidence_rejects_ledger_checkpoint_digest_drift(tmp_path):
+    sample = _canonical()
+    canonical_path = tmp_path / "canonical.jsonl"
+    inference_path = tmp_path / "inference-v2.jsonl"
+    paths = [tmp_path / name for name in ("scores.jsonl", "review.jsonl", "receipt.json")]
+    rows = [_ledger_v2(sample, condition) for condition in _CONDITIONS]
+    rows[0]["teacher_checkpoint_digest"] = "d" * 64
+    write_jsonl_atomic(canonical_path, [sample.model_dump(mode="json")])
+    write_jsonl_atomic(inference_path, rows)
+
+    with pytest.raises(ValueError, match="checkpoint digest"):
+        build_df_opd_teacher_decision_evidence_v2(
+            canonical_path,
+            [inference_path],
+            paths[0],
+            paths[1],
+            paths[2],
             dataset_fingerprint=_DATASET_DIGEST,
             checkpoint_digest=_CHECKPOINT_DIGEST,
             seed=17,
