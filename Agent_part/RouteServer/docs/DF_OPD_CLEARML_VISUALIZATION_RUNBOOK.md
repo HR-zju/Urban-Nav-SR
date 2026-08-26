@@ -138,3 +138,23 @@ Not verified by this runbook:
 - online training metrics from ms-swift;
 - GPU Agent or ClearML Pipeline scheduling;
 - benchmark or training quality claims.
+
+## 2026-08-26 remote validation boundary
+
+The `visualization` branch at commit `740135ffa554746d0cf6934cdb2e0b278b787519`
+was checked through `lpai-jump` on the lixiang host. The local machine was not
+used as the Python test environment: it has no `pydantic`. The remote check used
+`/usr/bin/python3` with `pytest 8.1.1` and `pydantic 2.10.6`.
+
+The branch files were overlaid into a temporary `/tmp` copy of the remote
+RouteServer checkout; the production checkout was not changed. The focused
+report-manifest and DF-OPD private-review tests completed with:
+
+```text
+8 passed in 1.10s
+```
+
+This is a CPU contract/rendering check for the evaluation bundle. The separate
+ms-swift r31 run is the evidence for a real UrbanNav DF-OPD optimizer step and
+training diagnostics; neither result claims full-data convergence, Teacher
+promotion, checkpoint restore parity, or a train-to-eval-to-report pipeline.
