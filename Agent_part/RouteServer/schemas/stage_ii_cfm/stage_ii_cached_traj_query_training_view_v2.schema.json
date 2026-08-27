@@ -207,7 +207,15 @@
             "fpv_instruction_bev_v1",
             "fpv_temporal_instruction_v1",
             "fpv_temporal_bev_v1",
-            "fpv_temporal_instruction_bev_v1"
+            "fpv_temporal_instruction_bev_v1",
+            "fpv_waypoint_v2",
+            "fpv_temporal_waypoint_v2",
+            "fpv_instruction_waypoint_v2",
+            "fpv_bev_waypoint_v2",
+            "fpv_instruction_bev_waypoint_v2",
+            "fpv_temporal_instruction_waypoint_v2",
+            "fpv_temporal_bev_waypoint_v2",
+            "fpv_temporal_instruction_bev_waypoint_v2"
           ],
           "title": "Action Modality Profile Id",
           "type": "string"
@@ -248,7 +256,15 @@
             "fpv_instruction_bev_v1",
             "fpv_temporal_instruction_v1",
             "fpv_temporal_bev_v1",
-            "fpv_temporal_instruction_bev_v1"
+            "fpv_temporal_instruction_bev_v1",
+            "fpv_waypoint_v2",
+            "fpv_temporal_waypoint_v2",
+            "fpv_instruction_waypoint_v2",
+            "fpv_bev_waypoint_v2",
+            "fpv_instruction_bev_waypoint_v2",
+            "fpv_temporal_instruction_waypoint_v2",
+            "fpv_temporal_bev_waypoint_v2",
+            "fpv_temporal_instruction_bev_waypoint_v2"
           ],
           "title": "Query Modality Profile Id",
           "type": "string"
@@ -367,7 +383,15 @@
             "fpv_instruction_bev_v1",
             "fpv_temporal_instruction_v1",
             "fpv_temporal_bev_v1",
-            "fpv_temporal_instruction_bev_v1"
+            "fpv_temporal_instruction_bev_v1",
+            "fpv_waypoint_v2",
+            "fpv_temporal_waypoint_v2",
+            "fpv_instruction_waypoint_v2",
+            "fpv_bev_waypoint_v2",
+            "fpv_instruction_bev_waypoint_v2",
+            "fpv_temporal_instruction_waypoint_v2",
+            "fpv_temporal_bev_waypoint_v2",
+            "fpv_temporal_instruction_bev_waypoint_v2"
           ],
           "title": "Modality Profile Id",
           "type": "string"

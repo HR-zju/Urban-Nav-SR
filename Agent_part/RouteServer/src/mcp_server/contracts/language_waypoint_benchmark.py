@@ -193,7 +193,7 @@ class WaypointGuidanceProvenanceV1(BaseModel):
     plan_timestamp_s: float = Field(ge=0.0)
     coordinate_reference_system: Literal["WGS84"] = "WGS84"
     datum: str = Field(min_length=1, max_length=64)
-    independent_of_future_target: Literal[True] = True
+    independent_of_future_target: Literal[True]
     source_kind: Literal["map_planner", "gps_route", "human_route"]
 
 
@@ -382,7 +382,7 @@ class NativePlannerRouteLogV1(BaseModel):
     route_version: str = Field(min_length=1, max_length=160)
     datum: str = Field(min_length=1, max_length=64)
     source_kind: Literal["map_planner", "gps_route", "human_route"]
-    independent_of_future_target: Literal[True] = True
+    independent_of_future_target: Literal[True]
     reroute: bool = False
 
     @model_validator(mode="after")

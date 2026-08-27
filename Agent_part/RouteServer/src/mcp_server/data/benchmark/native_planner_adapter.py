@@ -211,6 +211,109 @@ def build_foxglove_native_gps_anchors_v1(
     return report
 
 
+def build_foxglove_native_gps_anchors_from_stage_i_views_v1(
+    *,
+    source_jsonl: str | Path,
+    foxglove_raw_root: str | Path,
+    output_jsonl: str | Path,
+    report_json: str | Path,
+    heading_lookback_frames: int = 120,
+    min_heading_displacement_m: float = 0.25,
+    timestamp_scale_to_seconds: float = 1e-9,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """Build current-pose anchors from compiled FullCoT Stage I views.
+
+    The existing source adapter consumes the pre-teacher V4 source envelope.
+    This entry point covers the already compiled Stage I view available in the
+    current local artifact set.  It reads only the physical source identity
+    and native past/current GPS arrays; the view's private trajectory fields
+    are never inspected.
+    """
+
+    if limit is not None and limit < 0:
+        raise ValueError("limit must be non-negative")
+    raw_root = Path(foxglove_raw_root)
+    cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    anchors: list[NativePlannerAnchorV1] = []
+    counts: Counter[str] = Counter()
+    for payload in iter_jsonl(source_jsonl):
+        if payload.get("dataset_source") != "foxglove":
+            continue
+        if limit is not None and len(anchors) >= limit:
+            break
+        source_group_id = str(payload.get("source_group_id") or "")
+        prefix = "foxglove:"
+        source_record_id = source_group_id[len(prefix):] if source_group_id.startswith(prefix) else ""
+        clip_id, frame_index = _parse_foxglove_source_record_id_v1(source_record_id)
+        if not source_record_id or clip_id is None or frame_index is None:
+            counts["source_record_id_unparseable"] += 1
+            continue
+        try:
+            arrays = cache.get(clip_id)
+            if arrays is None:
+                arrays = _load_foxglove_native_arrays_v1(raw_root=raw_root, clip_id=clip_id)
+                cache[clip_id] = arrays
+            gps, times = arrays
+        except (OSError, ValueError) as exc:
+            counts[str(exc)] += 1
+            continue
+        if frame_index >= len(gps) or frame_index >= len(times):
+            counts["raw_frame_index_out_of_range"] += 1
+            continue
+        latitude_deg, longitude_deg = float(gps[frame_index, 0]), float(gps[frame_index, 1])
+        timestamp_s = float(times[frame_index]) * timestamp_scale_to_seconds
+        heading_rad = _past_gps_heading_rad_v1(
+            gps,
+            frame_index=frame_index,
+            lookback_frames=heading_lookback_frames,
+            min_displacement_m=min_heading_displacement_m,
+        )
+        if (
+            not _valid_wgs84_v1(latitude_deg, longitude_deg)
+            or not math.isfinite(timestamp_s)
+            or heading_rad is None
+        ):
+            counts["native_pose_unavailable"] += 1
+            continue
+        anchors.append(
+            NativePlannerAnchorV1(
+                anchor_id=_stable_id_v1("native_planner_anchor", source_group_id),
+                parent_sample_id=source_group_id,
+                dataset_source="foxglove",
+                source_record_id=source_record_id,
+                observation_timestamp_s=timestamp_s,
+                current_wgs84=Wgs84CoordinateV1(
+                    latitude_deg=latitude_deg,
+                    longitude_deg=longitude_deg,
+                ),
+                current_heading_rad=heading_rad,
+                localization_source="native_gps_past_bearing",
+                raw_clip_id=clip_id,
+                raw_frame_index=frame_index,
+                available=True,
+                reason="native_gps_anchor_available",
+            )
+        )
+        counts["native_gps_anchor_available"] += 1
+    write_jsonl_atomic(output_jsonl, (anchor.model_dump(mode="json") for anchor in anchors))
+    report = {
+        "schema_version": "urbannav_foxglove_stage_i_view_anchor_report_v1",
+        "source_jsonl": str(source_jsonl),
+        "raw_root": str(raw_root),
+        "source_role": "compiled_stage_i_fullcot_view",
+        "target_role": "current_pose_only_before_independent_planner_join",
+        "counts": dict(sorted(counts.items())),
+        "anchor_count": len(anchors),
+        "heading_lookback_frames": heading_lookback_frames,
+        "min_heading_displacement_m": min_heading_displacement_m,
+        "timestamp_scale_to_seconds": timestamp_scale_to_seconds,
+        "source_jsonl_sha256": _artifact_sha256_v1(source_jsonl),
+    }
+    _write_json_v1(report_json, report)
+    return report
+
+
 def build_planner_records_from_native_logs_v1(
     *,
     anchor_jsonl: str | Path,
@@ -315,6 +418,7 @@ def build_planner_records_from_native_logs_v1(
                     plan_timestamp_s=log.plan_timestamp_s,
                     datum=log.datum,
                     source_kind=log.source_kind,
+                    independent_of_future_target=True,
                 ),
                 reroute=log.reroute,
             )
@@ -506,5 +610,6 @@ def _write_json_v1(path: str | Path, payload: dict[str, Any]) -> None:
 
 __all__ = [
     "build_foxglove_native_gps_anchors_v1",
+    "build_foxglove_native_gps_anchors_from_stage_i_views_v1",
     "build_planner_records_from_native_logs_v1",
 ]

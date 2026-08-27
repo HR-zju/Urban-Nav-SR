@@ -21,6 +21,16 @@ native bundle、shuffle ablation、长序列双频 replay：未完成生产验�
 ONNX/TensorRT/HIL/实物部署：未实现
 ```
 
+底盘控制边界：车辆侧已有 PD controller，模型不直接输出电机控制量。模型侧的最终运行输出是
+`v`、`omega` 和 `duration_sec`，由 `ms-swift` `ActionRuntimeAdapter` 从
+`trajectory_ego_t` 的 metric ego-FLU 轨迹确定性转换得到；车辆侧 PD/controller 负责接收速度目标、
+限速、反馈、抢占和安全停车。
+
+已核对的仓库节点 `Policy_part/pd_controller_ros2_new2*.py` 仍是旧的 waypoint 输入实现：它订阅
+`Float32MultiArray(/waypoint)`，再发布 `geometry_msgs/Twist(/cmd_vel)`。该节点不代表本轮目标车端
+速度接口，不能把模型速度 payload 伪装成 waypoint。真实车辆速度 topic 和消息类型尚未在当前代码
+中确认；HIL 先验证 `v/omega/duration_sec`，确认接口后再写一个最小 transport。
+
 ## 2. 目标与非目标
 
 ### 2.1 目标
@@ -520,3 +530,120 @@ binding；条件 revision 变化时必须先刷新 Stage I query。
 4. 最后执行双频 replay、native/legacy parity、ONNX/TensorRT 和 HIL。
 
 本轮不新增 Stage II direct-condition action head，也不通过配置字段伪造 waypoint 能力。
+
+### 11.2 当前原理性 TODO 收敛（2026-08-22）
+
+已完成的只是输入合同和 runtime 闭环，不等于所有模型能力和部署能力完成：
+
+- 已完成 instruction Stage I 输入、cached-query V2 action、native Bundle 合同、dual-rate 调度和 Stage II optional 字段的缺省复用/绑定校验。
+- 已完成 waypoint V2 profile、独立 provenance 和 fail-closed capability gate；这不等于已有 checkpoint 能够消费 waypoint。
+- 当前 Bundle 只声明 `fpv_temporal_instruction_bev_v1`，不声明 waypoint profile。
+- 真实 replay 已证明 Stage II action 路径可运行，但 Stage I 约 1.16 Hz，尚未达到 2 Hz；stale 和 queue-drop 仍需优化。
+
+后续待做固定为：
+
+1. 先完成 Stage I instruction 的 2 Hz 长序列性能验收；
+2. 用独立、非 future-target 泄漏的 waypoint/goal source 构造 Stage I training view，训练并导出 goal encoder 和 waypoint-capable Bundle；
+3. 在新 capability Bundle 上运行 Stage I waypoint positive smoke；
+4. 再运行 Stage II optional waypoint/goal 的 presence、absence、binding consistency 和 shuffle；
+5. 完成 control、query-zero、visual/BEV/instruction/waypoint shuffle，确认模型实际使用条件；
+6. 完成 native/legacy parity、deterministic parity、长序列双频 replay；
+7. 最后进入 PyTorch HIL、ONNX/TensorRT 和实物部署。
+
+当前明确不做：通过 YAML 打开未训练 waypoint 能力、新增 semantic query、增加 Pass-R/Pass-D 前置流程，或新增 Stage II direct-condition action head 来替代现有 cached-query 合同。
+
+### 11.3 waypoint 真实产物审计（2026-08-23）
+
+对服务器已有的 language-waypoint smoke 产物进行字段级审计：
+
+- `language_goal_annotations.jsonl` 的 `provenance` 为 `lvlm_annotation`，属于 teacher 语言标注；
+- `language_goal_candidates_smoke.jsonl` 含 `source_trajectory_sidecar_digest`，其
+  `candidate_time_s=4.0`、`candidate_xy_flu_m` 来自未来 trajectory sidecar；
+- 对应 `foxglove_trajectory_sidecars_v2.jsonl` 的 `trajectory_qc.trajectory_source` 为
+  `foxglove_frame_pose_odometry`，`trajectory_target` 为 32 点 future supervision。
+
+因此该批 candidate 和 sidecar 只能作为 teacher/audit 或 Stage II target，不能转换为学生可见
+`WaypointGuidanceV1`。当前没有在本轮核实到独立 planner/GPS route log；waypoint Stage I
+training view 和 waypoint-capable Bundle 保持 blocked。只有带有 planner/request identity、
+生成时间、WGS84 route、provider/version 和 `independent_of_future_target=true` 的独立来源，
+才允许进入 `build_waypoint_condition`。
+
+### 11.4 最小实现原则下的 TODO（2026-08-22）
+
+当前只保留以下必要工作：
+
+1. 用固定 Bundle 和固定 replay 定位 Stage I 的实际耗时来源；在没有 profiler 证据前，不预设是 hidden forward、预处理还是调度问题。
+2. 重新测量 Stage I/Stage II effective rate、P50/P95、stale、queue drop 和 deadline；统计失败不通过改口径修复。
+3. 对已有 test view 运行 control、cached-query、BEV、instruction 和 query-zero 对照；只有观察到稳定变化时，才记录模型使用了对应条件。
+4. 完成 Bundle 的 native/legacy、fixed-seed、processor、normalization 和 contract digest 校验。
+5. 只有在上述证据通过后，才构造无 future-target 泄漏的 waypoint source，训练并导出 waypoint capability。
+6. waypoint capability 通过后，再测试 Stage II optional waypoint 的携带、缺省、绑定一致性和 shuffle。
+
+### 11.5 lyg0316 远端 source gate 复核（2026-08-24）
+
+本轮通过 `lyg0316` 的 `/mnt/gfs/urbannav/data` 复核了当前训练 source 和媒体目录。结果如下：
+
+| 项目 | 结果 |
+| --- | ---: |
+| `fullcot_v2.jsonl` | 59,623 rows；waypoint/goal/route guidance 字段为 0 |
+| EgoWalk VQA | 1,038,696 rows；waypoint/goal/route guidance 字段为 0 |
+| Foxglove VQA | 44,923 rows；waypoint/goal/route guidance 字段为 0 |
+| SideWalk VQA | 19,486 rows；waypoint/goal/route guidance 字段为 0 |
+| 远端独立 planner/GPS route log | 未发现 |
+| 远端 `frame_gps.npy` / `frame_times.npy` | 当前 `/mnt/gfs/urbannav/data` 未发现；本地原始 SideWalk chunk 存在 recording GPS，但尚未形成独立 planner route join |
+
+本地 RouteServer 的 UrbanNav OSM/OSRM route cache 是独立 benchmark source，但当前没有与
+SideWalk/Foxglove/EgoWalk parent、媒体和观测时间绑定的 join ledger。它不能直接生成当前训练 view。
+2026-08-25 的 source-only 字段审计保存在本地 ms-swift：
+`review_outputs/waypoint_source_audit_20260825/source_report.json`。该报告确认
+`25,000/25,000` 行具有有效 WGS84 route；由于缺少当前视频 parent join，当前训练 view 的
+accepted waypoint rows 仍为 `0`。该 source 只进入独立 UrbanNav benchmark arm。
+远端 FWTW planner-supervision snapshot 的 manifest 使用 `goal_mode=future-pose` 和
+`offline_future_pose_teacher=true`，并声明为 model-generated offline planner pseudolabel；
+该 source 仍属于 target-derived supervision，不能作为独立 waypoint guidance。当前可用的
+独立 route 仅能作为单独 UrbanNav benchmark arm，不能与现有 SideWalk/Foxglove/EgoWalk
+sample 直接拼接。
+因此本轮只完成 source gate 审计，未生成 accepted waypoint row，未启动 waypoint Stage I 训练，也未
+导出伪造 capability 的 Bundle。远端报告保存在：
+
+```text
+/opt/urbannav/runs/waypoint_source_audit_20260824/report.json
+```
+
+下一步必须提供带有 `parent_sample_id`、`source_record_id`、当前 GPS/heading、goal、planner
+polyline、route revision 和 `independent_of_future_target=true` 的独立 route log；获得该 source
+后复用现有 `build_native_planner_records.py` 和 `build_language_waypoint_benchmark.py`，不新增
+第二套 waypoint 转换规则。
+
+不在当前 TODO 中：新增 semantic query、Pass-R/Pass-D、Stage II direct-condition action head，或通过 profile/YAML 把未训练能力声明为可用。未知失败必须显式暴露，不能静默 fallback 或增加一次性通用抽象。
+
+### 11.6 lyg0316 代码 smoke（2026-08-24）
+
+本轮将当前 waypoint exporter、Stage I manifest 和对应测试同步到：
+
+```text
+/opt/urbannav/code/ms-swift
+```
+
+服务器 host 的 `waypoint-qc` 环境完成了 RouteServer 合同测试：`5 passed`，同步的 ms-swift
+两个实现文件通过 Python 语法检查。本地 `UrbanNav` 环境完成训练侧 waypoint exporter 和
+goal encoder smoke：`11 passed`。
+
+服务器上的完整训练容器没有挂载 `/opt/urbannav/code`，因此没有把容器启动或旧容器镜像当作
+当前 ms-swift 训练测试证据。独立 planner/GPS source gate 仍为未通过，accepted waypoint
+row 为 0，未启动 waypoint 训练。
+
+### 11.7 lyg0316 依赖与 source 复核（2026-08-24）
+
+服务器原有 `waypoint-qc` venv 的 Python 标准库不完整，无法作为测试环境使用。本轮在不修改
+已有训练环境的前提下创建了 `/opt/urbannav/venvs/waypoint-test`，安装 `pydantic`、`pytest`
+和 `numpy`。远端 RouteServer waypoint 合同测试为 `5 passed`；将代码 bind mount 到已有
+`urbannav/ms-swift:qwen35-cuda12.8` 容器后，ms-swift waypoint exporter/goal encoder 测试为
+`11 passed`。这些结果只证明合同和数据转换代码可执行，不证明 waypoint 模型能力已训练。
+
+本轮还复核了 lyg0316 的其他 route-like 产物。FWTW 当前运行命令使用
+`--goal-mode future-pose`，其 goal 明确由未来 camera pose 生成，属于 target/teacher 数据，
+不能作为模型可见 waypoint。`UrbanNav task_gt.jsonl` 含独立 OSM/OSRM route，但只有独立
+benchmark case，没有与当前 SideWalk/Foxglove/EgoWalk parent、媒体和观测 timestamp 的
+join ledger，不能直接进入当前训练视图。当前独立 source gate 仍未通过，accepted waypoint
+row 继续为 0。

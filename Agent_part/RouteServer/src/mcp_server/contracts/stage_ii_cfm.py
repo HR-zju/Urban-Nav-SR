@@ -26,6 +26,7 @@ from mcp_server.contracts.stage_i_sft import (
     StageIInstructionTrainingRoleV1,
     StageIModalityAvailabilityV1,
     StageIModalityProfileIdV1,
+    StageIModalityProfileIdV2,
     StageIModalitySelectionV1,
     StageIModalityStateV1,
 )
@@ -1695,7 +1696,7 @@ class StageIICachedTrajQueryObservationV1(BaseModel):
     source_group_id: str = Field(min_length=1, max_length=240)
     split_group_id: str = Field(min_length=1, max_length=240)
     dataset_source: str = Field(min_length=1, max_length=128)
-    modality_profile_id: StageIModalityProfileIdV1
+    modality_profile_id: StageIModalityProfileIdV2
     images: list[str] = Field(min_length=1, max_length=16)
     image_roles: list[str] = Field(min_length=1, max_length=16)
     instruction: str | None = Field(default=None, min_length=1, max_length=4096)
@@ -1844,8 +1845,8 @@ class StageIICachedTrajQueryBindingV2(BaseModel):
     query_age_sec: float
     query_source_group_id: str = Field(min_length=1, max_length=240)
     action_source_group_id: str = Field(min_length=1, max_length=240)
-    query_modality_profile_id: StageIModalityProfileIdV1
-    action_modality_profile_id: StageIModalityProfileIdV1
+    query_modality_profile_id: StageIModalityProfileIdV2
+    action_modality_profile_id: StageIModalityProfileIdV2
     condition_digest: str = Field(
         min_length=64,
         max_length=64,

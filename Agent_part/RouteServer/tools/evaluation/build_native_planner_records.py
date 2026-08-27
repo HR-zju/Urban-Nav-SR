@@ -16,6 +16,7 @@ import math
 from mcp_server.contracts.language_waypoint_benchmark import NativePlannerAdapterConfigV1
 from mcp_server.data.benchmark.native_planner_adapter import (
     build_foxglove_native_gps_anchors_v1,
+    build_foxglove_native_gps_anchors_from_stage_i_views_v1,
     build_planner_records_from_native_logs_v1,
 )
 
@@ -37,6 +38,15 @@ def main() -> int:
     anchor_parser.add_argument("--heading-lookback-frames", type=int, default=120)
     anchor_parser.add_argument("--min-heading-displacement-m", type=float, default=0.25)
     anchor_parser.add_argument("--timestamp-scale-to-seconds", type=float, default=1e-9)
+    view_anchor_parser = subparsers.add_parser("stage-i-view-anchors")
+    view_anchor_parser.add_argument("--source-jsonl", required=True)
+    view_anchor_parser.add_argument("--foxglove-raw-root", required=True)
+    view_anchor_parser.add_argument("--output-jsonl", required=True)
+    view_anchor_parser.add_argument("--report-json", required=True)
+    view_anchor_parser.add_argument("--heading-lookback-frames", type=int, default=120)
+    view_anchor_parser.add_argument("--min-heading-displacement-m", type=float, default=0.25)
+    view_anchor_parser.add_argument("--timestamp-scale-to-seconds", type=float, default=1e-9)
+    view_anchor_parser.add_argument("--limit", type=int)
     route_parser = subparsers.add_parser("planner-records")
     route_parser.add_argument("--anchor-jsonl", required=True)
     route_parser.add_argument("--planner-log-jsonl", required=True)
@@ -57,6 +67,17 @@ def main() -> int:
             heading_lookback_frames=args.heading_lookback_frames,
             min_heading_displacement_m=args.min_heading_displacement_m,
             timestamp_scale_to_seconds=args.timestamp_scale_to_seconds,
+        )
+    elif args.command == "stage-i-view-anchors":
+        report = build_foxglove_native_gps_anchors_from_stage_i_views_v1(
+            source_jsonl=args.source_jsonl,
+            foxglove_raw_root=args.foxglove_raw_root,
+            output_jsonl=args.output_jsonl,
+            report_json=args.report_json,
+            heading_lookback_frames=args.heading_lookback_frames,
+            min_heading_displacement_m=args.min_heading_displacement_m,
+            timestamp_scale_to_seconds=args.timestamp_scale_to_seconds,
+            limit=args.limit,
         )
     else:
         if args.max_heading_delta_deg <= 0.0 or args.max_heading_delta_deg > 180.0:

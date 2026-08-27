@@ -194,6 +194,7 @@ def _planner_record(parent_id: str) -> PlannerRouteRecordWgs84V1:
             plan_timestamp_s=1.0,
             datum="WGS84",
             source_kind="map_planner",
+            independent_of_future_target=True,
         ),
     )
 

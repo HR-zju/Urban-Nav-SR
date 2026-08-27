@@ -181,6 +181,25 @@ conda run -n UrbanNav env PYTHONPATH=.:src python \
   --arm fpv_language_waypoint
 ```
 
+UrbanNav 独立 benchmark 的 `task_gt.jsonl` 没有视频 parent 和传感器 heading。需要验证
+standalone route geometry 时，使用显式的 route-start tangent 坐标系适配器：
+
+```bash
+conda run -n UrbanNav env PYTHONPATH=.:src python \
+  tools/dataset_processing/build_urbannav_standalone_waypoint_source.py \
+  --input-jsonl URBANNAV_TASK_GT.jsonl \
+  --output-jsonl RUN/urbannav_standalone_waypoint_source.jsonl \
+  --rejects-jsonl RUN/urbannav_standalone_waypoint_rejects.jsonl \
+  --report-json RUN/reports/urbannav_standalone_waypoint_source.json \
+  --heading-source route_start_tangent
+```
+
+该命令只输出 instruction、current GPS、显式 route provenance 和 route context，不复制
+`gt_destination` 或 `gt_route` 到模型输入；`route_start_tangent` 是 benchmark 坐标系定义，
+不是设备 heading。报告固定写入 `current_clip_training_join.accepted_training_rows=0`，因此
+standalone 结果不能直接进入 SideWalk/Foxglove/EgoWalk 训练 view。视频训练必须改用
+`NativePlannerAnchorV1` 与独立 planner log 的 parent-bound join。
+
 ## 7. 2026-08-09 真实 smoke 与原始数据审计
 
 语言目标 teacher 使用单帧 `fpv.current` 及模型可见文本；候选 future point 只在 teacher
@@ -213,7 +232,7 @@ conda run -n UrbanNav env PYTHONPATH=.:src python \
 
 | 数据集 | 当前可用于 anchor 的原始信息 | 独立 route/goal/planner log | waypoint arm 结论 |
 | --- | --- | --- | --- |
-| SideWalk | 当前 staged source 无 WGS84 GPS | 无 | 不可构造 |
+| SideWalk | 原始 chunk 有 `frame_gps.npy`，可建立当前记录帧 anchor；当前 staged source 未暴露独立 route | 无 | 仅可产 anchor；不可构造 guidance |
 | Foxglove | 原始每帧 `frame_gps.npy`、`frame_times.npy`，可用过去 GPS 求当前 heading | 无；BEV route overlay 与 `route_theta_deg` 只是演示/地图上下文 | 仅可产 anchor；不可构造 guidance |
 | EgoWalk | parquet odometry 是局部运动，不是 WGS84 route | 无 | 不可构造 |
 
@@ -227,6 +246,62 @@ planner ledger 后，输出 `PlannerRouteRecordWgs84V1` 为 $0$；决策分布�
 `anchor_native_past_heading_unavailable` 和 $1$ 条 `planner_log_missing`。该结果只量化这批
 smoke 的可用性，不能外推为全量 Foxglove 覆盖率，但足以证明当前现有路径没有可用 waypoint
 guidance。
+
+### 9.1 2026-08-25 standalone route full manifest
+
+同一适配器已对 `urbannav_v3_osm_local_osrm_foot_final25k_v3_23cities/task_gt.jsonl` 完成全量
+转换。输入 SHA256 为
+`4eb5f7c2548a72d8687702e38f8639ecc4eb99b844566bef68c2f31ccdfd430a`，结果为：
+
+| 项目 | 数量 |
+| --- | ---: |
+| source rows | 25,000 |
+| accepted source rows | 25,000 |
+| rejected source rows | 0 |
+| waypoint manifest rows | 25,000 |
+| `independent_of_future_target=true` | 25,000 |
+| current video training join | 0 |
+
+完整 manifest 和 QC 已保存到：
+
+```text
+lyg0316:/mnt/gfs/urbannav/data/waypoints/urbannav_standalone_25k_20260825/
+```
+
+本地只保留报告和校验 receipt：
+`ms-swift/review_outputs/waypoint_source_audit_20260825/standalone_urbannav_25k/`。
+该全量结果是独立 UrbanNav waypoint benchmark/source，不是 SideWalk、Foxglove 或 EgoWalk
+的视频训练 view；由于没有对应 FPV/BEV 媒体和 `parent_sample_id + observation_timestamp`
+join，本轮不启动 waypoint Stage I 训练。
+
+对服务器现有 source 做了精确 ID 交集复核：25,000 条 standalone route 与 `fullcot_v2` 的
+59,623 行、Foxglove VQA 的 44,923 行、SideWalk VQA 的 19,486 行和 EgoWalk VQA 的
+1,038,696 行交集均为 $0$。这些 source 行中也没有 `current_gps`、`goal_gps`、
+`destination_gps`、`waypoint_input`、`route_points_ego_t` 或 `observation_timestamp` 字段，
+所以当前缺口是 parent-bound planner/GPS log。
+
+服务器上的 `FW2W/planner_supervision_v1_5h_20260823/records.jsonl` 也不满足 waypoint guidance
+合同：其记录使用 `future_pose_uniform_4_8s` 和 `offline_future_pose_teacher`，并声明为模型估计几何的
+离线伪标签。它不进入 UrbanNav 视频 waypoint package。
+
+### 9.2 UrbanNav public sample 的 waypoint 语义
+
+服务器上的 `external/urbannav_public_smoke/data_samples.tar.gz` 包含 FPV JPG、
+`label.json` 和 `traj_data.pkl`。UrbanNav 原生 loader 从 `traj_data.pkl` 的未来 pose 序列
+构造 `waypoint_poses`，因此这些点属于 target-only waypoint/trajectory supervision；它们不
+构成模型可见的独立 route guidance。`label.json` 是视觉目标、框和距离标注，也不是 planner
+route。
+
+该公开样本的 sample ID 与本节 25K `urbannav-*` source ID 没有已验证的
+`parent_sample_id + observation_timestamp` 对应关系。因此当前只能写入：
+
+```text
+UrbanNav traj_data.pkl -> target-only waypoint/trajectory supervision
+independent planner/GPS route -> model-visible waypoint guidance
+```
+
+在完成真实 parent join 前，不把公开 sample 的未来 pose、label 或文件名推断为
+`waypoint_input.available=true`，也不将其接入视频 Stage I/II 训练。
 
 ### 7.1 已批准的全量语言目标 queue
 
@@ -268,3 +343,18 @@ guidance 已被模型利用。
 4. 仅在 guidance 实际 accepted 后生成冻结四 arm paired package 与 HTML review；
 5. 冻结 parent/split registry，检查 media、路线 provenance 与目标泄漏；
 6. 最后才决定是否增加 waypoint encoder、condition-aware Stage I/II 训练和正式 benchmark。
+
+## 9. 2026-08-25 standalone adapter smoke
+
+`build_urbannav_standalone_waypoint_source.py` 已加入 RouteServer，用于将独立 UrbanNav
+`task_gt.jsonl` 映射为现有 ms-swift waypoint exporter 的输入字段。没有 native heading 时，
+只有显式指定 `route_start_tangent` 才生成 standalone benchmark 坐标系；该 heading 不是
+设备测量值。适配器同时输出 `id`、`sample_id`、`source_dataset` 和 `dataset_source`，以保持
+跨仓审计字段一致。
+
+`lyg0316` 远端原项目目录中的 100 条 smoke 结果：RouteServer 定向测试 `7 passed`，source
+adapter `100/100 accepted`，Docker 内 ms-swift exporter `100/100
+independent_gps_route_available`。远端 run root 为
+`/opt/urbannav/runs/waypoint_source_audit_20260825/standalone_adapter_100/`，报告仍明确
+`accepted_training_rows=0`；该验证不启动训练，也不把 standalone route 当作视频 parent-bound
+guidance。

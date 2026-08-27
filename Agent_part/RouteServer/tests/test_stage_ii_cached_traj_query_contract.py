@@ -14,6 +14,7 @@ from mcp_server.contracts.stage_ii_cfm import (
     StageIICachedTrajQuerySourceViewV2,
     stage_ii_digest_v1,
 )
+from mcp_server.contracts.reasoning_dataset_v4 import ReasoningTrainingViewV4
 from mcp_server.data.stage_ii.views import (
     build_stage_ii_cached_traj_query_observation_v1,
     build_stage_ii_cached_traj_query_source_view_v2,
@@ -30,6 +31,7 @@ from mcp_server.data.stage_ii.cached_pairs import (
     build_stage_ii_cached_traj_query_source_views_v2,
 )
 from mcp_server.data.stage_ii_views import project_stage_ii_cfm_view_v2
+from mcp_server.data.stage_i_views import project_stage_i_reasoning_view_v2
 
 from test_stage_ii_cfm_v2 import (
     _cache,
@@ -38,6 +40,7 @@ from test_stage_ii_cfm_v2 import (
     _trajectory_sidecar_v2,
     _trajectory_v2,
 )
+from test_stage_i_sft import _formal_reasoning_view
 
 
 def test_cached_traj_query_binding_requires_causal_consistent_timestamps():
@@ -197,6 +200,40 @@ def test_cached_pair_v2_bypasses_reasoning_and_decision_context():
     assert "action_view" not in pair.model_dump(mode="json")
     assert "reasoning_context" not in pair.model_dump(mode="json")
     assert "decision_context" not in pair.model_dump(mode="json")
+
+
+def test_cached_pair_v2_accepts_waypoint_stage_i_profile():
+    payload = _formal_reasoning_view().model_dump(mode="json")
+    payload["input_modalities"]["waypoint"] = True
+    payload["evidence_catalog"].append({
+        "ref": "waypoint.active",
+        "modality": "waypoint",
+        "summary": "independent planner route",
+    })
+    payload["model_visible_context"] = {
+        "waypoint": {
+            "independent_of_future_target": True,
+            "source": "independent_gps_route",
+            "waypoint_input": {
+                "available": True,
+                "independent_of_future_target": True,
+                "source": "independent_gps_route",
+            },
+        }
+    }
+    stage_i_view = project_stage_i_reasoning_view_v2(
+        ReasoningTrainingViewV4.model_validate(payload),
+        task_type="full_cot",
+        modality_profile_id="fpv_instruction_waypoint_v2",
+        instruction_training_role="primary",
+    )
+    observation = build_stage_ii_cached_traj_query_observation_v1(
+        stage_i_view,
+        observation_timestamp_sec=1.0,
+        frame_timestamps_sec=[1.0],
+    )
+
+    assert observation.modality_profile_id == "fpv_instruction_waypoint_v2"
 
 
 def test_cached_source_v2_is_built_from_visible_stage_i_and_sidecar_only():

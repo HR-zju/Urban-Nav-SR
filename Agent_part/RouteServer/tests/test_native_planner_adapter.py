@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from mcp_server.contracts.direction_profile import (
     FPV_DEGREE10_AFFORDANCE7_V1,
@@ -24,6 +25,7 @@ from mcp_server.contracts.reasoning_dataset_v4 import (
 )
 from mcp_server.data.benchmark.native_planner_adapter import (
     build_foxglove_native_gps_anchors_v1,
+    build_foxglove_native_gps_anchors_from_stage_i_views_v1,
     build_planner_records_from_native_logs_v1,
 )
 from mcp_server.data.io.jsonl import iter_jsonl
@@ -115,6 +117,7 @@ def _planner_log(source: ReasoningSourceV4, *, timestamp_s: float) -> NativePlan
         route_version="request-v1",
         datum="WGS84",
         source_kind="map_planner",
+        independent_of_future_target=True,
     )
 
 
@@ -215,3 +218,51 @@ def test_native_planner_join_rejects_stale_records(tmp_path: Path) -> None:
     assert report["accepted_record_count"] == 0
     decision = next(iter_jsonl(tmp_path / "decisions.jsonl"))
     assert decision["reason"] == "planner_record_stale"
+
+
+def test_native_planner_log_requires_explicit_independence(tmp_path: Path) -> None:
+    """A planner log without an explicit provenance assertion is invalid."""
+
+    payload = _planner_log(_foxglove_source(tmp_path), timestamp_s=1.0).model_dump(mode="json")
+    payload.pop("independent_of_future_target")
+    with pytest.raises(ValueError, match="independent_of_future_target"):
+        NativePlannerRouteLogV1.model_validate(payload)
+
+
+def test_stage_i_view_anchor_reads_only_native_pose(tmp_path: Path) -> None:
+    """A compiled FullCoT view becomes a current-pose anchor without targets."""
+
+    raw_root = tmp_path / "raw"
+    clip_root = raw_root / "clip_test"
+    clip_root.mkdir(parents=True)
+    np.save(
+        clip_root / "frame_gps.npy",
+        np.asarray(
+            [[30.0, 120.0], [30.000005, 120.0], [30.000010, 120.0]],
+            dtype=np.float64,
+        ),
+    )
+    np.save(clip_root / "frame_times.npy", np.asarray([1e9, 2e9, 3e9]))
+    views_jsonl = tmp_path / "views.jsonl"
+    _write_jsonl(
+        views_jsonl,
+        [{
+            "dataset_source": "foxglove",
+            "source_group_id": "foxglove:clip_test_000002",
+            "trajectory_ego_t": [[999.0, 999.0, 999.0]],
+        }],
+    )
+    anchors_jsonl = tmp_path / "anchors.jsonl"
+    report = build_foxglove_native_gps_anchors_from_stage_i_views_v1(
+        source_jsonl=views_jsonl,
+        foxglove_raw_root=raw_root,
+        output_jsonl=anchors_jsonl,
+        report_json=tmp_path / "report.json",
+        heading_lookback_frames=3,
+        min_heading_displacement_m=0.25,
+        limit=1,
+    )
+    assert report["anchor_count"] == 1
+    anchor = next(iter_jsonl(anchors_jsonl))
+    assert anchor["source_record_id"] == "clip_test_000002"
+    assert "trajectory" not in json.dumps(anchor)
