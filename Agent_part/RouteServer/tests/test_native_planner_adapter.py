@@ -174,6 +174,7 @@ def test_native_anchor_and_planner_join_are_trajectory_free(tmp_path: Path) -> N
     assert report["accepted_record_count"] == 1
     record = next(iter_jsonl(records_jsonl))
     assert record["parent_sample_id"] == source.observation.source_group_id
+    assert record["observation_timestamp_s"] == pytest.approx(3.0)
     assert record["provenance"]["independent_of_future_target"] is True
     assert "trajectory" not in json.dumps(record)
 

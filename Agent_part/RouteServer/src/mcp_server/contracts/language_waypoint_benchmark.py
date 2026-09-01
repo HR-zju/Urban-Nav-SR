@@ -203,6 +203,9 @@ class WaypointGuidanceV1(BaseModel):
     Args:
         guidance_id: Stable route guidance identity.
         parent_sample_id: Physical parent receiving the route condition.
+        observation_timestamp_s: Timestamp of the parent observation in Unix
+            seconds.  It is part of the join identity and is not the planner
+            response time in ``provenance.plan_timestamp_s``.
         route_points_ego_flu_m: Spatially sampled planner points in FLU.
         route_terminal_within_horizon: Whether the real route endpoint is public.
         provenance: Independent planner-route provenance.
@@ -215,6 +218,7 @@ class WaypointGuidanceV1(BaseModel):
     )
     guidance_id: str = Field(min_length=1, max_length=256)
     parent_sample_id: str = Field(min_length=1, max_length=480)
+    observation_timestamp_s: float = Field(ge=0.0)
     current_wgs84: Wgs84CoordinateV1
     current_heading_rad: float
     goal_wgs84: Wgs84CoordinateV1
@@ -240,6 +244,8 @@ class WaypointGuidanceV1(BaseModel):
         count = len(self.route_points_ego_flu_m)
         if len(self.route_heading_rel_rad) != count or len(self.route_arc_length_m) != count:
             raise ValueError("waypoint route feature lengths must match")
+        if not math.isfinite(self.observation_timestamp_s):
+            raise ValueError("observation_timestamp_s must be finite")
         if not math.isfinite(self.current_heading_rad):
             raise ValueError("current_heading_rad must be finite")
         prior = -math.inf
@@ -265,6 +271,8 @@ class PlannerRouteRecordWgs84V1(BaseModel):
     Args:
         record_id: Stable native-adapter record identity.
         parent_sample_id: Physical parent joined to benchmark source data.
+        observation_timestamp_s: Timestamp of the parent observation in Unix
+            seconds.  This value must survive conversion into public guidance.
         current_wgs84: Robot position when the plan was produced.
         current_heading_rad: Compass heading, clockwise from north.
         goal_wgs84: Planner destination.
@@ -276,6 +284,7 @@ class PlannerRouteRecordWgs84V1(BaseModel):
 
     record_id: str = Field(min_length=1, max_length=256)
     parent_sample_id: str = Field(min_length=1, max_length=480)
+    observation_timestamp_s: float = Field(ge=0.0)
     current_wgs84: Wgs84CoordinateV1
     current_heading_rad: float
     goal_wgs84: Wgs84CoordinateV1
@@ -528,6 +537,7 @@ def build_waypoint_guidance_from_planner_v1(
     *,
     guidance_id: str,
     parent_sample_id: str,
+    observation_timestamp_s: float,
     current_wgs84: Wgs84CoordinateV1,
     current_heading_rad: float,
     goal_wgs84: Wgs84CoordinateV1,
@@ -550,6 +560,8 @@ def build_waypoint_guidance_from_planner_v1(
     Args:
         guidance_id: Stable output guidance identity.
         parent_sample_id: Physical parent joined to the source manifest.
+        observation_timestamp_s: Timestamp of the parent observation in Unix
+            seconds, retained as part of the parent-bound condition identity.
         current_wgs84: Current planner origin.
         current_heading_rad: Current compass heading in radians.
         goal_wgs84: Planner destination.
@@ -593,6 +605,7 @@ def build_waypoint_guidance_from_planner_v1(
     return WaypointGuidanceV1(
         guidance_id=guidance_id,
         parent_sample_id=parent_sample_id,
+        observation_timestamp_s=observation_timestamp_s,
         current_wgs84=current_wgs84,
         current_heading_rad=current_heading_rad,
         goal_wgs84=goal_wgs84,
@@ -637,6 +650,7 @@ def build_waypoint_guidance_from_record_v1(
     return build_waypoint_guidance_from_planner_v1(
         guidance_id=record.record_id,
         parent_sample_id=record.parent_sample_id,
+        observation_timestamp_s=record.observation_timestamp_s,
         current_wgs84=record.current_wgs84,
         current_heading_rad=record.current_heading_rad,
         goal_wgs84=record.goal_wgs84,

@@ -408,6 +408,7 @@ def build_planner_records_from_native_logs_v1(
             PlannerRouteRecordWgs84V1(
                 record_id=_stable_id_v1("native_planner_route", parent_id, log.route_log_id),
                 parent_sample_id=parent_id,
+                observation_timestamp_s=anchor.observation_timestamp_s,
                 current_wgs84=anchor.current_wgs84,
                 current_heading_rad=anchor.current_heading_rad,
                 goal_wgs84=log.goal_wgs84,

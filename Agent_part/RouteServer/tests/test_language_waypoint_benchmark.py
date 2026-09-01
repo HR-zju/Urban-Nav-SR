@@ -180,6 +180,7 @@ def _planner_record(parent_id: str) -> PlannerRouteRecordWgs84V1:
     return PlannerRouteRecordWgs84V1(
         record_id="planner-1",
         parent_sample_id=parent_id,
+        observation_timestamp_s=2.0,
         current_wgs84={"latitude_deg": 30.0, "longitude_deg": 120.0},
         current_heading_rad=0.0,
         goal_wgs84={"latitude_deg": 30.0004, "longitude_deg": 120.0},

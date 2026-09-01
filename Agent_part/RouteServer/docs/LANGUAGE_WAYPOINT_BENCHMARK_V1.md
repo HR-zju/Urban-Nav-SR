@@ -166,6 +166,10 @@ conda run -n UrbanNav env PYTHONPATH=.:src python \
 join 仅接受与 observation 同一 native record、在 observation 之前生成、未超过公开时效，且
 GPS origin 与 heading 均匹配的 route。`NativePlannerRouteLogV1` 在 schema 中强制
 `independent_of_future_target=true`；不满足任一条件的 parent 只写 reject decision。
+通过 join 的 `PlannerRouteRecordWgs84V1` 和后续 `WaypointGuidanceV1` 还会保留
+`observation_timestamp_s`。同一 `parent_sample_id` 可以对应多个 observation；Stage-I 按
+`parent_sample_id + observation_timestamp_s` 选择唯一 guidance，时间差超过 $10^{-4}\,s$ 或窗口内
+存在重复记录时进入 reject/失败路径。
 
 最后构造一个测试 arm：
 
