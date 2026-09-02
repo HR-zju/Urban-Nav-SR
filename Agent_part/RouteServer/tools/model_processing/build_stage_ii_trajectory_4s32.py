@@ -48,6 +48,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--limit-per-manifest", type=int, default=None)
     parser.add_argument("--raw-cache-size", type=int, default=8)
     parser.add_argument("--progress-interval", type=int, default=1000)
+    parser.add_argument(
+        "--allow-partial-horizon",
+        action="store_true",
+        help=(
+            "Accept source-covered trajectory prefixes and emit the explicit "
+            "zero-padded timestep mask. Full-horizon admission remains the default."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -70,6 +78,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         limit_per_manifest=args.limit_per_manifest,
         raw_cache_size=args.raw_cache_size,
         progress_interval=args.progress_interval,
+        full_horizon_required=not args.allow_partial_horizon,
         progress_callback=lambda payload: print(
             json.dumps({"stage_ii_v2_progress": payload}, ensure_ascii=False),
             file=sys.stderr,

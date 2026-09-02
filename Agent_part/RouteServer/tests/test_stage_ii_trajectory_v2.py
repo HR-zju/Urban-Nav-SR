@@ -17,6 +17,7 @@ from mcp_server.data.stage_ii_trajectory import (
 from mcp_server.data.stage_ii_trajectory_v2_corpus import (
     build_stage_ii_trajectory_corpus_v2,
 )
+from tools.model_processing.build_stage_ii_trajectory_4s32 import parse_args
 
 
 ROUTE_ROOT = Path(__file__).resolve().parents[1]
@@ -61,6 +62,22 @@ def _manifest_row(clip_id: str) -> dict:
             "trajectory_source": "calibrated_pose_projection",
         },
     }
+
+
+def test_trajectory_builder_cli_defaults_to_full_horizon_and_explicitly_allows_prefixes() -> None:
+    base_args = [
+        "--dataset-manifest",
+        "sidewalk=/tmp/source.jsonl",
+        "--raw-root",
+        "sidewalk=/tmp/raw",
+        "--identity-registry-json",
+        "/tmp/registry.json",
+        "--output-dir",
+        "/tmp/output",
+    ]
+
+    assert parse_args(base_args).allow_partial_horizon is False
+    assert parse_args([*base_args, "--allow-partial-horizon"]).allow_partial_horizon is True
 
 
 def _quaternion_rows(yaw: float, count: int, *, order: str) -> np.ndarray:
@@ -128,6 +145,32 @@ def test_v2_rejects_partial_horizon_and_invalid_current_origin() -> None:
     result = _build_target(invalid_origin)
     assert not result.accepted
     assert result.qc.reason_codes == ("trajectory_current_origin_pose_invalid",)
+
+
+def test_v2_partial_policy_emits_zero_padded_prefix_mask() -> None:
+    rows = _straight_rows(end=3.875)
+    result = build_stage_ii_trajectory_target_v2(
+        sample_id="sidewalk:partial",
+        dataset_source="sidewalk",
+        clip_id="clip-partial",
+        frame_idx=0,
+        raw_trajectory=rows,
+        action_mask=[True] * len(rows),
+        source_adapter_id="sidewalk_npy_pose_4s_v2",
+        trajectory_source="sidewalk_frame_pose_odometry",
+        allowed_trajectory_sources={"sidewalk_frame_pose_odometry"},
+        raw_timestamp_unit="nanosecond",
+        yaw_offset_deg=0.0,
+        full_horizon_required=False,
+    )
+
+    assert result.accepted
+    assert result.target is not None
+    assert result.target.valid_step_count == 31
+    assert result.target.action_mask == [True] * 31 + [False]
+    assert result.target.trajectory_ego_t[-1] == [0.0, 0.0, 0.0]
+    assert result.target.policy.full_horizon_required is False
+    assert result.qc.target_valid_step_count == 31
 
 
 @pytest.mark.parametrize(
@@ -234,6 +277,49 @@ def test_raw_npy_adapters_preserve_forward_axis(
     assert target.accepted
     assert target.target is not None
     assert target.target.trajectory_ego_t[-1] == pytest.approx([4.0, 0.0, 0.0], abs=1e-6)
+
+
+def test_raw_npy_adapter_exposes_source_prefix_for_partial_policy(tmp_path: Path) -> None:
+    root = tmp_path / "sidewalk"
+    positions = np.zeros((25, 3), dtype=np.float64)
+    positions[:, 0] = np.arange(25) * 0.125
+    _write_npy_clip(
+        root,
+        "clip-partial",
+        positions=positions,
+        yaw=0.0,
+        order="wxyz",
+        write_metadata=False,
+    )
+    reader = StageIIRawTrajectoryReaderV2({"sidewalk": root})
+
+    with pytest.raises(StageIIRawTrajectoryErrorV2) as exc_info:
+        reader.extract("sidewalk", _manifest_row("clip-partial"))
+    assert exc_info.value.code == "trajectory_full_horizon_missing"
+
+    window = reader.extract(
+        "sidewalk",
+        _manifest_row("clip-partial"),
+        full_horizon_required=False,
+    )
+    assert window.trajectory_ego_timed[-1][-1] == pytest.approx(3.0)
+    target = build_stage_ii_trajectory_target_v2(
+        sample_id="sidewalk:partial",
+        dataset_source="sidewalk",
+        clip_id=window.clip_id,
+        frame_idx=window.frame_idx,
+        raw_trajectory=window.trajectory_ego_timed,
+        action_mask=window.action_mask,
+        source_adapter_id=window.source_adapter_id,
+        trajectory_source=window.trajectory_source,
+        allowed_trajectory_sources={window.trajectory_source},
+        raw_timestamp_unit=window.raw_timestamp_unit,
+        yaw_offset_deg=window.yaw_offset_deg,
+        full_horizon_required=False,
+    )
+    assert target.accepted
+    assert target.target is not None
+    assert target.target.action_mask == [True] * 24 + [False] * 8
 
 
 def test_raw_npy_adapter_rejects_static_export_and_bad_clock(tmp_path: Path) -> None:
@@ -350,3 +436,43 @@ def test_v2_corpus_writes_portable_sidecar_qc_and_report(tmp_path: Path) -> None
         "trajectory_source_speed_audit_exceeded",
     ]
     assert str(raw_root) not in json.dumps(sidecars[0])
+
+
+def test_v2_corpus_propagates_partial_horizon_policy(tmp_path: Path) -> None:
+    raw_root = tmp_path / "raw"
+    positions = np.zeros((25, 3), dtype=np.float64)
+    positions[:, 0] = np.arange(25) * 0.125
+    _write_npy_clip(
+        raw_root,
+        "clip-corpus-partial",
+        positions=positions,
+        yaw=0.0,
+        order="wxyz",
+        write_metadata=False,
+    )
+    manifest = tmp_path / "sidewalk.jsonl"
+    manifest.write_text(
+        json.dumps(_manifest_row("clip-corpus-partial")) + "\n",
+        encoding="utf-8",
+    )
+
+    report = build_stage_ii_trajectory_corpus_v2(
+        dataset_manifests={"sidewalk": [manifest]},
+        raw_roots={"sidewalk": raw_root},
+        identity_registry_json=(
+            ROUTE_ROOT / "config/stage_ii_cfm/trajectory_source_registry_v1.json"
+        ),
+        output_dir=tmp_path / "output",
+        full_horizon_required=False,
+    )
+
+    assert report["complete"] is True
+    assert report["counts"]["accepted"] == 1
+    sidecars = []
+    for split in ("train", "validation", "test"):
+        path = tmp_path / "output" / f"trajectory_sidecars_v2_{split}.jsonl"
+        sidecars.extend(json.loads(line) for line in path.read_text().splitlines())
+    assert len(sidecars) == 1
+    target = sidecars[0]["trajectory_target"]
+    assert target["action_mask"] == [True] * 24 + [False] * 8
+    assert target["policy"]["full_horizon_required"] is False

@@ -905,7 +905,10 @@ class StageIITrajectoryPolicyV2(BaseModel):
     raw_timestamp_unit: Literal["nanosecond", "millisecond"]
     yaw_source: Literal["odometry"] = "odometry"
     yaw_offset_deg: float
-    full_horizon_required: Literal[True] = True
+    # Full-horizon admission remains the default V2 policy.  The partial-mask
+    # capability selects ``False`` explicitly and then carries a valid prefix
+    # in ``action_mask``; no target value is synthesized for the suffix.
+    full_horizon_required: bool = True
     max_source_gap_sec: Literal[STAGE_II_MAX_SOURCE_GAP_SEC_V2] = (
         STAGE_II_MAX_SOURCE_GAP_SEC_V2
     )
@@ -933,7 +936,7 @@ class StageIITrajectoryPolicyV2(BaseModel):
 
 
 class StageIITrajectoryTargetV2(BaseModel):
-    """Carry one complete 4-second, 32-step metric FLU target."""
+    """Carry one 4-second, 32-step metric FLU target and its valid prefix."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -948,9 +951,7 @@ class StageIITrajectoryTargetV2(BaseModel):
         min_length=STAGE_II_HORIZON_STEPS_V2,
         max_length=STAGE_II_HORIZON_STEPS_V2,
     )
-    valid_step_count: Literal[STAGE_II_HORIZON_STEPS_V2] = (
-        STAGE_II_HORIZON_STEPS_V2
-    )
+    valid_step_count: int = Field(ge=1, le=STAGE_II_HORIZON_STEPS_V2)
     policy: StageIITrajectoryPolicyV2
     source_target_digest: str = Field(
         min_length=64,
@@ -965,15 +966,30 @@ class StageIITrajectoryTargetV2(BaseModel):
 
     @model_validator(mode="after")
     def validate_target(self) -> "StageIITrajectoryTargetV2":
-        """Reject padding, non-finite metric poses, and digest drift."""
+        """Validate prefix padding, finite poses, and digest identity."""
 
-        if not all(self.action_mask):
-            raise ValueError("Stage II V2 requires all 32 target steps")
+        if len(self.action_mask) != STAGE_II_HORIZON_STEPS_V2:
+            raise ValueError("Stage II V2 action_mask must contain 32 steps")
+        seen_padding = False
+        valid_count = 0
+        for index, valid in enumerate(self.action_mask):
+            if valid:
+                if seen_padding:
+                    raise ValueError("Stage II V2 action_mask must be prefix-contiguous")
+                valid_count += 1
+            else:
+                seen_padding = True
+        if valid_count != self.valid_step_count:
+            raise ValueError("Stage II V2 valid_step_count mismatch")
+        if self.policy.full_horizon_required and valid_count != STAGE_II_HORIZON_STEPS_V2:
+            raise ValueError("full-horizon Stage II V2 policy requires all 32 target steps")
         for index, row in enumerate(self.trajectory_ego_t):
             if len(row) != 3 or not all(math.isfinite(float(item)) for item in row):
                 raise ValueError(
                     f"Stage II V2 trajectory row {index} must be finite [3]"
                 )
+            if not self.action_mask[index] and any(float(item) != 0.0 for item in row):
+                raise ValueError("Stage II V2 invalid suffix rows must be zero padded")
         expected = stage_ii_digest_v1(
             self.model_dump(mode="json", exclude={"target_digest"})
         )
@@ -1020,11 +1036,11 @@ class StageIITrajectoryQCReportV2(BaseModel):
 
     @model_validator(mode="after")
     def validate_qc(self) -> "StageIITrajectoryQCReportV2":
-        """Require full-horizon acceptance and immutable audit content."""
+        """Require accepted rows to claim a non-empty target prefix."""
 
         if self.status == "accepted":
-            if self.target_valid_step_count != STAGE_II_HORIZON_STEPS_V2:
-                raise ValueError("accepted Stage II V2 QC requires 32 target steps")
+            if self.target_valid_step_count < 1:
+                raise ValueError("accepted Stage II V2 QC requires target steps")
             if self.source_evidence_digest is None:
                 raise ValueError("accepted Stage II V2 QC requires source evidence")
         elif self.target_valid_step_count != 0:

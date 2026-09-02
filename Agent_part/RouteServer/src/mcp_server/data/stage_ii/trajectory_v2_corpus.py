@@ -52,6 +52,7 @@ def build_stage_ii_trajectory_corpus_v2(
     raw_cache_size: int = 8,
     progress_interval: int = 0,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    full_horizon_required: bool = True,
 ) -> dict[str, Any]:
     """Build source-parent V2 sidecars, QC, rejects, and a coverage report.
 
@@ -67,6 +68,8 @@ def build_stage_ii_trajectory_corpus_v2(
         progress_interval: Emit a callback every N globally scanned rows; zero
             disables progress events.
         progress_callback: Optional consumer for deterministic progress maps.
+        full_horizon_required: Select full-horizon admission or the explicit
+            prefix-mask capability for the materialized target rows.
 
     Returns:
         Deterministic report covering every scanned non-empty input row.
@@ -198,7 +201,11 @@ def build_stage_ii_trajectory_corpus_v2(
                             )
                             continue
                         try:
-                            raw_window = reader.extract(dataset, row)
+                            raw_window = reader.extract(
+                                dataset,
+                                row,
+                                full_horizon_required=bool(full_horizon_required),
+                            )
                             result = build_stage_ii_trajectory_target_v2(
                                 sample_id=sample_id,
                                 dataset_source=dataset,
@@ -211,6 +218,7 @@ def build_stage_ii_trajectory_corpus_v2(
                                 allowed_trajectory_sources={raw_window.trajectory_source},
                                 raw_timestamp_unit=raw_window.raw_timestamp_unit,
                                 yaw_offset_deg=raw_window.yaw_offset_deg,
+                                full_horizon_required=bool(full_horizon_required),
                             )
                             qc = result.qc
                         except StageIIRawTrajectoryErrorV2 as exc:
@@ -386,6 +394,7 @@ def build_stage_ii_trajectory_corpus_v2(
         },
         "limit_per_dataset": limit_per_dataset,
         "limit_per_manifest": limit_per_manifest,
+        "full_horizon_required": bool(full_horizon_required),
         "counts": {
             **dict(counts),
             "rejected_total": rejected_count,

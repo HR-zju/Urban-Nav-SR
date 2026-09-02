@@ -229,8 +229,9 @@ def build_stage_ii_trajectory_target_v2(
     allowed_trajectory_sources: Iterable[str],
     raw_timestamp_unit: str,
     yaw_offset_deg: float,
+    full_horizon_required: bool = True,
 ) -> StageIITrajectoryBuildResultV2:
-    """Build one complete 4-second, 32-step metric FLU target.
+    """Build one 4-second, 32-step metric FLU target.
 
     Args:
         sample_id: Stable dataset parent identity.
@@ -245,14 +246,16 @@ def build_stage_ii_trajectory_target_v2(
         allowed_trajectory_sources: Frozen caller allowlist.
         raw_timestamp_unit: Raw clock unit before conversion to seconds.
         yaw_offset_deg: Odom-to-base rotation used by the raw adapter for XY.
+        full_horizon_required: Require source coverage through 4 seconds when
+            true. When false, emit a zero-padded suffix and its prefix mask.
 
     Returns:
-        Complete metric target plus QC, or one rejection report.
+        Metric target plus QC, or one rejection report.
 
     Notes:
-        V2 never extrapolates, repeats a terminal pose, or accepts a partial
-        suffix.  The raw source must cover every target time in
-        ``0.125, ..., 4.0`` seconds and pass bounded gap/kinematic QC.
+        V2 never extrapolates or repeats a terminal pose. The partial-mask
+        capability keeps source-covered target times and zero-pads the suffix;
+        the default policy still requires every target time.
     """
 
     raw_rows = list(raw_trajectory or [])
@@ -324,7 +327,7 @@ def build_stage_ii_trajectory_target_v2(
             yaw_source="odometry",
             horizon_seconds=STAGE_II_HORIZON_SECONDS_V2,
             horizon_steps=STAGE_II_HORIZON_STEPS_V2,
-            full_horizon_required=True,
+            full_horizon_required=bool(full_horizon_required),
         )
         evidence_digest = stage_ii_digest_v1(
             {
@@ -341,12 +344,13 @@ def build_stage_ii_trajectory_target_v2(
             trajectory_source=trajectory_source,
             raw_timestamp_unit=raw_timestamp_unit,
             yaw_offset_deg=float(yaw_offset_deg),
+            full_horizon_required=bool(full_horizon_required),
         )
         target_payload = {
             "schema_version": STAGE_II_TRAJECTORY_TARGET_V2_SCHEMA_VERSION,
             "trajectory_ego_t": target_rows,
             "action_mask": target_mask,
-            "valid_step_count": STAGE_II_HORIZON_STEPS_V2,
+            "valid_step_count": sum(target_mask),
             "policy": policy.model_dump(mode="json"),
             "source_target_digest": evidence_digest,
         }
@@ -369,7 +373,7 @@ def build_stage_ii_trajectory_target_v2(
             reason_codes=tuple(reason_codes),
             raw_pose_count=len(raw_rows),
             source_valid_step_count=source_valid_count,
-            target_valid_step_count=STAGE_II_HORIZON_STEPS_V2,
+            target_valid_step_count=sum(target_mask),
             source_evidence_digest=evidence_digest,
             **metrics,
         )

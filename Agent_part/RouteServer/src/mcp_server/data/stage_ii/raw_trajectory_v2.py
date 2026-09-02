@@ -103,12 +103,17 @@ class StageIIRawTrajectoryReaderV2:
         self,
         dataset_source: str,
         row: Mapping[str, Any],
+        *,
+        full_horizon_required: bool = True,
     ) -> StageIIRawTrajectoryWindowV2:
-        """Read one strict current-to-4-second raw-pose window.
+        """Read one current-to-4-second raw-pose window.
 
         Args:
             dataset_source: ``sidewalk``, ``foxglove``, or ``egowalk``.
             row: Prepared source-manifest row used only for identity/stamps.
+            full_horizon_required: Require raw coverage through four seconds.
+                When false, return the source-covered prefix and let the V2
+                target builder zero-pad its suffix with an explicit mask.
 
         Returns:
             Current-origin FLU timed rows with real odometry yaw.
@@ -116,6 +121,10 @@ class StageIIRawTrajectoryReaderV2:
         Raises:
             StageIIRawTrajectoryErrorV2: If identity, raw files, continuity,
                 instruction horizon, or pose arrays are not trustworthy.
+
+        The default keeps the historical full-horizon contract.  A caller that
+        explicitly selects the partial policy receives only source-covered
+        poses; no terminal pose is repeated and no missing suffix is inferred.
         """
 
         dataset = str(dataset_source)
@@ -125,9 +134,16 @@ class StageIIRawTrajectoryReaderV2:
                 f"no raw root supplied for dataset={dataset}",
             )
         if dataset in {"sidewalk", "foxglove"}:
-            return self._extract_npy(dataset, row)
+            return self._extract_npy(
+                dataset,
+                row,
+                full_horizon_required=bool(full_horizon_required),
+            )
         if dataset == "egowalk":
-            return self._extract_egowalk(row)
+            return self._extract_egowalk(
+                row,
+                full_horizon_required=bool(full_horizon_required),
+            )
         raise StageIIRawTrajectoryErrorV2(
             "trajectory_dataset_unsupported",
             f"dataset={dataset} has no V2 raw adapter",
@@ -137,6 +153,8 @@ class StageIIRawTrajectoryReaderV2:
         self,
         dataset: str,
         row: Mapping[str, Any],
+        *,
+        full_horizon_required: bool,
     ) -> StageIIRawTrajectoryWindowV2:
         """Extract SideWalk/Foxglove poses from aligned NPY arrays."""
 
@@ -176,6 +194,7 @@ class StageIIRawTrajectoryReaderV2:
             current_index=frame_idx,
             horizon_seconds=4.0,
             yaw_offset_deg=yaw_offset,
+            full_horizon_required=full_horizon_required,
         )
         return StageIIRawTrajectoryWindowV2(
             clip_id=clip_id,
@@ -190,6 +209,8 @@ class StageIIRawTrajectoryReaderV2:
     def _extract_egowalk(
         self,
         row: Mapping[str, Any],
+        *,
+        full_horizon_required: bool,
     ) -> StageIIRawTrajectoryWindowV2:
         """Extract one EgoWalk window from the original odometry parquet."""
 
@@ -208,10 +229,11 @@ class StageIIRawTrajectoryReaderV2:
                 f"EgoWalk source must be egowalk_odometry, got {source!r}",
             )
         annotation_end = _field_value(row, "egowalk_annotation.end_ts")
-        if annotation_end is None or int(annotation_end) < timestamp + 4000:
+        minimum_annotation_end = timestamp + (4000 if full_horizon_required else 125)
+        if annotation_end is None or int(annotation_end) < minimum_annotation_end:
             raise StageIIRawTrajectoryErrorV2(
                 "trajectory_instruction_horizon_missing",
-                "EgoWalk caption interval does not remain active for the full 4-second target",
+                "EgoWalk caption interval does not cover the required target prefix",
             )
         series = self._series("egowalk", clip_id)
         matches = np.flatnonzero(
@@ -228,6 +250,12 @@ class StageIIRawTrajectoryReaderV2:
             current_index=current_index,
             horizon_seconds=4.0,
             yaw_offset_deg=0.0,
+            full_horizon_required=full_horizon_required,
+            max_horizon_seconds=(
+                max(0.0, (int(annotation_end) - timestamp) / 1000.0)
+                if not full_horizon_required
+                else None
+            ),
         )
         _reject_egowalk_backward_discontinuity(rows)
         return StageIIRawTrajectoryWindowV2(
@@ -416,6 +444,8 @@ def _relative_window(
     current_index: int,
     horizon_seconds: float,
     yaw_offset_deg: float,
+    full_horizon_required: bool = True,
+    max_horizon_seconds: float | None = None,
 ) -> tuple[tuple[float, float, float, float], ...]:
     r"""Transform a raw global pose window into current-ego FLU coordinates.
 
@@ -436,13 +466,18 @@ def _relative_window(
         )
     divisor = 1e9 if series.timestamp_unit == "nanosecond" else 1e3
     current_time = float(series.timestamps[current_index])
-    end_time = current_time + float(horizon_seconds) * divisor
+    effective_horizon = float(horizon_seconds)
+    if max_horizon_seconds is not None:
+        effective_horizon = min(effective_horizon, float(max_horizon_seconds))
+    end_time = current_time + effective_horizon * divisor
     end_index = int(np.searchsorted(series.timestamps, end_time, side="left"))
     if end_index >= count:
-        raise StageIIRawTrajectoryErrorV2(
-            "trajectory_full_horizon_missing",
-            "raw pose series ends before the 4-second target horizon",
-        )
+        if full_horizon_required:
+            raise StageIIRawTrajectoryErrorV2(
+                "trajectory_full_horizon_missing",
+                "raw pose series ends before the 4-second target horizon",
+            )
+        end_index = count - 1
     selection = slice(current_index, end_index + 1)
     positions = np.asarray(series.positions_xy[selection], dtype=np.float64)
     yaws = np.asarray(series.yaws[selection], dtype=np.float64)
