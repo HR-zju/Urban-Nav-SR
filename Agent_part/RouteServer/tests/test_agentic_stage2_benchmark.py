@@ -16,6 +16,7 @@ from mcp_server.eval.agentic_stage2_benchmark import (
 
 
 ROUTESERVER_ROOT = Path(__file__).resolve().parents[1]
+AGENT_TOOLS_ROOT = ROUTESERVER_ROOT.parents[2] / "UrbanNav-AgentTools"
 
 
 class AgenticStage2BenchmarkCollectorTest(unittest.TestCase):
@@ -118,7 +119,9 @@ class AgenticStage2BenchmarkCliTest(unittest.TestCase):
                 "/models/stage2b",
             ]
             env = os.environ.copy()
-            env["PYTHONPATH"] = str(ROUTESERVER_ROOT / "src")
+            env["PYTHONPATH"] = os.pathsep.join(
+                [str(ROUTESERVER_ROOT / "src"), str(AGENT_TOOLS_ROOT / "src")]
+            )
             completed = subprocess.run(cmd, cwd=ROUTESERVER_ROOT, env=env, check=True, capture_output=True, text=True)
             payload = json.loads(completed.stdout)
             self.assertEqual(payload["collection"]["num_cases"], 2)

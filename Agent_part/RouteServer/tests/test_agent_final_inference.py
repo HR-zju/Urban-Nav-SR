@@ -26,6 +26,7 @@ from mcp_server.eval.online_agent_runner import CallableModelAdapter
 
 
 ROUTESERVER_ROOT = Path(__file__).resolve().parents[1]
+AGENT_TOOLS_ROOT = ROUTESERVER_ROOT.parents[2] / "UrbanNav-AgentTools"
 
 
 class FinalInferenceInterfaceTest(unittest.IsolatedAsyncioTestCase):
@@ -92,7 +93,9 @@ class FinalInferenceCliTest(unittest.TestCase):
                 "no_tool",
             ]
             env = os.environ.copy()
-            env["PYTHONPATH"] = str(ROUTESERVER_ROOT / "src")
+            env["PYTHONPATH"] = os.pathsep.join(
+                [str(ROUTESERVER_ROOT / "src"), str(AGENT_TOOLS_ROOT / "src")]
+            )
             completed = subprocess.run(cmd, cwd=ROUTESERVER_ROOT, env=env, check=True, capture_output=True, text=True)
             payload = json.loads(completed.stdout)
             self.assertTrue(payload["finish_valid"])

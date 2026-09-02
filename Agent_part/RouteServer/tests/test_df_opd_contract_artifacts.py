@@ -5,8 +5,6 @@ import json
 import sys
 from pathlib import Path
 
-import pytest
-
 from mcp_server.contracts.df_opd import DF_OPD_PROFILES_V1
 from tools.model_processing.export_df_opd_contract_artifacts import (
     ARTIFACT_FILENAMES,
@@ -20,8 +18,9 @@ from tools.model_processing.sync_df_opd_contract_cross_repo import (
 ROUTE_ROOT = Path(__file__).resolve().parents[1]
 CODE_ROOT = Path(__file__).resolve().parents[4]
 ROUTE_ARTIFACTS = ROUTE_ROOT / 'schemas' / 'df_opd'
-MS_ROOT = CODE_ROOT / 'ms-swift'
-MS_ARTIFACTS = MS_ROOT / 'swift' / 'sidewalk_nav' / 'schemas' / 'df_opd'
+CONTRACT_ROOT = CODE_ROOT / 'UrbanNav-Contracts'
+CONTRACT_PACKAGE = CONTRACT_ROOT / 'src' / 'urbannav_contracts'
+CONTRACT_ARTIFACTS = CONTRACT_PACKAGE / 'schemas' / 'df_opd'
 
 
 def test_committed_df_opd_contract_artifacts_are_current(tmp_path: Path) -> None:
@@ -36,24 +35,21 @@ def test_committed_df_opd_contract_artifacts_are_current(tmp_path: Path) -> None
     export_df_opd_contract_artifacts(ROUTE_ARTIFACTS, check=True)
 
 
-def test_df_opd_ms_swift_mirror_is_current_and_profile_equivalent() -> None:
-    """Require generated source/schema parity and preserve frozen profiles."""
+def test_df_opd_contract_bundle_is_current_and_profile_equivalent() -> None:
+    """Require standalone source/schema parity and preserve frozen profiles."""
 
-    if not MS_ROOT.is_dir():
-        pytest.skip('sibling ms-swift checkout is unavailable')
+    assert CONTRACT_ROOT.is_dir()
     for filename in ARTIFACT_FILENAMES:
-        assert (MS_ARTIFACTS / filename).read_bytes() == (
+        assert (CONTRACT_ARTIFACTS / filename).read_bytes() == (
             ROUTE_ARTIFACTS / filename
         ).read_bytes()
-    report = sync_df_opd_contract_cross_repo(MS_ROOT, check=True)
+    report = sync_df_opd_contract_cross_repo(CONTRACT_ROOT, check=True)
     assert report['passed'] is True
     assert report['stale'] == []
 
-    sys.path.insert(0, str(MS_ROOT))
+    sys.path.insert(0, str(CONTRACT_ROOT / 'src'))
     try:
-        module = importlib.import_module(
-            'swift.sidewalk_nav._generated_df_opd_contract'
-        )
+        module = importlib.import_module('urbannav_contracts.df_opd')
         assert {
             profile_id: profile.model_dump(mode='json')
             for profile_id, profile in module.DF_OPD_PROFILES_V1.items()
@@ -62,7 +58,7 @@ def test_df_opd_ms_swift_mirror_is_current_and_profile_equivalent() -> None:
             for profile_id, profile in DF_OPD_PROFILES_V1.items()
         }
         digest_artifact = json.loads(
-            (MS_ARTIFACTS / 'contract_digest.json').read_text(encoding='utf-8')
+            (CONTRACT_ARTIFACTS / 'contract_digest.json').read_text(encoding='utf-8')
         )
         assert digest_artifact['profiles'] == {
             profile_id: {
@@ -72,4 +68,4 @@ def test_df_opd_ms_swift_mirror_is_current_and_profile_equivalent() -> None:
             for profile_id, profile in sorted(DF_OPD_PROFILES_V1.items())
         }
     finally:
-        sys.path.remove(str(MS_ROOT))
+        sys.path.remove(str(CONTRACT_ROOT / 'src'))

@@ -63,6 +63,7 @@ def test_generated_vqa_python_mirrors_are_current() -> None:
     report = sync_vqa_v2_cross_repo(MS_ROOT, check=True)
     assert report["passed"] is True
     assert report["stale"] == []
+    assert "_generated_direction_profile.py" not in report["sha256"]
 
 
 def test_golden_vqa_parser_parity() -> None:

@@ -167,8 +167,8 @@ tools/model_processing/build_stage_ii_trajectory_sidecars.py
 ```bash
 PYTHONPATH=src python tools/model_processing/export_stage_ii_cfm_contract_artifacts.py \
   --output-dir schemas/stage_ii_cfm
-PYTHONPATH=src python tools/model_processing/sync_stage_ii_cfm_cross_repo.py \
-  --ms-swift-root /path/to/ms-swift --check
+PYTHONPATH=.:src python tools/model_processing/sync_stage_ii_cfm_cross_repo.py \
+  --output-dir /path/to/UrbanNav-Contracts --check
 ```
 
 批量构造 view：

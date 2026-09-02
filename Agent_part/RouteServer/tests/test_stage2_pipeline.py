@@ -26,6 +26,7 @@ from mcp_server.teacher.agentic_stage2_trace_builder import AgenticStage2TraceBu
 
 
 ROUTESERVER_ROOT = Path(__file__).resolve().parents[1]
+AGENT_TOOLS_ROOT = ROUTESERVER_ROOT.parents[2] / "UrbanNav-AgentTools"
 
 
 class Stage2PipelineHelperTest(unittest.TestCase):
@@ -142,7 +143,9 @@ class Stage2PipelineCliTest(unittest.TestCase):
                 "1",
             ]
             env = os.environ.copy()
-            env["PYTHONPATH"] = str(ROUTESERVER_ROOT / "src")
+            env["PYTHONPATH"] = os.pathsep.join(
+                [str(ROUTESERVER_ROOT / "src"), str(AGENT_TOOLS_ROOT / "src")]
+            )
             subprocess.run(cmd, cwd=ROUTESERVER_ROOT, env=env, check=True)
 
             report = json.loads((output_dir / "sidewalk_agent_stage2_report_smoke.json").read_text(encoding="utf-8"))

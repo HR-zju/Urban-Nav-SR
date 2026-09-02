@@ -17,12 +17,6 @@ _GENERATED_HEADER = (
     "# Generated from RouteServer canonical Navigation VQA V2. "
     "Do not edit by hand.\n"
 )
-_DIRECTION_GENERATED_HEADER = (
-    "# Generated from RouteServer canonical Stage-A direction profiles. "
-    "Do not edit by hand.\n"
-)
-
-
 def _replace_once(
     text: str,
     expected: str,
@@ -36,17 +30,6 @@ def _replace_once(
             f"{expected}"
         )
     return text.replace(expected, replacement)
-
-
-def render_direction_profile_mirror(source_text: str) -> str:
-    """Rewrite the package-local ReasonCode import."""
-
-    rendered = _replace_once(
-        source_text,
-        "from mcp_server.contracts.reasoning import ReasonCode",
-        "from .contracts.reasoning import ReasonCode",
-    )
-    return _DIRECTION_GENERATED_HEADER + rendered
 
 
 def render_vqa_contract_mirror(source_text: str) -> str:
@@ -150,13 +133,6 @@ def sync_vqa_v2_cross_repo(
         tuple[Path, Path, Callable[[str], str]],
         ...,
     ] = (
-        (
-            route_root
-            / "src/mcp_server/contracts/direction_profile.py",
-            ms_root
-            / "swift/sidewalk_nav/_generated_direction_profile.py",
-            render_direction_profile_mirror,
-        ),
         (
             route_root / "src/mcp_server/contracts/vqa_v2.py",
             ms_root

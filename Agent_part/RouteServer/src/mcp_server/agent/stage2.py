@@ -15,6 +15,18 @@ import json
 import re
 from typing import Any
 
+from urbannav_agent_tools.message_codec import (
+    NAVIGATION_READOUT_TOKENS,
+    READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2,
+    READOUT_PLACEMENT_USER_PROMPT_V1,
+    READOUT_PLACEMENTS,
+    SYSTEM1_READOUT_TOKENS,
+    append_system1_readout,
+    build_agent_think_text,
+    final_navigation_user_content,
+    initial_user_content as _initial_user_content,
+    system1_readout_block,
+)
 from mcp_server.agent.reasoning_text import parse_or_adapt_reasoning_text, render_reasoning_target_v2
 from mcp_server.agent.finish_schema import (
     build_finish_payload,
@@ -36,15 +48,7 @@ from mcp_server.contracts.reasoning import (
 )
 
 
-TRAJECTORY_TOKEN_COUNT = 16
-NAVIGATION_READOUT_TOKENS = tuple(f"[TRAJ_{index}]" for index in range(TRAJECTORY_TOKEN_COUNT))
-SYSTEM1_READOUT_TOKENS = tuple(f"[SYS1_{index}]" for index in range(TRAJECTORY_TOKEN_COUNT))
-READOUT_PLACEMENT_USER_PROMPT_V1 = "user_prompt_v1"
-READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2 = "assistant_suffix_v2"
-READOUT_PLACEMENTS = {
-    READOUT_PLACEMENT_USER_PROMPT_V1,
-    READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2,
-}
+TRAJECTORY_TOKEN_COUNT = len(NAVIGATION_READOUT_TOKENS)
 TOOL_DECISION_REASON_CODE_NEED_MAP_CONTEXT = "need_map_context"
 TOOL_DECISION_REASON_CODE_NEED_VISUAL_CROP = "need_visual_crop"
 TOOL_DECISION_REASON_CODE_NEED_USER_CLARIFICATION = "need_user_clarification"
@@ -87,117 +91,16 @@ def json_dumps(payload: Any) -> str:
 
 
 def initial_user_content(case: AgentStage2Case) -> str:
-    """Build the first user turn.
-
-    输入:
-        ``AgentStage2Case``，其中 ``observation.images`` 决定 ``<image>`` 数量。
-
-    输出:
-        ``<image>...`` 前缀 + 用户导航请求。
-    """
-
-    return "".join("<image>" for _ in case.images) + case.user_request
-
-
-def final_navigation_user_content(
-    *,
-    tool_used: bool = True,
-    readout_placement: str = READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2,
-) -> str:
-    """Return the final readout prompt containing all trajectory query tokens.
+    """Build the first user turn through the standalone message codec.
 
     Args:
-        tool_used: True 时提示模型把已经出现的 ``tool_response`` 纳入最终导航；
-            False 时生成 no-tool replay 的最终导航 prompt。
-        readout_placement: ``user_prompt_v1`` 时返回带 ``[TRAJ_i]`` 的旧
-            readout user prompt；``assistant_suffix_v2`` 时只返回文本触发
-            prompt，readout token 由最终 assistant 的 ``<readout>`` 承载。
+        case: RouteServer Stage2 case containing ordered images and request.
 
     Returns:
-        最终导航 user turn 文本。v1 包含 ``[TRAJ_i]``；v2 不包含 readout
-        token，避免 System1 readout 早于 ``<finish>``。
-
-    Raises:
-        ValueError: ``readout_placement`` 不是已知取值时抛出。
+        Provider-neutral initial user content.
     """
 
-    if readout_placement not in READOUT_PLACEMENTS:
-        raise ValueError(f"Unknown readout placement: {readout_placement}")
-    if readout_placement == READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2:
-        return FINAL_NAVIGATION_DECISION_WITH_TOOL_TEXT_PROMPT if tool_used else FINAL_NAVIGATION_DECISION_TEXT_PROMPT
-    return FINAL_NAVIGATION_DECISION_WITH_TOOL_PROMPT if tool_used else FINAL_NAVIGATION_DECISION_PROMPT
-
-
-def system1_readout_block(*, readout_placement: str = READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2) -> str:
-    """Build the System1 assistant-suffix readout block.
-
-    Args:
-        readout_placement: Placement mode. Only ``assistant_suffix_v2`` emits
-            a non-empty block.
-
-    Returns:
-        ``<readout>[SYS1_0] ... [SYS1_N]</readout>`` for v2, otherwise an
-        empty string. These tokens are latent anchors and must be masked out of
-        assistant LM loss by the ms-swift template/trainer.
-
-    Raises:
-        ValueError: ``readout_placement`` is unknown.
-    """
-
-    if readout_placement not in READOUT_PLACEMENTS:
-        raise ValueError(f"Unknown readout placement: {readout_placement}")
-    if readout_placement != READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2:
-        return ""
-    return "<readout>" + " ".join(SYSTEM1_READOUT_TOKENS) + "</readout>"
-
-
-def append_system1_readout(
-    text: str,
-    *,
-    readout_placement: str = READOUT_PLACEMENT_ASSISTANT_SUFFIX_V2,
-) -> str:
-    """Append a v2 System1 readout block to final assistant text.
-
-    Args:
-        text: Final assistant text containing ``<finish>``.
-        readout_placement: Placement mode. ``user_prompt_v1`` leaves ``text``
-            unchanged.
-
-    Returns:
-        Assistant text with one trailing ``<readout>`` block in v2 mode.
-
-    Raises:
-        ValueError: ``readout_placement`` is unknown.
-    """
-
-    block = system1_readout_block(readout_placement=readout_placement)
-    if not block:
-        return text
-    # ask_user/terminal turn 由 runtime 处理，不允许把它伪装成 CFM 导航样本。
-    if _finish_decision_type(text) not in {None, "navigate"}:
-        return text
-    if "<readout>" in text:
-        return text
-    return f"{text.rstrip()}\n{block}"
-
-
-def build_agent_think_text(*, state: dict[str, Any], decision: dict[str, Any]) -> str:
-    """Build the assistant reasoning turn before tool execution.
-
-    输入:
-        ``state`` 是当前导航状态摘要；``decision`` 是是否调用工具、调用哪个工具的
-        结构化教师决策。
-
-    输出:
-        assistant content。该文本算 LM loss 但不包含可执行 ``tool_call`` JSON。
-    """
-
-    return (
-        "<think>\n"
-        f"<AgentState>{json_dumps(state)}</AgentState>\n"
-        f"<ToolDecision>{json_dumps(decision)}</ToolDecision>\n"
-        "</think>\n"
-    )
+    return _initial_user_content(case.images, case.user_request)
 
 
 def build_agent_state(case: AgentStage2Case, *, intent: dict[str, Any] | None = None) -> dict[str, Any]:

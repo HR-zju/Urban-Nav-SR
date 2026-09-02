@@ -13,6 +13,9 @@ dependencies = [
  "langgraph>=1.2.9,<2.0.0",
 ]
 [project.optional-dependencies]
+agent-tools = [
+ "urbannav-agent-tools>=0.1.0",
+]
 macos = [
  "pyobjc-core>=10.0; sys_platform == 'darwin'",
  "pyobjc-framework-Cocoa>=10.0; sys_platform == 'darwin'",

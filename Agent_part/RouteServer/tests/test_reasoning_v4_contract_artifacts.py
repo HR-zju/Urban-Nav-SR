@@ -23,10 +23,9 @@ from tools.model_processing.sync_reasoning_v4_cross_repo import (
 ROUTE_ROOT = Path(__file__).resolve().parents[1]
 CODE_ROOT = Path(__file__).resolve().parents[4]
 ROUTE_ARTIFACTS = ROUTE_ROOT / "schemas" / "reasoning_v4"
-MS_ROOT = CODE_ROOT / "ms-swift"
-MS_ARTIFACTS = (
-    MS_ROOT / "swift" / "sidewalk_nav" / "schemas" / "reasoning_v4"
-)
+CONTRACT_ROOT = CODE_ROOT / "UrbanNav-Contracts"
+CONTRACT_PACKAGE = CONTRACT_ROOT / "src" / "urbannav_contracts"
+CONTRACT_ARTIFACTS = CONTRACT_PACKAGE / "schemas" / "reasoning_v4"
 
 
 def test_committed_contract_artifacts_are_current(tmp_path: Path) -> None:
@@ -43,61 +42,58 @@ def test_committed_contract_artifacts_are_current(tmp_path: Path) -> None:
     )
 
 
-def test_ms_swift_contract_artifact_mirror_is_byte_identical() -> None:
-    if not MS_ARTIFACTS.is_dir():
-        pytest.skip("sibling ms-swift artifact mirror is unavailable")
+def test_contract_bundle_artifact_is_byte_identical() -> None:
+    assert CONTRACT_ARTIFACTS.is_dir()
 
     for filename in ARTIFACT_FILENAMES:
-        assert (MS_ARTIFACTS / filename).read_bytes() == (
+        assert (CONTRACT_ARTIFACTS / filename).read_bytes() == (
             ROUTE_ARTIFACTS / filename
         ).read_bytes()
 
 
-def test_generated_ms_swift_python_mirrors_are_current() -> None:
-    if not MS_ROOT.is_dir():
-        pytest.skip("sibling ms-swift checkout is unavailable")
+def test_generated_contract_python_modules_are_current() -> None:
+    assert CONTRACT_ROOT.is_dir()
 
-    report = sync_reasoning_v4_cross_repo(MS_ROOT, check=True)
+    report = sync_reasoning_v4_cross_repo(CONTRACT_ROOT, check=True)
 
     assert report["passed"] is True
     assert report["stale"] == []
 
 
 def test_golden_valid_and_invalid_fixtures_have_parser_parity() -> None:
-    if not MS_ROOT.is_dir():
-        pytest.skip("sibling ms-swift checkout is unavailable")
-    sys.path.insert(0, str(MS_ROOT))
+    assert CONTRACT_ROOT.is_dir()
+    sys.path.insert(0, str(CONTRACT_ROOT / "src"))
     try:
-        ms_contract = importlib.import_module(
-                "swift.sidewalk_nav.prompts.reasoning_v4"
+        contract_module = importlib.import_module(
+            "urbannav_contracts.reasoning_v4_text"
         )
         valid = _load_json("reasoning_v4_golden_valid.json")
         invalid = _load_json("reasoning_v4_golden_invalid.json")
 
         for case in valid["cases"]:
             target = ReasoningTargetV4.model_validate(case["value"])
-            ms_target = ms_contract.ReasoningTargetV4.model_validate(
+            package_target = contract_module.ReasoningTargetV4.model_validate(
                 case["value"]
             )
-            assert target.model_dump(mode="json") == ms_target.model_dump(
+            assert target.model_dump(mode="json") == package_target.model_dump(
                 mode="json"
             )
             route_parsed = parse_reasoning_target_v4(
                 case["canonical_assistant_text"]
             )
-            ms_parsed = ms_contract.parse_reasoning_target_v4(
+            package_parsed = contract_module.parse_reasoning_target_v4(
                 case["canonical_assistant_text"]
             )
-            assert route_parsed.valid and ms_parsed.valid
+            assert route_parsed.valid and package_parsed.valid
 
         for case in invalid["cases"]:
             route_error = _route_error(case)
-            ms_error = _ms_error(case, ms_contract)
+            package_error = _package_error(case, contract_module)
             expected = str(case["expected_error_contains"])
             assert expected in route_error
-            assert expected in ms_error
+            assert expected in package_error
     finally:
-        sys.path.remove(str(MS_ROOT))
+        sys.path.remove(str(CONTRACT_ROOT / "src"))
 
 
 def _route_error(case: dict[str, Any]) -> str:
@@ -112,8 +108,8 @@ def _route_error(case: dict[str, Any]) -> str:
     return "\n".join(parsed.errors)
 
 
-def _ms_error(case: dict[str, Any], module: Any) -> str:
-    """Return the ms-swift failure text for one invalid fixture."""
+def _package_error(case: dict[str, Any], module: Any) -> str:
+    """Return the standalone package failure text for one invalid fixture."""
 
     if case["entrypoint"] == "reasoning_target":
         with pytest.raises((ValidationError, ValueError)) as captured:

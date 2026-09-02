@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate ms-swift mirrors of the canonical Stage II CFM contract."""
+"""Export the standalone Python and JSON Stage II CFM contract bundle."""
 
 from __future__ import annotations
 
@@ -9,6 +9,17 @@ import json
 from pathlib import Path
 from typing import Sequence
 
+if __package__:
+    from tools.model_processing.export_stage_ii_cfm_contract_artifacts import (
+        ARTIFACT_FILENAMES,
+        export_stage_ii_cfm_contract_artifacts,
+    )
+else:  # Direct ``python tools/.../script.py`` execution.
+    from export_stage_ii_cfm_contract_artifacts import (  # type: ignore[no-redef]
+        ARTIFACT_FILENAMES,
+        export_stage_ii_cfm_contract_artifacts,
+    )
+
 
 _GENERATED_HEADER = (
     "# Generated from RouteServer canonical UrbanNav Stage II CFM contract. "
@@ -17,17 +28,17 @@ _GENERATED_HEADER = (
 
 
 def render_stage_ii_contract_mirror(source_text: str) -> str:
-    """Rewrite canonical imports for the ms-swift package."""
+    """Rewrite canonical imports for the standalone contract package."""
 
     replacements = {
         "from mcp_server.contracts.reasoning import ReasonCode": (
-            "from .contracts.reasoning import ReasonCode"
+            "from .reasoning import ReasonCode"
         ),
         "from mcp_server.contracts.reasoning_dataset_v4 import (": (
-            "from ._generated_reasoning_dataset_v4 import ("
+            "from .reasoning_dataset_v4 import ("
         ),
         "from mcp_server.contracts.stage_i_sft import (": (
-            "from ._generated_stage_i_sft import ("
+            "from .stage_i_sft import ("
         ),
     }
     rendered = source_text
@@ -38,20 +49,31 @@ def render_stage_ii_contract_mirror(source_text: str) -> str:
                 f"{expected}"
             )
         rendered = rendered.replace(expected, replacement)
+    import_lines = (
+        line.strip()
+        for line in rendered.splitlines()
+        if line.strip().startswith(("from ", "import "))
+    )
+    if any(
+        line.startswith(("from mcp_server", "import mcp_server"))
+        for line in import_lines
+    ):
+        raise ValueError("standalone Stage II contract imports RouteServer")
     return _GENERATED_HEADER + rendered
 
 
 def sync_stage_ii_cfm_cross_repo(
-    ms_swift_root: str | Path,
+    output_dir: str | Path,
     *,
     check: bool = False,
 ) -> dict[str, object]:
-    """Write or verify generated Python and JSON mirrors."""
+    """Write or verify the independent Stage II CFM contract bundle."""
 
     route_root = Path(__file__).resolve().parents[2]
-    ms_root = Path(ms_swift_root).expanduser().resolve()
+    output_root = Path(output_dir).expanduser().resolve()
+    package_root = output_root / "src/urbannav_contracts"
     source_path = route_root / "src/mcp_server/contracts/stage_ii_cfm.py"
-    destination = ms_root / "swift/sidewalk_nav/_generated_stage_ii_cfm.py"
+    destination = package_root / "stage_ii_cfm.py"
     rendered = render_stage_ii_contract_mirror(source_path.read_text(encoding="utf-8"))
     written: list[str] = []
     stale: list[str] = []
@@ -62,44 +84,31 @@ def sync_stage_ii_cfm_cross_repo(
             destination.write_text(rendered, encoding="utf-8")
             written.append(str(destination))
 
-    artifact_hashes: dict[str, str] = {}
-    for filename in (
-        "stage_ii_context_cache_v1.schema.json",
-        "stage_ii_reasoning_context_v2.schema.json",
-        "stage_ii_trajectory_target_v1.schema.json",
-        "stage_ii_trajectory_qc_v1.schema.json",
-        "stage_ii_trajectory_target_v2.schema.json",
-        "stage_ii_trajectory_qc_v2.schema.json",
-        "stage_ii_trajectory_sidecar_v2.schema.json",
-        "stage_ii_trajectory_source_registry_v1.schema.json",
-        "stage_ii_legacy_direct_target_v1.schema.json",
-        "stage_ii_cfm_training_view_v1.schema.json",
-        "stage_ii_cfm_training_view_v2.schema.json",
-        "stage_ii_cached_traj_query_observation_v1.schema.json",
-        "stage_ii_cached_traj_query_training_view_v1.schema.json",
-        "stage_ii_cached_traj_query_binding_v2.schema.json",
-        "stage_ii_cached_traj_query_training_view_v2.schema.json",
-        "stage_ii_cached_traj_query_source_view_v2.schema.json",
-        "stage_ii_direct_latent_view_v1.schema.json",
-        "stage_ii_projection_drop_v1.schema.json",
-        "stage_ii_projection_drop_v2.schema.json",
-        "contract_digest.json",
-    ):
-        source = route_root / "schemas/stage_ii_cfm" / filename
-        target = ms_root / "swift/sidewalk_nav/schemas/stage_ii_cfm" / filename
-        content = source.read_text(encoding="utf-8")
-        artifact_hashes[filename] = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        if not target.is_file() or target.read_text(encoding="utf-8") != content:
-            stale.append(str(target))
-            if not check:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(content, encoding="utf-8")
-                written.append(str(target))
+    artifact_report = export_stage_ii_cfm_contract_artifacts(
+        package_root / "schemas/stage_ii_cfm",
+        check=check,
+    )
+    if check:
+        stale.extend(
+            str(package_root / "schemas/stage_ii_cfm" / filename)
+            for filename in artifact_report["stale"]
+        )
+    else:
+        written.extend(
+            str(package_root / "schemas/stage_ii_cfm" / filename)
+            for filename in artifact_report["written"]
+        )
+    artifact_hashes = {
+        filename: hashlib.sha256(
+            (package_root / "schemas/stage_ii_cfm" / filename).read_bytes()
+        ).hexdigest()
+        for filename in ARTIFACT_FILENAMES
+    }
     if check and stale:
         raise ValueError("stale Stage II generated mirrors: " + ", ".join(stale))
     return {
         "schema_version": "urbannav_stage_ii_cfm_cross_repo_sync_v1",
-        "ms_swift_root": str(ms_root),
+        "output_dir": str(output_root),
         "checked": check,
         "written": written,
         "stale": stale,
@@ -113,7 +122,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments."""
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--ms-swift-root", required=True, type=Path)
+    parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--check", action="store_true")
     return parser.parse_args(argv)
 
@@ -122,7 +131,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     """Generate or check the cross-repository mirrors."""
 
     args = parse_args(argv)
-    report = sync_stage_ii_cfm_cross_repo(args.ms_swift_root, check=args.check)
+    report = sync_stage_ii_cfm_cross_repo(args.output_dir, check=args.check)
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
 
