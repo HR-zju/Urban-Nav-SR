@@ -68,7 +68,6 @@
           "type": "string"
         },
         "required_values": {
-          "additionalProperties": true,
           "title": "Required Values",
           "type": "object"
         },

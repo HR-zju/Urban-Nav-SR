@@ -94,7 +94,6 @@
       "description": "Describe one prompt-visible raw input item.\n\nArgs:\n    ref: Stable input-envelope reference.\n    modality: Input modality.\n    summary: Optional prompt-visible summary.\n    attributes: Prompt-visible producer metadata.\n    bev_route_evidence: Optional BEV presentation declaration.",
       "properties": {
         "attributes": {
-          "additionalProperties": true,
           "title": "Attributes",
           "type": "object"
         },
@@ -292,7 +291,6 @@
           "type": "string"
         },
         "model_visible_context": {
-          "additionalProperties": true,
           "title": "Model Visible Context",
           "type": "object"
         },
@@ -385,7 +383,6 @@
           "type": "string"
         },
         "full_horizon_required": {
-          "const": true,
           "default": true,
           "title": "Full Horizon Required",
           "type": "boolean"
@@ -555,7 +552,7 @@
     },
     "StageIITrajectoryTargetV2": {
       "additionalProperties": false,
-      "description": "Carry one complete 4-second, 32-step metric FLU target.",
+      "description": "Carry one 4-second, 32-step metric FLU target and its valid prefix.",
       "properties": {
         "action_mask": {
           "items": {
@@ -602,8 +599,8 @@
           "type": "array"
         },
         "valid_step_count": {
-          "const": 32,
-          "default": 32,
+          "maximum": 32,
+          "minimum": 1,
           "title": "Valid Step Count",
           "type": "integer"
         }
@@ -611,6 +608,7 @@
       "required": [
         "trajectory_ego_t",
         "action_mask",
+        "valid_step_count",
         "policy",
         "source_target_digest",
         "target_digest"
@@ -638,7 +636,6 @@
       "$ref": "#/$defs/StageIICachedTrajQueryObservationV1"
     },
     "provenance": {
-      "additionalProperties": true,
       "title": "Provenance",
       "type": "object"
     },
