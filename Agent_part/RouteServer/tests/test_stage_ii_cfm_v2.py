@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from mcp_server.agent.reasoning_v4_text import render_reasoning_section_v4
 from mcp_server.contracts.stage_ii_cfm import (
+    STAGE_II_ACTION_MASK_SCHEMA_VERSION,
     StageIICFMDirectLatentViewV1,
     StageIICFMTrainingViewV2,
     StageIIContextProducerV1,
@@ -18,6 +19,7 @@ from mcp_server.contracts.stage_ii_cfm import (
     StageIITrajectorySidecarV2,
     StageIITrajectoryTargetV2,
     stage_ii_digest_v1,
+    validate_stage_ii_action_mask_v2,
 )
 from mcp_server.data.stage_i_views import (
     project_stage_i_reasoning_dropout_from_full_v2,
@@ -97,6 +99,26 @@ def _trajectory_v2() -> StageIITrajectoryTargetV2:
     }
     payload["target_digest"] = stage_ii_digest_v1(payload)
     return StageIITrajectoryTargetV2.model_validate(payload)
+
+
+def test_stage_ii_action_mask_v2_owns_partial_prefix_semantics() -> None:
+    """The canonical contract defines K=sum(m_t) for every V2 consumer."""
+
+    assert STAGE_II_ACTION_MASK_SCHEMA_VERSION == "urbannav_prefix_timestep_mask_v1"
+    assert validate_stage_ii_action_mask_v2(
+        [True] * 8 + [False] * 24,
+        allow_suffix_padding=True,
+    ) == 8
+    with pytest.raises(ValueError, match="prefix-contiguous"):
+        validate_stage_ii_action_mask_v2(
+            [True, False, True] + [False] * 29,
+            allow_suffix_padding=True,
+        )
+    with pytest.raises(ValueError, match="full-horizon"):
+        validate_stage_ii_action_mask_v2(
+            [True] * 31 + [False],
+            allow_suffix_padding=False,
+        )
 
 
 def _trajectory_v1():

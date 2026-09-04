@@ -627,6 +627,16 @@ def build_phase1_sample(
         "bev_frame_idx": record.bev_frame_idx,
         "bev_timestamp": record.bev_timestamp,
         "bev_time_delta_ms": record.bev_time_delta_ms,
+        # The matcher accepts a BEV frame only inside this configured window.
+        # Persist the same policy so a downstream Cosmos view can prove
+        # ``bev_age_sec <= bev_tolerance_sec`` without reconstructing CLI
+        # arguments from a historical run.
+        "bev_tolerance_sec": (
+            float(config.max_bev_time_delta_ms) / 1000.0
+            if float(config.max_bev_time_delta_ms) > 0.0
+            else None
+        ),
+        "bev_alignment_mode": "fixed",
         "bev_mapping_source": record.bev_mapping_source,
         "lat": record.lat,
         "lng": record.lng,

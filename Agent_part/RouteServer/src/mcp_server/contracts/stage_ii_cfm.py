@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections.abc import Sequence
 from typing import Annotated, Any, Literal, Mapping, Union
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
@@ -112,6 +113,7 @@ STAGE_II_TARGET_FORMAT = "ego_pose_xyt_flu_v1"
 STAGE_II_TRAJECTORY_TARGET_V2_SCHEMA_VERSION = (
     "urbannav_stage_ii_trajectory_target_v2_1"
 )
+STAGE_II_ACTION_MASK_SCHEMA_VERSION = "urbannav_prefix_timestep_mask_v1"
 STAGE_II_TRAJECTORY_QC_V2_SCHEMA_VERSION = (
     "urbannav_stage_ii_trajectory_qc_v2_1"
 )
@@ -137,6 +139,53 @@ STAGE_II_GROUNDING_SECTION_NAMES = (
     "NavigationContextGrounding",
     "InteractionConstraintGrounding",
 )
+
+
+def validate_stage_ii_action_mask_v2(
+    mask: Sequence[bool],
+    *,
+    allow_suffix_padding: bool,
+) -> int:
+    """Validate the canonical V2 timestep mask and return its active length.
+
+    The mask is the binary supervision gate
+    ``m_t = 1[t < K]`` for the fixed ``T=32`` action horizon.  A partial row
+    therefore carries a non-empty valid prefix and an invalid zero-padded
+    suffix; no consumer infers ``K`` from trajectory values.
+
+    Args:
+        mask: Exactly 32 boolean timestep values.
+        allow_suffix_padding: Whether a row may end before ``T``.
+
+    Returns:
+        ``K = sum_t m_t``.
+
+    Raises:
+        ValueError: If the mask shape, type, or prefix semantics are invalid.
+    """
+
+    if isinstance(mask, (str, bytes)) or len(mask) != STAGE_II_HORIZON_STEPS_V2:
+        raise ValueError(
+            "Stage II V2 action_mask must contain "
+            f"{STAGE_II_HORIZON_STEPS_V2} steps"
+        )
+    if any(type(value) is not bool for value in mask):
+        raise ValueError("Stage II V2 action_mask values must be booleans")
+    valid_count = sum(mask)
+    if valid_count == 0:
+        raise ValueError("Stage II V2 action_mask requires at least one valid step")
+    if not allow_suffix_padding and valid_count != STAGE_II_HORIZON_STEPS_V2:
+        raise ValueError(
+            "full-horizon Stage II V2 action_mask must mark every target step valid"
+        )
+    seen_padding = False
+    for valid in mask:
+        if valid and seen_padding:
+            raise ValueError("Stage II V2 action_mask must be prefix-contiguous")
+        if not valid:
+            seen_padding = True
+    return valid_count
+
 
 StageIIContextKindV1 = Literal["reasoning_grounding", "decision"]
 StageIIContextSourceV1 = Literal["ground_truth", "model_prediction"]
@@ -968,21 +1017,12 @@ class StageIITrajectoryTargetV2(BaseModel):
     def validate_target(self) -> "StageIITrajectoryTargetV2":
         """Validate prefix padding, finite poses, and digest identity."""
 
-        if len(self.action_mask) != STAGE_II_HORIZON_STEPS_V2:
-            raise ValueError("Stage II V2 action_mask must contain 32 steps")
-        seen_padding = False
-        valid_count = 0
-        for index, valid in enumerate(self.action_mask):
-            if valid:
-                if seen_padding:
-                    raise ValueError("Stage II V2 action_mask must be prefix-contiguous")
-                valid_count += 1
-            else:
-                seen_padding = True
+        valid_count = validate_stage_ii_action_mask_v2(
+            self.action_mask,
+            allow_suffix_padding=not self.policy.full_horizon_required,
+        )
         if valid_count != self.valid_step_count:
             raise ValueError("Stage II V2 valid_step_count mismatch")
-        if self.policy.full_horizon_required and valid_count != STAGE_II_HORIZON_STEPS_V2:
-            raise ValueError("full-horizon Stage II V2 policy requires all 32 target steps")
         for index, row in enumerate(self.trajectory_ego_t):
             if len(row) != 3 or not all(math.isfinite(float(item)) for item in row):
                 raise ValueError(
@@ -2262,6 +2302,7 @@ __all__ = [
     "STAGE_II_DIRECT_LATENT_PROJECTION_POLICY_ID",
     "STAGE_II_DIRECT_LATENT_PROJECTION_POLICY_VERSION",
     "STAGE_II_DIRECT_LATENT_VIEW_SCHEMA_VERSION",
+    "STAGE_II_ACTION_MASK_SCHEMA_VERSION",
     "STAGE_II_CFM_TRAINING_VIEW_V2_SCHEMA_VERSION",
     "STAGE_II_CFM_TRAINING_VIEW_SCHEMA_VERSION",
     "STAGE_II_CONTEXT_CACHE_SCHEMA_VERSION",
@@ -2344,6 +2385,7 @@ __all__ = [
     "StageIITrajectorySplitPolicyV1",
     "StageIITrajectoryTargetV1",
     "StageIITrajectoryTargetV2",
+    "validate_stage_ii_action_mask_v2",
     "stage_ii_digest_v1",
     "stage_ii_projected_input_digest_v1",
     "stage_ii_pass_t_input_digest_v2",

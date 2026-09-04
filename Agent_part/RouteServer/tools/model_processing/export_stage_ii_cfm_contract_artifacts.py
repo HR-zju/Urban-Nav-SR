@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from mcp_server.contracts.stage_ii_cfm import (
+    STAGE_II_ACTION_MASK_SCHEMA_VERSION,
     STAGE_II_CFM_TRAINING_VIEW_V2_SCHEMA_VERSION,
     STAGE_II_CACHED_TRAJ_QUERY_OBSERVATION_SCHEMA_VERSION,
     STAGE_II_CACHED_TRAJ_QUERY_BINDING_V2_SCHEMA_VERSION,
@@ -139,6 +140,7 @@ def build_stage_ii_cfm_contract_artifacts() -> dict[str, Any]:
         "trajectory_target_schema_version": STAGE_II_TRAJECTORY_TARGET_SCHEMA_VERSION,
         "trajectory_qc_schema_version": STAGE_II_TRAJECTORY_QC_SCHEMA_VERSION,
         "trajectory_target_v2_schema_version": STAGE_II_TRAJECTORY_TARGET_V2_SCHEMA_VERSION,
+        "action_mask_schema_version": STAGE_II_ACTION_MASK_SCHEMA_VERSION,
         "trajectory_qc_v2_schema_version": STAGE_II_TRAJECTORY_QC_V2_SCHEMA_VERSION,
         "trajectory_sidecar_v2_schema_version": STAGE_II_TRAJECTORY_SIDECAR_V2_SCHEMA_VERSION,
         "trajectory_source_registry_schema_version": (

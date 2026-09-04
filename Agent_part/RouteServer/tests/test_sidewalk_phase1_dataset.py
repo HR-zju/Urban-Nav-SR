@@ -405,6 +405,8 @@ class SidewalkPhase1DatasetTest(unittest.TestCase):
             ]
             self.assertTrue(rows[0]["bev_image_path"].endswith("000000_bev.jpg"))
             self.assertEqual(rows[0]["sidewalk_meta"]["bev_frame_idx"], 0)
+            self.assertAlmostEqual(rows[0]["sidewalk_meta"]["bev_tolerance_sec"], 0.3)
+            self.assertEqual(rows[0]["sidewalk_meta"]["bev_alignment_mode"], "fixed")
             self.assertTrue(rows[1]["bev_image_path"].endswith("000000_bev.jpg"))
             self.assertEqual(rows[1]["sidewalk_meta"]["bev_frame_idx"], 0)
             self.assertEqual(rows[1]["sidewalk_meta"]["bev_mapping_source"], "nearest_timestamp")

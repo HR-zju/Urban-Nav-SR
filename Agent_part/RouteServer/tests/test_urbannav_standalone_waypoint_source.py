@@ -67,6 +67,8 @@ def test_standalone_route_emits_public_condition_without_gt_fields(tmp_path: Pat
     assert row["source_dataset"] == "urbannav_standalone_benchmark"
     assert row["route_context"]["independent_of_future_target"] is True
     assert row["route_context"]["heading_source"] == "route_start_tangent"
+    assert row["observation_timestamp_s"] == 0.0
+    assert row["observation_timestamp_source"] == "standalone_static_epoch"
     assert "gt_route" not in row
     assert "gt_destination" not in row
     assert row["current_heading_rad"] == 0.0

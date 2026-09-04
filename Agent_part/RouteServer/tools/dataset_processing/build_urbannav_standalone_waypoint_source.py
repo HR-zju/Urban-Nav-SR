@@ -21,6 +21,9 @@ from mcp_server.data.io.jsonl import file_sha256, iter_jsonl, write_jsonl_atomic
 
 SCHEMA_VERSION = "urbannav_standalone_waypoint_source_v1"
 ROUTE_START_TANGENT = "route_start_tangent"
+# Standalone cases have no video observation clock.  A fixed epoch keeps the
+# strict waypoint exporter contract explicit without claiming a media join.
+STANDALONE_OBSERVATION_TIMESTAMP_S = 0.0
 
 
 def build_standalone_waypoint_source(
@@ -93,6 +96,11 @@ def build_standalone_waypoint_source(
             "accepted_training_rows": 0,
             "reason": "standalone UrbanNav cases do not bind to SideWalk/Foxglove/EgoWalk media parents",
         },
+        "observation_timestamp_policy": {
+            "value_s": STANDALONE_OBSERVATION_TIMESTAMP_S,
+            "source": "standalone_static_epoch",
+            "video_parent_join_allowed": False,
+        },
         "reject_counts": _count_rejects(rejects),
     }
     report_path = Path(report_json).expanduser()
@@ -119,6 +127,8 @@ def _convert_row(source: dict[str, Any], *, heading_source: str | None) -> tuple
         "sample_id": source["id"],
         "parent_sample_id": source["id"],
         "source_record_id": source["id"],
+        "observation_timestamp_s": STANDALONE_OBSERVATION_TIMESTAMP_S,
+        "observation_timestamp_source": "standalone_static_epoch",
         "source_dataset": "urbannav_standalone_benchmark",
         "dataset_source": "urbannav_standalone_benchmark",
         "source_scope": "standalone_benchmark",
