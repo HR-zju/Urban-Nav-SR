@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 from collections import Counter, defaultdict
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -206,6 +207,228 @@ def build_foxglove_native_gps_anchors_v1(
         "timestamp_scale_to_seconds": timestamp_scale_to_seconds,
         "source_jsonl_sha256": _artifact_sha256_v1(source_jsonl),
         "raw_root": str(raw_root),
+    }
+    _write_json_v1(report_json, report)
+    return report
+
+
+def build_sidewalk_native_gps_anchors_v1(
+    *,
+    source_jsonl: str | Path,
+    sidewalk_raw_root: str | Path,
+    output_jsonl: str | Path,
+    report_json: str | Path,
+    heading_lookback_frames: int = 120,
+    min_heading_displacement_m: float = 0.25,
+    timestamp_scale_to_seconds: float = 1e-9,
+) -> dict[str, Any]:
+    """Build SideWalk current-pose anchors from native GPS arrays.
+
+    SideWalk source rows identify a physical frame through
+    ``sidewalk_meta.clip_id`` and ``sidewalk_meta.frame_idx``.  The adapter
+    reads the current GPS point, its timestamp, and a heading computed from a
+    prior GPS point.  ``trajectory_ego_t`` and every other future-target field
+    remain private and are never inspected.
+
+    The result is a localization ledger only.  A separate typed planner log
+    is still required before route guidance can be exposed to the model.
+    """
+
+    return _build_native_gps_anchors_v1(
+        source_jsonl=source_jsonl,
+        native_raw_root=sidewalk_raw_root,
+        output_jsonl=output_jsonl,
+        report_json=report_json,
+        dataset_source="sidewalk",
+        report_schema_version="urbannav_sidewalk_native_gps_anchor_report_v1",
+        heading_lookback_frames=heading_lookback_frames,
+        min_heading_displacement_m=min_heading_displacement_m,
+        timestamp_scale_to_seconds=timestamp_scale_to_seconds,
+    )
+
+
+def build_foxglove_native_gps_anchors_from_source_v1(
+    *,
+    source_jsonl: str | Path,
+    foxglove_raw_root: str | Path,
+    output_jsonl: str | Path,
+    report_json: str | Path,
+    heading_lookback_frames: int = 120,
+    min_heading_displacement_m: float = 0.25,
+    timestamp_scale_to_seconds: float = 1e-9,
+) -> dict[str, Any]:
+    """Build Foxglove anchors from either raw or canonical V4 source rows."""
+
+    return _build_native_gps_anchors_v1(
+        source_jsonl=source_jsonl,
+        native_raw_root=foxglove_raw_root,
+        output_jsonl=output_jsonl,
+        report_json=report_json,
+        dataset_source="foxglove",
+        report_schema_version="urbannav_foxglove_native_gps_anchor_report_v1",
+        heading_lookback_frames=heading_lookback_frames,
+        min_heading_displacement_m=min_heading_displacement_m,
+        timestamp_scale_to_seconds=timestamp_scale_to_seconds,
+    )
+
+
+def _build_native_gps_anchors_v1(
+    *,
+    source_jsonl: str | Path,
+    native_raw_root: str | Path,
+    output_jsonl: str | Path,
+    report_json: str | Path,
+    dataset_source: str,
+    report_schema_version: str,
+    heading_lookback_frames: int,
+    min_heading_displacement_m: float,
+    timestamp_scale_to_seconds: float,
+) -> dict[str, Any]:
+    """Build one dataset's current-pose ledger from raw or V4 source rows."""
+
+    if heading_lookback_frames < 1:
+        raise ValueError("heading_lookback_frames must be positive")
+    if min_heading_displacement_m <= 0.0 or not math.isfinite(min_heading_displacement_m):
+        raise ValueError("min_heading_displacement_m must be positive and finite")
+    if timestamp_scale_to_seconds <= 0.0 or not math.isfinite(timestamp_scale_to_seconds):
+        raise ValueError("timestamp_scale_to_seconds must be positive and finite")
+
+    raw_root = Path(native_raw_root)
+    cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    anchors: list[NativePlannerAnchorV1] = []
+    counts: Counter[str] = Counter()
+    seen_parent_ids: set[str] = set()
+    for payload in iter_jsonl(source_jsonl):
+        identity = _native_source_identity_v1(payload, dataset_source=dataset_source)
+        if identity is None:
+            counts["source_identity_unparseable"] += 1
+            continue
+        parent_id, source_record_id, clip_id, frame_index = identity
+        if parent_id in seen_parent_ids:
+            raise ValueError(f"duplicate source_group_id: {parent_id}")
+        seen_parent_ids.add(parent_id)
+        if clip_id is None or frame_index is None:
+            anchors.append(
+                _unavailable_anchor_v1(
+                    parent_sample_id=parent_id,
+                    dataset_source=dataset_source,
+                    source_record_id=source_record_id,
+                    reason="source_record_id_unparseable",
+                )
+            )
+            counts["source_record_id_unparseable"] += 1
+            continue
+        try:
+            arrays = cache.get(clip_id)
+            if arrays is None:
+                arrays = _load_native_arrays_v1(raw_root=raw_root, clip_id=clip_id)
+                cache[clip_id] = arrays
+            gps, times = arrays
+        except (OSError, ValueError) as exc:
+            reason = str(exc)
+            anchors.append(
+                _unavailable_anchor_v1(
+                    parent_sample_id=parent_id,
+                    dataset_source=dataset_source,
+                    source_record_id=source_record_id,
+                    reason=reason,
+                    raw_clip_id=clip_id,
+                    raw_frame_index=frame_index,
+                )
+            )
+            counts[reason] += 1
+            continue
+        if frame_index >= len(gps) or frame_index >= len(times):
+            anchors.append(
+                _unavailable_anchor_v1(
+                    parent_sample_id=parent_id,
+                    dataset_source=dataset_source,
+                    source_record_id=source_record_id,
+                    reason="raw_frame_index_out_of_range",
+                    raw_clip_id=clip_id,
+                    raw_frame_index=frame_index,
+                )
+            )
+            counts["raw_frame_index_out_of_range"] += 1
+            continue
+        latitude_deg, longitude_deg = float(gps[frame_index, 0]), float(gps[frame_index, 1])
+        timestamp_s = float(times[frame_index]) * timestamp_scale_to_seconds
+        if not _valid_wgs84_v1(latitude_deg, longitude_deg) or not math.isfinite(timestamp_s):
+            anchors.append(
+                _unavailable_anchor_v1(
+                    parent_sample_id=parent_id,
+                    dataset_source=dataset_source,
+                    source_record_id=source_record_id,
+                    reason="native_gps_or_timestamp_invalid",
+                    raw_clip_id=clip_id,
+                    raw_frame_index=frame_index,
+                    observation_timestamp_s=max(0.0, timestamp_s) if math.isfinite(timestamp_s) else 0.0,
+                )
+            )
+            counts["native_gps_or_timestamp_invalid"] += 1
+            continue
+        heading_rad = _past_gps_heading_rad_v1(
+            gps,
+            frame_index=frame_index,
+            lookback_frames=heading_lookback_frames,
+            min_displacement_m=min_heading_displacement_m,
+        )
+        if heading_rad is None:
+            anchors.append(
+                NativePlannerAnchorV1(
+                    anchor_id=_stable_id_v1("native_planner_anchor", parent_id),
+                    parent_sample_id=parent_id,
+                    dataset_source=dataset_source,
+                    source_record_id=source_record_id,
+                    observation_timestamp_s=timestamp_s,
+                    current_wgs84=Wgs84CoordinateV1(
+                        latitude_deg=latitude_deg,
+                        longitude_deg=longitude_deg,
+                    ),
+                    localization_source="unavailable",
+                    raw_clip_id=clip_id,
+                    raw_frame_index=frame_index,
+                    available=False,
+                    reason="native_past_heading_unavailable",
+                )
+            )
+            counts["native_past_heading_unavailable"] += 1
+            continue
+        anchors.append(
+            NativePlannerAnchorV1(
+                anchor_id=_stable_id_v1("native_planner_anchor", parent_id),
+                parent_sample_id=parent_id,
+                dataset_source=dataset_source,
+                source_record_id=source_record_id,
+                observation_timestamp_s=timestamp_s,
+                current_wgs84=Wgs84CoordinateV1(
+                    latitude_deg=latitude_deg,
+                    longitude_deg=longitude_deg,
+                ),
+                current_heading_rad=heading_rad,
+                localization_source="native_gps_past_bearing",
+                raw_clip_id=clip_id,
+                raw_frame_index=frame_index,
+                available=True,
+                reason="native_gps_anchor_available",
+            )
+        )
+        counts["native_gps_anchor_available"] += 1
+    write_jsonl_atomic(output_jsonl, (anchor.model_dump(mode="json") for anchor in anchors))
+    report = {
+        "schema_version": report_schema_version,
+        "dataset_source": dataset_source,
+        "source_count": len(seen_parent_ids),
+        "anchor_count": len(anchors),
+        "available_count": sum(anchor.available for anchor in anchors),
+        "unavailable_count": sum(not anchor.available for anchor in anchors),
+        "status_counts": dict(sorted(counts.items())),
+        "heading_lookback_frames": heading_lookback_frames,
+        "min_heading_displacement_m": min_heading_displacement_m,
+        "timestamp_scale_to_seconds": timestamp_scale_to_seconds,
+        "source_jsonl_sha256": _artifact_sha256_v1(source_jsonl),
+        "raw_root": str(raw_root),
+        "target_policy": "current_pose_only_before_independent_planner_join",
     }
     _write_json_v1(report_json, report)
     return report
@@ -454,8 +677,118 @@ def _parse_foxglove_source_record_id_v1(source_record_id: str) -> tuple[str | No
     return clip_id, int(suffix)
 
 
+def _native_source_identity_v1(
+    payload: Mapping[str, Any],
+    *,
+    dataset_source: str,
+) -> tuple[str, str, str | None, int | None] | None:
+    """Resolve parent and raw-frame identity from V4 or native source rows."""
+
+    observation = payload.get("observation")
+    if isinstance(observation, Mapping):
+        actual_source = str(observation.get("dataset_source") or "")
+        parent_id = str(observation.get("source_group_id") or "")
+        source_record_id = str(observation.get("source_record_id") or "")
+        if actual_source != dataset_source or not parent_id or not source_record_id:
+            return None
+        clip_id, frame_index = _parse_native_record_id_v1(
+            source_record_id,
+            dataset_source=dataset_source,
+        )
+        return parent_id, source_record_id, clip_id, frame_index
+
+    if str(payload.get("dataset_source") or "") != dataset_source:
+        return None
+    metadata = payload.get("sidewalk_meta")
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+    frame_name = str(metadata.get("frame_name") or "").strip() or None
+    clip_id = str(
+        payload.get("clip_id")
+        or payload.get("clip_name")
+        or metadata.get("clip_id")
+        or ""
+    ).strip() or None
+    frame_value = payload.get("frame_idx")
+    if frame_value is None:
+        frame_value = payload.get("fpv_frame_idx")
+    if frame_value is None:
+        frame_value = metadata.get("frame_idx")
+    if frame_value is None:
+        frame_value = metadata.get("frame_name")
+    frame_index = _coerce_frame_index_v1(frame_value)
+    source_record_id = str(
+        payload.get("source_record_id")
+        or payload.get("id")
+        or payload.get("sample_id")
+        or ""
+    ).strip()
+    if not source_record_id and clip_id is not None and frame_index is not None:
+        record_frame = frame_name if frame_name is not None else str(frame_index)
+        source_record_id = f"{clip_id}:{record_frame}"
+    parent_id = str(payload.get("source_group_id") or "").strip()
+    if not parent_id and clip_id is not None and frame_name is not None:
+        # The direct-action adapter uses the source's declared frame name for
+        # the parent identity.  Keep that identity stable even when the
+        # planner join key uses the numeric frame index.
+        parent_id = f"{dataset_source}:{clip_id}:{frame_name}"
+    if not parent_id and source_record_id:
+        parent_id = f"{dataset_source}:{source_record_id}"
+    if not parent_id or not source_record_id:
+        return None
+    if clip_id is None or frame_index is None:
+        parsed_clip, parsed_frame = _parse_native_record_id_v1(
+            source_record_id,
+            dataset_source=dataset_source,
+        )
+        clip_id = clip_id or parsed_clip
+        frame_index = frame_index if frame_index is not None else parsed_frame
+    return parent_id, source_record_id, clip_id, frame_index
+
+
+def _parse_native_record_id_v1(
+    source_record_id: str,
+    *,
+    dataset_source: str,
+) -> tuple[str | None, int | None]:
+    """Parse the source's declared clip/frame separator."""
+
+    if dataset_source == "foxglove":
+        return _parse_foxglove_source_record_id_v1(source_record_id)
+    clip_id, separator, suffix = str(source_record_id).rpartition(":")
+    if separator and clip_id and suffix.isdigit():
+        return clip_id, int(suffix)
+    return None, None
+
+
+def _coerce_frame_index_v1(value: Any) -> int | None:
+    """Convert an explicitly numbered frame field without guessing values."""
+
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) and value >= 0:
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+
 def _load_foxglove_native_arrays_v1(*, raw_root: Path, clip_id: str) -> tuple[np.ndarray, np.ndarray]:
     """Load only native GPS and timestamps required for a current-pose anchor."""
+
+    clip_root = raw_root / clip_id
+    gps_path = clip_root / "frame_gps.npy"
+    times_path = clip_root / "frame_times.npy"
+    if not gps_path.is_file() or not times_path.is_file():
+        raise ValueError("native_gps_or_frame_times_missing")
+    gps = np.load(gps_path, mmap_mode="r")
+    times = np.load(times_path, mmap_mode="r")
+    if gps.ndim != 2 or gps.shape[1] < 2 or times.ndim != 1:
+        raise ValueError("native_gps_or_frame_times_schema_invalid")
+    return gps, times
+
+
+def _load_native_arrays_v1(*, raw_root: Path, clip_id: str) -> tuple[np.ndarray, np.ndarray]:
+    """Load the shared native GPS/time layout used by SideWalk and Foxglove."""
 
     clip_root = raw_root / clip_id
     gps_path = clip_root / "frame_gps.npy"
@@ -611,6 +944,8 @@ def _write_json_v1(path: str | Path, payload: dict[str, Any]) -> None:
 
 __all__ = [
     "build_foxglove_native_gps_anchors_v1",
+    "build_foxglove_native_gps_anchors_from_source_v1",
     "build_foxglove_native_gps_anchors_from_stage_i_views_v1",
+    "build_sidewalk_native_gps_anchors_v1",
     "build_planner_records_from_native_logs_v1",
 ]

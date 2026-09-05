@@ -27,6 +27,7 @@ from mcp_server.data.benchmark.native_planner_adapter import (
     build_foxglove_native_gps_anchors_v1,
     build_foxglove_native_gps_anchors_from_stage_i_views_v1,
     build_planner_records_from_native_logs_v1,
+    build_sidewalk_native_gps_anchors_v1,
 )
 from mcp_server.data.io.jsonl import iter_jsonl
 
@@ -266,4 +267,48 @@ def test_stage_i_view_anchor_reads_only_native_pose(tmp_path: Path) -> None:
     assert report["anchor_count"] == 1
     anchor = next(iter_jsonl(anchors_jsonl))
     assert anchor["source_record_id"] == "clip_test_000002"
+    assert "trajectory" not in json.dumps(anchor)
+
+
+def test_sidewalk_anchor_reads_canonical_metadata_and_ignores_future_target(tmp_path: Path) -> None:
+    """SideWalk rows resolve clip/frame identity without exposing trajectory labels."""
+
+    raw_root = tmp_path / "raw"
+    clip_root = raw_root / "sidewalk_clip"
+    clip_root.mkdir(parents=True)
+    np.save(
+        clip_root / "frame_gps.npy",
+        np.asarray(
+            [[31.0, 121.0], [31.000005, 121.0], [31.000010, 121.0]],
+            dtype=np.float64,
+        ),
+    )
+    np.save(clip_root / "frame_times.npy", np.asarray([1e9, 2e9, 3e9]))
+    source_jsonl = tmp_path / "sidewalk.jsonl"
+    _write_jsonl(
+        source_jsonl,
+        [{
+            "dataset_source": "sidewalk",
+            "sidewalk_meta": {
+                "clip_id": "sidewalk_clip",
+                "frame_idx": 2,
+                "frame_name": "000002",
+            },
+            "trajectory_ego_t": [[999.0, 999.0, 999.0]],
+        }],
+    )
+    anchors_jsonl = tmp_path / "anchors.jsonl"
+    report = build_sidewalk_native_gps_anchors_v1(
+        source_jsonl=source_jsonl,
+        sidewalk_raw_root=raw_root,
+        output_jsonl=anchors_jsonl,
+        report_json=tmp_path / "report.json",
+        heading_lookback_frames=3,
+        min_heading_displacement_m=0.25,
+    )
+    assert report["available_count"] == 1
+    anchor = next(iter_jsonl(anchors_jsonl))
+    assert anchor["parent_sample_id"] == "sidewalk:sidewalk_clip:000002"
+    assert anchor["source_record_id"] == "sidewalk_clip:000002"
+    assert anchor["raw_frame_index"] == 2
     assert "trajectory" not in json.dumps(anchor)

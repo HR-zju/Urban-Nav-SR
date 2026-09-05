@@ -22,7 +22,9 @@ from mcp_server.data.benchmark.language_waypoint_human_review import (
 )
 from mcp_server.data.benchmark.native_planner_adapter import (
     build_foxglove_native_gps_anchors_v1,
+    build_foxglove_native_gps_anchors_from_source_v1,
     build_planner_records_from_native_logs_v1,
+    build_sidewalk_native_gps_anchors_v1,
 )
 from mcp_server.data.benchmark.urbannav_dataset_plugin import (
     UrbanNavDatasetPluginV1,
@@ -39,7 +41,9 @@ __all__ = [
     "build_language_waypoint_package_v1",
     "build_waypoint_guidance_manifest_v1",
     "build_foxglove_native_gps_anchors_v1",
+    "build_foxglove_native_gps_anchors_from_source_v1",
     "build_planner_records_from_native_logs_v1",
+    "build_sidewalk_native_gps_anchors_v1",
     "citywalker_default_profile_v1",
     "evaluate_language_goal_human_review_v1",
     "get_benchmark_dataset_plugin_v1",

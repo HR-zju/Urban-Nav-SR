@@ -15,9 +15,10 @@ import math
 
 from mcp_server.contracts.language_waypoint_benchmark import NativePlannerAdapterConfigV1
 from mcp_server.data.benchmark.native_planner_adapter import (
-    build_foxglove_native_gps_anchors_v1,
+    build_foxglove_native_gps_anchors_from_source_v1,
     build_foxglove_native_gps_anchors_from_stage_i_views_v1,
     build_planner_records_from_native_logs_v1,
+    build_sidewalk_native_gps_anchors_v1,
 )
 
 
@@ -38,6 +39,14 @@ def main() -> int:
     anchor_parser.add_argument("--heading-lookback-frames", type=int, default=120)
     anchor_parser.add_argument("--min-heading-displacement-m", type=float, default=0.25)
     anchor_parser.add_argument("--timestamp-scale-to-seconds", type=float, default=1e-9)
+    sidewalk_anchor_parser = subparsers.add_parser("sidewalk-anchors")
+    sidewalk_anchor_parser.add_argument("--source-jsonl", required=True)
+    sidewalk_anchor_parser.add_argument("--sidewalk-raw-root", required=True)
+    sidewalk_anchor_parser.add_argument("--output-jsonl", required=True)
+    sidewalk_anchor_parser.add_argument("--report-json", required=True)
+    sidewalk_anchor_parser.add_argument("--heading-lookback-frames", type=int, default=120)
+    sidewalk_anchor_parser.add_argument("--min-heading-displacement-m", type=float, default=0.25)
+    sidewalk_anchor_parser.add_argument("--timestamp-scale-to-seconds", type=float, default=1e-9)
     view_anchor_parser = subparsers.add_parser("stage-i-view-anchors")
     view_anchor_parser.add_argument("--source-jsonl", required=True)
     view_anchor_parser.add_argument("--foxglove-raw-root", required=True)
@@ -59,9 +68,19 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.command == "foxglove-anchors":
-        report = build_foxglove_native_gps_anchors_v1(
+        report = build_foxglove_native_gps_anchors_from_source_v1(
             source_jsonl=args.source_jsonl,
             foxglove_raw_root=args.foxglove_raw_root,
+            output_jsonl=args.output_jsonl,
+            report_json=args.report_json,
+            heading_lookback_frames=args.heading_lookback_frames,
+            min_heading_displacement_m=args.min_heading_displacement_m,
+            timestamp_scale_to_seconds=args.timestamp_scale_to_seconds,
+        )
+    elif args.command == "sidewalk-anchors":
+        report = build_sidewalk_native_gps_anchors_v1(
+            source_jsonl=args.source_jsonl,
+            sidewalk_raw_root=args.sidewalk_raw_root,
             output_jsonl=args.output_jsonl,
             report_json=args.report_json,
             heading_lookback_frames=args.heading_lookback_frames,
