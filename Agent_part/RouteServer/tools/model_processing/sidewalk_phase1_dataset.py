@@ -148,6 +148,10 @@ class FrameRecord:
     bev_timestamp: int | None = None
     bev_time_delta_ms: float | None = None
     bev_mapping_source: str | None = None
+    bev_sample_fps: float | None = None
+    bev_draw_trajectory: bool | None = None
+    bev_route_overlay: dict[str, Any] | None = None
+    bev_route_evidence: dict[str, Any] | None = None
     lat: float | None = None
     lng: float | None = None
     heading_deg: float | None = None
@@ -638,6 +642,10 @@ def build_phase1_sample(
         ),
         "bev_alignment_mode": "fixed",
         "bev_mapping_source": record.bev_mapping_source,
+        "bev_sample_fps": record.bev_sample_fps,
+        "draw_trajectory": record.bev_draw_trajectory,
+        "bev_route_overlay": record.bev_route_overlay,
+        "bev_route_evidence": record.bev_route_evidence,
         "lat": record.lat,
         "lng": record.lng,
         "heading_deg": record.heading_deg,
@@ -1530,6 +1538,10 @@ def _iter_legacy_trajectory_frame_records(
                 bev_timestamp=bev_match.get("bev_timestamp"),
                 bev_time_delta_ms=bev_match.get("bev_time_delta_ms"),
                 bev_mapping_source=bev_match.get("bev_mapping_source"),
+                bev_sample_fps=bev_match.get("bev_sample_fps"),
+                bev_draw_trajectory=bev_match.get("draw_trajectory"),
+                bev_route_overlay=bev_match.get("bev_route_overlay"),
+                bev_route_evidence=bev_match.get("bev_route_evidence"),
                 lat=float(row["lat"]),
                 lng=float(row["lng"]),
                 heading_deg=float(row.get("heading_deg", 0.0) or 0.0),
@@ -1609,6 +1621,10 @@ def _iter_internnav_frame_records(
             bev_timestamp=bev_match.get("bev_timestamp"),
             bev_time_delta_ms=bev_match.get("bev_time_delta_ms"),
             bev_mapping_source=bev_match.get("bev_mapping_source"),
+            bev_sample_fps=bev_match.get("bev_sample_fps"),
+            bev_draw_trajectory=bev_match.get("draw_trajectory"),
+            bev_route_overlay=bev_match.get("bev_route_overlay"),
+            bev_route_evidence=bev_match.get("bev_route_evidence"),
             timestamp=timestamp,
             speed_mps=(
                 float(frame_speeds[frame_idx])
@@ -1739,10 +1755,10 @@ def _read_bev_image_meta(path: Path) -> dict[str, Any]:
     meta_path = path.with_suffix(path.suffix + ".bevmeta.json")
     if not meta_path.is_file():
         return {}
-    try:
-        return json.loads(meta_path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+    data = json.loads(meta_path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"BEV metadata must be a JSON object: {meta_path}")
+    return data
 
 
 def _load_bev_index_entries(clip_dir: Path) -> list[dict[str, Any]]:
@@ -1754,13 +1770,31 @@ def _load_bev_index_entries_cached(clip_dir_text: str) -> tuple[dict[str, Any], 
     clip_dir = Path(clip_dir_text)
     for index_path in (clip_dir / "bev_index.json", clip_dir / "bev_images" / "bev_index.json"):
         if index_path.is_file():
-            try:
-                data = json.loads(index_path.read_text(encoding="utf-8"))
-                entries = data.get("entries") if isinstance(data, dict) else None
-                if isinstance(entries, list):
-                    return tuple(_normalize_bev_index_entry(item, index_path.parent) for item in entries if isinstance(item, dict))
-            except Exception:
-                pass
+            data = json.loads(index_path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError(f"BEV index must be a JSON object: {index_path}")
+            entries = data.get("entries")
+            if not isinstance(entries, list):
+                raise ValueError(f"BEV index entries must be a list: {index_path}")
+            if any(not isinstance(item, dict) for item in entries):
+                raise ValueError(f"BEV index entries must be JSON objects: {index_path}")
+            defaults = {
+                key: data.get(key)
+                for key in (
+                    "bev_sample_fps",
+                    "bev_alignment",
+                    "draw_trajectory",
+                    "bev_route_overlay",
+                    "bev_route_evidence",
+                )
+            }
+            return tuple(
+                _normalize_bev_index_entry(
+                    {**defaults, **item},
+                    index_path.parent,
+                )
+                for item in entries
+            )
 
     entries: list[dict[str, Any]] = []
     for bev_dir_name in ("bev_images", "bev_images_ego_aligned"):
@@ -1768,10 +1802,9 @@ def _load_bev_index_entries_cached(clip_dir_text: str) -> tuple[dict[str, Any], 
         if not bev_dir.is_dir():
             continue
         for meta_path in sorted(bev_dir.glob("*.bevmeta.json")):
-            try:
-                meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            except Exception:
-                continue
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            if not isinstance(meta, dict):
+                raise ValueError(f"BEV metadata must be a JSON object: {meta_path}")
             image_path = Path(str(meta_path)[: -len(".bevmeta.json")])
             if not image_path.is_file():
                 continue
@@ -1796,6 +1829,9 @@ def _normalize_bev_index_entry(item: dict[str, Any], base_dir: Path) -> dict[str
         "timestamp": timestamp,
         "bev_sample_fps": item.get("bev_sample_fps"),
         "bev_alignment": item.get("bev_alignment") or "ego_aligned",
+        "draw_trajectory": item.get("draw_trajectory"),
+        "bev_route_overlay": item.get("bev_route_overlay"),
+        "bev_route_evidence": item.get("bev_route_evidence"),
     }
 
 
@@ -1835,6 +1871,10 @@ def _bev_match_meta(
         "bev_timestamp": bev_timestamp,
         "bev_time_delta_ms": delta_ms,
         "bev_mapping_source": mapping_source,
+        "bev_sample_fps": raw_meta.get("bev_sample_fps"),
+        "draw_trajectory": raw_meta.get("draw_trajectory"),
+        "bev_route_overlay": raw_meta.get("bev_route_overlay"),
+        "bev_route_evidence": raw_meta.get("bev_route_evidence"),
     }
 
 
@@ -1846,10 +1886,7 @@ def _bev_match_too_far(bev_match: dict[str, Any], *, max_bev_time_delta_ms: floa
     delta = bev_match.get("bev_time_delta_ms")
     if delta is None:
         return False
-    try:
-        return float(delta) > float(max_bev_time_delta_ms)
-    except Exception:
-        return False
+    return float(delta) > float(max_bev_time_delta_ms)
 
 
 def _image_dir_is_one_based(image_dir: Path) -> bool:
