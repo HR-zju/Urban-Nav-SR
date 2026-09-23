@@ -342,6 +342,148 @@ def test_decision_only_projection_has_no_full_cot_prefix_or_system1() -> None:
     assert reference.direction_stamp.label_name == "stop"
 
 
+def test_history_projection_preserves_approved_source_time_and_target():
+    from urbannav_contracts.history_observation import HISTORY_4S_2HZ_PROFILE, history_image_roles
+    from swift.sidewalk_nav.data.stage_i.stage_i_manifest import build_stage_i_manifest_row
+
+    source = _formal_reasoning_view().model_dump(mode="json", exclude_none=True)
+    source["images"] = [f"/data/{i}.jpg" for i in range(9)]
+    source["image_roles"] = history_image_roles(include_bev=False)
+    source["input_modalities"]["history_fpv"] = True
+    source["evidence_catalog"].extend({"ref": role, "modality": "fpv"} for role in source["image_roles"][:-1])
+    times = list(range(0, 4_000_000_001, 500_000_000))
+    source["metadata"].update({
+        "history_observation": {"observation_profile": HISTORY_4S_2HZ_PROFILE,
+                                "source_parent_id": source["source_group_id"],
+                                "source_ns": times, "target_ns": times, "video_ordinals": list(range(9)),
+                                "fpv_paths": source["images"], "bev": None},
+        "history_max_lag_ns": 0,
+    })
+    full = project_stage_i_reasoning_view_v2(
+        source, task_type="full_cot", modality_profile_id="fpv_temporal_instruction_v1",
+        instruction_training_role="primary")
+    assert full.metadata["history_observation"] == source["metadata"]["history_observation"]
+    assert full.assistant_text == source["assistant_text"]
+    physical = build_stage_i_manifest_row(full.model_dump(mode="json", exclude_none=True))
+    assert physical["observation_profile"] == HISTORY_4S_2HZ_PROFILE
+    assert physical["frame_offsets_sec"] == [-4, -3.5, -3, -2.5, -2, -1.5, -1, -.5, 0]
+    dropout = project_stage_i_reasoning_view_v2(
+        source, task_type="reasoning_dropout", modality_profile_id="fpv_temporal_instruction_v1",
+        instruction_training_role="primary")
+    assert dropout.metadata["history_observation"] == full.metadata["history_observation"]
+    source["metadata"]["history_observation"]["source_parent_id"] = "other"
+    with pytest.raises(ValueError, match="annotated source parent"):
+        project_stage_i_reasoning_view_v2(
+            source, task_type="full_cot", modality_profile_id="fpv_temporal_instruction_v1",
+            instruction_training_role="primary")
+
+
+def test_vqa_history_time_changes_fingerprint_and_reaches_stage_i(tmp_path):
+    from urbannav_contracts.history_observation import HISTORY_4S_2HZ_PROFILE, history_image_roles
+    from mcp_server.data.stage_i.views import project_stage_i_vqa_view_v2
+    from swift.sidewalk_nav.data.stage_i.stage_i_manifest import build_stage_i_manifest_row
+    from mcp_server.data.vqa.source import build_vqa_source_manifest_v2
+
+    observation = _vqa_source().observation.model_dump(mode="json")
+    observation["images"] = [f"/data/{i}.jpg" for i in range(9)]
+    observation["image_roles"] = history_image_roles(include_bev=False)
+    observation["input_modalities"]["history_fpv"] = True
+    observation["evidence_catalog"].extend({"ref": role, "modality": "fpv"}
+                                          for role in observation["image_roles"][:-1])
+    observation = NavObservationV4.model_validate(observation).model_dump(mode="json")
+    payload = {"schema_version": REASONING_SOURCE_V4_SCHEMA_VERSION, "observation": observation,
+               "direction_supervision": _direction(), "trajectory_ego_t": None,
+               "trajectory_policy": None, "action_mask": None, "warnings": []}
+    payload["source_fingerprint"] = reasoning_source_fingerprint_v4(payload)
+    source = ReasoningSourceV4.model_validate(payload)
+    old = build_vqa_source_v2(source)
+    times = list(range(0, 4_000_000_001, 500_000_000))
+    history = {"observation_profile": HISTORY_4S_2HZ_PROFILE, "source_parent_id": observation["source_group_id"],
+               "source_ns": times, "target_ns": times, "video_ordinals": list(range(9)),
+               "fpv_paths": observation["images"], "bev": None}
+    current = build_vqa_source_v2(source, history_observation=history, history_max_lag_ns=0)
+    assert old.source_fingerprint != current.source_fingerprint
+    assert current.observation.images == old.observation.images
+    # canonical JSONL 是批量构造的真实边界；时间合同随 evidence 一起进入新 source 身份。
+    payload["observation"] = current.observation.model_dump(mode="json")
+    payload.pop("source_fingerprint")
+    payload["source_fingerprint"] = reasoning_source_fingerprint_v4(payload)
+    input_path, output_path = tmp_path / "reasoning.jsonl", tmp_path / "vqa.jsonl"
+    input_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+    report = build_vqa_source_manifest_v2(input_path, output_path)
+    assert report["counts"]["output_rows"] == 1
+    assert json.loads(output_path.read_text())["source_fingerprint"] == current.source_fingerprint
+    attributes = next(item["attributes"] for item in payload["observation"]["evidence_catalog"]
+                      if item["ref"] == "fpv.current")
+    attributes["history_observation"]["source_parent_id"] = "other"
+    payload.pop("source_fingerprint")
+    payload["source_fingerprint"] = reasoning_source_fingerprint_v4(payload)
+    input_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="visible parent"):
+        build_vqa_source_manifest_v2(input_path, tmp_path / "invalid.jsonl")
+    capabilities = load_vqa_capabilities_v2()
+    annotations = []
+    for item in (old, current):
+        question = next(q for q in build_vqa_questions_v2(item, capabilities).questions
+                        if q.task_id == "e0_demonstrated_direction_selection")
+        annotations.append(CanonicalDemonstratedDirectionProducerV2().produce(item, question, capabilities).annotation)
+    kwargs = dict(capabilities=capabilities, modality_profile_id="fpv_temporal_instruction_v1",
+                  instruction_training_role="primary")
+    with pytest.raises(ValueError, match="fingerprint mismatch"):
+        project_stage_i_vqa_view_v2(current, annotations[0], **kwargs)
+    view = project_stage_i_vqa_view_v2(current, annotations[1], **kwargs)
+    row = build_stage_i_manifest_row(view.model_dump(mode="json", exclude_none=True))
+    assert row["observation_profile"] == HISTORY_4S_2HZ_PROFILE
+    assert row["frame_timestamps_ns"] == times
+
+
+@pytest.mark.parametrize("bev_profile", ["causal_map_v1", "recorded_bev_v1"])
+def test_materialized_history_builds_fresh_reasoning_source(tmp_path, bev_profile):
+    """Package inputs preserve time and private direction, while rebuilding evidence."""
+    from urbannav_contracts.history_observation import HISTORY_4S_2HZ_PROFILE, history_image_roles
+    from mcp_server.data.canonical.reasoning_v4_source import build_reasoning_source_manifest_v4
+    from mcp_server.data.legacy.reasoning_v2.source import ReasoningSourceBuildConfig
+
+    paths = [f"{i}.jpg" for i in range(9)]
+    for path in paths + ["bev.jpg"]:
+        (tmp_path / path).write_bytes(b"fixture")
+    times = list(range(0, 4_000_000_001, 500_000_000))
+    history = {"observation_profile": HISTORY_4S_2HZ_PROFILE, "source_parent_id": "sidewalk:parent",
+               "source_ns": times, "target_ns": times, "video_ordinals": list(range(9)),
+               "fpv_paths": paths, "bev": {"bev_image_path": "bev.jpg", "input_profile": bev_profile,
+                   "draw_trajectory": bev_profile == "recorded_bev_v1",
+                   "bev_route_scope": "global_full" if bev_profile == "recorded_bev_v1" else "none",
+                   "bev_alignment": "ego_aligned", "timestamp": times[-1], "age_ns": 0}}
+    original = {"images": ["old.jpg"], "direction_supervision": _direction(),
+                "direction_raw_angle_deg": 1.25, "direction_displacement": 0.4,
+                "instruction": "Continue straight.", "route_context": "old complete route",
+                "messages": [{"role": "assistant", "content": "old annotation"}]}
+    record = {"source_parent_id": "sidewalk:parent", "split_group_id": "clip", "split": "train",
+              "observation": history, "source_row": original, "trajectory_sidecar": None}
+    input_path, output_path = tmp_path / "observations.jsonl", tmp_path / "reasoning.jsonl"
+    input_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    report = build_reasoning_source_manifest_v4(input_path, output_path,
+        config=ReasoningSourceBuildConfig(dataset_source="sidewalk", media_root=tmp_path),
+        history_max_lag_ns=0)
+    assert report["counts"]["output_rows"] == 1
+    result = ReasoningSourceV4.model_validate(json.loads(output_path.read_text()))
+    assert result.observation.image_roles == history_image_roles(include_bev=True)
+    assert result.observation.source_group_id == record["source_parent_id"]
+    assert result.observation.split_group_id == "clip"
+    bev = next(entry for entry in result.observation.evidence_catalog if entry.ref == "bev.current")
+    assert bev.bev_route_evidence.route_overlay_visible == (bev_profile == "recorded_bev_v1")
+    vqa = build_vqa_source_v2(result)
+    current = next(entry for entry in vqa.observation.evidence_catalog if entry.ref == "fpv.current")
+    assert current.attributes["history_observation"]["source_ns"] == times
+    assert current.attributes["history_observation"]["fpv_paths"] == result.observation.images[:9]
+    assert result.direction_supervision.model_dump(mode="json") == _direction()
+    assert result.direction_geometry.raw_angle_deg == 1.25
+    assert result.direction_geometry.displacement == 0.4
+    assert result.direction_geometry.angle_valid is True
+    assert result.trajectory_ego_t is None
+    assert "old annotation" not in output_path.read_text()
+
+
 def test_v2_full_cot_supervises_decision_and_dropout_is_parent_linked(
 ) -> None:
     """V2 fixes the V1 action mask without creating a second action teacher."""
@@ -1001,7 +1143,7 @@ def test_all_stage_i_task_views_build_ms_swift_physical_rows() -> None:
     sys.path.insert(0, str(ms_root))
     try:
         adapter = importlib.import_module(
-            "swift.sidewalk_nav.data.stage_i_manifest")
+            "swift.sidewalk_nav.data.stage_i.stage_i_manifest")
         full_cot = project_stage_i_reasoning_view_v1(
             _formal_reasoning_view(),
             task_type="full_cot",

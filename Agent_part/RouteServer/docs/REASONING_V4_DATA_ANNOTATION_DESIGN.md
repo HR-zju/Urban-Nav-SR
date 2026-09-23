@@ -87,10 +87,10 @@ goal、waypoint 和可见结构化上下文仍按 source 合同提供。只有 D
 | Section | teacher 图片输入 | 原因 |
 | --- | --- | --- |
 | `TaskGrounding` | current FPV + optional current BEV | 校验当前任务语境，不消费历史动态 |
-| `SceneGrounding` | 5 FPV | 汇总当前场景并保留短时视觉上下文 |
+| `SceneGrounding` | 9 FPV（4 秒、2 Hz） | 汇总当前场景并保留物理源时钟上下文 |
 | `LocalTraversability` | current FPV | 判断当前局部支撑面、净空与物理可执行性 |
 | `NavigationContextGrounding` | current FPV + optional current BEV | 将显式 instruction/BEV route 映射到当前 FPV 方向 |
-| `InteractionConstraintGrounding` | 5 FPV | 识别影响短动作的人车交互和动态占用 |
+| `InteractionConstraintGrounding` | 9 FPV（4 秒、2 Hz） | 识别影响短动作的人车交互和动态占用 |
 | `Decision` | current FPV + optional current BEV + 五段 validated groundings | 核验当前几何和路线，综合已有事实提出动作 |
 
 图片投影会同步过滤 `image_roles/evidence_catalog/input_modalities`。当 section 不再接收历史

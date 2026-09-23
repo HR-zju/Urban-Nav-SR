@@ -723,20 +723,18 @@ def normalize_bev_index_entry(item: dict[str, Any], base_dir: Path) -> dict[str,
 
     Returns:
         Normalized BEV index entry.
+
+    Raises:
+        FileNotFoundError: If the indexed image is absent from this clip.
     """
 
     raw_path = item.get("bev_image_path") or item.get("path")
     path = Path(str(raw_path)).expanduser() if raw_path else base_dir / f"{item.get('frame_name', '')}_bev.jpg"
-    if not path.is_absolute():
-        path = (base_dir / path).resolve()
-    elif not path.is_file():
-        relocation_candidates = [base_dir / path.name]
-        if base_dir.name != "bev_images":
-            relocation_candidates.append(base_dir / "bev_images" / path.name)
-        for relocated in relocation_candidates:
-            if relocated.is_file():
-                path = relocated.resolve()
-                break
+    # 索引所属 clip 决定媒体身份；旧挂载点即使仍存在，也不能覆盖当前数据根。
+    bev_dir = base_dir if base_dir.name.startswith("bev_images") else base_dir / "bev_images"
+    path = bev_dir / path.name
+    if not path.is_file():
+        raise FileNotFoundError(f"BEV index {base_dir}: image missing: {path}")
     frame_idx = optional_int(item.get("frame_idx") if item.get("frame_idx") is not None else item.get("source_frame_idx"))
     timestamp = optional_int(item.get("timestamp") if item.get("timestamp") is not None else item.get("source_timestamp_ns"))
     return {
@@ -761,17 +759,11 @@ def load_bev_index_entries(clip_dir_text: str) -> tuple[dict[str, Any], ...]:
     for index_path in (clip_dir / "bev_index.json", clip_dir / "bev_images" / "bev_index.json"):
         if not index_path.is_file():
             continue
-        try:
-            data = json.loads(index_path.read_text(encoding="utf-8"))
-            entries = data.get("entries") if isinstance(data, dict) else None
-            if isinstance(entries, list):
-                return tuple(
-                    normalize_bev_index_entry(item, index_path.parent)
-                    for item in entries
-                    if isinstance(item, dict)
-                )
-        except Exception:
-            pass
+        data = json.loads(index_path.read_text(encoding="utf-8"))
+        return tuple(
+            normalize_bev_index_entry(item, index_path.parent)
+            for item in data["entries"]
+        )
 
     entries: list[dict[str, Any]] = []
     for bev_dir_name in ("bev_images", "bev_images_ego_aligned"):
@@ -779,13 +771,8 @@ def load_bev_index_entries(clip_dir_text: str) -> tuple[dict[str, Any], ...]:
         if not bev_dir.is_dir():
             continue
         for meta_path in sorted(bev_dir.glob("*.bevmeta.json")):
-            try:
-                meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            except Exception:
-                continue
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
             image_path = Path(str(meta_path)[: -len(".bevmeta.json")])
-            if not image_path.is_file():
-                continue
             item = dict(meta)
             item["path"] = str(image_path)
             entries.append(normalize_bev_index_entry(item, bev_dir))

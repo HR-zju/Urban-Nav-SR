@@ -6,6 +6,8 @@ import json
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
+from urbannav_contracts.history_observation import history_image_roles, validate_history_observation
+
 from mcp_server.agent.vqa_v2_text import render_vqa_answer_v2
 from mcp_server.contracts.reasoning_dataset_v4 import (
     EvidenceCatalogEntryV4,
@@ -394,6 +396,10 @@ def project_stage_i_vqa_view_v1(
         "capability_config_digest":
         base_view.capability_config_digest,
         "metadata": {
+            **_history_projection_metadata(
+                next((item.attributes for item in typed_source.observation.evidence_catalog
+                      if item.ref == "fpv.current"), {}),
+                typed_source.observation.source_group_id, projected),
             "annotation_context_digest":
             typed_annotation.annotation_context_digest,
             "source_field_refs": list(typed_annotation.source_field_refs),
@@ -566,6 +572,7 @@ def _project_full_cot_view(
         "prompt_policy_digest":
         view.prompt_policy_digest,
         "metadata": {
+            **_history_projection_metadata(view.metadata, view.source_group_id, projected),
             "source_view_schema_version": view.schema_version,
             "action_supervision_location": "decision.selected_action_label",
         },
@@ -632,11 +639,36 @@ def _project_decision_view(
         "decision_authority":
         authority,
         "metadata": {
+            **_history_projection_metadata(view.metadata, view.source_group_id, projected),
             "source_view_schema_version": view.schema_version,
             "full_cot_teacher_prefix_present": False,
         },
     }
     return _finalize_view(StageIDecisionViewV1, payload)
+
+
+def _history_projection_metadata(metadata, source_group_id, projected) -> dict[str, Any]:
+    """Carry explicit source-clock evidence while preserving annotation eligibility.
+
+    This projects an already admitted source view; it does not replace images,
+    rewrite evidence refs, or promote a legacy annotation to a new window.
+    """
+    observation = metadata.get("history_observation")
+    if observation is None:
+        return {}
+    max_lag_ns = metadata["history_max_lag_ns"]
+    validate_history_observation(observation, max_lag_ns=max_lag_ns)
+    if observation["source_parent_id"] != source_group_id:
+        raise ValueError("History observation must belong to the annotated source parent")
+    paths = list(observation["fpv_paths"])
+    bev = observation["bev"]
+    if bev is not None:
+        paths.append(bev["bev_image_path"])
+    if (projected.images != paths
+            or projected.image_roles != history_image_roles(include_bev=bev is not None)):
+        raise ValueError("History projection must retain the declared nine-frame observation")
+    # 只投影明确的观测 metadata；教师内部字段与未来监督继续留在原始 artifact。
+    return {"history_observation": observation, "history_max_lag_ns": max_lag_ns}
 
 
 def _project_visible_inputs(
@@ -1254,6 +1286,7 @@ def _project_full_cot_view_v2(
         "prompt_profile_id": view.prompt_profile_id,
         "prompt_policy_digest": view.prompt_policy_digest,
         "metadata": {
+            **_history_projection_metadata(view.metadata, view.source_group_id, projected),
             "source_view_schema_version": view.schema_version,
             "action_supervision_location": "decision.selected_action_label",
         },

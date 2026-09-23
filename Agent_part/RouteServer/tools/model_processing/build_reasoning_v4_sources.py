@@ -33,6 +33,8 @@ def parse_args(
         action="store_true",
     )
     parser.add_argument("--media-root", type=Path)
+    parser.add_argument("--history-max-lag-ns", type=int,
+                        help="Read materialized observations.jsonl with this explicit sampling budget")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--skip-errors", action="store_true")
     return parser.parse_args(argv)
@@ -57,6 +59,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         config=config,
         limit=args.limit,
         skip_errors=args.skip_errors,
+        history_max_lag_ns=args.history_max_lag_ns,
     )
     if args.report_json is not None:
         args.report_json.parent.mkdir(parents=True, exist_ok=True)

@@ -270,13 +270,21 @@ episode_terminal / goal_reached / terminal_provenance
 
 ### 3.2 时间合同
 
-历史视觉条件保持：
+当前 Cosmos3 历史视觉条件固定为：
 
 ```text
-5 个 FPV
-5 Hz
-offset = [-0.8, -0.6, -0.4, -0.2, 0.0] s
+9 个 FPV
+4 秒历史窗口
+2 Hz 目标采样网格
+target offset = [-4.0, -3.5, -3.0, -2.5, -2.0, -1.5, -1.0, -0.5, 0.0] s
 ```
+
+每个样本同时保存 `target_ns`（规则目标网格）、`source_ns`（实际因果源帧）、
+`video_ordinals`、`source_parent_id` 和 `max_lag_ns`。实际源帧必须满足
+`source_ns[i] <= target_ns[i]`、`target_ns[i] - source_ns[i] <= max_lag_ns`，且
+`source_ns[8]` 等于当前观测锚点。缺帧、重复源帧和超出滞后预算的样本写入稳定拒绝原因，
+不使用当前帧重复填充历史窗口。旧 5 帧/5Hz 行只允许带 legacy observation profile，
+不能混入当前 9 帧 manifest。
 
 Stage II 目标使用当前时刻之后的 4 秒 metric FLU：
 

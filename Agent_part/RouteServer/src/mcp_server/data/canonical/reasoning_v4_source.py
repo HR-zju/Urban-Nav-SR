@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import copy
 import re
 from collections import Counter
 from pathlib import Path
 from typing import Any, Mapping
+
+from urbannav_contracts.history_observation import history_image_roles, validate_history_observation
 
 from mcp_server.contracts.direction_profile import (
     affordance_probe_profile_for_action,
@@ -34,6 +37,7 @@ from mcp_server.data.legacy.reasoning_v2.source import (
     ReasoningSourceBuildConfig,
     _dataset_source,
     _ordered_images,
+    _resolve_image_path,
     _source_record_id,
     _split_group_id,
 )
@@ -108,16 +112,57 @@ def build_reasoning_source_v4(
         row,
         source_record_id=source_record_id,
     )
-    images, image_roles = _ordered_images(row, config=config)
+    history = row.get("history_observation")
+    if history is None:
+        images, image_roles = _ordered_images(row, config=config)
+    else:
+        validate_history_observation(history, max_lag_ns=row["history_max_lag_ns"])
+        if history["source_parent_id"] != source_group_id:
+            raise ValueError("History Reasoning source parent must match source_group_id")
+        history = copy.deepcopy(history)
+        history["fpv_paths"] = [_resolve_image_path(path, media_root=config.media_root)
+                                for path in history["fpv_paths"]]
+        images = list(history["fpv_paths"])
+        if len(images) != 9 or len(set(images)) != 9:
+            raise ValueError("History Reasoning source requires nine unique FPV paths")
+        if history["bev"] is not None:
+            bev = history["bev"]
+            if bev["input_profile"] not in ("causal_map_v1", "recorded_bev_v1"):
+                raise ValueError("Unsupported history Reasoning BEV profile")
+            if bev["input_profile"] == "causal_map_v1" and bev["draw_trajectory"]:
+                raise ValueError("Map-only BEV must preserve its route-free content contract")
+            age = history["source_ns"][-1] - bev["timestamp"]
+            if age < 0 or age != bev["age_ns"]:
+                raise ValueError("History Reasoning BEV requires a causal timestamp and matching age")
+            bev["bev_image_path"] = _resolve_image_path(bev["bev_image_path"], media_root=config.media_root)
+            images.append(bev["bev_image_path"])
+        # 新 profile 的角色和帧数由时间合同决定，保持旧五帧 selector 的行为不变。
+        image_roles = history_image_roles(include_bev=history["bev"] is not None)
     instruction = _optional_instruction(row)
     visible_context, context_warnings = _visible_context_v4(row)
+    evidence_row = row
+    if history is not None:
+        bev = history["bev"]
+        route = BevRouteEvidenceV4()
+        if bev is not None and bev["input_profile"] == "recorded_bev_v1":
+            # 时间 predecessor 不改变旧图中的 route；公开证据按原绘制来源重建。
+            route = _bev_route_evidence_v4({
+                "bev_route_scope": bev["bev_route_scope"],
+                "bev_route_overlay": bev.get("bev_route_overlay", {}),
+                "bev_image_alignment": bev.get("bev_alignment", "unknown"),
+            }, role="bev.current", dataset_source=dataset_source)
+        evidence_row = {**row, "bev_route_evidence": route.model_dump(mode="json")}
     evidence_catalog = _evidence_catalog_v4(
-        row=row,
+        row=evidence_row,
         dataset_source=dataset_source,
         image_roles=image_roles,
         instruction=instruction,
         visible_context=visible_context,
     )
+    if history is not None:
+        current = next(entry for entry in evidence_catalog if entry.ref == "fpv.current")
+        current.attributes.update({"history_observation": history,
+                                   "history_max_lag_ns": row["history_max_lag_ns"]})
     modalities = InputModalitiesV4(
         history_fpv=any(role.startswith("fpv.history_") for role in image_roles),
         instruction=instruction is not None,
@@ -214,6 +259,7 @@ def build_reasoning_source_manifest_v4(
     config: ReasoningSourceBuildConfig,
     limit: int | None = None,
     skip_errors: bool = False,
+    history_max_lag_ns: int | None = None,
 ) -> dict[str, Any]:
     """Build a V4 source manifest and deterministic conversion report.
 
@@ -223,6 +269,7 @@ def build_reasoning_source_manifest_v4(
         config: Source build policy.
         limit: Optional maximum number of input rows.
         skip_errors: Continue after invalid rows when true.
+        history_max_lag_ns: Explicit budget for materialized history-package rows.
 
     Returns:
         Conversion counts and bounded errors.
@@ -239,6 +286,24 @@ def build_reasoning_source_manifest_v4(
             break
         counts["input_rows"] += 1
         try:
+            if history_max_lag_ns is not None:
+                original = row["source_row"]
+                dataset_source = _dataset_source(original, fallback=config.dataset_source)
+                direction, _ = _direction_supervision_v4(original, dataset_source=dataset_source)
+                geometry, _ = _direction_geometry_v1(original, direction=direction)
+                # 只迁移输入指令和私有方向监督；旧 assistant、route 与帧证据留在原包供审查。
+                # 连续角度与 stop 位移从原监督构造，避免裁剪输入字段后退化为 unavailable。
+                row = {
+                    "id": row["source_parent_id"],
+                    "source_group_id": row["source_parent_id"],
+                    "split_group_id": row["split_group_id"],
+                    "dataset_source": dataset_source,
+                    "instruction": _optional_instruction(original),
+                    "direction_supervision": _raw_direction_record(original),
+                    "direction_geometry": geometry.model_dump(mode="json") if geometry is not None else None,
+                    "history_observation": row["observation"],
+                    "history_max_lag_ns": history_max_lag_ns,
+                }
             source = build_reasoning_source_v4(
                 row,
                 index=index,

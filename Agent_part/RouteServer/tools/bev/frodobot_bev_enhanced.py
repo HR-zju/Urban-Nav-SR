@@ -109,6 +109,7 @@ def _fetch_tile_image(
     zoom: int,
     provider_config: dict[str, Any],
     cache_dir: Path,
+    require_cached: bool = False,
 ) -> Image.Image:
     """Fetch tile with custom provider support."""
     n = 2**int(zoom)
@@ -119,6 +120,14 @@ def _fetch_tile_image(
     cache_key = f"{provider_config.get('name', 'custom')}_{zoom}_{x_wrapped}_{y_clamped}"
     cache_path = cache_dir / f"{cache_key}.png"
 
+    if require_cached:
+        # 数据重建使用明确的地图缓存；缺图或损坏直接报错，避免空白底图进入训练。
+        with Image.open(cache_path) as image:
+            tile = image.convert("RGB")
+        if tile.getextrema() == ((242, 242), (239, 239), (233, 233)):
+            raise ValueError(f"Map cache contains an unverified blank/legacy placeholder tile: {cache_path}")
+        return tile
+
     if cache_path.exists():
         try:
             return Image.open(cache_path).convert("RGB")
@@ -128,10 +137,6 @@ def _fetch_tile_image(
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     fallback = Image.new("RGB", (256, 256), (242, 239, 233))
     if os.getenv("BEV_MAP_TILE_OFFLINE", "").strip().lower() in {"1", "true", "yes", "on"}:
-        try:
-            fallback.save(cache_path)
-        except Exception:
-            pass
         return fallback
 
     url = template.format(z=int(zoom), x=x_wrapped, y=y_clamped)
@@ -157,10 +162,6 @@ def _fetch_tile_image(
         return Image.open(io.BytesIO(raw)).convert("RGB")
     except Exception as exc:
         print(f"  [WARN] Tile fetch failed {zoom}/{x}/{y}: {exc}")
-        try:
-            fallback.save(cache_path)
-        except Exception:
-            pass
         return fallback
 
 
@@ -191,6 +192,7 @@ class ProcessOptions:
     draw_trajectory: bool = True
     add_attribution: bool = True
     bev_alignment: str = "ego_aligned"
+    require_cached_tiles: bool = False
 
 
 # ==================== GPS Processing ====================
@@ -337,6 +339,7 @@ def render_bev_map(
                 x=tx, y=ty, zoom=zoom,
                 provider_config=provider_config,
                 cache_dir=options.cache_dir,
+                require_cached=options.require_cached_tiles,
             )
             paste_x = (dx + half_tiles) * tile_size
             paste_y = (dy + half_tiles) * tile_size

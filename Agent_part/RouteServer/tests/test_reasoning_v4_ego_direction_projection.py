@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import copy
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,43 @@ def _row(trajectory: list[list[float]]) -> dict[str, object]:
         "direction_source": "low_displacement_rule",
         "direction_bin_mode": "degree10_with_stop",
     }
+
+
+def test_history_sidecar_direction_preserves_gt_and_flu_sign():
+    """Left-positive FLU geometry becomes a negative right-positive angle."""
+    from urbannav_contracts.stage_ii_cfm import (
+        StageIITrajectoryPolicyV2, STAGE_II_TRAJECTORY_TARGET_V2_SCHEMA_VERSION, stage_ii_digest_v1)
+    from tools.model_processing.project_reasoning_v4_ego_directions import project_history_sidecar_direction
+
+    policy = StageIITrajectoryPolicyV2(source_adapter_id="sidewalk_npy_pose_4s_v2",
+        trajectory_source="sidewalk_frame_pose_odometry", raw_timestamp_unit="nanosecond", yaw_offset_deg=0)
+    target = {"schema_version": STAGE_II_TRAJECTORY_TARGET_V2_SCHEMA_VERSION,
+              "trajectory_ego_t": [[2.0, 0.35, 0.0] for _ in range(32)],
+              "action_mask": [True] * 32, "valid_step_count": 32,
+              "policy": policy.model_dump(mode="json"), "source_target_digest": "a" * 64}
+    target["target_digest"] = stage_ii_digest_v1(target)
+    record = {"source_parent_id": "sidewalk:case", "source_row": {"id": "case"},
+              "trajectory_sidecar": {"sample_id": "sidewalk:case", "dataset_source": "sidewalk",
+                                     "trajectory_target": target}}
+    original = copy.deepcopy(record)
+    source = project_history_sidecar_direction(record, dataset_source="sidewalk",
+        target_profile_id="ego_degree10_12way_terminal_centroid_v2")
+    assert source["direction_name"] == "left_10"
+    assert source["direction_raw_angle_deg"] < 0
+    assert source["direction_projection"]["target_digest"] == target["target_digest"]
+    assert record == original
+
+
+def test_missing_history_sidecar_has_explicit_exclusion(tmp_path):
+    source = tmp_path / "source.jsonl"
+    source.write_text(json.dumps({"source_parent_id": "sidewalk:missing", "trajectory_sidecar": None}) + "\n")
+    report = project_reasoning_v4_ego_direction_manifest(source, tmp_path / "out.jsonl",
+        report_json=tmp_path / "report.json", dataset_source="sidewalk", history_package=True,
+        direction_from_sidecar=True, target_profile_id="ego_degree10_12way_terminal_centroid_v2")
+    assert report["counts"]["missing_linked_sidecar"] == 1
+    assert (tmp_path / "out.jsonl").read_text() == ""
+    assert json.loads(Path(report["exclusion_jsonl"]).read_text()) == {
+        "source_parent_id": "sidewalk:missing", "reason": "missing_linked_sidecar"}
 
 
 def test_project_ego_direction_uses_metric_terminal_centroid() -> None:

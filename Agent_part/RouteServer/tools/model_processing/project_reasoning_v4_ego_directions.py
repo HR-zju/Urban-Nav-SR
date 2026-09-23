@@ -22,6 +22,7 @@ from mcp_server.contracts.direction_profile import (
     resolve_stage_a_direction_profile,
 )
 from mcp_server.data.jsonl_io import iter_jsonl, write_jsonl_atomic
+from urbannav_contracts.stage_ii_cfm import StageIITrajectoryTargetV2
 
 
 _PROJECTION_SCHEMA_VERSION = "reasoning_v4_ego_direction_projection_v1"
@@ -56,6 +57,10 @@ def parse_args(
     )
     parser.add_argument("--limit", type=int)
     parser.add_argument("--skip-errors", action="store_true")
+    parser.add_argument("--history-package", action="store_true",
+                        help="Project source_row in observations.jsonl; preserve observation and Stage II sidecar")
+    parser.add_argument("--direction-from-sidecar", action="store_true",
+                        help="Use the package's metric FLU Stage II target for direction only")
     return parser.parse_args(argv)
 
 
@@ -233,6 +238,44 @@ def project_reasoning_v4_ego_direction_row(
     return projected
 
 
+def project_history_sidecar_direction(record: Mapping[str, Any], *, dataset_source: str,
+                                      target_profile_id: str) -> dict[str, Any]:
+    """Project a linked FLU target into direction fields without rewriting action GT.
+
+    Args:
+        record: Materialized observation record with its original trajectory sidecar.
+        dataset_source: Expected dataset identity.
+        target_profile_id: Explicit registered ego terminal-centroid profile.
+    Returns:
+        Source row carrying newly computed direction supervision and provenance.
+    Raises:
+        ValueError: If target identity or the metric FLU contract is inconsistent.
+    """
+    sidecar = record["trajectory_sidecar"]
+    if sidecar is None:
+        raise ValueError(f"{record['source_parent_id']}: direction requires a linked trajectory sidecar")
+    if sidecar["sample_id"] != record["source_parent_id"] or sidecar["dataset_source"] != dataset_source:
+        raise ValueError("Direction sidecar must match the observation parent and dataset")
+    target = StageIITrajectoryTargetV2.model_validate(sidecar["trajectory_target"])
+    policy = target.policy
+    # 仅在方向计算临时视图中换轴：(x_right,y_front)=(-y_left,x_forward)。
+    # mask 决定可用点，原 [32,3]、yaw 和 action_mask 全部保留在 sidecar 中。
+    points = [[-point[1], point[0]] for point, valid in zip(target.trajectory_ego_t, target.action_mask) if valid]
+    original = record["source_row"]
+    temporary = {**original, "source_dataset": dataset_source, "dataset_source": dataset_source,
+                 "trajectory_ego_t": points, "trajectory_policy": {"source": policy.trajectory_source}}
+    projected = project_reasoning_v4_ego_direction_row(
+        temporary, dataset_source=dataset_source, target_profile_id=target_profile_id,
+        allowed_trajectory_sources=(policy.trajectory_source,))
+    projected["direction_projection"].update({
+        "trajectory_field": "trajectory_sidecar.trajectory_target.trajectory_ego_t",
+        "target_digest": target.target_digest,
+        "input_coordinate_frame": policy.coordinate_frame,
+        "valid_target_indices": [i for i, valid in enumerate(target.action_mask) if valid],
+    })
+    return {**original, **{key: value for key, value in projected.items() if key.startswith("direction_")}}
+
+
 def project_reasoning_v4_ego_direction_manifest(
     input_jsonl: str | Path,
     output_jsonl: str | Path,
@@ -245,6 +288,8 @@ def project_reasoning_v4_ego_direction_manifest(
     ),
     limit: int | None = None,
     skip_errors: bool = False,
+    history_package: bool = False,
+    direction_from_sidecar: bool = False,
 ) -> dict[str, Any]:
     """Project a JSONL manifest and write a deterministic audit report.
 
@@ -257,6 +302,8 @@ def project_reasoning_v4_ego_direction_manifest(
         allowed_trajectory_sources: Trusted trajectory provenance allowlist.
         limit: Optional positive input-row limit.
         skip_errors: Continue after invalid rows when true.
+        history_package: Read nested source_row and preserve the rest of each package record.
+        direction_from_sidecar: Derive direction from linked metric FLU targets instead of legacy geometry.
 
     Returns:
         Projection counts, bounded errors, and profile identity.
@@ -267,21 +314,33 @@ def project_reasoning_v4_ego_direction_manifest(
 
     if limit is not None and int(limit) <= 0:
         raise ValueError("limit must be positive")
+    if direction_from_sidecar and not history_package:
+        raise ValueError("direction_from_sidecar requires history_package")
     counts: Counter[str] = Counter()
     errors: list[dict[str, Any]] = []
+    exclusions: list[dict[str, Any]] = []
 
     def rows() -> Any:
         for index, row in enumerate(iter_jsonl(input_jsonl)):
             if limit is not None and index >= int(limit):
                 break
             counts["input_rows"] += 1
+            if direction_from_sidecar and row["trajectory_sidecar"] is None:
+                # 正常的监督缺失独立记录；坏 schema、身份错配与 IO 错误仍按原严格路径报出。
+                counts["missing_linked_sidecar"] += 1
+                exclusions.append({"source_parent_id": row["source_parent_id"],
+                                   "reason": "missing_linked_sidecar"})
+                continue
+            source_row = row["source_row"] if history_package else row
             try:
-                projected = project_reasoning_v4_ego_direction_row(
-                    row,
+                projected = (project_history_sidecar_direction(
+                    row, dataset_source=dataset_source, target_profile_id=target_profile_id)
+                    if direction_from_sidecar else project_reasoning_v4_ego_direction_row(
+                    source_row,
                     dataset_source=dataset_source,
                     target_profile_id=target_profile_id,
                     allowed_trajectory_sources=allowed_trajectory_sources,
-                )
+                ))
             except (TypeError, ValueError) as exc:
                 counts["invalid_rows"] += 1
                 if len(errors) < 100:
@@ -298,9 +357,10 @@ def project_reasoning_v4_ego_direction_manifest(
             counts["output_rows"] += 1
             name = str(projected["direction_name"])
             counts[f"direction:{name}"] += 1
-            if name != str(row.get("direction_name") or ""):
+            if name != str(source_row.get("direction_name") or ""):
                 counts["legacy_label_changed_rows"] += 1
-            yield projected
+            # 方向来自原 x_right/y_front odometry；包中的 FLU action sidecar 保持原样。
+            yield {**row, "source_row": projected} if history_package else projected
 
     written = write_jsonl_atomic(output_jsonl, rows())
     if written != counts["output_rows"]:
@@ -311,14 +371,22 @@ def project_reasoning_v4_ego_direction_manifest(
         "output_jsonl": str(output_jsonl),
         "dataset_source": str(dataset_source).strip().lower(),
         "target_profile_id": target_profile_id,
-        "allowed_trajectory_sources": list(allowed_trajectory_sources),
+        "allowed_trajectory_sources": list(allowed_trajectory_sources) if not direction_from_sidecar else None,
+        "trajectory_input_contract": "StageIITrajectoryTargetV2:current_ego_flu" if direction_from_sidecar
+                                     else "legacy_x_right_y_front",
         "trajectory_read": True,
         "direction_rederived": True,
+        "history_package": history_package,
+        "direction_from_sidecar": direction_from_sidecar,
         "counts": dict(sorted(counts.items())),
         "errors": errors,
         "passed": counts.get("invalid_rows", 0) == 0,
     }
     report_path = Path(report_json)
+    if direction_from_sidecar:
+        drop_path = report_path.with_name(report_path.stem + "-drops.jsonl")
+        write_jsonl_atomic(drop_path, exclusions)
+        report["exclusion_jsonl"] = str(drop_path)
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n",
@@ -377,6 +445,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         ),
         limit=args.limit,
         skip_errors=args.skip_errors,
+        history_package=args.history_package,
+        direction_from_sidecar=args.direction_from_sidecar,
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
 

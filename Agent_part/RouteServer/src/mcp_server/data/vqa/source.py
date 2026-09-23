@@ -6,6 +6,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Mapping
 
+from urbannav_contracts.history_observation import history_image_roles, validate_history_observation
+
 from mcp_server.contracts.reasoning_dataset_v4 import ReasoningSourceV4
 from mcp_server.contracts.vqa_dataset_v2 import (
     VQASourceInterfacesV2,
@@ -26,12 +28,17 @@ def build_vqa_source_v2(
     reasoning_source: ReasoningSourceV4 | Mapping[str, Any],
     *,
     interfaces: VQASourceInterfacesV2 | None = None,
+    history_observation: Mapping[str, Any] | None = None,
+    history_max_lag_ns: int | None = None,
 ) -> VQASourceV2:
     """Project one frozen Reasoning V4 source into a VQA source.
 
     Args:
         reasoning_source: Canonical Stage-A source or its JSON payload.
         interfaces: Optional accepted external-GT interface records.
+        history_observation: Explicit nine-frame observation already matching the visible source images.
+            When omitted, use the contract carried by fpv.current evidence attributes.
+        history_max_lag_ns: Required source sampling budget when history is supplied.
 
     Returns:
         Fingerprinted VQA source with visible input and private labels split.
@@ -62,6 +69,32 @@ def build_vqa_source_v2(
         ).model_dump(mode="json"),
         "warnings": list(source.warnings),
     }
+    observation = payload["observation"]
+    current = next(item for item in observation["evidence_catalog"] if item["ref"] == "fpv.current")
+    if history_observation is None:
+        # JSONL 批量入口沿用 canonical source 的时间合同，与单条构造执行相同校验。
+        history_observation = current["attributes"].get("history_observation")
+        history_max_lag_ns = current["attributes"].get("history_max_lag_ns")
+    if history_observation is not None:
+        if history_max_lag_ns is None:
+            raise ValueError("History VQA source requires an explicit sampling lag budget")
+        validate_history_observation(history_observation, max_lag_ns=history_max_lag_ns)
+        paths = list(history_observation["fpv_paths"])
+        bev = history_observation["bev"]
+        if bev is not None:
+            paths.append(bev["bev_image_path"])
+        if (history_observation["source_parent_id"] != observation["source_group_id"]
+                or paths != observation["images"]
+                or observation["image_roles"] != history_image_roles(include_bev=bev is not None)):
+            raise ValueError("History VQA source must match its visible parent, images and roles")
+        # 现有 evidence attributes 属于可见输入并参与 fingerprint；旧 annotation 无法冒充新时窗标注。
+        current["attributes"].update({
+            "history_observation": {key: history_observation[key] for key in (
+                "observation_profile", "source_parent_id", "source_ns", "target_ns",
+                "video_ordinals", "fpv_paths", "bev",
+            )},
+            "history_max_lag_ns": history_max_lag_ns,
+        })
     payload["source_fingerprint"] = vqa_source_fingerprint_v2(
         payload
     )
