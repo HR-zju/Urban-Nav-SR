@@ -20,6 +20,31 @@ import numpy as np
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 
+def encode_frame_sequence(images_dir: Path, output: Path, frame_count: int, fps: float) -> None:
+    """Encode one video frame per source image in filename order.
+
+    Args:
+        images_dir: Directory containing zero-padded JPEG source filenames.
+        output: Destination MP4 file.
+        frame_count: Number of source timestamp rows.
+        fps: Container playback rate; physical time remains in frame_times.npy.
+
+    Raises:
+        ValueError: If image count differs from the source timestamp count.
+        subprocess.CalledProcessError: If FFmpeg encoding fails.
+    """
+    images = sorted(images_dir.glob("*.jpg"))
+    if len(images) != frame_count or frame_count == 0:
+        raise ValueError(f"{images_dir}: {len(images)} images for {frame_count} source rows")
+    # 每个源图像对应一个 ordinal；image2 避免 concat duration 的重采样和末帧追加。
+    subprocess.run(
+        ["ffmpeg", "-y", "-framerate", str(fps), "-pattern_type", "glob",
+         "-i", str(images_dir / "*.jpg"), "-frames:v", str(frame_count),
+         "-c:v", "libx264", "-pix_fmt", "yuv420p", str(output)],
+        check=True,
+    )
+
+
 def _quat_xyzw_from_euler(roll: float, pitch: float, yaw: float) -> tuple[float, float, float, float]:
     qx = np.sin(roll / 2) * np.cos(pitch / 2) * np.cos(yaw / 2) - np.cos(roll / 2) * np.sin(pitch / 2) * np.sin(yaw / 2)
     qy = np.cos(roll / 2) * np.sin(pitch / 2) * np.cos(yaw / 2) + np.sin(roll / 2) * np.cos(pitch / 2) * np.sin(yaw / 2)
@@ -199,47 +224,9 @@ def mcap_to_chunk_format(
     # Step 3: Create front.mp4 from images
     print("\n[3/5] Creating front.mp4...")
     images_dir = extract_dir / "images"
-    image_files = sorted(images_dir.glob("*.jpg"))
-
-    if not image_files:
-        raise RuntimeError(f"No images found: {images_dir}")
-
-    # Use ffmpeg to create video
     front_mp4 = output_dir / "front.mp4"
-
-    # Create a list file for ffmpeg
-    list_file = extract_dir / "images_list.txt"
-    with open(list_file, "w") as f:
-        for img in image_files:
-            abs_path = img.resolve()
-            f.write(f"file '{abs_path}'\n")
-            f.write(f"duration {1.0/sample_fps}\n")
-        # Add last frame again
-        if image_files:
-            abs_path = image_files[-1].resolve()
-            f.write(f"file '{abs_path}'\n")
-
-    # Run ffmpeg
-    ffmpeg_cmd = [
-        "ffmpeg",
-        "-y",
-        "-f", "concat",
-        "-safe", "0",
-        "-i", str(list_file),
-        "-c:v", "libx264",
-        "-vf", f"fps={sample_fps}",
-        "-pix_fmt", "yuv420p",
-        str(front_mp4),
-    ]
-
-    print(f"Running ffmpeg...")
-    result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        print(f"Warning: ffmpeg failed, but continuing:")
-        print(f"STDOUT: {result.stdout}")
-        print(f"STDERR: {result.stderr}")
-    else:
-        print(f"Created: {front_mp4}")
+    encode_frame_sequence(images_dir, front_mp4, num_frames, sample_fps)
+    print(f"Created: {front_mp4}")
 
     # Step 4: Generate BEV using process_sidewalk_dataset.py
     if not generate_bev:
