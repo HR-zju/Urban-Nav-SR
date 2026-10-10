@@ -179,6 +179,7 @@ def decide_section_reuse(
     media_identities: Mapping[str, str],
     reuse_policy: str = "exact_input",
     anchor_records: Mapping[str, Any] | None = None,
+    anchor_tolerance_ns: int = 0,
 ) -> dict[str, Any]:
     """Compare a grounding section's real teacher inputs and producer policy.
 
@@ -192,6 +193,7 @@ def decide_section_reuse(
         media_identities: Path to proven source-frame identity mapping.
         reuse_policy: Historical exact_input or preferred anchor_label_v1.
         anchor_records: Optional legacy sampling evidence keyed by source fingerprint.
+        anchor_tolerance_ns: Inclusive time alignment tolerance in nanoseconds.
 
     Returns:
         Disposition, reason, and compared input digests. A changed input is a
@@ -220,7 +222,7 @@ def decide_section_reuse(
             return {"disposition": "reuse_instruction" if equal else "pending",
                     "reason": "task_instruction_equal" if equal else "task_instruction_changed"}
         return _anchor_section_decision(old_source, new_source, section, value,
-                                        media_identities, anchor_records)
+                                        media_identities, anchor_records, anchor_tolerance_ns)
     if reuse_policy != "exact_input":
         raise ValueError(f"unsupported reuse policy: {reuse_policy}")
     profiles = get_reasoning_v4_teacher_profiles(
@@ -276,10 +278,11 @@ def decide_section_reuse(
     }
 
 
-def _anchor_section_decision(old, new, section, value, identities, anchor_records):
+def _anchor_section_decision(old, new, section, value, identities, anchor_records, anchor_tolerance_ns):
     """Reuse current-state fields while retaining their original producer provenance."""
     same, reason, evidence = anchor_label_evidence(
         old, new, media_identities=identities, anchor_records=anchor_records,
+        anchor_tolerance_ns=anchor_tolerance_ns,
     )
     decision = {"anchor_evidence": evidence, "comparison_scope": "anchor_label_v1"}
     if not same:
@@ -405,6 +408,7 @@ def plan_canonical_migration(config: Mapping[str, Any], output: Path,
                         direction_registry_version=config["direction_registry_version"],
                         media_identities=identities,
                         reuse_policy=config.get("reuse_policy", "exact_input"), anchor_records=anchor_records,
+                        anchor_tolerance_ns=config.get("anchor_tolerance_ns", 0),
                     )
                     if candidate["disposition"] == "missing":
                         continue

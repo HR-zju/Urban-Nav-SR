@@ -32,6 +32,32 @@ experiment_record_version: 1
 
 ## 记录实验结果
 
+### 2026-10-10 单 clip：100 ms 原采样时刻映射
+
+用户批准同 clip、同稳定 anchor 下 `abs(t_old - t_new) <= 100_000_000 ns`，
+随后要求先完成一个 clip 供人工检查，再决定批量迁移。
+使用 portable manifest 保留的 `source_row.sidewalk_meta.timestamp` 恢复旧 prepared 时刻；
+EgoWalk 对应 `source_row.timestamp`，单位为毫秒。已核实的物理帧时间优先，
+000110 的真实帧偏移 48.151552 ms 在本次批准范围内。其余记录声明 prepared 时间对齐，
+原始传感器同步与逐 JPEG 物理时刻仍属于未验证范围。
+
+- 代码基线 `ec86136f97a9434226b16fab82afd4be67291ef4`，本轮追加 tolerance 和 anchor-map 实现。
+- clip：`2025-07-13__C10003__9c6c72d9-fe02-4a37-816b-15c16effe13e__15`，26 个新 anchor。
+- 旧输入：本地首 clip 快照，26 个 reasoning source、6 个 VQA source、85 个旧 VQA 答案。
+- 产物：产物根下 `sidewalk-clip-100ms-review/`；复现入口 `run_clip_100ms.py`。
+- 复用：26 条 Scene、6 条 Interaction，保存原文与 producer 至 `reused_sections.jsonl`。
+- 训练：18 条旧 LVLM VQA（a1/a2/a3 各 6）+ 26 条既有 e0 方向标签，共 44 行。
+- 待处理 VQA：346 条当前旧快照无答案、52 条题意或方向合同变化；这不是全量旧池缺失结论。
+- Scene/Interaction 为独立片段，尚未生成完整 FullCoT/Decision；没有 teacher、训练或质量评测。
+- `review.html` 展示每个 anchor 的 9 FPV、BEV、复用标签和详细原因，等待用户检查。
+- 新训练行的媒体路径保持相对 dataset root；review 页面按本地目录关系引用媒体。
+
+本轮新增时间边界和采样单位检查，连同相关迁移检查共 13 passed、51 deselected。
+Urban-Nav-SR 初始迁移提交已 push origin；ms-swift fetch 后 HEAD 与 origin/main 一致，
+既有 stage_ii_edge.toml 修改保留。31041/32011/32660 均 SSH banner 超时，服务器尚未同步。
+全量标签迁移依照用户最新要求暂停，已启动的额外映射任务中止；部分映射产物保留，
+不计为完整批量迁移。
+
 ### 2026-10-10 后续：按标签时刻优先复用
 
 用户进一步明确：扩窗本身不改变当前状态标签，原 exact-input 筛选过严。
@@ -88,10 +114,11 @@ ms-swift 的 stage_ii_edge.toml 与 CityWalker 的 pl_modules/citywalker_module.
 | --- | --- | --- | --- | --- |
 | 2026-10-10 | 严格复用并生成实际训练集 | 采用严格复用 | 只接纳已证明等价的旧答案；其余保持待补标，先导出可用子集 | 全量旧记录读取 |
 | 2026-10-10 后续 | 扩展历史应优先复用同 anchor 标签 | 用 anchor_label_v1 替代新任务中的 exact-input 判据 | 当前标签保留原文；时间、方向或证据问题进入 pending | legacy 时间映射和已知帧偏移 |
+| 2026-10-10 单 clip | 100ms 偏差可接受，先检查一个 clip | 同稳定 anchor 使用 inclusive 100ms 时间容差 | 先交付 26 anchor 的标签与 44 行训练子集 | 等待人工审核，服务器握手超时 |
 
 ## 接下来要做的实验
 
 | 优先级 | 下一实验 | 假设 | 唯一主要变量 | 所需证据 | 通过/停止条件 | 依赖或授权 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P0 | 新输出的真实消费者编码 | 训练行可被既有 processor 读取 | 新训练行 | 有效监督 token 与 batch | 路径或编码失败即停止 | 本次已授权 |
-| P1 | 全量旧 VQA 严格筛选 | 部分旧输入依赖仍等价 | 数据覆盖 | 逐题等价与来源记录 | 证据不足进入 pending | 已授权迁移；teacher 保持关闭 |
+| 当前 | 用户审核单 clip | 扩窗后当前时刻标签仍适用 | 100ms 时间对齐 | review.html、标签原文与 lineage | 用户指出矛盾时修正对应规则 | 等待用户审核；暂停扩大范围 |
+| 后续 | 全量旧 VQA 迁移 | 相同标签目标可跨历史窗口复用 | 数据覆盖 | 逐题语义合同与来源记录 | 证据不足进入 pending | 单 clip 审核后确认；teacher 保持关闭 |

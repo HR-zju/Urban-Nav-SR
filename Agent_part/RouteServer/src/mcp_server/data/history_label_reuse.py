@@ -21,6 +21,7 @@ def history_observation(observation: Any) -> dict[str, Any]:
 def anchor_label_evidence(
     old_source: Any, new_source: Any, *, media_identities: Mapping[str, str],
     anchor_records: Mapping[str, Any] | None = None,
+    anchor_tolerance_ns: int = 0,
 ) -> tuple[bool, str, dict[str, Any]]:
     """Resolve equal clip/time anchors from recorded sampling or frame evidence.
 
@@ -30,6 +31,8 @@ def anchor_label_evidence(
         media_identities: Proven frame identities; JPEG inequality is inconclusive.
         anchor_records: Optional source-fingerprint keyed legacy sampling records.
             Each contains clip_id, timestamp_ns, current_frame_id and provenance.
+        anchor_tolerance_ns: Inclusive bound on both nominal and known frame time
+            differences: abs(t_old - t_new) <= tolerance. Zero preserves exact reuse.
 
     Returns:
         Equality, diagnostic reason and the evidence used. Missing evidence is
@@ -62,6 +65,19 @@ def anchor_label_evidence(
     before, after = record(old_source), record(new_source)
     evidence = {"old_anchor": before, "new_anchor": after}
     if before is not None and after is not None:
+        if anchor_tolerance_ns < 0:
+            raise ValueError("anchor_tolerance_ns must be nonnegative")
+        if anchor_tolerance_ns > 0:
+            delta = abs(int(before["timestamp_ns"]) - int(after["timestamp_ns"]))
+            frame_delta = abs(int(before.get("current_frame_timestamp_ns", before["timestamp_ns"]))
+                              - int(after.get("current_frame_timestamp_ns", after["timestamp_ns"])))
+            evidence.update(anchor_delta_ns=delta, current_frame_delta_ns=frame_delta,
+                            anchor_tolerance_ns=anchor_tolerance_ns)
+            # 同 clip、同稳定 anchor；已核实的物理帧时刻优先于 prepared 名义时刻。
+            matched = (before["clip_id"] == after["clip_id"]
+                       and max(delta, frame_delta) <= anchor_tolerance_ns)
+            return matched, ("anchor_within_tolerance" if matched
+                             else "anchor_time_or_frame_changed"), evidence
         fields = ("clip_id", "timestamp_ns", "current_frame_id")
         if all(before[key] == after[key] for key in fields):
             return True, "anchor_time_and_frame_equal", evidence

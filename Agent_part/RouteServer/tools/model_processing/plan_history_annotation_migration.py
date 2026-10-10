@@ -6,6 +6,8 @@ import asyncio
 import json
 from pathlib import Path
 
+from mcp_server.data.history_anchor_mapping import build_anchor_map
+
 from mcp_server.data.history_annotation_migration import (
     annotate_canonical_migration, build_migration_sources, export_canonical_migration, plan_canonical_migration,
 )
@@ -18,6 +20,13 @@ def main() -> None:
     """Read explicit old-run priority and write a new migration plan."""
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    mapping = commands.add_parser("anchor-map")
+    mapping.add_argument("--manifest", type=Path, required=True)
+    mapping.add_argument("--dataset", choices=("egowalk", "sidewalk", "foxglove"), required=True)
+    mapping.add_argument("--output", type=Path, required=True)
+    mapping.add_argument("--old-sources", type=Path, nargs="*", default=[])
+    mapping.add_argument("--overrides", type=Path)
+    mapping.add_argument("--tolerance-ns", type=int, default=100_000_000)
     sources = commands.add_parser("sources")
     sources.add_argument("--dataset-root", type=Path, required=True)
     sources.add_argument("--dataset", choices=("egowalk", "sidewalk", "foxglove"), required=True)
@@ -52,7 +61,11 @@ def main() -> None:
     vqa_export.add_argument("--modality-profile-id", required=True)
     vqa_export.add_argument("--accepted-only", action="store_true")
     args = parser.parse_args()
-    if args.command == "sources":
+    if args.command == "anchor-map":
+        report = build_anchor_map(args.manifest, args.dataset, args.output,
+                                  old_sources=args.old_sources, overrides=args.overrides,
+                                  tolerance_ns=args.tolerance_ns)
+    elif args.command == "sources":
         report = build_migration_sources(args.dataset_root, args.dataset, args.output, limit=args.limit,
                                          bev_tolerance_ns=args.bev_tolerance_ns)
     elif args.command == "plan":

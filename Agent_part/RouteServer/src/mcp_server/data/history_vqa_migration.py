@@ -39,7 +39,7 @@ def _offline_plan_eligible(plan: Mapping[str, Any]) -> bool:
     )
 
 
-def _anchor_vqa_decision(old, new, old_question, question, identities, anchor_records):
+def _anchor_vqa_decision(old, new, old_question, question, identities, anchor_records, anchor_tolerance_ns):
     """Compare the annotation target rather than the original teacher request."""
     # template id、历史角色编号和 prompt 元数据不定义监督答案；题意和方向条件仍定义答案。
     excluded = {"template_id", "evidence_refs"}
@@ -51,6 +51,7 @@ def _anchor_vqa_decision(old, new, old_question, question, identities, anchor_re
         return {**decision, "disposition": "pending", "reason": "label_question_or_direction_changed"}
     same, reason, evidence = anchor_label_evidence(
         old, new, media_identities=identities, anchor_records=anchor_records,
+        anchor_tolerance_ns=anchor_tolerance_ns,
     )
     decision["anchor_evidence"] = evidence
     if not same:
@@ -88,6 +89,7 @@ def migrate_vqa_answer(
     annotation: VQAAnnotationV2, question: VQAQuestionV2,
     *, media_identities: Mapping[str, str], reuse_policy: str = "exact_input",
     anchor_records: Mapping[str, Any] | None = None,
+    anchor_tolerance_ns: int = 0,
 ) -> tuple[VQAAnnotationV2 | None, dict[str, Any]]:
     """Reuse one answer when its actual question-scoped teacher inputs match.
 
@@ -100,6 +102,7 @@ def migrate_vqa_answer(
         reuse_policy: exact_input for historical cache comparison, or
             anchor_label_v1 for label migration across expanded history.
         anchor_records: Optional legacy timestamp/frame records keyed by source fingerprint.
+        anchor_tolerance_ns: Inclusive time alignment tolerance in nanoseconds.
 
     Returns:
         Rebound annotation for exact reuse, otherwise None; plus a disposition
@@ -126,7 +129,7 @@ def migrate_vqa_answer(
     profile = VQA_V2_TEACHER_PROFILES[question.task_id]
     if reuse_policy == "anchor_label_v1":
         decision = _anchor_vqa_decision(old_source, new_source, annotation.question, question,
-                                        media_identities, anchor_records)
+                                        media_identities, anchor_records, anchor_tolerance_ns)
         if decision["disposition"] != "reuse_anchor":
             return None, decision
         return _rebind_vqa_answer(old_source, new_source, annotation, question,
@@ -280,6 +283,7 @@ def plan_vqa_migration(config: Mapping[str, Any], output: Path, *, input_root: P
                     _, decision = migrate_vqa_answer(
                         old, source, annotation, question, media_identities=identities,
                         reuse_policy=config.get("reuse_policy", "exact_input"), anchor_records=anchor_records,
+                        anchor_tolerance_ns=config.get("anchor_tolerance_ns", 0),
                     )
                 append_jsonl_row(plan_file, {
                     "source_group_id": group, "source_fingerprint": source.source_fingerprint,
@@ -377,6 +381,7 @@ async def annotate_vqa_migration(
                         old, source, previous, question, media_identities=identities,
                         reuse_policy=report["config"].get("reuse_policy", "exact_input"),
                         anchor_records=anchor_records,
+                        anchor_tolerance_ns=report["config"].get("anchor_tolerance_ns", 0),
                     )
                     if (annotation is None or previous.annotation_id != origin["annotation_id"]
                             or decision["new_input_digest"] != plan["new_input_digest"]
