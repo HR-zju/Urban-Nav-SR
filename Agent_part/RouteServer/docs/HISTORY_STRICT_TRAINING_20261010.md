@@ -32,6 +32,55 @@ experiment_record_version: 1
 
 ## 记录实验结果
 
+后续全量迁移及自身任务覆盖核查见 [全量迁移记录](HISTORY_TIME_ONLY_FULL_MIGRATION_20261010.md)。
+下列单 clip 结果保留历史执行范围；当前已完成全量候选关联，LVLM 校准尚未执行。
+
+### 28 observation 完整单 clip 时间迁移
+
+用户确认旧审核规则仅作为历史诊断，本次只做同 clip、≤100ms 时间关联。
+入口新增 `candidates --packaged-observations`，读取原始 observation 清单，避免轨迹 sidecar
+筛选提前移除语义迁移目标。没有变更已有正式训练 gate；本次不调用该 gate 或 teacher。
+
+- 输入是该 clip 原始 28 个 observation；补回 001120、001160，原 split 与媒体路径保留。
+- 旧来源只取本地 main reasoning、VQA 汇总文件和 admission_v2 历史审计，service/rejected
+  文件及临时快照不混入。汇总记录内的拒绝原始回答仍完整保留。
+- 28/28 新 observation 匹配：28 份 reasoning、85 条 VQA、20 份历史审计，共 133 份关联。
+- 38 份未匹配旧记录位于 000000、000040、000080，均不属于新 observation 清单；
+  不将这些片头旧记录计为新样本覆盖缺口。
+- 已验证每个原始 payload 未变、所有匹配差 ≤100ms、页面媒体存在；没有正式训练行导出。
+- 本地 baseline 的最新性尚未确认，显式 `latest_revision_verified=false`。
+  这是来源受限的单 clip 操作，不宣称完成最新服务器修订结果迁移。
+- 产物根下 `sidewalk-clip-28-time-only/`，入口 `migrate_clip_28.py`，中文 review 显示包括
+  rejected 在内的原始回答。结束后停止，等待用户讨论下一步。
+
+### 2026-10-10 后续决定：先迁移全部候选，再校准
+
+用户将流程明确为“时间匹配迁移候选 → LVLM 检查 → 局部修正/重标 → 正式导出”，
+本轮只授权第一步、一个 clip。新入口 `candidates` 与之前的直接复用计划分开：
+同数据集、同 clip 最近时刻差 ≤100ms 即保留候选，方向、prompt 和旧验收状态继续原样保存。
+同距匹配保留歧义，相同完整记录聚合 origins，不同答案版本分别保留并输出字段差异。
+
+- 代码基线 `b6ba1c2`，本轮实现尚未提交；CPU 元数据处理，模型/训练参数 N/A。
+- 使用同一 clip 的 26 个新 anchor；新媒体引用及原有 split 未修改。
+- 扫描本地 `urbannav_annotation_results_20260820` 的 SideWalk main/extra 和 VQA
+  annotation/service/rejected 文件，以及此前单 clip 快照，选择该 clip 的记录。
+- 440 次原始记录出现归并为 171 份不同完整记录；匹配 129 份：26 份 reasoning、85 条 VQA、
+  18 份历史 reconciliation audit。26 个新 anchor 全部有候选。
+- reasoning 保留 122 个非空 grounding section，以及 18 个 accepted Decision 原始回答；
+  其余 8 个旧 Decision 为 skipped，原状态保留。旧 direction 合同不阻止候选迁移。
+- 42 份记录属于 5 个超出时间容差的旧 anchor：000000、000040、000080、001120、001160，
+  保存至 unmatched_old.jsonl；没有强行匹配，也没有删除。
+- 同字段不同答案冲突为 0，重复记录的全部来源均保留。
+- main 的 `action_reconciliation_audits.jsonl` 开头为零字节，明确记录为不可读取；
+  可读的 admission_v2 audit 已收集。本次不声称覆盖服务器全部历史版本。
+- 产物根下 `sidewalk-clip-candidates-review/` 保存中文 `review.html`、候选、未匹配记录、
+  input_inventory、visualization manifest/index 和复现输入。
+- 复现准备脚本：产物根的 `prepare_clip_candidates.py`；展示脚本 `render_clip_candidates.py`。
+- 原 frame_times.npy 提供 prepared anchor 时间；已验证的具体 source 指纹采用实际当前帧时间，
+  000110 对应偏移 48.151552ms。其余数据仍只声明 prepared 时间对齐。
+- 新增一个 focused test 覆盖边界、不同旧 ID 的时间匹配、跨 clip 隔离、重复来源、冲突及原文保留。
+- 本轮 teacher_calls=0、formal_training_rows=0；上一轮 44 行文件保持原样，本轮不引用为最终监督。
+
 ### 2026-10-10 单 clip：100 ms 原采样时刻映射
 
 用户批准同 clip、同稳定 anchor 下 `abs(t_old - t_new) <= 100_000_000 ns`，
@@ -115,10 +164,11 @@ ms-swift 的 stage_ii_edge.toml 与 CityWalker 的 pl_modules/citywalker_module.
 | 2026-10-10 | 严格复用并生成实际训练集 | 采用严格复用 | 只接纳已证明等价的旧答案；其余保持待补标，先导出可用子集 | 全量旧记录读取 |
 | 2026-10-10 后续 | 扩展历史应优先复用同 anchor 标签 | 用 anchor_label_v1 替代新任务中的 exact-input 判据 | 当前标签保留原文；时间、方向或证据问题进入 pending | legacy 时间映射和已知帧偏移 |
 | 2026-10-10 单 clip | 100ms 偏差可接受，先检查一个 clip | 同稳定 anchor 使用 inclusive 100ms 时间容差 | 先交付 26 anchor 的标签与 44 行训练子集 | 等待人工审核，服务器握手超时 |
+| 2026-10-10 候选迁移 | 先迁移全部旧标签，再检查校准 | 本轮仅按同 clip 最近时间 ≤100ms 迁移 | 26 新 anchor 关联 129 份含审计的候选记录 | 用户审核后才进入 LVLM 校准；远端版本尚未扫描 |
 
 ## 接下来要做的实验
 
 | 优先级 | 下一实验 | 假设 | 唯一主要变量 | 所需证据 | 通过/停止条件 | 依赖或授权 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 当前 | 用户审核单 clip | 扩窗后当前时刻标签仍适用 | 100ms 时间对齐 | review.html、标签原文与 lineage | 用户指出矛盾时修正对应规则 | 等待用户审核；暂停扩大范围 |
-| 后续 | 全量旧 VQA 迁移 | 相同标签目标可跨历史窗口复用 | 数据覆盖 | 逐题语义合同与来源记录 | 证据不足进入 pending | 单 clip 审核后确认；teacher 保持关闭 |
+| 当前 | 用户审核单 clip 候选关联 | 原文和时间关联完整保留 | 100ms 时间匹配 | candidates review、旧原文与来源 | 时间关联错误时修正映射 | 等待用户审核；暂停扩大范围 |
+| 后续 | 新输入下的 LVLM 校准 | 多数候选仍适用于扩窗输入 | 校准后的标签 | 旧答案、检查结论、最终答案对照 | 证据不足保留待确认 | 本轮只执行第一步，teacher 保持关闭 |

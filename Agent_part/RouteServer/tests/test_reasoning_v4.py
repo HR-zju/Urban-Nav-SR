@@ -1540,6 +1540,43 @@ def test_migration_reuses_scene_by_anchor_without_teacher_input_equality() -> No
     assert unresolved["reason"] == "anchor_alignment_unresolved"
 
 
+def test_history_candidates_preserve_versions_and_match_time(tmp_path: Path) -> None:
+    from mcp_server.data.history_annotation_candidates import migrate_annotation_candidates
+    from mcp_server.data.io.jsonl import iter_jsonl, write_jsonl_atomic
+
+    raw = _source().model_dump(mode="json", exclude={"source_fingerprint"})
+    obs = raw['observation']
+    for evidence in obs['evidence_catalog']:
+        if evidence['ref'] == 'fpv.current':
+            evidence['attributes']['history_observation'] = {'source_ns': [1_000_000_000]}
+    raw['source_fingerprint'] = reasoning_source_fingerprint_v4(raw)
+    write_jsonl_atomic(tmp_path / 'new.jsonl', [raw])
+    clip = obs['split_group_id'].removeprefix(obs['dataset_source'] + ':')
+    clocks = [dict(source_group_id=key, dataset=obs['dataset_source'], clip_id=group,
+                   timestamp_ns=time, provenance='fixture') for key, group, time in [
+                       ('different-old-id', clip, 900_000_000),
+                       ('too-far', clip, 899_999_999), ('other-clip', 'other', 1_000_000_000)]]
+    records = []
+    for i, (key, label) in enumerate([('different-old-id', 'left'), ('different-old-id', 'right'),
+                                    ('different-old-id', 'left'), ('too-far', 'left'), ('other-clip', 'left')]):
+        records.append(dict(kind='reasoning', origin={'line': i + 1}, annotation={
+            'source_group_id': key, 'record_status': 'rejected',
+            'grounding_outputs': {'scene_grounding': {'old_direction_label': label}},
+        }))
+    write_jsonl_atomic(tmp_path / 'old.jsonl', records)
+    write_jsonl_atomic(tmp_path / 'clocks.jsonl', clocks)
+    report = migrate_annotation_candidates(tmp_path / 'new.jsonl', tmp_path / 'old.jsonl',
+                                           tmp_path / 'clocks.jsonl', tmp_path / 'result')
+    candidates = list(iter_jsonl(tmp_path / 'result/candidates.jsonl'))
+    assert report['candidate_rows'] == 2
+    assert report['unmatched_versions'] == 2
+    assert report['conflicting_fields'] == 1
+    assert len(candidates[0]['origins']) == 2
+    assert candidates[0]['annotation'] == records[0]['annotation']
+    assert all(row['status'] == 'pending_calibration' and not row['training_eligible'] for row in candidates)
+    assert all(abs(row['time_delta_ns']) == 100_000_000 for row in candidates)
+
+
 def test_teacher_binds_media_root_without_mutating_source(tmp_path: Path, monkeypatch) -> None:
     source = _source()
     before = source.model_dump(mode="json")

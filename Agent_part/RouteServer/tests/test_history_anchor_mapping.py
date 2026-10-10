@@ -42,3 +42,26 @@ def test_map_uses_original_clock_and_preserves_split(tmp_path):
     assert result["old_timestamp_ns"] == 1_200_000_000
     assert result["delta_ns"] == 50_000_000
     assert result["split"] == "val"
+
+
+def test_candidates_keep_observation_without_trajectory_sidecar(tmp_path):
+    from mcp_server.data.history_annotation_candidates import migrate_annotation_candidates
+    from mcp_server.data.io.jsonl import write_jsonl_atomic, iter_jsonl
+
+    write_jsonl_atomic(tmp_path / 'observations.jsonl', [{
+        'source_parent_id': 'sidewalk:new', 'split_group_id': 'sidewalk:clip',
+        'observation': {'source_ns': [1000000000]},
+    }])
+    original = {'source_group_id': 'sidewalk:old', 'grounding_outputs': {},
+                'stage_records': {'NavigationContextGrounding': {
+                    'status': 'rejected', 'raw_answer': 'original answer', 'errors': ['old_gate']}},
+                'formal_training_eligible': False}
+    write_jsonl_atomic(tmp_path / 'old.jsonl', [dict(kind='reasoning', annotation=original, origin={'line': 1})])
+    write_jsonl_atomic(tmp_path / 'clocks.jsonl', [dict(source_group_id='sidewalk:old',
+        dataset='sidewalk', clip_id='clip', timestamp_ns=1000000000, provenance='fixture')])
+    report = migrate_annotation_candidates(tmp_path / 'observations.jsonl', tmp_path / 'old.jsonl',
+        tmp_path / 'clocks.jsonl', tmp_path / 'output', packaged_observations=True)
+    candidate = next(iter_jsonl(tmp_path / 'output/candidates.jsonl'))
+    assert report['matched_new_anchors'] == 1
+    assert candidate['annotation'] == original
+    assert candidate['new_anchor']['observation_record_index'] == 0

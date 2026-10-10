@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from mcp_server.data.history_anchor_mapping import build_anchor_map
+from mcp_server.data.history_annotation_candidates import migrate_annotation_candidates
 
 from mcp_server.data.history_annotation_migration import (
     annotate_canonical_migration, build_migration_sources, export_canonical_migration, plan_canonical_migration,
@@ -20,6 +21,13 @@ def main() -> None:
     """Read explicit old-run priority and write a new migration plan."""
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    candidates = commands.add_parser("candidates")
+    candidates.add_argument("--new-sources", type=Path, required=True)
+    candidates.add_argument("--old-records", type=Path, required=True)
+    candidates.add_argument("--old-anchors", type=Path, required=True)
+    candidates.add_argument("--output", type=Path, required=True)
+    candidates.add_argument("--tolerance-ns", type=int, default=100_000_000)
+    candidates.add_argument("--packaged-observations", action="store_true")
     mapping = commands.add_parser("anchor-map")
     mapping.add_argument("--manifest", type=Path, required=True)
     mapping.add_argument("--dataset", choices=("egowalk", "sidewalk", "foxglove"), required=True)
@@ -61,7 +69,11 @@ def main() -> None:
     vqa_export.add_argument("--modality-profile-id", required=True)
     vqa_export.add_argument("--accepted-only", action="store_true")
     args = parser.parse_args()
-    if args.command == "anchor-map":
+    if args.command == "candidates":
+        report = migrate_annotation_candidates(args.new_sources, args.old_records, args.old_anchors,
+                                              args.output, tolerance_ns=args.tolerance_ns,
+                                              packaged_observations=args.packaged_observations)
+    elif args.command == "anchor-map":
         report = build_anchor_map(args.manifest, args.dataset, args.output,
                                   old_sources=args.old_sources, overrides=args.overrides,
                                   tolerance_ns=args.tolerance_ns)
