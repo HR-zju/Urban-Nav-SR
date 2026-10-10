@@ -87,6 +87,9 @@ def build_vqa_source_v2(
                 or paths != observation["images"]
                 or observation["image_roles"] != history_image_roles(include_bev=bev is not None)):
             raise ValueError("History VQA source must match its visible parent, images and roles")
+        # Reasoning 的兼容标志默认关闭；VQA 已验证九个独立、有序的历史帧后启用时序题。
+        # 此处只声明 prepared observation 的时序证据，不声明原始传感器同步。
+        observation["temporal_evidence_eligible"] = True
         # 现有 evidence attributes 属于可见输入并参与 fingerprint；旧 annotation 无法冒充新时窗标注。
         current["attributes"].update({
             "history_observation": {key: history_observation[key] for key in (

@@ -58,6 +58,39 @@ def iter_jsonl(path: str | Path) -> Iterator[dict[str, Any]]:
             yield value
 
 
+def iter_jsonl_with_offsets(path: str | Path) -> Iterator[tuple[int, dict[str, Any]]]:
+    """Read JSONL objects together with seekable byte offsets.
+
+    Args:
+        path: Immutable UTF-8 JSONL input.
+
+    Yields:
+        Byte offset and parsed object for each nonempty record. Offsets can
+        be used with a binary file handle, including for non-ASCII content.
+
+    Raises:
+        ValueError: If a nonempty line is invalid JSON or not an object.
+    """
+    input_path = Path(path).expanduser()
+    with input_path.open("rb") as handle:
+        line_number = 0
+        while True:
+            offset = handle.tell()
+            line = handle.readline()
+            if not line:
+                break
+            line_number += 1
+            if not line.strip():
+                continue
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"Invalid JSONL at {input_path}:{line_number}: {exc.msg}") from exc
+            if not isinstance(value, dict):
+                raise ValueError(f"JSONL row at {input_path}:{line_number} is not an object")
+            yield offset, value
+
+
 def write_jsonl_atomic(path: str | Path, rows: Iterable[dict[str, Any]]) -> int:
     """Atomically replace a JSONL file with serialized rows.
 
@@ -110,4 +143,4 @@ def append_jsonl_row(handle: Any, row: dict[str, Any]) -> None:
     handle.flush()
 
 
-__all__ = ["append_jsonl_row", "file_sha256", "iter_jsonl", "write_jsonl_atomic"]
+__all__ = ["append_jsonl_row", "file_sha256", "iter_jsonl", "iter_jsonl_with_offsets", "write_jsonl_atomic"]

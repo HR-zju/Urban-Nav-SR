@@ -4,6 +4,7 @@ import asyncio
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import ValidationError
@@ -101,6 +102,7 @@ from mcp_server.data.reasoning_source import ReasoningSourceBuildConfig
 from mcp_server.teacher.reasoning_v2_teacher import TeacherGeneration
 from mcp_server.teacher.reasoning_v4_batch import (
     ReasoningV4BatchConfig,
+    VisionReasoningV4TeacherBackend,
     annotate_reasoning_source_v4,
     repair_reasoning_annotation_v4,
 )
@@ -1379,6 +1381,7 @@ class _FakeBackend:
         self.image_details[section] = image_detail
         self.image_roles[section] = tuple(observation.image_roles)
         answers = {
+            "TaskGrounding": _groundings().task_grounding.model_dump(mode="json"),
             "SceneGrounding": {
                 "scene_type": "urban_sidewalk",
                 "walkable_support": "paved_sidewalk",
@@ -1417,6 +1420,245 @@ class _FakeBackend:
             model="fake-vlm",
             telemetry={"provider": "fake", "model": "fake-vlm"},
         )
+
+
+def test_migration_plan_executes_reuse_and_resumes_completed_source(tmp_path: Path) -> None:
+    from mcp_server.data.history_annotation_migration import (
+        annotate_canonical_migration, export_canonical_migration, plan_canonical_migration,
+    )
+
+    source = _source()
+    config = ReasoningV4BatchConfig(max_retries=0)
+    original = asyncio.run(annotate_reasoning_source_v4(
+        source, backend=_FakeBackend(), config=config,
+    ))
+    (tmp_path / "sources.jsonl").write_text(json.dumps(source.model_dump(mode="json")) + "\n")
+    earlier = original.model_dump(mode="json")
+    earlier["metadata"]["fixture_note"] = "较早的中文记录"
+    (tmp_path / "old.jsonl").write_text(
+        "\n" + json.dumps(earlier, ensure_ascii=False) + "\n\n" + original.model_dump_json() + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "identities.jsonl").write_text(json.dumps({
+        "path": "frame.jpg", "identity": "fixture:current-frame",
+    }) + "\n")
+    run_root = tmp_path / "run"
+    plan_canonical_migration({
+        "new_sources": "sources.jsonl", "media_identity_jsonl": "identities.jsonl",
+        "section_image_policy_id": config.section_image_policy_id,
+        "direction_registry_version": config.direction_registry_version,
+        "old_runs": [{"sources": "sources.jsonl", "annotations": "old.jsonl"}],
+    }, run_root, input_root=tmp_path)
+
+    scene_plan = json.loads((run_root / "migration_plan.jsonl").read_text())["sections"]["SceneGrounding"]
+    assert scene_plan["changed_inputs"] == []
+    origin = scene_plan["origin"]
+    assert origin["annotation_record_index"] == 1
+    with (tmp_path / origin["annotations"]).open("rb") as handle:
+        handle.seek(origin["annotation_byte_offset"])
+        assert json.loads(handle.readline()) == original.model_dump(mode="json")
+    backend = _FakeBackend()
+    report = asyncio.run(annotate_canonical_migration(
+        run_root, input_root=tmp_path, backend=backend,
+    ))
+    assert backend.requested_sections == ["Decision"]
+    assert report["annotation_counts"]["reused_groundings"] == 4
+    backend.requested_sections.clear()
+    resumed = asyncio.run(annotate_canonical_migration(
+        run_root, input_root=tmp_path, backend=backend,
+    ))
+    assert backend.requested_sections == []
+    assert resumed["annotation_counts"]["already_completed"] == 1
+    assert len((run_root / "annotations.jsonl").read_text().splitlines()) == 1
+    exported = export_canonical_migration(run_root, modality_profile_id="fpv_instruction_v1")
+    assert exported["stage_i_counts"]["accepted"] == 1
+    assert exported["source_jsonl"] == "sources.jsonl"
+    row = json.loads((run_root / "views/stage_i_full_cot.jsonl").read_text())
+    assert str(tmp_path) not in json.dumps(row)
+
+
+def test_migration_reuses_task_taxonomy_when_only_images_change() -> None:
+    from mcp_server.data.history_annotation_migration import decide_section_reuse
+
+    payload = _source().model_dump(mode="json", exclude={"source_fingerprint"})
+    payload["observation"]["instruction"] = "Follow the route past the blue bench near the junction."
+    payload["source_fingerprint"] = reasoning_source_fingerprint_v4(payload)
+    old = ReasoningSourceV4.model_validate(payload)
+    config = ReasoningV4BatchConfig(max_retries=0)
+    original = asyncio.run(annotate_reasoning_source_v4(old, backend=_FakeBackend(), config=config))
+    payload["observation"]["images"] = ["new/current.jpg"]
+    payload.pop("source_fingerprint")
+    payload["source_fingerprint"] = reasoning_source_fingerprint_v4(payload)
+    new = ReasoningSourceV4.model_validate(payload)
+    decision = decide_section_reuse(
+        old, new, original, "TaskGrounding", image_policy_id=config.section_image_policy_id,
+        direction_registry_version=config.direction_registry_version, media_identities={},
+    )
+    assert decision["disposition"] == "reuse_instruction"
+    backend = _FakeBackend()
+    migrated = asyncio.run(annotate_reasoning_source_v4(
+        new, backend=backend, config=config, reused_groundings={"TaskGrounding": original},
+    ))
+    assert "TaskGrounding" not in backend.requested_sections
+    assert migrated.grounding_outputs.task_grounding == original.grounding_outputs.task_grounding
+    assert migrated.stage_records["TaskGrounding"] == original.stage_records["TaskGrounding"]
+    payload["observation"]["instruction"] = "Find the blue bench."
+    payload.pop("source_fingerprint")
+    payload["source_fingerprint"] = reasoning_source_fingerprint_v4(payload)
+    changed = decide_section_reuse(
+        old, ReasoningSourceV4.model_validate(payload), original, "TaskGrounding",
+        image_policy_id=config.section_image_policy_id,
+        direction_registry_version=config.direction_registry_version, media_identities={},
+    )
+    assert changed["reason"] == "task_instruction_changed"
+
+
+def test_migration_reuses_scene_by_anchor_without_teacher_input_equality() -> None:
+    from mcp_server.data.history_annotation_migration import decide_section_reuse
+
+    old = _source()
+    config = ReasoningV4BatchConfig(max_retries=0)
+    original = asyncio.run(annotate_reasoning_source_v4(old, backend=_FakeBackend(), config=config))
+    payload = old.model_dump(mode="json", exclude={"source_fingerprint"})
+    payload["observation"]["images"] = ["new/current.jpg"]
+    payload["source_fingerprint"] = reasoning_source_fingerprint_v4(payload)
+    new = ReasoningSourceV4.model_validate(payload)
+    record = original.stage_records["SceneGrounding"]
+    original = original.model_copy(update={"stage_records": {
+        **original.stage_records, "SceneGrounding": record.model_copy(update={"prompt_policy_digest": "0" * 64}),
+    }})
+    sampling = {source.source_fingerprint: {
+        "clip_id": "fixture_clip", "timestamp_ns": 1000000000,
+        "current_frame_id": "video_ordinal:10", "provenance": "fixture_sampling_map",
+    } for source in (old, new)}
+    args = dict(image_policy_id=config.section_image_policy_id,
+                direction_registry_version=config.direction_registry_version,
+                media_identities={}, reuse_policy="anchor_label_v1")
+    decision = decide_section_reuse(old, new, original, "SceneGrounding", anchor_records=sampling, **args)
+    assert decision["disposition"] == "reuse_anchor"
+    unresolved = decide_section_reuse(old, new, original, "SceneGrounding", **args)
+    assert unresolved["reason"] == "anchor_alignment_unresolved"
+
+
+def test_teacher_binds_media_root_without_mutating_source(tmp_path: Path, monkeypatch) -> None:
+    source = _source()
+    before = source.model_dump(mode="json")
+    generate = AsyncMock(return_value=TeacherGeneration(
+        answer="{}", provider="fake", model="fake-vlm", telemetry={},
+    ))
+    monkeypatch.setattr(
+        "mcp_server.teacher.reasoning_v4_batch.VisionReasoningTeacherBackend.generate",
+        generate,
+    )
+    backend = VisionReasoningV4TeacherBackend(media_root=tmp_path)
+    asyncio.run(backend.generate(
+        source.observation, question="portable prompt", system_prompt="policy", image_detail="low",
+    ))
+
+    assert generate.call_args.args[0].images == [str(tmp_path / "frame.jpg")]
+    assert generate.call_args.kwargs["question"] == "portable prompt"
+    assert source.model_dump(mode="json") == before
+
+
+def test_migration_resumes_groundings_after_decision_failure(tmp_path: Path) -> None:
+    from mcp_server.data.history_annotation_migration import (
+        annotate_canonical_migration, plan_canonical_migration,
+    )
+
+    class DecisionFailure(_FakeBackend):
+        async def generate(self, observation, **kwargs):
+            payload, _ = json.JSONDecoder().raw_decode(kwargs["question"].split("\n\n", 1)[1])
+            if payload["requested_section"] == "Decision":
+                raise RuntimeError("fixture decision failure")
+            if payload["requested_section"] == "TaskGrounding":
+                return TeacherGeneration(
+                    answer=_groundings().task_grounding.model_dump_json(),
+                    provider="fake", model="fake-vlm", telemetry={},
+                )
+            return await super().generate(observation, **kwargs)
+
+    payload = _source().model_dump(mode="json")
+    payload["observation"]["instruction"] = "Follow the route past the blue bench near the junction."
+    payload.pop("source_fingerprint")
+    payload["source_fingerprint"] = reasoning_source_fingerprint_v4(payload)
+    source = ReasoningSourceV4.model_validate(payload)
+    config = ReasoningV4BatchConfig()
+    (tmp_path / "sources.jsonl").write_text(json.dumps(source.model_dump(mode="json")) + "\n")
+    (tmp_path / "identities.jsonl").write_text("")
+    run_root = tmp_path / "run"
+    plan_canonical_migration({
+        "new_sources": "sources.jsonl", "media_identity_jsonl": "identities.jsonl",
+        "section_image_policy_id": config.section_image_policy_id,
+        "direction_registry_version": config.direction_registry_version, "old_runs": [],
+    }, run_root, input_root=tmp_path)
+    with pytest.raises(RuntimeError, match="fixture decision failure"):
+        asyncio.run(annotate_canonical_migration(
+            run_root, input_root=tmp_path, backend=DecisionFailure(),
+        ))
+    assert len((run_root / "section_progress.jsonl").read_text().splitlines()) == 6
+    assert json.loads((run_root / "migration_report.json").read_text())["status"] == "annotation_failed"
+
+    backend = _FakeBackend()
+    resumed = asyncio.run(annotate_canonical_migration(
+        run_root, input_root=tmp_path, backend=backend,
+    ))
+    assert backend.requested_sections == ["Decision"]
+    assert resumed["annotation_counts"]["resumed_groundings"] == 5
+    result = json.loads((run_root / "annotations.jsonl").read_text().splitlines()[-1])
+    assert result["metadata"]["task_canonicalization_source"] == "lvlm_teacher"
+
+
+def test_migration_resumes_decision_after_composition_interruption(tmp_path: Path, monkeypatch) -> None:
+    from mcp_server.data.history_annotation_migration import (
+        annotate_canonical_migration, plan_canonical_migration,
+    )
+
+    def interrupted(*args):
+        raise RuntimeError("fixture composition interruption")
+
+    config = ReasoningV4BatchConfig()
+    (tmp_path / "sources.jsonl").write_text(_source().model_dump_json() + "\n")
+    (tmp_path / "identities.jsonl").write_text("")
+    run_root = tmp_path / "run"
+    plan_canonical_migration({
+        "new_sources": "sources.jsonl", "media_identity_jsonl": "identities.jsonl",
+        "section_image_policy_id": config.section_image_policy_id,
+        "direction_registry_version": config.direction_registry_version, "old_runs": [],
+    }, run_root, input_root=tmp_path)
+    with monkeypatch.context() as patch:
+        patch.setattr("mcp_server.teacher.reasoning_v4_batch.compose_reasoning_target_v4", interrupted)
+        with pytest.raises(RuntimeError, match="fixture composition interruption"):
+            asyncio.run(annotate_canonical_migration(run_root, input_root=tmp_path, backend=_FakeBackend()))
+    backend = _FakeBackend()
+    asyncio.run(annotate_canonical_migration(run_root, input_root=tmp_path, backend=backend))
+    assert backend.requested_sections == []
+    result = json.loads((run_root / "annotations.jsonl").read_text())
+    assert result["metadata"]["reused_decision_source_fingerprint"] == _source().source_fingerprint
+
+
+def test_reused_grounding_skips_only_selected_teacher_call() -> None:
+    source = _source()
+    config = ReasoningV4BatchConfig(max_retries=0)
+    original = asyncio.run(annotate_reasoning_source_v4(
+        source, backend=_FakeBackend(), config=config,
+    ))
+    backend = _FakeBackend()
+    migrated = asyncio.run(annotate_reasoning_source_v4(
+        source, backend=backend, config=config,
+        reused_groundings={"SceneGrounding": original},
+    ))
+
+    assert set(backend.requested_sections) == {
+        "LocalTraversability", "NavigationContextGrounding",
+        "InteractionConstraintGrounding", "Decision",
+    }
+    assert migrated.stage_records["SceneGrounding"] == original.stage_records["SceneGrounding"]
+    assert migrated.grounding_outputs == original.grounding_outputs
+    assert migrated.candidate_target == original.candidate_target
+    assert migrated.metadata["reused_groundings"]["SceneGrounding"] == {
+        "source_fingerprint": original.source_fingerprint,
+        "teacher_provider": "fake", "teacher_model": "fake-vlm",
+    }
 
 
 def test_known_task_registry_skips_task_teacher_call() -> None:

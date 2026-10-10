@@ -79,14 +79,17 @@ class VQATeacherBackendV2(Protocol):
 class VisionVQATeacherBackendV2:
     """Adapt the existing OpenAI-compatible vision backend."""
 
-    def __init__(self, *, api_key: str | None = None):
+    def __init__(self, *, api_key: str | None = None, media_root: Path | None = None):
         """Initialize the backend without serializing its key.
 
         Args:
             api_key: Optional in-memory per-worker key.
+            media_root: Runtime root for relative local media paths. Omit for
+                the existing absolute-path/URL interface.
         """
 
         self._delegate = VisionReasoningTeacherBackend(api_key=api_key)
+        self._media_root = media_root
 
     async def generate(
         self,
@@ -108,8 +111,12 @@ class VisionVQATeacherBackendV2:
             Raw generation and sanitized telemetry.
         """
 
+        # 只在 provider 读取边界拼接路径，持久 source 与 question 保持可迁移。
+        images = source.observation.images
+        if self._media_root is not None:
+            images = [str(self._media_root / path) for path in images]
         adapter = _VisibleVQASource(
-            images=source.observation.images,
+            images=images,
             image_roles=source.observation.image_roles,
         )
         return await self._delegate.generate(

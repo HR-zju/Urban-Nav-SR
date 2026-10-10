@@ -644,6 +644,132 @@ class _EvidenceCaptureBackend:
         )
 
 
+def test_history_migration_reuses_current_question_by_frame_identity(tmp_path: Path) -> None:
+    from mcp_server.data.history_vqa_migration import annotate_vqa_migration, export_vqa_migration, migrate_vqa_answer, plan_vqa_migration
+
+    old = _source()
+    payload = _source(temporal=True).model_dump(mode="json", exclude={"source_fingerprint"})
+    payload["observation"]["images"][-1] = "packages/current.jpg"
+    payload["source_fingerprint"] = vqa_source_fingerprint_v2(payload)
+    new = VQASourceV2.model_validate(payload)
+    capabilities = load_vqa_capabilities_v2()
+    old_question = next(q for q in build_vqa_questions_v2(old, capabilities).questions
+                        if q.task_id == "b1_direction_affordance")
+    new_question = next(q for q in build_vqa_questions_v2(new, capabilities).questions
+                        if q.task_id == "b1_direction_affordance")
+    original, errors = asyncio.run(annotate_vqa_question_v2(old, old_question, backend=_FakeBackend()))
+    assert original is not None and not errors
+    rebound, decision = migrate_vqa_answer(
+        old, new, original, new_question,
+        media_identities={"current.jpg": "clip:frame-10", "packages/current.jpg": "clip:frame-10"},
+    )
+    assert decision["disposition"] == "reuse_exact"
+    assert rebound is not None and rebound.answer == original.answer
+    assert rebound.source_fingerprint == new.source_fingerprint
+    assert rebound.annotation_id != original.annotation_id
+    assert rebound.metadata["migrated_from_annotation_id"] == original.annotation_id
+    changed, decision = migrate_vqa_answer(
+        old, new, original, new_question,
+        media_identities={"current.jpg": "clip:frame-10", "packages/current.jpg": "clip:frame-11"},
+    )
+    assert changed is None and decision["reason"] == "question_input_changed"
+
+    # 扩窗与 producer 提示词版本变化不改变当前时刻的同一道标签题。
+    sampling = {source.source_fingerprint: {
+        "clip_id": "fixture_clip", "timestamp_ns": 1000000000,
+        "current_frame_id": "video_ordinal:10", "provenance": "fixture_sampling_map",
+    } for source in (old, new)}
+    prior_policy = original.model_copy(update={"prompt_policy_digest": "0" * 64})
+    retained, aligned = migrate_vqa_answer(
+        old, new, prior_policy, new_question, media_identities={},
+        reuse_policy="anchor_label_v1", anchor_records=sampling,
+    )
+    assert aligned["disposition"] == "reuse_anchor"
+    assert retained.answer == original.answer
+    assert retained.prompt_policy_digest == prior_policy.prompt_policy_digest
+    sampling[new.source_fingerprint] = {**sampling[new.source_fingerprint], "timestamp_ns": 2000000000}
+    retained, aligned = migrate_vqa_answer(
+        old, new, original, new_question, media_identities={},
+        reuse_policy="anchor_label_v1", anchor_records=sampling,
+    )
+    assert retained is None and aligned["reason"] == "anchor_time_or_frame_changed"
+    assert aligned["disposition"] == "pending"
+
+    reasoning = new.model_dump(mode="json", exclude={"source_fingerprint", "interfaces"})
+    reasoning.update(schema_version=REASONING_SOURCE_V4_SCHEMA_VERSION,
+                     trajectory_ego_t=None, trajectory_policy=None, action_mask=None)
+    reasoning["source_fingerprint"] = reasoning_source_fingerprint_v4(reasoning)
+    write_jsonl_atomic(tmp_path / "new_reasoning.jsonl", [reasoning])
+    write_jsonl_atomic(tmp_path / "old_sources.jsonl", [old.model_dump(mode="json")])
+    write_jsonl_atomic(tmp_path / "old_answers.jsonl", [original.model_dump(mode="json")])
+    write_jsonl_atomic(tmp_path / "media.jsonl", [
+        {"path": path, "identity": "clip:frame-10"} for path in ["current.jpg", "packages/current.jpg"]
+    ])
+    report = plan_vqa_migration({
+        "new_sources": "new_reasoning.jsonl", "media_identity_jsonl": "media.jsonl",
+        "old_runs": [{"sources": "old_sources.jsonl", "annotations": "old_answers.jsonl"}],
+    }, tmp_path / "plan", input_root=tmp_path)
+    plans = [json.loads(line) for line in (tmp_path / "plan/migration_plan.jsonl").read_text().splitlines()]
+    assert report["counts"]["sources"] == 1
+    reused = [row for row in plans if row["disposition"] == "reuse_exact"]
+    assert len(reused) == 1
+    assert reused[0]["origin"]["annotation_id"] == original.annotation_id
+    assert any(row["disposition"] == "rebuild_label" for row in plans)
+    offline = asyncio.run(annotate_vqa_migration(
+        tmp_path / "plan", input_root=tmp_path, backend=None, offline_only=True,
+    ))
+    assert offline["annotation_counts"]["reuse_exact"] == 1
+    assert offline["annotation_counts"]["pending"] > 0
+    subset = export_vqa_migration(
+        tmp_path / "plan", modality_profile_id="fpv_temporal_instruction_v1", accepted_only=True,
+    )
+    assert subset["export_complete"] and not subset["full_plan_complete"]
+    assert subset["counts"]["provenance:reuse_exact"] == 1
+    assert subset["counts"]["missing"] == offline["annotation_counts"]["pending"]
+    cases = json.loads((Path(__file__).resolve().parents[1] /
+                        "schemas/vqa_v2/vqa_v2_golden_valid.json").read_text())["cases"]
+    answers = {case["task_id"]: case["canonical_assistant_text"] for case in cases}
+    annotated = asyncio.run(annotate_vqa_migration(
+        tmp_path / "plan", input_root=tmp_path, backend=_GoldenFixtureBackend(answers),
+    ))
+    assert annotated["annotation_counts"]["already_completed"] == subset["counts"]["accepted"]
+    resumed = asyncio.run(annotate_vqa_migration(
+        tmp_path / "plan", input_root=tmp_path, backend=_GoldenFixtureBackend({}),
+    ))
+    assert resumed["annotation_counts"]["already_completed"] == len(plans)
+    exported = export_vqa_migration(tmp_path / "plan", modality_profile_id="fpv_temporal_instruction_v1")
+    assert exported["export_complete"]
+    assert exported["counts"]["accepted"] == len(plans)
+    rows = [json.loads(line) for line in (tmp_path / "plan/views/stage_i_vqa.jsonl").read_text().splitlines()]
+    assert all(not Path(image).is_absolute() for row in rows for image in row["images"])
+    # 同一计划曾经调用过 teacher 时，离线导出仍只接纳严格复用与确定性方向。
+    asyncio.run(annotate_vqa_migration(tmp_path / "plan", input_root=tmp_path, backend=None, offline_only=True))
+    offline_export = export_vqa_migration(
+        tmp_path / "plan", modality_profile_id="fpv_temporal_instruction_v1", accepted_only=True,
+    )
+    assert offline_export["counts"]["accepted"] == subset["counts"]["accepted"]
+    asyncio.run(annotate_vqa_migration(tmp_path / "plan", input_root=tmp_path, backend=_GoldenFixtureBackend({})))
+    answers_path = tmp_path / "plan/annotations.jsonl"
+    answers_path.write_text("\n".join(answers_path.read_text().splitlines()[:-1]) + "\n")
+    with pytest.raises(RuntimeError, match="remaining annotations: 1"):
+        export_vqa_migration(tmp_path / "plan", modality_profile_id="fpv_temporal_instruction_v1")
+    assert not json.loads((tmp_path / "plan/views/export_report.json").read_text())["export_complete"]
+
+    plan_vqa_migration({
+        "reuse_policy": "anchor_label_v1", "new_sources": "new_reasoning.jsonl",
+        "media_identity_jsonl": "media.jsonl",
+        "old_runs": [{"sources": "old_sources.jsonl", "annotations": "old_answers.jsonl"}],
+    }, tmp_path / "anchor_plan", input_root=tmp_path)
+    anchor_result = asyncio.run(annotate_vqa_migration(
+        tmp_path / "anchor_plan", input_root=tmp_path, backend=None, offline_only=True,
+    ))
+    assert anchor_result["annotation_counts"]["reuse_anchor"] == 1
+    anchor_export = export_vqa_migration(
+        tmp_path / "anchor_plan", modality_profile_id="fpv_temporal_instruction_v1", accepted_only=True,
+    )
+    assert anchor_export["counts"]["provenance:reuse_anchor"] == 1
+
+
 def test_weak_teacher_returns_typed_weak_annotation() -> None:
     source = _source()
     capabilities = load_vqa_capabilities_v2()

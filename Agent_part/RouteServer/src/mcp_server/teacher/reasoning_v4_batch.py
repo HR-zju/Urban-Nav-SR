@@ -148,16 +148,20 @@ class ReasoningV4TeacherBackend(Protocol):
 class VisionReasoningV4TeacherBackend:
     """Adapt the existing vision backend without private sidecars."""
 
-    def __init__(self, *, api_key: str | None = None):
+    def __init__(self, *, api_key: str | None = None, media_root: Path | None = None):
         """Initialize the OpenAI-compatible vision backend.
 
         Args:
             api_key: Optional worker-local provider key.
+            media_root: Runtime root for portable local image paths. Omit for
+                existing absolute paths or URLs. This root is never serialized
+                into the canonical observation or teacher question.
         """
 
         self._delegate = VisionReasoningTeacherBackend(
             api_key=api_key
         )
+        self._media_root = media_root
 
     async def generate(
         self,
@@ -179,8 +183,12 @@ class VisionReasoningV4TeacherBackend:
             Provider generation and telemetry.
         """
 
+        # 只在媒体读取边界绑定挂载点，保持 canonical 内容和 source 指纹可迁移。
+        images = observation.images
+        if self._media_root is not None:
+            images = [str(self._media_root / path) for path in images]
         visible_source = _VisibleSourceAdapter(
-            images=observation.images,
+            images=images,
             image_roles=observation.image_roles,
         )
         return await self._delegate.generate(
@@ -288,6 +296,9 @@ async def annotate_reasoning_source_v4(
     backend: ReasoningV4TeacherBackend,
     config: ReasoningV4BatchConfig | None = None,
     task_coordinator: _TaskCanonicalizationCoordinator | None = None,
+    reused_groundings: Mapping[str, ReasoningAnnotationV4] | None = None,
+    reused_decision: ReasoningAnnotationV4 | None = None,
+    on_section_result: Callable[[str, BaseModel | None, AnnotationStageRecordV4, Mapping[str, Any]], None] | None = None,
 ) -> ReasoningAnnotationV4:
     """Annotate routed groundings and one visual conditioned Decision.
 
@@ -296,10 +307,24 @@ async def annotate_reasoning_source_v4(
         backend: Multimodal section teacher.
         config: Retry, image-detail, and audit limits.
         task_coordinator: Optional run-wide task deduplication coordinator.
+        reused_groundings: Accepted LVLM sections selected by the migration
+            planner, mapped to their original annotations. The caller verifies
+            input equivalence and producer policy before passing these seeds.
+            Deterministic Task canonicalization and Decision composition run
+            normally. A planned LVLM Task may also be supplied.
+        reused_decision: Prior proposal for this source revision. Reused only
+            when its five grounding dependencies equal the current outputs.
+        on_section_result: Optional synchronous checkpoint writer, called
+            after each new LVLM section. Context carries Task provenance or
+            Decision grounding dependencies. Writer errors propagate.
 
     Returns:
         Immutable completed annotation with independent section, candidate
         structure, and reconciliation state.
+
+    Raises:
+        ValueError: If a reused grounding is unsupported, belongs to another
+            anchor, or lacks an accepted result.
     """
 
     cfg = config or ReasoningV4BatchConfig()
@@ -325,35 +350,66 @@ async def annotate_reasoning_source_v4(
             raise ValueError(
                 f"{name} must be auto, low, or high: {value!r}"
             )
+    reused = reused_groundings or {}
+    unknown = reused.keys() - {*_LVLM_GROUNDING_SECTION_NAMES, "TaskGrounding"}
+    if unknown:
+        raise ValueError(f"unsupported reused groundings: {sorted(unknown)}")
+    section_fields = {
+        "TaskGrounding": "task_grounding",
+        "SceneGrounding": "scene_grounding",
+        "LocalTraversability": "local_traversability",
+        "NavigationContextGrounding": "navigation_context_grounding",
+        "InteractionConstraintGrounding": "interaction_constraint_grounding",
+    }
+    seeded_outcomes = {}
+    for name, original in reused.items():
+        section = getattr(original.grounding_outputs, section_fields[name])
+        record = original.stage_records[name]
+        if (original.source_group_id != source.observation.source_group_id
+                or record.status != "accepted" or section is None):
+            raise ValueError(f"reuse requires an accepted section for this anchor: {name}")
+        # 保留原始 producer 记录；复用结果不计作本轮 teacher 调用。
+        provenance = ({"task_canonicalization_source": original.metadata["task_canonicalization_source"]}
+                      if name == "TaskGrounding" else {})
+        seeded_outcomes[name] = _StageOutcome(section, record, (), provenance)
+    pending_names = [name for name in _LVLM_GROUNDING_SECTION_NAMES if name not in reused]
     coordinator = (
         task_coordinator or _TaskCanonicalizationCoordinator()
     )
-    task_future = coordinator.resolve(
-        source,
-        backend=backend,
-        config=cfg,
-        profiles=profiles,
-        image_policy=image_policy,
-    )
-    lvlm_futures = [
-        _run_stage_v4(
+    async def run_task() -> _StageOutcome:
+        if "TaskGrounding" in seeded_outcomes:
+            return seeded_outcomes["TaskGrounding"]
+        outcome = await coordinator.resolve(
+            source, backend=backend, config=cfg, profiles=profiles, image_policy=image_policy,
+        )
+        if on_section_result is not None and outcome.record.producer_kind == "lvlm":
+            on_section_result("TaskGrounding", outcome.section, outcome.record, outcome.provenance)
+        return outcome
+
+    task_future = run_task()
+    async def run_grounding(name: str) -> _StageOutcome:
+        outcome = await _run_stage_v4(
             source,
             profile=profiles[name],
             backend=backend,
             config=cfg,
             image_policy=image_policy,
         )
-        for name in _LVLM_GROUNDING_SECTION_NAMES
-    ]
+        if on_section_result is not None:
+            on_section_result(name, outcome.section, outcome.record, outcome.provenance)
+        return outcome
+
+    lvlm_futures = [run_grounding(name) for name in pending_names]
     results = await asyncio.gather(
         task_future,
         *lvlm_futures,
     )
     outcomes = {
         "TaskGrounding": results[0],
+        **seeded_outcomes,
         **dict(
             zip(
-                _LVLM_GROUNDING_SECTION_NAMES,
+                pending_names,
                 results[1:],
             )
         ),
@@ -364,6 +420,15 @@ async def annotate_reasoning_source_v4(
         "section_image_policy_digest": image_policy.policy_digest,
         "direction_registry_version": cfg.direction_registry_version,
     }
+    if reused:
+        annotation_provenance["reused_groundings"] = {
+            name: {
+                "source_fingerprint": original.source_fingerprint,
+                "teacher_provider": original.teacher_provider,
+                "teacher_model": original.teacher_model,
+            }
+            for name, original in reused.items()
+        }
     groundings = GroundingOutputsV4(
         task_grounding=_typed_section(
             outcomes["TaskGrounding"].section,
@@ -438,14 +503,23 @@ async def annotate_reasoning_source_v4(
             provenance=annotation_provenance,
         )
 
-    decision_outcome = await _run_stage_v4(
-        source,
-        profile=profiles["Decision"],
-        backend=backend,
-        config=cfg,
-        image_policy=image_policy,
-        groundings=groundings,
-    )
+    if (reused_decision is not None
+            and reused_decision.source_fingerprint == source.source_fingerprint
+            and reused_decision.grounding_outputs == groundings
+            and reused_decision.stage_records["Decision"].status == "accepted"
+            and reused_decision.decision_proposal is not None):
+        decision_outcome = _StageOutcome(
+            reused_decision.decision_proposal, reused_decision.stage_records["Decision"], (),
+        )
+        annotation_provenance["reused_decision_source_fingerprint"] = reused_decision.source_fingerprint
+    else:
+        decision_outcome = await _run_stage_v4(
+            source, profile=profiles["Decision"], backend=backend, config=cfg,
+            image_policy=image_policy, groundings=groundings,
+        )
+        if on_section_result is not None:
+            on_section_result("Decision", decision_outcome.section, decision_outcome.record,
+                              {"groundings": groundings.model_dump(mode="json")})
     records["Decision"] = decision_outcome.record
     generations.extend(decision_outcome.generations)
     errors.extend(
@@ -1094,7 +1168,7 @@ def _annotation_v4(
     errors: list[str],
     warnings: list[str],
     generations: list[TeacherGeneration],
-    provenance: dict[str, str],
+    provenance: dict[str, Any],
 ) -> ReasoningAnnotationV4:
     """Build one annotation and aggregate provider identity."""
 

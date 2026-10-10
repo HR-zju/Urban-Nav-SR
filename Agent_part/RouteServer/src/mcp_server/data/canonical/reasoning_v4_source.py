@@ -252,6 +252,43 @@ def build_reasoning_source_v4(
     return ReasoningSourceV4.model_validate(payload)
 
 
+def build_history_reasoning_source_v4(
+    row: Mapping[str, Any],
+    *,
+    index: int,
+    config: ReasoningSourceBuildConfig,
+    max_lag_ns: int,
+) -> ReasoningSourceV4:
+    """Build a canonical source from one direction-projected history row.
+
+    Args:
+        row: Packaged observation with its original source fields.
+        index: Source row position.
+        config: Build policy; media_root is this row's clip package directory.
+        max_lag_ns: Sampling budget recorded by the package compiler.
+
+    Returns:
+        Canonical source retaining the new physical-time observation.
+    """
+    original = row["source_row"]
+    dataset_source = _dataset_source(original, fallback=config.dataset_source)
+    direction, _ = _direction_supervision_v4(original, dataset_source=dataset_source)
+    geometry, _ = _direction_geometry_v1(original, direction=direction)
+    # 旧 assistant 留在原包；新 source 只接收公开指令、物理时间与私有方向监督。
+    projected = {
+        "id": row["source_parent_id"],
+        "source_group_id": row["source_parent_id"],
+        "split_group_id": row["split_group_id"],
+        "dataset_source": dataset_source,
+        "instruction": _optional_instruction(original),
+        "direction_supervision": _raw_direction_record(original),
+        "direction_geometry": geometry.model_dump(mode="json") if geometry is not None else None,
+        "history_observation": row["observation"],
+        "history_max_lag_ns": max_lag_ns,
+    }
+    return build_reasoning_source_v4(projected, index=index, config=config)
+
+
 def build_reasoning_source_manifest_v4(
     input_jsonl: str | Path,
     output_jsonl: str | Path,
@@ -287,28 +324,10 @@ def build_reasoning_source_manifest_v4(
         counts["input_rows"] += 1
         try:
             if history_max_lag_ns is not None:
-                original = row["source_row"]
-                dataset_source = _dataset_source(original, fallback=config.dataset_source)
-                direction, _ = _direction_supervision_v4(original, dataset_source=dataset_source)
-                geometry, _ = _direction_geometry_v1(original, direction=direction)
-                # 只迁移输入指令和私有方向监督；旧 assistant、route 与帧证据留在原包供审查。
-                # 连续角度与 stop 位移从原监督构造，避免裁剪输入字段后退化为 unavailable。
-                row = {
-                    "id": row["source_parent_id"],
-                    "source_group_id": row["source_parent_id"],
-                    "split_group_id": row["split_group_id"],
-                    "dataset_source": dataset_source,
-                    "instruction": _optional_instruction(original),
-                    "direction_supervision": _raw_direction_record(original),
-                    "direction_geometry": geometry.model_dump(mode="json") if geometry is not None else None,
-                    "history_observation": row["observation"],
-                    "history_max_lag_ns": history_max_lag_ns,
-                }
-            source = build_reasoning_source_v4(
-                row,
-                index=index,
-                config=config,
-            )
+                source = build_history_reasoning_source_v4(
+                    row, index=index, config=config, max_lag_ns=history_max_lag_ns)
+            else:
+                source = build_reasoning_source_v4(row, index=index, config=config)
         except (TypeError, ValueError) as exc:
             counts["invalid_rows"] += 1
             if len(errors) < 100:
