@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "urbannav-deploy"
+version = "0.1.0"
+description = "Causal observation replay and bounded robot inference service composition"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+urbannav-deploy = "urbannav_deploy.cli:main"
+
+[project.optional-dependencies]
+replay-media = ["numpy", "opencv-python"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["urbannav_deploy*"]

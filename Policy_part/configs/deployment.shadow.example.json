@@ -1,0 +1,11 @@
+{
+  "mode": "shadow",
+  "source": {"factory": "site_adapters.observations:create_source", "options": {}},
+  "inference": {
+    "factory": "urbannav_deploy.configuration:http_client_factory",
+    "options": {"url": "http://127.0.0.1:18714", "timeout": 120}
+  },
+  "control_hz": 20,
+  "max_plan_age_sec": 0.75,
+  "close_timeout_sec": 5
+}
