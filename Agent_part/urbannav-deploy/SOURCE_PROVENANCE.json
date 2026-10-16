@@ -1,0 +1,34 @@
+{
+  "source_repository": "/home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR",
+  "source_commit": "ed0bc62aa3848e8d614ab42bf7f6655fe7ef5b3e",
+  "source_directory": "Policy_part",
+  "copied_file_sha256": {
+    "urbannav_deploy/__init__.py": "0c3cfd944b79521e0e2d57fdda056ac3f378f06a6b6c0f7553924c064ef5831a",
+    "urbannav_deploy/__main__.py": "b4163719195c96ed124370b1508e1d0ceea343643a0725dfabf4f60c21840cd3",
+    "urbannav_deploy/admission.py": "c9612b6080a1fc7919cff1591f9a67fd29d2ef9ba7f6e6bd648262cb1fbad3f1",
+    "urbannav_deploy/application.py": "1128311fce1e95dd239cab42db0e0439df5f75d11ce2c65e8c75eff92e41dcc0",
+    "urbannav_deploy/cli.py": "c754654b608f25f366e8b68409c52d59c1903672a227df8bb763555a61778c0f",
+    "urbannav_deploy/configuration.py": "ab13d4f1b8de131562c33b380cb3a14d2e5fef1fedb6c0b14c90046437f18685",
+    "urbannav_deploy/media.py": "4368e998b5584dea130622fc7ded7d6e25019baccd037b72db788fdee58ce579",
+    "urbannav_deploy/replay.py": "09cec2e2d6aa5db6ed23a58a4ad5703bb21e58a14b62c8c72544fb4e9063fc45",
+    "urbannav_deploy/session.py": "f94e6aeb9932afc151fc99b78405b854864907232be873d1f44dc5073fcf3c4d",
+    "urbannav_deploy/transport.py": "169ea668cbaf16fea557bb58365aafdf19dd123224212a87440266e9868246a4",
+    "urbannav_deploy/README.md": "1510e0a923f6cf235aacb39ea9e9372dca2087ea5f51d8093b42411916d8facb",
+    "pyproject.toml": "2a58de081fa14f330b64fce746c677aa938fa461300ba726a7dfe395d8b26f33",
+    "configs/deployment.shadow.example.json": "657e001d8960826c60cd8c0c4d8d04042abe64dfc06ae0b90b0269b77c5a750b",
+    "tools/prepare_r10_clip.py": "0e486aa5b373e70d1a0491b9e63775b533ce031773a2f383adee0bcfc446ddec",
+    "tests/test_deployment_application.py": "52f92583910705ba8c8577d8f419a165b7be0b3d327ad720d04fe59c2f8bcf07",
+    "tests/test_deployment_replay.py": "a5b4b636aed42f9f37da0cf46df576ccb57567f67230ca9634366ee88d3725e1",
+    "tests/test_deployment_session.py": "1e6c1c9bf0af5334609f6719607a3edfb4c6abec3eccdf528a7f783730757259",
+    "tests/test_deployment_telemetry.py": "445bed7a345a69385b1737810b44b6333f4b9fa01f8e78f157dd6cd0239d8466"
+  },
+  "preserved_uncommitted_changes": [
+    "urbannav_deploy/README.md",
+    "urbannav_deploy/application.py",
+    "urbannav_deploy/cli.py",
+    "urbannav_deploy/session.py",
+    "tests/test_deployment_telemetry.py"
+  ],
+  "scope": "deployment client and replay only; no model weights, media, credentials, other Policy_part code or parent Git history copied",
+  "parent_history_changed": false
+}
