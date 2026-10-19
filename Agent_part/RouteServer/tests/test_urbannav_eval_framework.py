@@ -5,19 +5,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from mcp_server.eval.urbannav_io import (
-    load_urbannav_cases,
-    load_urbannav_predictions,
-    write_urbannav_cases,
-    write_urbannav_predictions,
-)
-from mcp_server.eval.urbannav_metrics import (
-    UrbanNavEvalConfig,
-    evaluate_case,
-    evaluate_predictions,
-    match_destination,
-)
-from mcp_server.eval.urbannav_schema import UrbanNavCase, UrbanNavDestination, UrbanNavPoint, UrbanNavPrediction
+from mcp_server.eval.urbannav.urbannav_io import load_urbannav_cases, load_urbannav_predictions, write_urbannav_cases, write_urbannav_predictions
+from mcp_server.eval.urbannav.urbannav_metrics import UrbanNavEvalConfig, evaluate_case, evaluate_predictions, match_destination
+from mcp_server.eval.urbannav.urbannav_schema import UrbanNavCase, UrbanNavDestination, UrbanNavPoint, UrbanNavPrediction
 
 
 class UrbanNavSchemaIOTest(unittest.TestCase):

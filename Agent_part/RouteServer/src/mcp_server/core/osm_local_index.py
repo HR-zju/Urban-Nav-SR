@@ -8,8 +8,8 @@ import math
 from pathlib import Path
 from typing import Any, Iterable
 
-from mcp_server.eval.urbannav_metrics import haversine_m
-from mcp_server.eval.urbannav_schema import UrbanNavDestination, UrbanNavPoint
+from mcp_server.eval.urbannav.urbannav_metrics import haversine_m
+from mcp_server.eval.urbannav.urbannav_schema import UrbanNavDestination, UrbanNavPoint
 
 
 DEFAULT_OSM_POI_TAGS = {

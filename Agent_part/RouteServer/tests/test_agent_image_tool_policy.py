@@ -6,8 +6,8 @@ import unittest
 from mcp_server.agent.schemas import AGENT_STAGE2_CASE_SCHEMA_VERSION, AgentStage2Case, ToolCall
 from mcp_server.agent.tool_executor import ToolExecutor
 from mcp_server.agent.tool_schema import IMAGE_TOOL_NAME, IMAGE_TOOL_OPS, get_tool_definitions, validate_tool_call
-from mcp_server.eval.exporters import trace_to_ms_swift_stage2_row
-from mcp_server.teacher.agentic_stage2_trace_builder import AgenticStage2TraceBuilder
+from mcp_server.eval.agent_tools.exporters import trace_to_ms_swift_stage2_row
+from mcp_server.teacher.agent_tools.agentic_stage2_trace_builder import AgenticStage2TraceBuilder
 
 
 class ImageToolPolicyTest(unittest.IsolatedAsyncioTestCase):

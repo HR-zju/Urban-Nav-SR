@@ -22,7 +22,7 @@ from mcp_server.agent.stage2 import (
     build_final_assistant_text,
     build_tool_decision,
 )
-from mcp_server.eval.online_agent_runner import CallableModelAdapter
+from mcp_server.eval.agent_tools.online_agent_runner import CallableModelAdapter
 
 
 ROUTESERVER_ROOT = Path(__file__).resolve().parents[1]

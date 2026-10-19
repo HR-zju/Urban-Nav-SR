@@ -16,8 +16,8 @@ from mcp_server.core.urbannav_provider import (
     UrbanNavProviderCapabilities,
     UrbanNavRouteRequest,
 )
-from mcp_server.eval.urbannav_metrics import haversine_m
-from mcp_server.eval.urbannav_schema import UrbanNavDestination, UrbanNavPoint
+from mcp_server.eval.urbannav.urbannav_metrics import haversine_m
+from mcp_server.eval.urbannav.urbannav_schema import UrbanNavDestination, UrbanNavPoint
 
 
 class OsmOverpassOsrmProvider(UrbanNavLiveProvider):

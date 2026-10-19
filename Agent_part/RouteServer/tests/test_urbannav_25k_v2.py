@@ -8,9 +8,9 @@ from pathlib import Path
 import sys
 
 from mcp_server.core.replay_map_backend import ReplayRouteResult
-from mcp_server.eval.urbannav_metrics import evaluate_multi_stop_case
-from mcp_server.eval.urbannav_runners import _best_origin_matched_route
-from mcp_server.eval.urbannav_schema import UrbanNavCase, UrbanNavDestination, UrbanNavPoint, UrbanNavPrediction
+from mcp_server.eval.urbannav.urbannav_metrics import evaluate_multi_stop_case
+from mcp_server.eval.urbannav.urbannav_runners import _best_origin_matched_route
+from mcp_server.eval.urbannav.urbannav_schema import UrbanNavCase, UrbanNavDestination, UrbanNavPoint, UrbanNavPrediction
 
 
 ROUTE_SERVER_ROOT = Path(__file__).resolve().parents[1]

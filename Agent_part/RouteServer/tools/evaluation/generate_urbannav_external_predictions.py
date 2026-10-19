@@ -29,13 +29,9 @@ if str(SRC) not in sys.path:
 
 from mcp_server.core.live_map_backend import LiveMapBackend  # noqa: E402
 from mcp_server.core.replay_map_backend import ReplayMapBackend, ReplayMapBackendClient  # noqa: E402
-from mcp_server.eval.urbannav_io import load_urbannav_cases, write_urbannav_predictions  # noqa: E402
-from mcp_server.eval.urbannav_runners import (  # noqa: E402
-    ReplayUrbanNavBackendAdapter,
-    RouteServerRunnerConfig,
-    RouteServerUrbanNavRunner,
-)
-from mcp_server.eval.urbannav_schema import UrbanNavCase, UrbanNavPrediction  # noqa: E402
+from mcp_server.eval.urbannav.urbannav_io import load_urbannav_cases, write_urbannav_predictions
+from mcp_server.eval.urbannav.urbannav_runners import ReplayUrbanNavBackendAdapter, RouteServerRunnerConfig, RouteServerUrbanNavRunner
+from mcp_server.eval.urbannav.urbannav_schema import UrbanNavCase, UrbanNavPrediction
 from mcp_server.llm import CandidateReranker, GoalDecomposer, IntentParser, LLMSettings  # noqa: E402
 from mcp_server.utils.async_batch import run_ordered_bounded  # noqa: E402
 

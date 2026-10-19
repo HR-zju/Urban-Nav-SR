@@ -7,7 +7,7 @@ import argparse
 import json
 from pathlib import Path
 
-from mcp_server.eval.urbannav_validator import UrbanNavValidationConfig, validate_urbannav_package
+from mcp_server.eval.urbannav.urbannav_validator import UrbanNavValidationConfig, validate_urbannav_package
 
 
 def parse_args() -> argparse.Namespace:

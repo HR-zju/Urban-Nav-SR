@@ -14,12 +14,8 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from mcp_server.eval.urbannav_io import load_urbannav_cases, load_urbannav_predictions  # noqa: E402
-from mcp_server.eval.urbannav_metrics_v2 import (  # noqa: E402
-    UrbanNavEvalV2Config,
-    evaluate_predictions_v2,
-    write_eval_v2_artifacts,
-)
+from mcp_server.eval.urbannav.urbannav_io import load_urbannav_cases, load_urbannav_predictions
+from mcp_server.eval.urbannav.urbannav_metrics_v2 import UrbanNavEvalV2Config, evaluate_predictions_v2, write_eval_v2_artifacts
 
 
 def parse_args() -> argparse.Namespace:

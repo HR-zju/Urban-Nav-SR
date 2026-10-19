@@ -19,7 +19,7 @@ from mcp_server.agent.tool_executor import ToolExecutor
 from mcp_server.agent.tool_parser import parse_finish_text
 from mcp_server.agent.tool_runtime import AgentToolRuntime, AgentToolRuntimeConfig, ToolBudget
 from mcp_server.agent.tool_schema import get_tool_definitions
-from mcp_server.eval.online_agent_runner import ModelAdapter, OnlineAgentRunner, OnlineAgentRunnerConfig
+from mcp_server.eval.agent_tools.online_agent_runner import ModelAdapter, OnlineAgentRunner, OnlineAgentRunnerConfig
 
 
 @dataclass(frozen=True)

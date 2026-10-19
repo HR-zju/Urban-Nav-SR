@@ -5,13 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from mcp_server.eval.urbannav_module1_compare import (
-    Module1ComparisonConfig,
-    Module1RunSpec,
-    compare_module1_runs,
-    comparison_to_markdown,
-    score_summary,
-)
+from mcp_server.eval.urbannav.urbannav_module1_compare import Module1ComparisonConfig, Module1RunSpec, compare_module1_runs, comparison_to_markdown, score_summary
 
 
 class UrbanNavModule1CompareTest(unittest.TestCase):

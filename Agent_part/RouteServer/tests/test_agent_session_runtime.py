@@ -4,7 +4,7 @@ import unittest
 
 from mcp_server.agent import RouteSessionRuntime, SessionRuntimeConfig
 from mcp_server.agent.schemas import AGENT_STAGE2_CASE_SCHEMA_VERSION, AgentStage2Case
-from mcp_server.eval.runners import RuleRunner
+from mcp_server.eval.agent_tools.runners import RuleRunner
 
 
 class RouteSessionRuntimeTest(unittest.IsolatedAsyncioTestCase):

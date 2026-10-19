@@ -12,9 +12,9 @@ from typing import Any, Iterable
 
 from mcp_server.core.live_map_backend import LiveMapBackend, LiveRouteRequest
 from mcp_server.core.replay_map_backend import ReplayPoiResult, ReplayRouteResult
-from mcp_server.eval.urbannav_io import write_urbannav_cases
-from mcp_server.eval.urbannav_schema import UrbanNavCase, UrbanNavDestination, UrbanNavPoint
-from mcp_server.eval.urbannav_validator import validate_urbannav_cases
+from mcp_server.eval.urbannav.urbannav_io import write_urbannav_cases
+from mcp_server.eval.urbannav.urbannav_schema import UrbanNavCase, UrbanNavDestination, UrbanNavPoint
+from mcp_server.eval.urbannav.urbannav_validator import validate_urbannav_cases
 
 
 BUILDER_VERSION = "urbannav_live_v1"

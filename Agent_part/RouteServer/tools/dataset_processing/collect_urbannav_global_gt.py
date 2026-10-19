@@ -19,9 +19,9 @@ from mcp_server.core.osm_global_provider import OsmOverpassOsrmProvider
 from mcp_server.core.osm_local_provider import LocalOsmOsrmProvider
 from mcp_server.core.replay_map_backend import ReplayPoiResult, ReplayRouteResult
 from mcp_server.core.urbannav_provider import UrbanNavLiveProvider, UrbanNavPoiSearchRequest, UrbanNavRouteRequest
-from mcp_server.eval.urbannav_io import iter_json_records, load_urbannav_cases
-from mcp_server.eval.urbannav_schema import UrbanNavCase, UrbanNavDestination, UrbanNavPoint
-from mcp_server.eval.urbannav_validator import validate_urbannav_cases
+from mcp_server.eval.urbannav.urbannav_io import iter_json_records, load_urbannav_cases
+from mcp_server.eval.urbannav.urbannav_schema import UrbanNavCase, UrbanNavDestination, UrbanNavPoint
+from mcp_server.eval.urbannav.urbannav_validator import validate_urbannav_cases
 
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[2] / "config" / "urbannav_global_gt_collection.json"

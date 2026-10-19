@@ -11,8 +11,8 @@ from mcp_server.agent.contracts import (
 from mcp_server.agent.schemas import AGENT_STAGE2_CASE_SCHEMA_VERSION, AgentStage2Case, AgentTrace, ToolCall
 from mcp_server.agent.tool_executor import ToolExecutor
 from mcp_server.agent.tool_schema import validate_tool_call
-from mcp_server.eval.exporters import trace_to_ms_swift_stage2_row
-from mcp_server.eval.runners import RuleRunner
+from mcp_server.eval.agent_tools.exporters import trace_to_ms_swift_stage2_row
+from mcp_server.eval.agent_tools.runners import RuleRunner
 
 
 class AgentContractTest(unittest.IsolatedAsyncioTestCase):

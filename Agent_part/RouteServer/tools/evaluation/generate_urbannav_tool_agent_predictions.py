@@ -19,10 +19,10 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from mcp_server.core.replay_map_backend import ReplayMapBackend  # noqa: E402
-from mcp_server.eval.urbannav_io import load_urbannav_cases  # noqa: E402
-from mcp_server.eval.urbannav_runners import ReplayUrbanNavBackendAdapter  # noqa: E402
-from mcp_server.eval.urbannav_schema import UrbanNavCase, UrbanNavPrediction  # noqa: E402
-from mcp_server.eval.urbannav_tool_agent_runner import UrbanNavToolAgentConfig, UrbanNavToolAgentRunner  # noqa: E402
+from mcp_server.eval.urbannav.urbannav_io import load_urbannav_cases
+from mcp_server.eval.urbannav.urbannav_runners import ReplayUrbanNavBackendAdapter
+from mcp_server.eval.urbannav.urbannav_schema import UrbanNavCase, UrbanNavPrediction
+from mcp_server.eval.agent_tools.urbannav_tool_agent_runner import UrbanNavToolAgentConfig, UrbanNavToolAgentRunner
 from mcp_server.llm import LLMSettings  # noqa: E402
 from mcp_server.utils.async_batch import run_ordered_bounded  # noqa: E402
 

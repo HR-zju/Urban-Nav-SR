@@ -11,15 +11,8 @@ from mcp_server.agent.schemas import AGENT_STAGE2_CASE_SCHEMA_VERSION, AgentStag
 from mcp_server.agent.stage2 import build_agent_state, build_agent_think_text, build_final_assistant_text, build_tool_decision
 from mcp_server.agent.tool_executor import ToolExecutor
 from mcp_server.agent.tool_runtime import AgentToolRuntime
-from mcp_server.eval.online_agent_runner import (
-    MsSwiftInferenceAdapter,
-    MsSwiftInferenceConfig,
-    OpenAICompatibleInferenceConfig,
-    OpenAICompatibleStage2Adapter,
-    OnlineAgentRunner,
-    build_initial_model_messages,
-)
-from mcp_server.eval.stage2_validator import validate_ms_swift_stage2_row, validate_stage2_trace
+from mcp_server.eval.agent_tools.online_agent_runner import MsSwiftInferenceAdapter, MsSwiftInferenceConfig, OpenAICompatibleInferenceConfig, OpenAICompatibleStage2Adapter, OnlineAgentRunner, build_initial_model_messages
+from mcp_server.eval.agent_tools.stage2_validator import validate_ms_swift_stage2_row, validate_stage2_trace
 from mcp_server.llm import LLMSettings
 
 

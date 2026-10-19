@@ -11,7 +11,7 @@ from urllib.parse import urlencode
 from urllib.request import urlopen
 
 from mcp_server.core.replay_map_backend import ReplayPoiResult, ReplayRouteResult
-from mcp_server.eval.urbannav_schema import UrbanNavDestination, UrbanNavPoint, parse_route
+from mcp_server.eval.urbannav.urbannav_schema import UrbanNavDestination, UrbanNavPoint, parse_route
 from mcp_server.map_providers import (
     MapProviderClient,
     create_map_client,

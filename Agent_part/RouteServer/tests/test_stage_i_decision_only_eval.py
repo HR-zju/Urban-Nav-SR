@@ -7,10 +7,8 @@ from mcp_server.contracts.openloop_benchmark import (
     OpenLoopReferenceV1,
 )
 from mcp_server.contracts.reasoning_v4 import DecisionV4
-from mcp_server.eval.openloop_common import join_openloop_artifacts_v1
-from mcp_server.eval.stage_i_openloop import (
-    evaluate_stage_i_decision_only_v1,
-)
+from mcp_server.eval.openloop.openloop_common import join_openloop_artifacts_v1
+from mcp_server.eval.openloop.stage_i_openloop import evaluate_stage_i_decision_only_v1
 
 
 def _stamp(label_index: int, label_name: str, choice: str, angle: float) -> DirectionLabelStamp:

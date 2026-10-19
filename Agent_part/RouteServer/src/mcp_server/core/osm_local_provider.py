@@ -18,7 +18,7 @@ from mcp_server.core.urbannav_provider import (
     UrbanNavProviderCapabilities,
     UrbanNavRouteRequest,
 )
-from mcp_server.eval.urbannav_schema import UrbanNavPoint
+from mcp_server.eval.urbannav.urbannav_schema import UrbanNavPoint
 
 
 class LocalOsmOsrmProvider(UrbanNavLiveProvider):

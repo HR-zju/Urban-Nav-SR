@@ -12,7 +12,7 @@ from mcp_server.contracts.openloop_benchmark import (
 )
 from mcp_server.contracts.stage_i_sft import parse_stage_i_training_view_v1
 from mcp_server.data.io.jsonl import iter_jsonl, write_jsonl_atomic
-from mcp_server.eval.openloop_common import artifact_sha256_v1
+from mcp_server.eval.openloop.openloop_common import artifact_sha256_v1
 
 
 OPENLOOP_SPLIT_SOURCE_SPEC_VERSION = (

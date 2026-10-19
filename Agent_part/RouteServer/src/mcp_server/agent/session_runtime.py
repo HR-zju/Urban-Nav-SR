@@ -16,7 +16,7 @@ from typing import Any, Iterable, Protocol
 from mcp_server.agent.schemas import AgentStage2Case, AgentTrace
 from mcp_server.agent.tool_parser import parse_finish_text
 from mcp_server.agent.tool_schema import USER_INTERACTION_TOOL_NAME
-from mcp_server.eval.stage2_validator import Stage2ValidationResult, validate_stage2_trace
+from mcp_server.eval.agent_tools.stage2_validator import Stage2ValidationResult, validate_stage2_trace
 
 
 SESSION_TRACE_SCHEMA_VERSION = "sidewalk_agent_session_trace_v1"

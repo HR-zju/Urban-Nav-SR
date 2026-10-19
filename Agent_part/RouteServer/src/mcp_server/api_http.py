@@ -621,7 +621,7 @@ def main() -> None:
     )
     episode_service = None
     if args.episode_cases:
-        from mcp_server.eval.episode import FrozenExternalEpisodeService, load_frozen_episode_cases
+        from mcp_server.eval.agent_tools.episode import FrozenExternalEpisodeService, load_frozen_episode_cases
 
         episode_service = FrozenExternalEpisodeService(load_frozen_episode_cases(args.episode_cases))
     if args.episode_only and episode_service is None:

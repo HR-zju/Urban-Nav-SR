@@ -19,13 +19,13 @@ from mcp_server.agent.tool_parser import (
 from mcp_server.runtime.interfaces import System2ActionType
 from mcp_server.agent.tool_runtime import AgentToolRuntime, AgentToolRuntimeConfig, ToolBudget
 from mcp_server.agent.tool_schema import validate_tool_call
-from mcp_server.eval.cases import load_stage2_cases, write_stage2_cases
-from mcp_server.eval.exporters import trace_to_ms_swift_stage2_row
-from mcp_server.eval.metrics import compute_trace_metrics
-from mcp_server.eval.phase1_archive_adapter import phase1_archive_row_to_stage2_case
-from mcp_server.eval.runners import RouteServerTeacherRunner, RuleRunner
-from mcp_server.eval.stage2_validator import validate_ms_swift_stage2_row, validate_stage2_trace
-from mcp_server.teacher.agentic_stage2_trace_builder import AgenticStage2TraceBuilder
+from mcp_server.eval.agent_tools.cases import load_stage2_cases, write_stage2_cases
+from mcp_server.eval.agent_tools.exporters import trace_to_ms_swift_stage2_row
+from mcp_server.eval.agent_tools.metrics import compute_trace_metrics
+from mcp_server.eval.agent_tools.phase1_archive_adapter import phase1_archive_row_to_stage2_case
+from mcp_server.eval.agent_tools.runners import RouteServerTeacherRunner, RuleRunner
+from mcp_server.eval.agent_tools.stage2_validator import validate_ms_swift_stage2_row, validate_stage2_trace
+from mcp_server.teacher.agent_tools.agentic_stage2_trace_builder import AgenticStage2TraceBuilder
 
 
 class AgentProtocolTest(unittest.TestCase):

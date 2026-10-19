@@ -9,10 +9,10 @@ from pathlib import Path
 from mcp_server.core.replay_map_backend import ReplayMapBackend
 from mcp_server.agent.tool_parser import parse_agent_action
 from mcp_server.agent.tool_schema import validate_tool_call
-from mcp_server.eval.urbannav_replay_tool_executor import ReplayUrbanNavToolExecutor
-from mcp_server.eval.urbannav_runners import ReplayUrbanNavBackendAdapter
-from mcp_server.eval.urbannav_schema import UrbanNavCase, UrbanNavDestination, UrbanNavPoint
-from mcp_server.eval.urbannav_tool_agent_runner import UrbanNavToolAgentConfig, UrbanNavToolAgentRunner
+from mcp_server.eval.agent_tools.urbannav_replay_tool_executor import ReplayUrbanNavToolExecutor
+from mcp_server.eval.urbannav.urbannav_runners import ReplayUrbanNavBackendAdapter
+from mcp_server.eval.urbannav.urbannav_schema import UrbanNavCase, UrbanNavDestination, UrbanNavPoint
+from mcp_server.eval.agent_tools.urbannav_tool_agent_runner import UrbanNavToolAgentConfig, UrbanNavToolAgentRunner
 from mcp_server.llm import LLMSettings
 
 

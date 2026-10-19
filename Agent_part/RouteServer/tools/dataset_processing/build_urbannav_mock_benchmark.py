@@ -14,9 +14,9 @@ from pathlib import Path
 from typing import Any
 
 from mcp_server.core.replay_map_backend import ReplayPoiResult, ReplayRouteResult
-from mcp_server.eval.urbannav_io import write_urbannav_cases
-from mcp_server.eval.urbannav_schema import UrbanNavCase
-from mcp_server.eval.urbannav_validator import validate_urbannav_cases
+from mcp_server.eval.urbannav.urbannav_io import write_urbannav_cases
+from mcp_server.eval.urbannav.urbannav_schema import UrbanNavCase
+from mcp_server.eval.urbannav.urbannav_validator import validate_urbannav_cases
 
 
 def parse_args() -> argparse.Namespace:
@@ -417,7 +417,7 @@ def _point(lat: float, lng: float) -> Any:
         ``UrbanNavPoint`` instance.
     """
 
-    from mcp_server.eval.urbannav_schema import UrbanNavPoint
+    from mcp_server.eval.urbannav.urbannav_schema import UrbanNavPoint
 
     return UrbanNavPoint(lat=lat, lng=lng)
 

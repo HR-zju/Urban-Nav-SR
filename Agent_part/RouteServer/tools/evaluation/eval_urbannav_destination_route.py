@@ -13,8 +13,8 @@ import argparse
 import json
 from pathlib import Path
 
-from mcp_server.eval.urbannav_io import load_urbannav_cases, load_urbannav_predictions
-from mcp_server.eval.urbannav_metrics import UrbanNavEvalConfig, evaluate_predictions, summarize_by
+from mcp_server.eval.urbannav.urbannav_io import load_urbannav_cases, load_urbannav_predictions
+from mcp_server.eval.urbannav.urbannav_metrics import UrbanNavEvalConfig, evaluate_predictions, summarize_by
 
 
 def parse_args() -> argparse.Namespace:

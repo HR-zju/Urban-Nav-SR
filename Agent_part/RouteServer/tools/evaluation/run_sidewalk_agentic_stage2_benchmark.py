@@ -20,11 +20,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from mcp_server.eval.agentic_stage2_benchmark import (  # noqa: E402
-    AgenticStage2BenchmarkConfig,
-    collect_agentic_stage2_benchmark,
-    run_ms_swift_stage2_pipeline,
-)
+from mcp_server.eval.agent_tools.agentic_stage2_benchmark import AgenticStage2BenchmarkConfig, collect_agentic_stage2_benchmark, run_ms_swift_stage2_pipeline
 
 
 DEFAULT_ACTIONS = ("prepare", "benchmark_base", "benchmark_stage2a", "benchmark_stage2b", "compare")

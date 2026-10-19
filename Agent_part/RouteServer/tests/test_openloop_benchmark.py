@@ -43,24 +43,10 @@ from mcp_server.contracts.stage_ii_cfm import (
     stage_ii_digest_v1,
 )
 from mcp_server.contracts.vqa_v2 import VQAQuestionV2, build_vqa_answer_v2
-from mcp_server.eval.openloop_common import (
-    audit_checkpoint_exposure_v1,
-    audit_output_input_digests_v1,
-    canonical_row_digest_v1,
-    coverage_metrics_v1,
-    join_openloop_artifacts_v1,
-)
-from mcp_server.eval.openloop_registry import (
-    build_checkpoint_exposure_registry_v1,
-)
-from mcp_server.eval.stage_i_openloop import (
-    evaluate_decision_openloop_v1,
-    evaluate_full_cot_openloop_v1,
-    evaluate_vqa_openloop_v1,
-)
-from mcp_server.eval.stage_ii_cfm_openloop import (
-    evaluate_stage_ii_cfm_openloop_v1,
-)
+from mcp_server.eval.openloop.openloop_common import audit_checkpoint_exposure_v1, audit_output_input_digests_v1, canonical_row_digest_v1, coverage_metrics_v1, join_openloop_artifacts_v1
+from mcp_server.eval.openloop.openloop_registry import build_checkpoint_exposure_registry_v1
+from mcp_server.eval.openloop.stage_i_openloop import evaluate_decision_openloop_v1, evaluate_full_cot_openloop_v1, evaluate_vqa_openloop_v1
+from mcp_server.eval.openloop.stage_ii_cfm_openloop import evaluate_stage_ii_cfm_openloop_v1
 
 
 _HEX_A = "a" * 64

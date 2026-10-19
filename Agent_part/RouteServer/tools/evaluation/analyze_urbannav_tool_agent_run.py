@@ -26,7 +26,7 @@ if str(SRC) not in sys.path:
 from mcp_server.agent.schemas import ToolCall  # noqa: E402
 from mcp_server.agent.tool_parser import parse_agent_action  # noqa: E402
 from mcp_server.agent.tool_schema import normalize_map_tool_arguments, validate_tool_call  # noqa: E402
-from mcp_server.eval.urbannav_io import load_urbannav_cases  # noqa: E402
+from mcp_server.eval.urbannav.urbannav_io import load_urbannav_cases
 
 
 def parse_args() -> argparse.Namespace:

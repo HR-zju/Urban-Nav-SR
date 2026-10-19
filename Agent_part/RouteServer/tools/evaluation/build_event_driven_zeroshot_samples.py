@@ -7,7 +7,7 @@ import argparse
 import json
 from pathlib import Path
 
-from mcp_server.eval.episode.zeroshot_samples import build_event_driven_zeroshot_rows
+from mcp_server.eval.agent_tools.episode.zeroshot_samples import build_event_driven_zeroshot_rows
 
 
 def main() -> None:

@@ -1,7 +1,7 @@
 """Tests for UrbanNav city-target coverage filtering."""
 
 from mcp_server.core.osm_local_index import LocalOsmPoiRecord
-from mcp_server.eval.urbannav_collection_coverage import build_hotspot_target_coverage, filter_instruction_rows_by_coverage
+from mcp_server.eval.urbannav.urbannav_collection_coverage import build_hotspot_target_coverage, filter_instruction_rows_by_coverage
 
 
 TARGET_MAP = {

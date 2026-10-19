@@ -14,12 +14,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from mcp_server.eval.urbannav_module1_compare import (  # noqa: E402
-    Module1ComparisonConfig,
-    Module1RunSpec,
-    compare_module1_runs,
-    comparison_to_markdown,
-)
+from mcp_server.eval.urbannav.urbannav_module1_compare import Module1ComparisonConfig, Module1RunSpec, compare_module1_runs, comparison_to_markdown
 
 
 def parse_args() -> argparse.Namespace:

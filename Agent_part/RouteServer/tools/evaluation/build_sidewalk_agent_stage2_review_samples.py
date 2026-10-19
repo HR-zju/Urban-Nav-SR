@@ -39,31 +39,13 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from mcp_server.eval.cases import load_stage2_cases
-from mcp_server.eval.cases import write_stage2_cases
-from mcp_server.eval.exporters import (
-    trace_to_ms_swift_stage2_row,
-    write_ms_swift_stage2_jsonl,
-    write_traces_jsonl,
-)
-from mcp_server.eval.phase1_archive_adapter import load_phase1_archive_stage2_cases
-from mcp_server.eval.runners import RouteServerTeacherRunner, run_cases
-from mcp_server.eval.stage2_pipeline import (
-    STAGE2_SPLITS,
-    Stage2SplitConfig,
-    apply_stage2_splits,
-    count_stage2_splits,
-    sample_stage2_review_rows,
-    summarize_stage2_slices,
-    write_jsonl_records,
-    write_review_index_csv,
-    write_stage2_split_outputs,
-)
-from mcp_server.eval.stage2_validator import (
-    validate_ms_swift_stage2_row,
-    validate_stage2_case,
-    validate_stage2_trace,
-)
+from mcp_server.eval.agent_tools.cases import load_stage2_cases
+from mcp_server.eval.agent_tools.cases import write_stage2_cases
+from mcp_server.eval.agent_tools.exporters import trace_to_ms_swift_stage2_row, write_ms_swift_stage2_jsonl, write_traces_jsonl
+from mcp_server.eval.agent_tools.phase1_archive_adapter import load_phase1_archive_stage2_cases
+from mcp_server.eval.agent_tools.runners import RouteServerTeacherRunner, run_cases
+from mcp_server.eval.agent_tools.stage2_pipeline import STAGE2_SPLITS, Stage2SplitConfig, apply_stage2_splits, count_stage2_splits, sample_stage2_review_rows, summarize_stage2_slices, write_jsonl_records, write_review_index_csv, write_stage2_split_outputs
+from mcp_server.eval.agent_tools.stage2_validator import validate_ms_swift_stage2_row, validate_stage2_case, validate_stage2_trace
 
 
 def _metric_average(values: list[float | None]) -> float | None:

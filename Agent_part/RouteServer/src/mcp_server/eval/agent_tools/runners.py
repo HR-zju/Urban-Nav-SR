@@ -143,7 +143,7 @@ class RouteServerTeacherRunner(AgentRunner):
     async def run_case(self, case: AgentStage2Case) -> AgentTrace:
         if self.teacher is None:
             # Lazy import，避免只使用 eval.cases/metrics 时强依赖 map provider 或视觉环境。
-            from mcp_server.teacher.trace_builder import RouteServerAgentTeacher, RouteServerTeacherConfig
+            from mcp_server.teacher.agent_tools.trace_builder import RouteServerAgentTeacher, RouteServerTeacherConfig
 
             # 默认 teacher 是 RouteServer 真实 teacher adapter，可选择 synthetic 或 executor tool_response。
             teacher = RouteServerAgentTeacher(

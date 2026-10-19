@@ -33,13 +33,7 @@ from mcp_server.agent.stage2 import (  # noqa: E402
     build_tool_decision,
 )
 from mcp_server.agent.tool_executor import ToolExecutor  # noqa: E402
-from mcp_server.eval.online_agent_runner import (  # noqa: E402
-    CallableModelAdapter,
-    MsSwiftInferenceAdapter,
-    MsSwiftInferenceConfig,
-    OpenAICompatibleInferenceConfig,
-    OpenAICompatibleStage2Adapter,
-)
+from mcp_server.eval.agent_tools.online_agent_runner import CallableModelAdapter, MsSwiftInferenceAdapter, MsSwiftInferenceConfig, OpenAICompatibleInferenceConfig, OpenAICompatibleStage2Adapter
 from mcp_server.llm import LLMSettings  # noqa: E402
 from mcp_server.map_providers import create_map_client  # noqa: E402
 

@@ -8,7 +8,7 @@ from mcp_server.core.commercial_global_provider import (
     _tomtom_category_set,
 )
 from mcp_server.core.urbannav_provider import UrbanNavPoiSearchRequest
-from mcp_server.eval.urbannav_schema import UrbanNavPoint
+from mcp_server.eval.urbannav.urbannav_schema import UrbanNavPoint
 
 
 class TomTomUrbanNavProviderTest(unittest.TestCase):

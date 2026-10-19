@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from mcp_server.core.osm_local_index import iter_local_osm_pois
-from mcp_server.eval.urbannav_collection_coverage import build_hotspot_target_coverage, filter_instruction_rows_by_coverage
+from mcp_server.eval.urbannav.urbannav_collection_coverage import build_hotspot_target_coverage, filter_instruction_rows_by_coverage
 
 
 def parse_args() -> argparse.Namespace:

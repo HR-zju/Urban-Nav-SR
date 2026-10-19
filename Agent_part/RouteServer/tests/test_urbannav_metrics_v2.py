@@ -4,12 +4,8 @@ from __future__ import annotations
 
 import json
 
-from mcp_server.eval.urbannav_metrics_v2 import (
-    UrbanNavEvalV2Config,
-    evaluate_predictions_v2,
-    write_eval_v2_artifacts,
-)
-from mcp_server.eval.urbannav_schema import UrbanNavCase, UrbanNavPrediction
+from mcp_server.eval.urbannav.urbannav_metrics_v2 import UrbanNavEvalV2Config, evaluate_predictions_v2, write_eval_v2_artifacts
+from mcp_server.eval.urbannav.urbannav_schema import UrbanNavCase, UrbanNavPrediction
 
 
 def _single_case(case_id: str = "single-1") -> UrbanNavCase:

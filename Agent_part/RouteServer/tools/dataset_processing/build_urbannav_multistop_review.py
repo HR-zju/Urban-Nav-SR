@@ -11,7 +11,7 @@ from typing import Any, Iterable
 
 from mcp_server.core.live_map_backend import LiveMapBackend, LiveRouteRequest
 from mcp_server.core.replay_map_backend import ReplayPoiResult, ReplayRouteResult
-from mcp_server.eval.urbannav_schema import UrbanNavDestination, UrbanNavPoint
+from mcp_server.eval.urbannav.urbannav_schema import UrbanNavDestination, UrbanNavPoint
 
 
 BUILDER_VERSION = "urbannav_multistop_live_v1"

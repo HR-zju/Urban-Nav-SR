@@ -9,20 +9,10 @@ import tempfile
 import unittest
 
 from mcp_server.agent.schemas import AgentStage2Case, ToolCall, ToolResponse
-from mcp_server.eval.exporters import trace_to_ms_swift_stage2_row
-from mcp_server.eval.stage2_pipeline import (
-    Stage2SplitConfig,
-    apply_stage2_splits,
-    sample_stage2_review_rows,
-    summarize_stage2_slices,
-    write_stage2_split_outputs,
-)
-from mcp_server.eval.stage2_validator import (
-    validate_ms_swift_stage2_row,
-    validate_stage2_case,
-    validate_stage2_trace,
-)
-from mcp_server.teacher.agentic_stage2_trace_builder import AgenticStage2TraceBuilder
+from mcp_server.eval.agent_tools.exporters import trace_to_ms_swift_stage2_row
+from mcp_server.eval.agent_tools.stage2_pipeline import Stage2SplitConfig, apply_stage2_splits, sample_stage2_review_rows, summarize_stage2_slices, write_stage2_split_outputs
+from mcp_server.eval.agent_tools.stage2_validator import validate_ms_swift_stage2_row, validate_stage2_case, validate_stage2_trace
+from mcp_server.teacher.agent_tools.agentic_stage2_trace_builder import AgenticStage2TraceBuilder
 
 
 ROUTESERVER_ROOT = Path(__file__).resolve().parents[1]

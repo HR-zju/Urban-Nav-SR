@@ -7,8 +7,8 @@ import math
 from typing import Iterable
 
 from mcp_server.core.osm_local_index import DEFAULT_OSM_POI_TAGS, LocalOsmPoiRecord
-from mcp_server.eval.urbannav_metrics import haversine_m
-from mcp_server.eval.urbannav_schema import UrbanNavPoint
+from mcp_server.eval.urbannav.urbannav_metrics import haversine_m
+from mcp_server.eval.urbannav.urbannav_schema import UrbanNavPoint
 
 
 @dataclass(frozen=True)

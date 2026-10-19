@@ -6,7 +6,7 @@ import sys
 import unittest
 
 
-_MODULE_PATH = Path(__file__).resolve().parents[1] / "tools" / "mcap_to_sidewalk_inputs.py"
+_MODULE_PATH = Path(__file__).resolve().parents[1] / "tools" / "dataset_processing" / "mcap_to_sidewalk_inputs.py"
 _SPEC = importlib.util.spec_from_file_location("mcap_to_sidewalk_inputs_test", _MODULE_PATH)
 if _SPEC is None or _SPEC.loader is None:
     raise RuntimeError(f"Unable to load module spec from {_MODULE_PATH}")

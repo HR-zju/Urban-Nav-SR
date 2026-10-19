@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from mcp_server.core.replay_map_backend import ReplayPoiResult, ReplayRouteResult
-from mcp_server.eval.urbannav_schema import UrbanNavDestination, UrbanNavPoint
+from mcp_server.eval.urbannav.urbannav_schema import UrbanNavDestination, UrbanNavPoint
 
 
 @dataclass(frozen=True)

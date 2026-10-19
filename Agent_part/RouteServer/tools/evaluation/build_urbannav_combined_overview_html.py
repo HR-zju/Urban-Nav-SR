@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from mcp_server.core.osm_local_index import LocalOsmPoiIndex
-from mcp_server.eval.urbannav_io import load_urbannav_cases
-from mcp_server.eval.urbannav_schema import UrbanNavCase, UrbanNavDestination, UrbanNavPoint
+from mcp_server.eval.urbannav.urbannav_io import load_urbannav_cases
+from mcp_server.eval.urbannav.urbannav_schema import UrbanNavCase, UrbanNavDestination, UrbanNavPoint
 
 
 DEFAULT_PLAN = Path(__file__).resolve().parents[2] / "config" / "urbannav_10k_distribution_plan.json"

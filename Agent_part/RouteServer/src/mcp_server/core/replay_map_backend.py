@@ -10,8 +10,8 @@ from urllib import error as urlerror
 from urllib import parse as urlparse
 from urllib import request as urlrequest
 
-from mcp_server.eval.urbannav_io import iter_json_records
-from mcp_server.eval.urbannav_schema import UrbanNavDestination, UrbanNavPoint, parse_route
+from mcp_server.eval.urbannav.urbannav_io import iter_json_records
+from mcp_server.eval.urbannav.urbannav_schema import UrbanNavDestination, UrbanNavPoint, parse_route
 
 
 @dataclass(frozen=True)

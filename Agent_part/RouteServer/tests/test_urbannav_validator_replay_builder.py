@@ -7,18 +7,11 @@ from pathlib import Path
 
 from mcp_server.core.live_map_backend import LiveMapBackend, LiveRouteRequest
 from mcp_server.core.replay_map_backend import ReplayMapBackend
-from mcp_server.eval.urbannav_schema import UrbanNavDestination, UrbanNavPoint
-from mcp_server.eval.urbannav_io import load_urbannav_cases, load_urbannav_predictions
-from mcp_server.eval.urbannav_metrics import evaluate_predictions
-from mcp_server.eval.urbannav_runners import (
-    OracleUrbanNavRunner,
-    ReplayUrbanNavBackendAdapter,
-    RouteServerRunnerConfig,
-    RouteServerUrbanNavRunner,
-    run_urbannav_cases,
-    run_urbannav_cases_async,
-)
-from mcp_server.eval.urbannav_validator import validate_urbannav_package
+from mcp_server.eval.urbannav.urbannav_schema import UrbanNavDestination, UrbanNavPoint
+from mcp_server.eval.urbannav.urbannav_io import load_urbannav_cases, load_urbannav_predictions
+from mcp_server.eval.urbannav.urbannav_metrics import evaluate_predictions
+from mcp_server.eval.urbannav.urbannav_runners import OracleUrbanNavRunner, ReplayUrbanNavBackendAdapter, RouteServerRunnerConfig, RouteServerUrbanNavRunner, run_urbannav_cases, run_urbannav_cases_async
+from mcp_server.eval.urbannav.urbannav_validator import validate_urbannav_package
 
 
 def _load_mock_builder():

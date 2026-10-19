@@ -12,13 +12,10 @@ from mcp_server.agent.stage2 import (
     build_final_assistant_text,
 )
 from mcp_server.agent.tool_parser import parse_finish_text
-from mcp_server.eval.exporters import trace_to_ms_swift_stage2_row
-from mcp_server.eval.metrics import compute_trace_metrics
-from mcp_server.eval.stage2_validator import validate_ms_swift_stage2_row, validate_stage2_trace
-from mcp_server.teacher.agentic_stage2_trace_builder import (
-    AgenticStage2TraceBuilder,
-    AgenticStage2TraceBuilderConfig,
-)
+from mcp_server.eval.agent_tools.exporters import trace_to_ms_swift_stage2_row
+from mcp_server.eval.agent_tools.metrics import compute_trace_metrics
+from mcp_server.eval.agent_tools.stage2_validator import validate_ms_swift_stage2_row, validate_stage2_trace
+from mcp_server.teacher.agent_tools.agentic_stage2_trace_builder import AgenticStage2TraceBuilder, AgenticStage2TraceBuilderConfig
 
 
 class AgentFinishSchemaTest(unittest.TestCase):

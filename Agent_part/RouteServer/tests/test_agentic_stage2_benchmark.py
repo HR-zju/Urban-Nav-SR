@@ -8,11 +8,7 @@ import sys
 import tempfile
 import unittest
 
-from mcp_server.eval.agentic_stage2_benchmark import (
-    AgenticStage2BenchmarkConfig,
-    collect_agentic_stage2_benchmark,
-    run_ms_swift_stage2_pipeline,
-)
+from mcp_server.eval.agent_tools.agentic_stage2_benchmark import AgenticStage2BenchmarkConfig, collect_agentic_stage2_benchmark, run_ms_swift_stage2_pipeline
 
 
 ROUTESERVER_ROOT = Path(__file__).resolve().parents[1]

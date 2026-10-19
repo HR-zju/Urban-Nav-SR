@@ -21,10 +21,10 @@ from typing import Any, Iterable
 
 from mcp_server.core.replay_map_backend import ReplayPoiResult, ReplayRouteResult
 from mcp_server.core.urbannav_provider import UrbanNavLiveProvider, UrbanNavPoiSearchRequest, UrbanNavRouteRequest
-from mcp_server.eval.urbannav_io import iter_json_records, load_urbannav_cases
-from mcp_server.eval.urbannav_collection_policy import previous_target_types_for_update
-from mcp_server.eval.urbannav_schema import UrbanNavDestination, UrbanNavPoint
-from mcp_server.eval.urbannav_validator import validate_urbannav_cases
+from mcp_server.eval.urbannav.urbannav_io import iter_json_records, load_urbannav_cases
+from mcp_server.eval.urbannav.urbannav_collection_policy import previous_target_types_for_update
+from mcp_server.eval.urbannav.urbannav_schema import UrbanNavDestination, UrbanNavPoint
+from mcp_server.eval.urbannav.urbannav_validator import validate_urbannav_cases
 
 from collect_urbannav_global_gt import (
     BUILDER_VERSION as GLOBAL_BUILDER_VERSION,

@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Any
 from urllib.request import urlopen
 
-from mcp_server.eval.urbannav_io import iter_json_records, load_urbannav_cases, load_urbannav_predictions
-from mcp_server.eval.urbannav_schema import UrbanNavCase, UrbanNavDestination, UrbanNavPoint, UrbanNavPrediction
+from mcp_server.eval.urbannav.urbannav_io import iter_json_records, load_urbannav_cases, load_urbannav_predictions
+from mcp_server.eval.urbannav.urbannav_schema import UrbanNavCase, UrbanNavDestination, UrbanNavPoint, UrbanNavPrediction
 from mcp_server.map_providers import (
     build_amap_staticmap_url,
     encode_polyline_text,

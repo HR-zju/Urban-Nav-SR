@@ -5,13 +5,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from mcp_server.eval.urbannav_io import write_urbannav_cases, write_urbannav_predictions
-from mcp_server.eval.urbannav_module1_benchmark import (
-    UrbanNavModule1BenchmarkConfig,
-    module1_prediction_contract,
-    run_module1_benchmark,
-)
-from mcp_server.eval.urbannav_schema import UrbanNavCase, UrbanNavDestination, UrbanNavPoint, UrbanNavPrediction
+from mcp_server.eval.urbannav.urbannav_io import write_urbannav_cases, write_urbannav_predictions
+from mcp_server.eval.urbannav.urbannav_module1_benchmark import UrbanNavModule1BenchmarkConfig, module1_prediction_contract, run_module1_benchmark
+from mcp_server.eval.urbannav.urbannav_schema import UrbanNavCase, UrbanNavDestination, UrbanNavPoint, UrbanNavPrediction
 
 
 class UrbanNavModule1BenchmarkTest(unittest.TestCase):

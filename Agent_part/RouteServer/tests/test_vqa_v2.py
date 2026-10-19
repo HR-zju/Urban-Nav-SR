@@ -45,7 +45,7 @@ from mcp_server.data.vqa.questions import build_vqa_questions_v2
 from mcp_server.data.vqa.source import build_vqa_source_v2
 from mcp_server.data.vqa.migration import migrate_vqa_annotation_payload_v2, migrate_vqa_source_payload_v2
 from mcp_server.data.vqa.views import build_vqa_training_view_v2
-from mcp_server.eval.vqa_v2 import evaluate_vqa_predictions_v2
+from mcp_server.eval.openloop.vqa_v2 import evaluate_vqa_predictions_v2
 from mcp_server.teacher.reasoning_v2_teacher import TeacherGeneration
 from mcp_server.teacher.vqa_v2_batch import (
     LVLMWeakLabelProducerV2,

@@ -328,7 +328,7 @@ class AgentToolRuntime:
             trace.metadata["runtime_errors"] = list(runtime_errors)
         if self.config.compute_metrics:
             # runtime 内部只附加协议指标，不在这里做训练/优化。
-            from mcp_server.eval.metrics import compute_trace_metrics
+            from mcp_server.eval.agent_tools.metrics import compute_trace_metrics
 
             metric_result = compute_trace_metrics(trace, case)
             trace.metrics = metric_result.metrics

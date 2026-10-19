@@ -34,7 +34,7 @@ from mcp_server.agent.stage2 import (
 )
 from mcp_server.agent.tool_parser import parse_agent_action
 from mcp_server.agent.tool_schema import get_tool_definitions
-from mcp_server.eval.metrics import compute_trace_metrics
+from mcp_server.eval.agent_tools.metrics import compute_trace_metrics
 
 
 @dataclass(frozen=True)

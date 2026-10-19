@@ -8,8 +8,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from mcp_server.eval.urbannav_io import load_urbannav_cases
-from mcp_server.eval.urbannav_schema import UrbanNavCase, UrbanNavPoint
+from mcp_server.eval.urbannav.urbannav_io import load_urbannav_cases
+from mcp_server.eval.urbannav.urbannav_schema import UrbanNavCase, UrbanNavPoint
 
 
 def parse_args() -> argparse.Namespace:

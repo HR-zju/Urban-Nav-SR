@@ -8,7 +8,7 @@ import asyncio
 from mcp_server.core.osm_local_index import LocalOsmPoiIndex, LocalOsmPoiRecord
 from mcp_server.core.osm_local_provider import LocalOsmOsrmProvider
 from mcp_server.core.urbannav_provider import UrbanNavPoiSearchRequest, UrbanNavRouteRequest
-from mcp_server.eval.urbannav_schema import UrbanNavPoint
+from mcp_server.eval.urbannav.urbannav_schema import UrbanNavPoint
 
 
 def test_local_osm_poi_index_filters_by_radius_and_tags() -> None:

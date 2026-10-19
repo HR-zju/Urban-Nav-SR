@@ -8,7 +8,7 @@ from mcp_server.agent.tool_executor import ToolExecutor
 from mcp_server.agent.tool_schema import get_tool_definitions, validate_tool_call
 from mcp_server.contracts.task import TaskState
 from mcp_server.contracts.tool import ToolCallV2
-from mcp_server.eval.urbannav_replay_tool_executor import ReplayUrbanNavToolExecutor
+from mcp_server.eval.agent_tools.urbannav_replay_tool_executor import ReplayUrbanNavToolExecutor
 from mcp_server.runtime import LiveToolExecutorAdapter
 from mcp_server.tools.registry import DEFAULT_TOOL_REGISTRY
 

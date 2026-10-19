@@ -6,9 +6,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from mcp_server.eval.openloop_registry import (
-    build_checkpoint_exposure_registry_v1,
-)
+from mcp_server.eval.openloop.openloop_registry import build_checkpoint_exposure_registry_v1
 
 
 def main() -> None:

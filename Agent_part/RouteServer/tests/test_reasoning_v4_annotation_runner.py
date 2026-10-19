@@ -187,8 +187,7 @@ def test_registry_v1_is_frozen_and_registry_v2_has_four_profiles() -> None:
         EGO_DEGREE10_12WAY_TERMINAL_CENTROID_V2,
     }
     assert STUDENT_FULL_COT_PROFILE_V4.policy_digest == (
-        "09462230ab1439971e39fe1ac957b1d5"
-        "a33c00a6680335ce5fe90f6ef8eeff0c"
+        "99358496341f88aaa38b60f2897da2347559e07de371bfd200e6b1a6be8da960"
     )
     assert (
         STUDENT_FULL_COT_PROFILE_V4_REGISTRY_V2.profile_id
@@ -212,14 +211,14 @@ def test_teacher_profiles_are_versioned_by_direction_registry() -> None:
         direction_registry_version=DIRECTION_PROFILE_REGISTRY_V2,
     )
 
-    assert legacy.profile_id.endswith("_v10")
-    assert expanded.profile_id.endswith("_v11")
+    # 方向 registry 本身仍冻结；视觉目标/停车证据策略拥有独立版本与缓存身份。
+    assert legacy.profile_id.endswith("_v10_visual_goal_stop_v1")
+    assert expanded.profile_id.endswith("_v11_visual_goal_stop_v1")
     assert legacy.policy_digest != expanded.policy_digest
-    assert legacy.derivation_version.endswith("_v2")
-    assert expanded.derivation_version.endswith("_v3")
+    assert legacy.derivation_version.endswith("_v2_visual_goal_stop_v1")
+    assert expanded.derivation_version.endswith("_v3_visual_goal_stop_v1")
     assert legacy.policy_digest == (
-        "ddad6e12bfd1e33bc521774a2d6577ba"
-        "6b31daba67213da6f784377da9b66440"
+        "7082a21704dfa2ca01a70474bdbf9b631b41f640e7f7d0f0d817e9bd7a280f93"
     )
     routed_legacy = get_reasoning_v4_teacher_profile(
         "Decision",
@@ -229,8 +228,7 @@ def test_teacher_profiles_are_versioned_by_direction_registry() -> None:
         direction_registry_version=DIRECTION_PROFILE_REGISTRY_V1,
     )
     assert routed_legacy.policy_digest == (
-        "2c4a5ebafd7b042964b4586b897e06c1"
-        "9b875ed40f0f47c59f255325b9fe7fb2"
+        "6e4c75231297126f9ed24135e65fc82e14db8e0a6d56e06f14149ae471586100"
     )
 
 
