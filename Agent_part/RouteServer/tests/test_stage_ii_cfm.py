@@ -551,7 +551,7 @@ def test_context_cache_materialization_matches_ms_swift() -> None:
     sys.path.insert(0, str(ms_root))
     try:
         adapter = importlib.import_module(
-            "swift.sidewalk_nav.data.stage_ii_context_cache"
+            "swift.sidewalk_nav.data.stage_ii.stage_ii_context_cache"
         )
         ms_cache = adapter.build_stage_ii_context_cache_row(record)
     finally:
@@ -599,14 +599,14 @@ def test_stage_ii_view_builds_cfm_only_ms_swift_row() -> None:
     sys.path.insert(0, str(ms_root))
     try:
         adapter = importlib.import_module(
-            "swift.sidewalk_nav.data.stage_ii_manifest"
+            "swift.sidewalk_nav.data.stage_ii.stage_ii_manifest"
         )
         row = adapter.build_stage_ii_manifest_row(serialized)
         eval_adapter = importlib.import_module(
-            "swift.sidewalk_nav.data.stage_ii_eval_manifest"
+            "swift.sidewalk_nav.data.stage_ii.stage_ii_eval_manifest"
         )
         case_adapter = importlib.import_module(
-            "swift.sidewalk_nav.data.stage_ii_case_manifest"
+            "swift.sidewalk_nav.data.stage_ii.stage_ii_case_manifest"
         )
         benchmark_input = case_adapter.build_stage_ii_case_input_row(
             view,
@@ -769,7 +769,7 @@ def test_legacy_direct_profile_reuses_visible_prefix_without_pass_rd(
     sys.path.insert(0, str(ms_root))
     try:
         adapter = importlib.import_module(
-            "swift.sidewalk_nav.data.stage_ii_legacy_direct_manifest"
+            "swift.sidewalk_nav.data.legacy.stage_ii_legacy_direct_manifest"
         )
         physical = adapter.build_stage_ii_legacy_direct_manifest_row(
             split_row,
