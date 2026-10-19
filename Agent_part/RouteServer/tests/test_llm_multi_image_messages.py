@@ -9,7 +9,7 @@ from unittest.mock import patch
 from mcp_server.llm import LLMSettings, VisionAnalyzer
 
 
-LLM_FILE = Path(__file__).resolve().parents[1] / "src" / "mcp_server" / "llm.py"
+LLM_FILE = Path(__file__).resolve().parents[1] / "src" / "mcp_server" / "llm_services" / "vision.py"
 
 
 def _function_arg_names(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:
