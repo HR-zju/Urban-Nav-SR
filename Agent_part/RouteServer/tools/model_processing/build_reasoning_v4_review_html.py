@@ -18,17 +18,10 @@ from mcp_server.contracts.reasoning_dataset_v4 import (
     ReasoningAnnotationV4,
     ReasoningSourceV4,
 )
-from mcp_server.data.jsonl_io import iter_jsonl
-from mcp_server.data.reasoning_v4_reconciliation import (
-    action_reconciliation_review_priority_v4,
-)
-from mcp_server.data.reasoning_v4_state import (
-    derive_reasoning_release_state_v4,
-    load_latest_action_adjudications_v4,
-)
-from mcp_server.data.reasoning_v4_review import (
-    load_latest_action_review_diagnoses_v4,
-)
+from mcp_server.data.io.jsonl import iter_jsonl
+from mcp_server.data.canonical.reasoning_v4_reconciliation import action_reconciliation_review_priority_v4
+from mcp_server.data.canonical.reasoning_v4_state import derive_reasoning_release_state_v4, load_latest_action_adjudications_v4
+from mcp_server.data.canonical.reasoning_v4_review import load_latest_action_review_diagnoses_v4
 
 _REVIEW_VERDICTS_V4 = (
     "teacher_proposal_error",

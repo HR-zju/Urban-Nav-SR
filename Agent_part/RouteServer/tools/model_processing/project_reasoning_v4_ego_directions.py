@@ -21,7 +21,7 @@ from mcp_server.contracts.direction_profile import (
     canonical_direction_derivation_version,
     resolve_stage_a_direction_profile,
 )
-from mcp_server.data.jsonl_io import iter_jsonl, write_jsonl_atomic
+from mcp_server.data.io.jsonl import iter_jsonl, write_jsonl_atomic
 from urbannav_contracts.stage_ii_cfm import StageIITrajectoryTargetV2
 
 

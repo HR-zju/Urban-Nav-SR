@@ -19,9 +19,9 @@ from mcp_server.contracts.reasoning import (
     TaskGroundingV2,
 )
 from mcp_server.contracts.reasoning_dataset import ReasoningAnnotationV2, ReasoningSourceV2
-from mcp_server.data.jsonl_io import iter_jsonl, write_jsonl_atomic
-from mcp_server.data.reasoning_source import ReasoningSourceBuildConfig, build_reasoning_source_v2
-from mcp_server.data.reasoning_views import build_reasoning_training_views
+from mcp_server.data.io.jsonl import iter_jsonl, write_jsonl_atomic
+from mcp_server.data.legacy.reasoning_v2.source import ReasoningSourceBuildConfig, build_reasoning_source_v2
+from mcp_server.data.legacy.reasoning_v2.views import build_reasoning_training_views
 from mcp_server.teacher.reasoning_v2_teacher import (
     ReasoningTeacherConfig,
     TeacherGeneration,

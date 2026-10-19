@@ -28,13 +28,13 @@
   "cached_traj_query_training_view_v2_schema_version": "urbannav_stage_ii_cached_traj_query_training_view_v2",
   "canonical_source_sha256": {
     "src/mcp_server/contracts/stage_ii_cfm.py": "be21bf6633aebd1b83a928b6e8188e97525310401bc5dcf17d1b14b2e15cf58c",
-    "src/mcp_server/data/stage_ii_context.py": "e98fd4fa7c0b0276c3e03e800b1141ec10fa6522e9c6223d0c14cd9416768de0",
-    "src/mcp_server/data/stage_ii_legacy_direct.py": "46cc9c6c2bc256bff0aad87f7067528c7df56430dd042b6192b6c21d7b368aec",
-    "src/mcp_server/data/stage_ii_raw_trajectory_v2.py": "a18bee709cac3766db3982282c03c14a22c2d3668fa601f860efc0f9120ad61b",
-    "src/mcp_server/data/stage_ii_sources.py": "1fa7e30bf8ef886fbdd672808c4ca5ba4a68b371b86823c71fd8f88c4577b3fe",
-    "src/mcp_server/data/stage_ii_trajectory.py": "256f1f42f579564208346c1657fbd30ea4fd67a19308dfabd45f1bced7a21470",
-    "src/mcp_server/data/stage_ii_trajectory_v2_corpus.py": "71860346c450270b3dc2dd4a1773325df529eb38b7e1a4281bdce7a8416efa94",
-    "src/mcp_server/data/stage_ii_views.py": "64731d4c8e18709cb99d92681538ca93c508800141f52f662a84fab044e67b79"
+    "src/mcp_server/data/stage_ii/context.py": "bf3a01895a38606dc1fad046fe4d1c2f3ade9c5e490995d3996290c637742ccf",
+    "src/mcp_server/data/stage_ii/legacy_direct.py": "db001c4391bd331857783140553bf7ebb94c8e2a04bb0048751119f5742b0925",
+    "src/mcp_server/data/stage_ii/raw_trajectory_v2.py": "b88a6cbb19e0b23d0b1c247d20cb0c0f31e3d9844c3e58426bf43a0ea5f3faa3",
+    "src/mcp_server/data/stage_ii/sources.py": "2f75c2b516fe31d891bced02e745bdd5ec3044547bb5bc81b93be75938af7696",
+    "src/mcp_server/data/stage_ii/trajectory.py": "47522bf5b238277761b6ab73dd0dd7729f3e4b0876fcb8c999d31ae784cc26ea",
+    "src/mcp_server/data/stage_ii/trajectory_v2_corpus.py": "8733d1e3f2b1d51db533877dbacce34eb01935c791887abe1d1371295dfb81bd",
+    "src/mcp_server/data/stage_ii/views.py": "ef8ce8669a26f86e9829ed2bc1ee2aa3eea008675fc550ff68dc35e086ad1255"
   },
   "context_cache_schema_version": "urbannav_stage_ii_context_cache_v1",
   "direct_latent_view_schema_version": "urbannav_stage_ii_direct_latent_view_v1",

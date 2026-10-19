@@ -7,7 +7,7 @@
   },
   "canonical_source_sha256": {
     "src/mcp_server/contracts/stage_i_sft.py": "2aa3cbe5873d260f9ca78739b84017d7bc757b053b3bd70b30b019dc311ac584",
-    "src/mcp_server/data/stage_i_views.py": "015a1bd506fb74c9e3b3e63de12cf93a9427f0965bde491dd9bfac1feade0cf8"
+    "src/mcp_server/data/stage_i/views.py": "68469111bcd758f8c3cfb39739c8231a17a8b03331388a967895bb530ad6031e"
   },
   "instruction_provenance_schema_version": "urbannav_stage_i_instruction_provenance_v1",
   "loss_span_policy_id": "urbannav_stage_i_char_spans_v1",

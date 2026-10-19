@@ -8,9 +8,7 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from mcp_server.data.reasoning_v4_audit import (
-    audit_reasoning_v4_source_coverage,
-)
+from mcp_server.data.canonical.reasoning_v4_audit import audit_reasoning_v4_source_coverage
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

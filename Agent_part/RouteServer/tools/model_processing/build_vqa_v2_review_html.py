@@ -22,10 +22,8 @@ from mcp_server.contracts.vqa_dataset_v2 import (
     VQASourceV2,
     VQATrainingViewV2,
 )
-from mcp_server.data.jsonl_io import iter_jsonl
-from mcp_server.data.vqa_v2_review import (
-    VQA_REVIEW_DECISION_V2_SCHEMA_VERSION,
-)
+from mcp_server.data.io.jsonl import iter_jsonl
+from mcp_server.data.vqa.review import VQA_REVIEW_DECISION_V2_SCHEMA_VERSION
 
 
 _REVIEW_REPORT_SCHEMA_VERSION = (

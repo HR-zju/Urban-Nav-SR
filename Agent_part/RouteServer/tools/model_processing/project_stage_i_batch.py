@@ -8,10 +8,7 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from mcp_server.data.stage_i_batch import (
-    project_stage_i_batch_v1,
-    project_stage_i_batch_v2,
-)
+from mcp_server.data.stage_i.batch import project_stage_i_batch_v1, project_stage_i_batch_v2
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

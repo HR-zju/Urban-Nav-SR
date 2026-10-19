@@ -16,15 +16,10 @@ from mcp_server.contracts.stage_ii_cfm import (
     StageIIContextProducerV1,
     stage_ii_digest_v1,
 )
-from mcp_server.data.stage_i_migration_v2 import (
-    upgrade_stage_i_full_cot_manifest_v2, )
-from mcp_server.data.stage_i_views import project_stage_i_reasoning_view_v1
-from mcp_server.data.stage_ii_cache_migration_v2 import (
-    rebind_stage_ii_context_cache_manifest_v2, )
-from mcp_server.data.stage_ii_context import (
-    build_stage_ii_context_cache_v1,
-    stage_ii_projected_input_digest_v1,
-)
+from mcp_server.data.stage_i.migration_v2 import upgrade_stage_i_full_cot_manifest_v2
+from mcp_server.data.stage_i.views import project_stage_i_reasoning_view_v1
+from mcp_server.data.stage_ii.cache_migration_v2 import rebind_stage_ii_context_cache_manifest_v2
+from mcp_server.data.stage_ii.context import build_stage_ii_context_cache_v1, stage_ii_projected_input_digest_v1
 
 from test_stage_i_sft import _formal_reasoning_view
 

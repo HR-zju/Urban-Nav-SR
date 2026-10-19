@@ -30,7 +30,7 @@ sys.path.insert(0, str(_WORKSPACE_ROOT / "UrbanNav-Contracts" / "src"))
 sys.path.insert(0, str(_WORKSPACE_ROOT / "ms-swift"))
 
 from mcp_server.data.history_corpus import materialize_history_corpus_parallel
-from mcp_server.data.jsonl_io import iter_jsonl
+from mcp_server.data.io.jsonl import iter_jsonl
 from model_processing.project_reasoning_v4_ego_directions import (
     project_reasoning_v4_ego_direction_manifest,
 )

@@ -8,9 +8,7 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from mcp_server.data.vqa_v2_review import (
-    filter_vqa_artifacts_by_review_v2,
-)
+from mcp_server.data.vqa.review import filter_vqa_artifacts_by_review_v2
 
 
 def parse_args(

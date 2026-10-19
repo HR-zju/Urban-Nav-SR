@@ -12,9 +12,7 @@ from mcp_server.contracts.direction_profile import (
     DIRECTION_PROFILE_REGISTRY_V1,
     direction_profile_registry_versions,
 )
-from mcp_server.data.reasoning_v4_views import (
-    export_reasoning_training_views_v4,
-)
+from mcp_server.data.canonical.reasoning_v4_views import export_reasoning_training_views_v4
 
 
 def parse_args(

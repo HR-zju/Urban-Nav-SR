@@ -21,21 +21,11 @@ from mcp_server.contracts.stage_ii_cfm import (
     stage_ii_digest_v1,
     validate_stage_ii_action_mask_v2,
 )
-from mcp_server.data.stage_i_views import (
-    project_stage_i_reasoning_dropout_from_full_v2,
-    project_stage_i_reasoning_view_v2,
-)
-from mcp_server.data.stage_ii_context import build_stage_ii_context_cache_v2
-from mcp_server.data.stage_ii_route_pool_v2 import (
-    build_stage_ii_cfm_route_pool_v2,
-)
-from mcp_server.data.stage_ii_trajectory import build_stage_ii_trajectory_qc_v2
-from mcp_server.data.stage_ii_views import (
-    project_stage_ii_cfm_view_v1_from_stage_i_v2,
-    project_stage_ii_cfm_view_v2,
-    project_stage_ii_cfm_view_with_audit_v2,
-    project_stage_ii_direct_latent_view_from_stage_i_v2,
-)
+from mcp_server.data.stage_i.views import project_stage_i_reasoning_dropout_from_full_v2, project_stage_i_reasoning_view_v2
+from mcp_server.data.stage_ii.context import build_stage_ii_context_cache_v2
+from mcp_server.data.stage_ii.route_pool_v2 import build_stage_ii_cfm_route_pool_v2
+from mcp_server.data.stage_ii.trajectory import build_stage_ii_trajectory_qc_v2
+from mcp_server.data.stage_ii.views import project_stage_ii_cfm_view_v1_from_stage_i_v2, project_stage_ii_cfm_view_v2, project_stage_ii_cfm_view_with_audit_v2, project_stage_ii_direct_latent_view_from_stage_i_v2
 from tools.model_processing.build_stage_ii_cfm_views import build_stage_ii_cfm_views
 
 from test_stage_i_sft import _formal_reasoning_view
@@ -147,7 +137,7 @@ def test_v2_partial_suffix_validates_padding_values(padding: str) -> None:
 def _trajectory_v1():
     """Return the retained clean 16-point target used by the compatibility path."""
 
-    from mcp_server.data.stage_ii_trajectory import build_stage_ii_trajectory_target_v1
+    from mcp_server.data.stage_ii.trajectory import build_stage_ii_trajectory_target_v1
 
     return build_stage_ii_trajectory_target_v1(
         sample_id="sidewalk:trajectory-test",

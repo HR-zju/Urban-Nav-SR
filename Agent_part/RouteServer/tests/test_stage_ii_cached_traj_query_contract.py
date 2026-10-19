@@ -30,8 +30,8 @@ from mcp_server.data.stage_ii.cached_pairs import (
     build_stage_ii_cached_traj_query_pairs_v2,
     build_stage_ii_cached_traj_query_source_views_v2,
 )
-from mcp_server.data.stage_ii_views import project_stage_ii_cfm_view_v2
-from mcp_server.data.stage_i_views import project_stage_i_reasoning_view_v2
+from mcp_server.data.stage_ii.views import project_stage_ii_cfm_view_v2
+from mcp_server.data.stage_i.views import project_stage_i_reasoning_view_v2
 
 from test_stage_ii_cfm_v2 import (
     _cache,
@@ -400,7 +400,7 @@ def _stage_ii_view(label: str = "straight", *, instruction: str | None = None):
 
     stage_i_view = _stage_i_full_v2() if label == "straight" else None
     if stage_i_view is None:
-        from mcp_server.data.stage_i_views import project_stage_i_reasoning_view_v2
+        from mcp_server.data.stage_i.views import project_stage_i_reasoning_view_v2
         from test_stage_i_sft import _formal_reasoning_view
 
         reasoning_view = _formal_reasoning_view(label)

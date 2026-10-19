@@ -40,37 +40,17 @@ from mcp_server.contracts.stage_i_sft import (
     parse_stage_i_training_view_v2,
     stage_i_projection_digest_v1,
 )
-from mcp_server.data.stage_i_batch import (
-    project_stage_i_batch_v1,
-    project_stage_i_batch_v2,
-)
-from mcp_server.data.openloop_benchmark import (
-    build_stage_i_openloop_reference_v1, )
-from mcp_server.data.openloop_lineage import (
-    build_openloop_split_lineage_v1,
-    freeze_openloop_stage_i_views_v1,
-)
-from mcp_server.data.stage_i_provenance import (
-    build_stage_i_instruction_provenance_v1,
-    resolve_stage_i_instruction_role_v1,
-)
-from mcp_server.data.stage_i_portable import relocate_stage_i_training_views_v1
-from mcp_server.data.stage_i_migration_v2 import (
-    extract_stage_i_full_cot_manifest_v1,
-    upgrade_stage_i_full_cot_manifest_v2,
-)
-from mcp_server.data.stage_i_views import (
-    project_stage_i_reasoning_dropout_from_full_v2,
-    project_stage_i_reasoning_view_v1,
-    project_stage_i_reasoning_view_with_audit_v1,
-    project_stage_i_vqa_view_v1,
-    project_stage_i_vqa_view_with_audit_v1,
-    project_stage_i_reasoning_view_v2,
-)
-from mcp_server.data.vqa_v2_eligibility import load_vqa_capabilities_v2
-from mcp_server.data.vqa_v2_producers import CanonicalDemonstratedDirectionProducerV2
-from mcp_server.data.vqa_v2_questions import build_vqa_questions_v2
-from mcp_server.data.vqa_v2_source import build_vqa_source_v2
+from mcp_server.data.stage_i.batch import project_stage_i_batch_v1, project_stage_i_batch_v2
+from mcp_server.data.openloop.benchmark import build_stage_i_openloop_reference_v1
+from mcp_server.data.openloop.lineage import build_openloop_split_lineage_v1, freeze_openloop_stage_i_views_v1
+from mcp_server.data.stage_i.provenance import build_stage_i_instruction_provenance_v1, resolve_stage_i_instruction_role_v1
+from mcp_server.data.stage_i.portable import relocate_stage_i_training_views_v1
+from mcp_server.data.stage_i.migration_v2 import extract_stage_i_full_cot_manifest_v1, upgrade_stage_i_full_cot_manifest_v2
+from mcp_server.data.stage_i.views import project_stage_i_reasoning_dropout_from_full_v2, project_stage_i_reasoning_view_v1, project_stage_i_reasoning_view_with_audit_v1, project_stage_i_vqa_view_v1, project_stage_i_vqa_view_with_audit_v1, project_stage_i_reasoning_view_v2
+from mcp_server.data.vqa.eligibility import load_vqa_capabilities_v2
+from mcp_server.data.vqa.producers import CanonicalDemonstratedDirectionProducerV2
+from mcp_server.data.vqa.questions import build_vqa_questions_v2
+from mcp_server.data.vqa.source import build_vqa_source_v2
 from tools.model_processing.build_stage_i_instruction_provenance import (
     build_policy_registry, )
 

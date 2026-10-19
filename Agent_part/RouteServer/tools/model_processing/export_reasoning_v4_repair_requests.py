@@ -8,13 +8,9 @@ import json
 from pathlib import Path
 from typing import Any, Sequence
 
-from mcp_server.data.jsonl_io import write_jsonl_atomic
-from mcp_server.data.reasoning_v4_review import (
-    build_reasoning_repair_request_v4,
-)
-from mcp_server.data.reasoning_v4_state import (
-    load_latest_action_adjudications_v4,
-)
+from mcp_server.data.io.jsonl import write_jsonl_atomic
+from mcp_server.data.canonical.reasoning_v4_review import build_reasoning_repair_request_v4
+from mcp_server.data.canonical.reasoning_v4_state import load_latest_action_adjudications_v4
 
 
 def parse_args(

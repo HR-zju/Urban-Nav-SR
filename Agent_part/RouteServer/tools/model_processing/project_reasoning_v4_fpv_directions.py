@@ -22,7 +22,7 @@ from mcp_server.contracts.direction_profile import (
     quantize_direction_angle,
     resolve_stage_a_direction_profile,
 )
-from mcp_server.data.jsonl_io import iter_jsonl, write_jsonl_atomic
+from mcp_server.data.io.jsonl import iter_jsonl, write_jsonl_atomic
 
 
 _PROJECTION_SCHEMA_VERSION = "reasoning_v4_fpv_direction_projection_v2"

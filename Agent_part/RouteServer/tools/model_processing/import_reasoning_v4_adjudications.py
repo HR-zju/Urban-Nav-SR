@@ -14,14 +14,9 @@ from mcp_server.contracts.reasoning_dataset_v4 import (
     ReasoningAnnotationV4,
     ReasoningSourceV4,
 )
-from mcp_server.data.jsonl_io import iter_jsonl
-from mcp_server.data.reasoning_v4_review import (
-    bind_action_adjudication_v4,
-    load_latest_action_review_diagnoses_v4,
-)
-from mcp_server.data.reasoning_v4_state import (
-    append_action_adjudication_v4,
-)
+from mcp_server.data.io.jsonl import iter_jsonl
+from mcp_server.data.canonical.reasoning_v4_review import bind_action_adjudication_v4, load_latest_action_review_diagnoses_v4
+from mcp_server.data.canonical.reasoning_v4_state import append_action_adjudication_v4
 
 
 def parse_args(

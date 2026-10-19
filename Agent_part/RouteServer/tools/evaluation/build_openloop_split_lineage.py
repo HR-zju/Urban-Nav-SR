@@ -7,7 +7,7 @@ import argparse
 import json
 from pathlib import Path
 
-from mcp_server.data.openloop_lineage import build_openloop_split_lineage_v1
+from mcp_server.data.openloop.lineage import build_openloop_split_lineage_v1
 
 
 def main() -> None:

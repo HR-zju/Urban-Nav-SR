@@ -223,13 +223,13 @@ def _canonical_source_hashes() -> dict[str, str]:
     route_root = Path(__file__).resolve().parents[2]
     relatives = (
         "src/mcp_server/contracts/stage_ii_cfm.py",
-        "src/mcp_server/data/stage_ii_context.py",
-        "src/mcp_server/data/stage_ii_trajectory.py",
-        "src/mcp_server/data/stage_ii_raw_trajectory_v2.py",
-        "src/mcp_server/data/stage_ii_trajectory_v2_corpus.py",
-        "src/mcp_server/data/stage_ii_sources.py",
-        "src/mcp_server/data/stage_ii_legacy_direct.py",
-        "src/mcp_server/data/stage_ii_views.py",
+        "src/mcp_server/data/stage_ii/context.py",
+        "src/mcp_server/data/stage_ii/trajectory.py",
+        "src/mcp_server/data/stage_ii/raw_trajectory_v2.py",
+        "src/mcp_server/data/stage_ii/trajectory_v2_corpus.py",
+        "src/mcp_server/data/stage_ii/sources.py",
+        "src/mcp_server/data/stage_ii/legacy_direct.py",
+        "src/mcp_server/data/stage_ii/views.py",
     )
     return {
         relative: hashlib.sha256((route_root / relative).read_bytes()).hexdigest()

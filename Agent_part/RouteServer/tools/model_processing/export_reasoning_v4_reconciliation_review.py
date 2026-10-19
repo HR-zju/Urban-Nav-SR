@@ -6,9 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 
-from mcp_server.data.reasoning_v4_reconciliation_review import (
-    export_action_reconciliation_review_v4,
-)
+from mcp_server.data.canonical.reasoning_v4_reconciliation_review import export_action_reconciliation_review_v4
 
 
 def parse_args() -> argparse.Namespace:

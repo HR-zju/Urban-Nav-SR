@@ -8,9 +8,7 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from mcp_server.data.vqa_v2_eligibility import (
-    load_vqa_capabilities_v2,
-)
+from mcp_server.data.vqa.eligibility import load_vqa_capabilities_v2
 from mcp_server.eval.vqa_v2 import evaluate_vqa_predictions_v2
 
 

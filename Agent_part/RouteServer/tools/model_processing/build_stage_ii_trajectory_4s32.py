@@ -10,9 +10,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Sequence
 
-from mcp_server.data.stage_ii_trajectory_v2_corpus import (
-    build_stage_ii_trajectory_corpus_v2,
-)
+from mcp_server.data.stage_ii.trajectory_v2_corpus import build_stage_ii_trajectory_corpus_v2
 
 
 def _key_value(value: str) -> tuple[str, Path]:

@@ -9,7 +9,7 @@ from mcp_server.contracts.stage_ii_cfm import (
     STAGE_II_LEGACY_DIRECT_TARGET_SCHEMA_VERSION,
     stage_ii_digest_v1,
 )
-from mcp_server.data.stage_i_views import project_stage_i_reasoning_view_v2
+from mcp_server.data.stage_i.views import project_stage_i_reasoning_view_v2
 from mcp_server.data.stage_ii.trajectory import build_stage_ii_trajectory_target_v1
 from tools.model_processing.build_stage_ii_v4_clean_inputs import (
     build_stage_ii_v4_clean_inputs,

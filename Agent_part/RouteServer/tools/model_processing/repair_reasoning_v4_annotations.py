@@ -14,7 +14,7 @@ from mcp_server.contracts.reasoning_dataset_v4 import (
     ReasoningRepairRequestV4,
     ReasoningSourceV4,
 )
-from mcp_server.data.jsonl_io import append_jsonl_row, iter_jsonl
+from mcp_server.data.io.jsonl import append_jsonl_row, iter_jsonl
 from mcp_server.teacher.reasoning_v4_batch import (
     ReasoningV4BatchConfig,
     VisionReasoningV4TeacherBackend,

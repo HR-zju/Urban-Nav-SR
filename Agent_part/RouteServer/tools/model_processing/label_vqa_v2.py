@@ -10,9 +10,7 @@ import os
 from pathlib import Path
 from typing import Sequence
 
-from mcp_server.data.vqa_v2_eligibility import (
-    load_vqa_capabilities_v2,
-)
+from mcp_server.data.vqa.eligibility import load_vqa_capabilities_v2
 from mcp_server.teacher.vqa_v2_batch import (
     VQABatchConfigV2,
     label_vqa_source_manifest_v2,

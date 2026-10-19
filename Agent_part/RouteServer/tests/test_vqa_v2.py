@@ -37,29 +37,14 @@ from mcp_server.contracts.vqa_v2 import (
     get_vqa_task_spec_v2,
     validate_answer_for_question_v2,
 )
-from mcp_server.data.jsonl_io import write_jsonl_atomic
-from mcp_server.data.vqa_v2_eligibility import (
-    load_vqa_capabilities_v2,
-)
-from mcp_server.data.vqa_v2_producers import (
-    CanonicalDemonstratedDirectionProducerV2,
-    produce_external_interface_annotation_v2,
-)
-from mcp_server.data.vqa_v2_review import (
-    VQAReviewDecisionV2,
-    filter_vqa_artifacts_by_review_v2,
-)
-from mcp_server.data.vqa_v2_questions import (
-    build_vqa_questions_v2,
-)
-from mcp_server.data.vqa_v2_source import build_vqa_source_v2
-from mcp_server.data.vqa_v2_migration import (
-    migrate_vqa_annotation_payload_v2,
-    migrate_vqa_source_payload_v2,
-)
-from mcp_server.data.vqa_v2_views import (
-    build_vqa_training_view_v2,
-)
+from mcp_server.data.io.jsonl import write_jsonl_atomic
+from mcp_server.data.vqa.eligibility import load_vqa_capabilities_v2
+from mcp_server.data.vqa.producers import CanonicalDemonstratedDirectionProducerV2, produce_external_interface_annotation_v2
+from mcp_server.data.vqa.review import VQAReviewDecisionV2, filter_vqa_artifacts_by_review_v2
+from mcp_server.data.vqa.questions import build_vqa_questions_v2
+from mcp_server.data.vqa.source import build_vqa_source_v2
+from mcp_server.data.vqa.migration import migrate_vqa_annotation_payload_v2, migrate_vqa_source_payload_v2
+from mcp_server.data.vqa.views import build_vqa_training_view_v2
 from mcp_server.eval.vqa_v2 import evaluate_vqa_predictions_v2
 from mcp_server.teacher.reasoning_v2_teacher import TeacherGeneration
 from mcp_server.teacher.vqa_v2_batch import (

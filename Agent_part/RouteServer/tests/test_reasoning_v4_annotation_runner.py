@@ -21,8 +21,8 @@ from mcp_server.contracts.direction_profile import (
     approved_stage_a_direction_profiles,
     resolve_stage_a_direction_profile,
 )
-from mcp_server.data.reasoning_source import ReasoningSourceBuildConfig
-from mcp_server.data.reasoning_v4_source import build_reasoning_source_v4
+from mcp_server.data.legacy.reasoning_v2.source import ReasoningSourceBuildConfig
+from mcp_server.data.canonical.reasoning_v4_source import build_reasoning_source_v4
 from mcp_server.teacher.reasoning_v4_profiles import (
     get_reasoning_v4_teacher_profile,
 )

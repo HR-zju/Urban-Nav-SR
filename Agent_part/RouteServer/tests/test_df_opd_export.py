@@ -42,7 +42,7 @@ from mcp_server.data.df_opd.export import (
     build_df_opd_trainable_manifest_v1,
 )
 from mcp_server.data.io.jsonl import file_sha256, iter_jsonl, write_jsonl_atomic
-from mcp_server.data.stage_i_views import project_stage_i_reasoning_view_v2
+from mcp_server.data.stage_i.views import project_stage_i_reasoning_view_v2
 
 
 _POLICY_DIGEST = "a" * 64

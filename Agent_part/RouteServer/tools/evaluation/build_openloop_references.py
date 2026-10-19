@@ -7,9 +7,7 @@ import argparse
 import json
 from pathlib import Path
 
-from mcp_server.data.openloop_benchmark import (
-    build_openloop_reference_jsonl_v1,
-)
+from mcp_server.data.openloop.benchmark import build_openloop_reference_jsonl_v1
 
 
 def main() -> None:

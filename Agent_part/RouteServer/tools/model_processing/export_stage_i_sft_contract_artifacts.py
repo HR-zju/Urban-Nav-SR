@@ -122,7 +122,7 @@ def _canonical_source_hashes() -> dict[str, str]:
     route_root = Path(__file__).resolve().parents[2]
     relatives = (
         "src/mcp_server/contracts/stage_i_sft.py",
-        "src/mcp_server/data/stage_i_views.py",
+        "src/mcp_server/data/stage_i/views.py",
     )
     return {
         relative: hashlib.sha256((route_root / relative).read_bytes()).hexdigest()

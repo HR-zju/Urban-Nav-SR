@@ -8,9 +8,7 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from mcp_server.data.sidewalk_bev_contract_recovery import (
-    audit_sidewalk_navigation_repair,
-)
+from mcp_server.data.adapters.sidewalk_bev_contract_recovery import audit_sidewalk_navigation_repair
 
 
 def parse_args(

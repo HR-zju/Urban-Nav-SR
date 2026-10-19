@@ -55,50 +55,18 @@ from mcp_server.contracts.reasoning_v4 import (
     TaskDirectionV4,
     TaskGroundingV4,
 )
-from mcp_server.data.reasoning_v4_compact import (
-    parse_compact_full_cot_action_v4,
-)
-from mcp_server.data.reasoning_v4_audit import (
-    audit_reasoning_v4_artifacts,
-    audit_reasoning_v4_pilot,
-)
-from mcp_server.data.reasoning_v4_composer import (
-    REASONING_V4_COMPOSER_VERSION,
-    compose_reasoning_target_v4,
-)
-from mcp_server.data.reasoning_v4_reconciliation import (
-    action_reconciliation_advisory_trigger_codes_v4,
-    action_reconciliation_blocking_trigger_codes_v4,
-    action_reconciliation_review_priority_v4,
-    action_reconciliation_review_required_v4,
-    build_action_reconciliation_audit_v4,
-)
-from mcp_server.data.reasoning_v4_migration import (
-    migrate_reasoning_annotation_v4,
-)
-from mcp_server.data.reasoning_v4_reconciliation_review import (
-    export_action_reconciliation_review_v4,
-)
-from mcp_server.data.reasoning_v4_source import (
-    build_reasoning_source_v4,
-)
-from mcp_server.data.reasoning_v4_state import (
-    derive_reasoning_release_state_v4,
-)
-from mcp_server.data.reasoning_v4_review import (
-    bind_action_adjudication_v4,
-    bind_action_review_diagnosis_v4,
-    build_reasoning_repair_request_v4,
-)
-from mcp_server.data.reasoning_v4_task_canonicalization import (
-    canonicalize_task_instruction_v4,
-    normalize_task_instruction_v4,
-    task_instruction_fingerprint_v4,
-)
-from mcp_server.data.reasoning_v4_views import (
-    build_reasoning_training_views_v4,
-)
-from mcp_server.data.reasoning_source import ReasoningSourceBuildConfig
+from mcp_server.data.canonical.reasoning_v4_compact import parse_compact_full_cot_action_v4
+from mcp_server.data.canonical.reasoning_v4_audit import audit_reasoning_v4_artifacts, audit_reasoning_v4_pilot
+from mcp_server.data.canonical.reasoning_v4_composer import REASONING_V4_COMPOSER_VERSION, compose_reasoning_target_v4
+from mcp_server.data.canonical.reasoning_v4_reconciliation import action_reconciliation_advisory_trigger_codes_v4, action_reconciliation_blocking_trigger_codes_v4, action_reconciliation_review_priority_v4, action_reconciliation_review_required_v4, build_action_reconciliation_audit_v4
+from mcp_server.data.canonical.reasoning_v4_migration import migrate_reasoning_annotation_v4
+from mcp_server.data.canonical.reasoning_v4_reconciliation_review import export_action_reconciliation_review_v4
+from mcp_server.data.canonical.reasoning_v4_source import build_reasoning_source_v4
+from mcp_server.data.canonical.reasoning_v4_state import derive_reasoning_release_state_v4
+from mcp_server.data.canonical.reasoning_v4_review import bind_action_adjudication_v4, bind_action_review_diagnosis_v4, build_reasoning_repair_request_v4
+from mcp_server.data.canonical.reasoning_v4_task_canonicalization import canonicalize_task_instruction_v4, normalize_task_instruction_v4, task_instruction_fingerprint_v4
+from mcp_server.data.canonical.reasoning_v4_views import build_reasoning_training_views_v4
+from mcp_server.data.legacy.reasoning_v2.source import ReasoningSourceBuildConfig
 from mcp_server.teacher.reasoning_v2_teacher import TeacherGeneration
 from mcp_server.teacher.reasoning_v4_batch import (
     ReasoningV4BatchConfig,

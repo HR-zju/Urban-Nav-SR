@@ -8,9 +8,7 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from mcp_server.data.stage_ii_route_pool_v2 import (
-    build_stage_ii_cfm_route_pool_v2,
-)
+from mcp_server.data.stage_ii.route_pool_v2 import build_stage_ii_cfm_route_pool_v2
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

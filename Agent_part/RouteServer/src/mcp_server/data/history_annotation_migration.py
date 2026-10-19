@@ -28,7 +28,7 @@ from mcp_server.data.canonical.reasoning_v4_task_canonicalization import (
 from mcp_server.data.canonical.reasoning_v4_views import export_reasoning_training_views_v4
 from mcp_server.data.io.jsonl import append_jsonl_row, iter_jsonl, iter_jsonl_with_offsets, write_jsonl_atomic
 from mcp_server.data.history_label_reuse import anchor_label_evidence, same_evidence_image
-from mcp_server.data.reasoning_source import ReasoningSourceBuildConfig
+from mcp_server.data.legacy.reasoning_v2.source import ReasoningSourceBuildConfig
 from mcp_server.data.stage_i.views import project_stage_i_reasoning_view_with_audit_v2
 from mcp_server.teacher.reasoning_v4_batch import (
     ReasoningV4BatchConfig, ReasoningV4TeacherBackend, annotate_reasoning_source_v4,

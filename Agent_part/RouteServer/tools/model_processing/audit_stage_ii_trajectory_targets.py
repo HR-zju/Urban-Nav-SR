@@ -11,14 +11,8 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from mcp_server.contracts.stage_ii_cfm import stage_ii_digest_v1
-from mcp_server.data.stage_ii_sources import (
-    StageIISourceAdapterErrorV1,
-    adapt_stage_ii_trajectory_source_row_v1,
-    load_stage_ii_trajectory_source_registry_v1,
-    stage_ii_assign_split_v1,
-    stage_ii_source_row_identity_v1,
-)
-from mcp_server.data.stage_ii_trajectory import build_stage_ii_trajectory_target_v1
+from mcp_server.data.stage_ii.sources import StageIISourceAdapterErrorV1, adapt_stage_ii_trajectory_source_row_v1, load_stage_ii_trajectory_source_registry_v1, stage_ii_assign_split_v1, stage_ii_source_row_identity_v1
+from mcp_server.data.stage_ii.trajectory import build_stage_ii_trajectory_target_v1
 
 
 AUDIT_REPORT_SCHEMA_VERSION = "urbannav_stage_ii_target_audit_report_v1"

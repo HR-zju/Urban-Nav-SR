@@ -43,7 +43,7 @@ from mcp_server.data.benchmark.language_waypoint_dataset_plugin import (
     language_waypoint_default_profile_v1,
 )
 from mcp_server.data.io.jsonl import iter_jsonl
-from mcp_server.data.stage_ii_trajectory import build_stage_ii_trajectory_qc_v2
+from mcp_server.data.stage_ii.trajectory import build_stage_ii_trajectory_qc_v2
 from mcp_server.eval.openloop.benchmark_plugin_package import load_benchmark_package_v1
 
 

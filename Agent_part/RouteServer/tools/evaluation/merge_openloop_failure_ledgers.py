@@ -7,7 +7,7 @@ import argparse
 from pathlib import Path
 
 from mcp_server.contracts.openloop_benchmark import OpenLoopFailureV1
-from mcp_server.data.jsonl_io import iter_jsonl, write_jsonl_atomic
+from mcp_server.data.io.jsonl import iter_jsonl, write_jsonl_atomic
 
 
 def merge_failure_ledgers(

@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from mcp_server.data.stage_i_portable import relocate_stage_i_training_views_v1
+from mcp_server.data.stage_i.portable import relocate_stage_i_training_views_v1
 
 
 def _prefix_map(value: str) -> tuple[str, str]:

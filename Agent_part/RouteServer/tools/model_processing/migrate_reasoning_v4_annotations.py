@@ -8,9 +8,7 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from mcp_server.data.reasoning_v4_migration import (
-    migrate_reasoning_annotation_manifest_v4,
-)
+from mcp_server.data.canonical.reasoning_v4_migration import migrate_reasoning_annotation_manifest_v4
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

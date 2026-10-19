@@ -8,10 +8,8 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from mcp_server.data.vqa_v2_audit import audit_vqa_artifacts_v2
-from mcp_server.data.vqa_v2_eligibility import (
-    load_vqa_capabilities_v2,
-)
+from mcp_server.data.vqa.audit import audit_vqa_artifacts_v2
+from mcp_server.data.vqa.eligibility import load_vqa_capabilities_v2
 
 
 def parse_args(

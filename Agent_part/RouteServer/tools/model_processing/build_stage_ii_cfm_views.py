@@ -22,20 +22,10 @@ from mcp_server.contracts.stage_ii_cfm import (
     StageIITrajectoryTargetV2,
     STAGE_II_TRAJECTORY_SIDECAR_V2_SCHEMA_VERSION,
 )
-from mcp_server.data.stage_ii_sources import (
-    load_stage_ii_trajectory_source_registry_v1,
-)
-from mcp_server.data.openloop_benchmark import (
-    build_stage_ii_openloop_reference_from_parent_v1,
-)
-from mcp_server.data.stage_ii_trajectory import build_stage_ii_trajectory_target_v1
-from mcp_server.data.stage_ii_views import (
-    build_stage_ii_projection_drop_v1,
-    project_stage_ii_cfm_view_v1,
-    project_stage_ii_cfm_view_v1_from_stage_i_v2,
-    project_stage_ii_cfm_view_v2,
-    project_stage_ii_direct_latent_view_from_stage_i_v2,
-)
+from mcp_server.data.stage_ii.sources import load_stage_ii_trajectory_source_registry_v1
+from mcp_server.data.openloop.benchmark import build_stage_ii_openloop_reference_from_parent_v1
+from mcp_server.data.stage_ii.trajectory import build_stage_ii_trajectory_target_v1
+from mcp_server.data.stage_ii.views import build_stage_ii_projection_drop_v1, project_stage_ii_cfm_view_v1, project_stage_ii_cfm_view_v1_from_stage_i_v2, project_stage_ii_cfm_view_v2, project_stage_ii_direct_latent_view_from_stage_i_v2
 
 
 REPORT_VERSION = "urbannav_stage_ii_cfm_view_build_report_v1"

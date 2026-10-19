@@ -12,10 +12,8 @@ from typing import Any, Sequence
 
 from mcp_server.contracts.reasoning_dataset_v4 import ReasoningTrainingViewV4
 from mcp_server.contracts.vqa_dataset_v2 import VQASourceV2
-from mcp_server.data.jsonl_io import iter_jsonl
-from mcp_server.data.stage_i_provenance import (
-    build_stage_i_instruction_provenance_v1,
-)
+from mcp_server.data.io.jsonl import iter_jsonl
+from mcp_server.data.stage_i.provenance import build_stage_i_instruction_provenance_v1
 
 
 def build_registry(

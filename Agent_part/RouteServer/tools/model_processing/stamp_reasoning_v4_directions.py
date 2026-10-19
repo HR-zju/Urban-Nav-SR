@@ -27,7 +27,7 @@ from mcp_server.contracts.direction_profile import (
 from mcp_server.contracts.reasoning_dataset_v4 import (
     DirectionSupervisionV4,
 )
-from mcp_server.data.jsonl_io import iter_jsonl, write_jsonl_atomic
+from mcp_server.data.io.jsonl import iter_jsonl, write_jsonl_atomic
 
 
 _SELECTION_MODES = (

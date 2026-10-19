@@ -17,28 +17,14 @@ from mcp_server.contracts.stage_ii_cfm import (
     StageIITrajectorySourceRegistryV1,
     stage_ii_digest_v1,
 )
-from mcp_server.data.stage_i_views import project_stage_i_reasoning_view_v1
-from mcp_server.data.openloop_benchmark import (
-    build_stage_ii_openloop_reference_from_parent_v1,
-)
-from mcp_server.data.stage_ii_context import (
-    build_stage_ii_context_cache_v1,
-    stage_ii_projected_input_digest_v1,
-)
-from mcp_server.data.stage_ii_legacy_direct import (
-    build_stage_ii_legacy_direct_selection_v1,
-    build_stage_ii_legacy_direct_targets_v1,
-)
-from mcp_server.data.stage_ii_trajectory import build_stage_ii_trajectory_target_v1
-from mcp_server.data.stage_ii_sources import (
-    StageIISourceAdapterErrorV1,
-    adapt_stage_ii_trajectory_source_row_v1,
-    load_stage_ii_trajectory_source_registry_v1,
-)
-from mcp_server.data.stage_ii_sidecars import (
-    build_stage_ii_trajectory_sidecars_v1,
-)
-from mcp_server.data.stage_ii_views import project_stage_ii_cfm_view_v1
+from mcp_server.data.stage_i.views import project_stage_i_reasoning_view_v1
+from mcp_server.data.openloop.benchmark import build_stage_ii_openloop_reference_from_parent_v1
+from mcp_server.data.stage_ii.context import build_stage_ii_context_cache_v1, stage_ii_projected_input_digest_v1
+from mcp_server.data.stage_ii.legacy_direct import build_stage_ii_legacy_direct_selection_v1, build_stage_ii_legacy_direct_targets_v1
+from mcp_server.data.stage_ii.trajectory import build_stage_ii_trajectory_target_v1
+from mcp_server.data.stage_ii.sources import StageIISourceAdapterErrorV1, adapt_stage_ii_trajectory_source_row_v1, load_stage_ii_trajectory_source_registry_v1
+from mcp_server.data.stage_ii.sidecars import build_stage_ii_trajectory_sidecars_v1
+from mcp_server.data.stage_ii.views import project_stage_ii_cfm_view_v1
 from tools.model_processing.build_stage_ii_cfm_views import (
     build_stage_ii_cfm_views,
 )

@@ -8,8 +8,7 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from mcp_server.data.stage_ii_cache_migration_v2 import (
-    rebind_stage_ii_context_cache_manifest_v2, )
+from mcp_server.data.stage_ii.cache_migration_v2 import rebind_stage_ii_context_cache_manifest_v2
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

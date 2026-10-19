@@ -8,9 +8,7 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from mcp_server.data.stage_ii_legacy_direct import (
-    build_stage_ii_legacy_direct_selection_v1,
-)
+from mcp_server.data.stage_ii.legacy_direct import build_stage_ii_legacy_direct_selection_v1
 
 
 def _mapping(value: str) -> tuple[str, str]:

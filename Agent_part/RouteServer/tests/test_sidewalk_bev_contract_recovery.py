@@ -7,13 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from mcp_server.data.jsonl_io import iter_jsonl, write_jsonl_atomic
-from mcp_server.data.reasoning_v4_source import _bev_route_evidence_v4
-from mcp_server.data.sidewalk_bev_contract_recovery import (
-    SidewalkBevContractRegistryRow,
-    build_sidewalk_bev_contract_registry,
-    build_sidewalk_navigation_repair_subset,
-)
+from mcp_server.data.io.jsonl import iter_jsonl, write_jsonl_atomic
+from mcp_server.data.canonical.reasoning_v4_source import _bev_route_evidence_v4
+from mcp_server.data.adapters.sidewalk_bev_contract_recovery import SidewalkBevContractRegistryRow, build_sidewalk_bev_contract_registry, build_sidewalk_navigation_repair_subset
 
 
 def _write_producer_fixture(root: Path) -> tuple[str, Path]:

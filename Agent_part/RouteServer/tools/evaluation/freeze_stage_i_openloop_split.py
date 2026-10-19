@@ -7,7 +7,7 @@ import argparse
 import json
 from pathlib import Path
 
-from mcp_server.data.openloop_lineage import freeze_openloop_stage_i_views_v1
+from mcp_server.data.openloop.lineage import freeze_openloop_stage_i_views_v1
 
 
 def main() -> None:

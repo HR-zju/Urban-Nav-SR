@@ -7,16 +7,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from mcp_server.data.stage_ii_raw_trajectory_v2 import (
-    StageIIRawTrajectoryErrorV2,
-    StageIIRawTrajectoryReaderV2,
-)
-from mcp_server.data.stage_ii_trajectory import (
-    build_stage_ii_trajectory_target_v2,
-)
-from mcp_server.data.stage_ii_trajectory_v2_corpus import (
-    build_stage_ii_trajectory_corpus_v2,
-)
+from mcp_server.data.stage_ii.raw_trajectory_v2 import StageIIRawTrajectoryErrorV2, StageIIRawTrajectoryReaderV2
+from mcp_server.data.stage_ii.trajectory import build_stage_ii_trajectory_target_v2
+from mcp_server.data.stage_ii.trajectory_v2_corpus import build_stage_ii_trajectory_corpus_v2
 from tools.model_processing.build_stage_ii_trajectory_4s32 import parse_args
 
 

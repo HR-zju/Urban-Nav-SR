@@ -13,7 +13,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from mcp_server.data.jsonl_io import iter_jsonl
+from mcp_server.data.io.jsonl import iter_jsonl
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
