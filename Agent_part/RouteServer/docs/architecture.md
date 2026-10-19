@@ -3365,3 +3365,27 @@ swift/sidewalk_nav/rollout/urbannav_env.py
 19. V4 Full CoT 禁止裸 `ToolResultUse`；tool-aware/agentic target 必须使用未来独立 `AgentStep` profile。Legacy V2 的 `ToolResultUse` 位置约束只适用于 V2。
 20. VQA 不得从 V4 Full CoT 直接拆段冒充独立 QA 标签；必须使用独立 question/rationale/answer schema、validator 和 loss，且不得恢复 legacy V2 section-QA 入口。
 21. 多帧输入必须携带 `image_roles`；禁止用 `len(images)>1` 推断 BEV。
+
+
+## 代码职责拆分（2026-10-19）
+
+三个历史大文件保留稳定入口，业务实现按责任归属拆分：
+
+| 入口 | 实现位置 | 责任 |
+| --- | --- | --- |
+| `server.py` | `mcp_api/app.py` | MCP 实例和 provider 生命周期 |
+| `server.py` | `mcp_api/map_tools.py`、`route_sessions.py` | 地图查询、路线会话 |
+| `server.py` | `mcp_api/route_visualization.py`、`presentation.py` | 路线渲染与几何展示 |
+| `server.py` | `mcp_api/vision_tools.py`、`resources.py` | 图像工具、MCP resources |
+| `server.py` | `mcp_api/city_services.py`、`neighborhood.py`、`recommendations.py` | 城市查询、邻域分析、推荐入口 |
+| `llm.py` | `llm_services/settings.py`、`transport.py`、`json_codec.py`、`base.py` | 配置、客户端传输、解析和服务基类 |
+| `llm.py` | `llm_services/intent_rules.py`、`intent.py`、`goals.py` | 确定性意图规则、解析和目标拆解 |
+| `llm.py` | `llm_services/ranking.py`、`vision.py`、`localization.py`、`api.py` | 排序、视觉、地图语言适配和公共调用 |
+| `recommendation.py` | `recommendation_services/engine.py` | 推荐 orchestration |
+| `recommendation.py` | `recommendation_services/geometry.py`、`ranking.py`、`policy.py` | 几何、评分和目的地约束 |
+| `recommendation.py` | `recommendation_services/candidates.py`、`regional.py` | 候选归一化和区域扩展 |
+| `recommendation.py` | `recommendation_services/infrastructure.py`、`presentation.py` | 缓存、日志、输出展示 |
+
+这次拆分不更换模型、工具参数或排序算法。37 个 MCP tools 和 2 个 resource templates
+保持相同参数与返回 schema；描述文本仅清理行尾空白。历史 `data/eval/teacher` 转发模块
+已移除，其正式路径映射见 `retired_module_paths.json`。
