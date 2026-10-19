@@ -45,6 +45,26 @@ from uuid import uuid4
 
 from PIL import Image, ImageDraw, ImageOps
 
+from mcp_server.visualization.images import (
+    _jpeg_data_url_under_limit,
+    _image_href_for_overlay,
+)
+from mcp_server.visualization.map_overlay import (
+    _lat_lng_from_gps,
+    _osm_tile_xy_float,
+    _fetch_osm_tile_image,
+    _bev_map_heading_rotation_deg,
+    _gps_path_from_context,
+    _rotate_point_about_center,
+    _draw_bev_navigation_path,
+    _build_bev_map_overlay_payload,
+)
+from mcp_server.visualization.prompt_overlay import (
+    _rendered_prompt_path_uv,
+    _render_prompt_overlay_svg,
+    _svg_to_data_url,
+)
+
 from mcp_server.brain import (
     build_direct_prompt_question,
     build_direct_prompt_system_prompt,
@@ -113,10 +133,6 @@ def _exception_debug_payload(exc: Exception) -> Dict[str, Any]:
     return payload
 
 
-def _image_href_for_overlay(*, image_path: Optional[str], image_url: Optional[str]) -> str:
-    if str(image_path or "").strip():
-        return local_image_path_to_data_url(str(image_path))
-    return str(image_url or "").strip()
 
 
 def _load_prompt_image(*, image_path: Optional[str], image_url: Optional[str]) -> Image.Image:
@@ -178,33 +194,6 @@ def _resize_image_max_side(image: Image.Image, *, max_side: int) -> Image.Image:
     )
 
 
-def _jpeg_data_url_under_limit(
-    image: Image.Image,
-    *,
-    max_bytes: int,
-    jpeg_quality: int,
-) -> tuple[str, int, int]:
-    candidate = image.convert("RGB")
-    quality_schedule = [int(jpeg_quality), 78, 70, 62, 54, 46]
-    last_raw = b""
-    for _ in range(4):
-        for quality in quality_schedule:
-            buffer = io.BytesIO()
-            candidate.save(buffer, format="JPEG", quality=max(40, min(quality, 95)), optimize=True)
-            raw = buffer.getvalue()
-            last_raw = raw
-            if len(raw) <= int(max_bytes):
-                encoded = base64.b64encode(raw).decode("ascii")
-                return f"data:image/jpeg;base64,{encoded}", len(raw), int(quality)
-        width, height = candidate.size
-        if max(width, height) <= 640:
-            break
-        candidate = candidate.resize(
-            (max(1, int(round(width * 0.82))), max(1, int(round(height * 0.82)))),
-            Image.Resampling.LANCZOS,
-        )
-    encoded = base64.b64encode(last_raw).decode("ascii")
-    return f"data:image/jpeg;base64,{encoded}", len(last_raw), int(quality_schedule[-1])
 
 
 def _build_llm_image_payload(
@@ -260,339 +249,20 @@ def _local_image_path_to_llm_data_url(
     )
 
 
-def _lat_lng_from_gps(gps: Any) -> tuple[float, float] | None:
-    if not isinstance(gps, dict):
-        return None
-    try:
-        lat = float(gps.get("lat", gps.get("latitude")))
-        lng = float(gps.get("lng", gps.get("lon", gps.get("longitude"))))
-    except Exception:
-        return None
-    if not (-85.0 <= lat <= 85.0 and -180.0 <= lng <= 180.0):
-        return None
-    return lat, lng
 
 
-def _osm_tile_xy_float(*, lat: float, lng: float, zoom: int) -> tuple[float, float]:
-    """Project WGS84 into Web-Mercator slippy tile coordinates."""
-    lat_rad = math.radians(max(-85.05112878, min(85.05112878, float(lat))))
-    n = float(2**int(zoom))
-    x = (float(lng) + 180.0) / 360.0 * n
-    y = (1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n
-    return x, y
 
 
-def _fetch_osm_tile_image(*, x: int, y: int, zoom: int) -> Image.Image:
-    """Fetch one real OSM raster tile with a small on-disk cache."""
-    n = 2**int(zoom)
-    x_wrapped = int(x) % n
-    y_clamped = max(0, min(n - 1, int(y)))
-    cache_dir = Path(os.getenv("BEV_MAP_TILE_CACHE_DIR", "/tmp/urban_nav_osm_tiles")).expanduser()
-    tile_path = cache_dir / str(int(zoom)) / str(x_wrapped) / f"{y_clamped}.png"
-    if tile_path.exists():
-        return Image.open(tile_path).convert("RGB")
-    tile_path.parent.mkdir(parents=True, exist_ok=True)
-    template = os.getenv("BEV_MAP_TILE_URL_TEMPLATE", "https://tile.openstreetmap.org/{z}/{x}/{y}.png").strip()
-    url = template.format(z=int(zoom), x=x_wrapped, y=y_clamped)
-    timeout_s = float(os.getenv("BEV_MAP_TILE_TIMEOUT_S", "8") or 8)
-    request = Request(
-        url,
-        headers={
-            "User-Agent": os.getenv(
-                "BEV_MAP_TILE_USER_AGENT",
-                "UrbanNavRouteServer/0.1 (+https://openstreetmap.org)",
-            )
-        },
-    )
-    with urlopen(request, timeout=timeout_s) as response:
-        raw = response.read()
-    tile_path.write_bytes(raw)
-    return Image.open(io.BytesIO(raw)).convert("RGB")
 
 
-def _bev_map_heading_rotation_deg(raw_heading_deg: float) -> tuple[float, dict[str, Any]]:
-    """Resolve map screenshot rotation from raw heading convention and offset.
-
-    Supported conventions:
-        compass: 0 deg = north, 90 deg = east, clockwise-positive.
-        enu_yaw: 0 deg = east, 90 deg = north, counter-clockwise-positive.
-
-    PIL rotates images counter-clockwise for positive angles. For a north-up
-    slippy map, rotating by the compass heading puts the current forward
-    direction at the top of the BEV screenshot.
-    """
-    convention = os.getenv("BEV_MAP_HEADING_CONVENTION", "compass").strip().lower() or "compass"
-    offset_deg = float(os.getenv("BEV_MAP_HEADING_OFFSET_DEG", "0") or 0.0)
-    raw = float(raw_heading_deg)
-    if convention in {"enu", "enu_yaw", "ros_enu", "ros"}:
-        compass_heading = (90.0 - raw) % 360.0
-        resolved_convention = "enu_yaw"
-    else:
-        compass_heading = raw % 360.0
-        resolved_convention = "compass"
-    rotation_deg = (compass_heading + offset_deg) % 360.0
-    return rotation_deg, {
-        "raw_heading_deg": round(raw % 360.0, 3),
-        "heading_convention": resolved_convention,
-        "heading_offset_deg": round(float(offset_deg), 3),
-        "compass_heading_deg": round(float(compass_heading), 3),
-        "heading_rotation_deg": round(float(rotation_deg), 3),
-    }
 
 
-def _gps_path_from_context(local_bev_context: dict[str, Any], key: str) -> list[tuple[float, float]]:
-    raw_points = local_bev_context.get(key)
-    if not isinstance(raw_points, list):
-        return []
-    points: list[tuple[float, float]] = []
-    for item in raw_points:
-        gps = _lat_lng_from_gps(item)
-        if gps is not None:
-            points.append(gps)
-    return points
 
 
-def _rotate_point_about_center(
-    *,
-    x: float,
-    y: float,
-    center_x: float,
-    center_y: float,
-    angle_deg: float,
-) -> tuple[float, float]:
-    """Map overlay points through the same forward transform as PIL.rotate.
-
-    PIL rotates raster content counter-clockwise for positive angles in screen
-    coordinates.  Vector overlays must use the matching image-coordinate
-    transform; otherwise route/start/end markers drift relative to the OSM
-    background after ego-alignment.
-    """
-    theta = math.radians(float(angle_deg))
-    dx = float(x) - float(center_x)
-    dy = float(y) - float(center_y)
-    cos_t = math.cos(theta)
-    sin_t = math.sin(theta)
-    return (
-        float(center_x) + dx * cos_t + dy * sin_t,
-        float(center_y) - dx * sin_t + dy * cos_t,
-    )
 
 
-def _draw_bev_navigation_path(
-    *,
-    image: Image.Image,
-    path_gps: list[tuple[float, float]],
-    path_source: str,
-    current_gps: tuple[float, float],
-    zoom: int,
-    tile_size: int,
-    mosaic_origin_tile_x: int,
-    mosaic_origin_tile_y: int,
-    rotation_center_px: tuple[float, float],
-    heading_rotation_deg: float,
-    crop_box: tuple[int, int, int, int],
-) -> dict[str, Any]:
-    """Draw the route/reference path and ego pose into the BEV screenshot.
-
-    Offline datasets can provide the full recorded GNSS trajectory, while
-    online navigation can pass the active planner path through the same
-    ``navigation_path_gps`` contract. The geometry pipeline is:
-
-        WGS84 -> Web-Mercator mosaic pixels
-              -> heading-aligned rotation around ego
-              -> ego-centered crop
-              -> resized BEV image coordinates
-    """
-    if not path_gps:
-        return {"path_points_drawn": 0, "source": "none"}
-
-    crop_w = max(float(crop_box[2] - crop_box[0]), 1.0)
-    crop_h = max(float(crop_box[3] - crop_box[1]), 1.0)
-    scale_x = float(image.size[0]) / crop_w
-    scale_y = float(image.size[1]) / crop_h
-
-    def _gps_to_image_xy(lat: float, lng: float) -> tuple[float, float]:
-        tx, ty = _osm_tile_xy_float(lat=float(lat), lng=float(lng), zoom=int(zoom))
-        mosaic_x = tx * float(tile_size) - float(mosaic_origin_tile_x) * float(tile_size)
-        mosaic_y = ty * float(tile_size) - float(mosaic_origin_tile_y) * float(tile_size)
-        rotated_x, rotated_y = _rotate_point_about_center(
-            x=mosaic_x,
-            y=mosaic_y,
-            center_x=float(rotation_center_px[0]),
-            center_y=float(rotation_center_px[1]),
-            angle_deg=float(heading_rotation_deg),
-        )
-        return (
-            (rotated_x - float(crop_box[0])) * scale_x,
-            (rotated_y - float(crop_box[1])) * scale_y,
-        )
-
-    projected = [_gps_to_image_xy(lat, lng) for lat, lng in path_gps]
-    current_xy = _gps_to_image_xy(current_gps[0], current_gps[1])
-    draw = ImageDraw.Draw(image, "RGBA")
-    if len(projected) >= 2:
-        draw.line(projected, fill=(37, 99, 235, 235), width=max(int(round(image.size[0] * 0.012)), 4), joint="curve")
-        draw.line(projected, fill=(219, 234, 254, 220), width=max(int(round(image.size[0] * 0.004)), 2), joint="curve")
-    marker_r = max(int(round(image.size[0] * 0.018)), 7)
-    start_r = max(int(round(image.size[0] * 0.012)), 5)
-    if projected:
-        sx, sy = projected[0]
-        ex, ey = projected[-1]
-        draw.ellipse([sx - start_r, sy - start_r, sx + start_r, sy + start_r], fill=(34, 197, 94, 245), outline=(255, 255, 255, 245), width=2)
-        draw.rectangle([ex - start_r, ey - start_r, ex + start_r, ey + start_r], fill=(239, 68, 68, 245), outline=(255, 255, 255, 245), width=2)
-    cx, cy = current_xy
-    draw.ellipse([cx - marker_r, cy - marker_r, cx + marker_r, cy + marker_r], fill=(249, 115, 22, 250), outline=(255, 255, 255, 255), width=3)
-    heading_len = marker_r * 2.2
-    draw.line([(cx, cy), (cx, cy - heading_len)], fill=(255, 255, 255, 255), width=3)
-    return {
-        "path_points_drawn": int(len(projected)),
-        "source": str(path_source or "navigation_path_gps"),
-        "current_marker": "orange_circle",
-        "start_marker": "green_circle",
-        "end_marker": "red_square",
-        "route_style": "blue_polyline",
-    }
 
 
-def _build_bev_map_overlay_payload(
-    *,
-    local_bev_context: dict[str, Any],
-    llm_max_bytes: int,
-    llm_jpeg_quality: int,
-) -> dict[str, Any] | None:
-    """Build a real OpenStreetMap screenshot as an ego-aligned BEV input.
-
-    Unlike the earlier semantic sketch, this path uses actual OSM raster tiles:
-
-        GNSS -> Web-Mercator tile mosaic -> heading rotation -> center crop
-
-    The resulting image is a true map screenshot. It is intentionally not a
-    structured semantic prompt; LVLM receives it as an image only.
-    """
-    if not isinstance(local_bev_context, dict):
-        return None
-    gps = _lat_lng_from_gps(
-        local_bev_context.get("_origin_gps")
-        or local_bev_context.get("origin_gps")
-        or local_bev_context.get("gps")
-    )
-    if gps is None:
-        return None
-    lat, lng = gps
-    output_size = int(os.getenv("BEV_MAP_TILE_OUTPUT_SIZE_PX", "640") or 640)
-    tile_size = 256
-    zoom = int(os.getenv("BEV_MAP_TILE_ZOOM", "19") or 19)
-    mosaic_tiles = max(3, min(7, int(os.getenv("BEV_MAP_TILE_MOSAIC_TILES", "5") or 5)))
-    if mosaic_tiles % 2 == 0:
-        mosaic_tiles += 1
-    raw_heading_deg = float(local_bev_context.get("bev_rotation_deg", 0.0) or 0.0)
-    heading_rotation_deg, heading_debug = _bev_map_heading_rotation_deg(raw_heading_deg)
-    center_x, center_y = _osm_tile_xy_float(lat=lat, lng=lng, zoom=zoom)
-    center_px = center_x * tile_size
-    center_py = center_y * tile_size
-    center_tile_x = int(math.floor(center_x))
-    center_tile_y = int(math.floor(center_y))
-    half_tiles = mosaic_tiles // 2
-    mosaic = Image.new("RGB", (mosaic_tiles * tile_size, mosaic_tiles * tile_size), (242, 239, 233))
-    tile_errors: list[str] = []
-    fetched_tiles = 0
-    for dx in range(-half_tiles, half_tiles + 1):
-        for dy in range(-half_tiles, half_tiles + 1):
-            tx = center_tile_x + dx
-            ty = center_tile_y + dy
-            try:
-                tile = _fetch_osm_tile_image(x=tx, y=ty, zoom=zoom)
-                fetched_tiles += 1
-            except Exception as exc:
-                tile_errors.append(f"{zoom}/{tx}/{ty}:{exc}")
-                tile = Image.new("RGB", (tile_size, tile_size), (242, 239, 233))
-            paste_x = (dx + half_tiles) * tile_size
-            paste_y = (dy + half_tiles) * tile_size
-            mosaic.paste(tile.resize((tile_size, tile_size)), (paste_x, paste_y))
-
-    local_center_px = center_px - (center_tile_x - half_tiles) * tile_size
-    local_center_py = center_py - (center_tile_y - half_tiles) * tile_size
-    crop_side = min(mosaic.size) * 0.70
-    crop_box = (
-        int(round(local_center_px - crop_side / 2.0)),
-        int(round(local_center_py - crop_side / 2.0)),
-        int(round(local_center_px + crop_side / 2.0)),
-        int(round(local_center_py + crop_side / 2.0)),
-    )
-    # Rotate the full tile mosaic around ego before cropping. Cropping first would
-    # rotate a bounded square and expose irregular edge artifacts in the final BEV.
-    rotated_mosaic = mosaic.rotate(
-        float(heading_rotation_deg),
-        resample=Image.Resampling.BICUBIC,
-        expand=False,
-        center=(float(local_center_px), float(local_center_py)),
-        fillcolor=(242, 239, 233),
-    )
-    ego_aligned = rotated_mosaic.crop(
-        (
-            crop_box[0],
-            crop_box[1],
-            crop_box[2],
-            crop_box[3],
-        )
-    )
-    image = ego_aligned.resize((output_size, output_size), Image.Resampling.LANCZOS).convert("RGB")
-    navigation_path_gps = (
-        _gps_path_from_context(local_bev_context, "planner_path_gps")
-        or _gps_path_from_context(local_bev_context, "navigation_path_gps")
-    )
-    navigation_path_source = (
-        "planner_path_gps"
-        if _gps_path_from_context(local_bev_context, "planner_path_gps")
-        else str(local_bev_context.get("navigation_path_source") or "navigation_path_gps")
-    )
-    navigation_path_debug = _draw_bev_navigation_path(
-        image=image,
-        path_gps=navigation_path_gps,
-        path_source=navigation_path_source,
-        current_gps=(float(lat), float(lng)),
-        zoom=int(zoom),
-        tile_size=int(tile_size),
-        mosaic_origin_tile_x=int(center_tile_x - half_tiles),
-        mosaic_origin_tile_y=int(center_tile_y - half_tiles),
-        rotation_center_px=(float(local_center_px), float(local_center_py)),
-        heading_rotation_deg=float(heading_rotation_deg),
-        crop_box=crop_box,
-    )
-
-    data_url, byte_count, used_quality = _jpeg_data_url_under_limit(
-        image,
-        max_bytes=llm_max_bytes,
-        jpeg_quality=llm_jpeg_quality,
-    )
-    return {
-        "bev_map_overlay_image_data_url": data_url,
-        "image_role": "bev_map_overlay",
-        "source": "openstreetmap_raster_tiles",
-        "llm_image_size": [output_size, output_size],
-        "tile_provider": os.getenv("BEV_MAP_TILE_URL_TEMPLATE", "https://tile.openstreetmap.org/{z}/{x}/{y}.png"),
-        "tile_zoom": int(zoom),
-        "tile_mosaic": [int(mosaic_tiles), int(mosaic_tiles)],
-        "tile_center_float": [round(float(center_x), 6), round(float(center_y), 6)],
-        "alignment_order": "rotate_mosaic_then_center_crop",
-        "rotation_center_px": [round(float(local_center_px), 3), round(float(local_center_py), 3)],
-        "crop_side_px": round(float(crop_side), 3),
-        "navigation_path_overlay": navigation_path_debug,
-        "fetched_tiles": int(fetched_tiles),
-        "tile_errors": tile_errors[:6],
-        **heading_debug,
-        "encoded_bytes": int(byte_count),
-        "jpeg_quality": int(used_quality),
-        "legend": {
-            "image_role": "bev_map_overlay",
-            "source": "real_openstreetmap_raster_screenshot",
-            "coordinate_frame": "ego_aligned_bev",
-            "forward_axis": "image_up_after_heading_rotation",
-            "ego_marker": "orange circle; short white tick points forward/up",
-            "route_overlay": "blue polyline; green circle=start; red square=end",
-            "usage": "Real OSM screenshot for cross-view topology only; place final prompt on the FPV image, not in BEV coordinates.",
-        },
-    }
 
 
 def _scale_point_uv(value: Any, *, scale_x: float, scale_y: float) -> list[float] | None:
@@ -797,44 +467,6 @@ def _scale_decision_to_source_coordinates(
     )
 
 
-def _rendered_prompt_path_uv(rendered_prompt: Dict[str, Any] | None) -> list[list[float]]:
-    """Return the center trajectory for baseline evaluation/export.
-
-    RouteServer historically stores path-corridor prompts as center/left/right
-    samples.  SideWalk Phase1 evaluates only the center trajectory, so this
-    helper makes the export path explicit and avoids treating support
-    boundaries or coverage polygons as model predictions.
-    """
-    if not isinstance(rendered_prompt, dict):
-        return []
-    raw_path = rendered_prompt.get("path_uv")
-    if isinstance(raw_path, list):
-        path: list[list[float]] = []
-        for point in raw_path:
-            if not (isinstance(point, (list, tuple)) and len(point) == 2):
-                continue
-            try:
-                path.append([round(float(point[0]), 2), round(float(point[1]), 2)])
-            except Exception:
-                continue
-        if len(path) >= 2:
-            return path
-    path_samples = rendered_prompt.get("path_samples")
-    if isinstance(path_samples, list):
-        path = []
-        for sample in path_samples:
-            if not isinstance(sample, dict):
-                continue
-            center = sample.get("center_uv")
-            if not (isinstance(center, (list, tuple)) and len(center) == 2):
-                continue
-            try:
-                path.append([round(float(center[0]), 2), round(float(center[1]), 2)])
-            except Exception:
-                continue
-        if len(path) >= 2:
-            return path
-    return []
 
 
 def _direction_from_path_uv(path_uv: list[list[float]]) -> list[float] | None:
@@ -901,169 +533,8 @@ def _trajectory_only_decision(decision: VisualPromptDecision) -> VisualPromptDec
     )
 
 
-def _render_prompt_overlay_svg(
-    *,
-    image_href: str,
-    image_width: int,
-    image_height: int,
-    rendered_prompt: Dict[str, Any] | None,
-    title: str = "Visual Prompt Overlay",
-) -> str:
-    width = max(int(image_width), 32)
-    height = max(int(image_height), 32)
-    max_display_width = max(int(os.getenv("VISUAL_PROMPT_SVG_DISPLAY_WIDTH", "1200") or 1200), 320)
-    display_width = min(width, max_display_width)
-    display_height = max(int(round(display_width * height / max(width, 1))), 1)
-    min_dim = min(width, height)
-    title_font = max(min_dim * 0.018, 18.0)
-    label_font = max(min_dim * 0.014, 14.0)
-    line_stroke = max(min_dim * 0.009, 5.0)
-    outline_stroke = max(min_dim * 0.005, 2.0)
-    marker_radius = max(min_dim * 0.011, 6.0)
-    bg = (
-        f'<image href="{image_href}" x="0" y="0" width="{width}" height="{height}" preserveAspectRatio="xMidYMid slice" />'
-        if image_href
-        else f'<rect x="0" y="0" width="{width}" height="{height}" fill="#0f172a" />'
-    )
-    if not isinstance(rendered_prompt, dict):
-        return (
-            f'<svg xmlns="http://www.w3.org/2000/svg" width="{display_width}" height="{display_height}" viewBox="0 0 {width} {height}">'
-            f"{bg}"
-            f'<rect x="0" y="0" width="{width}" height="{height}" fill="rgba(2,6,23,0.10)" />'
-            f'<text x="{title_font:.1f}" y="{title_font * 1.7:.1f}" fill="#e2e8f0" font-size="{title_font:.1f}">{escape(title)}</text>'
-            f'<text x="{width/2:.1f}" y="{height/2:.1f}" text-anchor="middle" fill="#fca5a5" font-size="{title_font:.1f}">No rendered prompt</text>'
-            "</svg>"
-        )
-
-    prompt_type = str(rendered_prompt.get("type") or "arrow").strip().lower()
-    center = rendered_prompt.get("center_uv") or [width * 0.5, height * 0.55]
-    try:
-        cx = float(center[0])
-        cy = float(center[1])
-    except Exception:
-        cx = width * 0.5
-        cy = height * 0.55
-    span = max(float(rendered_prompt.get("span_px", 72.0) or 72.0), 16.0)
-    direction = rendered_prompt.get("direction_vec") or [0.0, -1.0]
-    try:
-        dx = float(direction[0])
-        dy = float(direction[1])
-    except Exception:
-        dx, dy = 0.0, -1.0
-    path_uv = _rendered_prompt_path_uv(rendered_prompt)
-    if path_uv:
-        cx = float(path_uv[-1][0])
-        cy = float(path_uv[-1][1])
-
-    anchor_x = width * 0.5
-    anchor_y = height * 0.94
-    label = str(rendered_prompt.get("semantic_tag") or prompt_type)
-    termination_semantics = str(rendered_prompt.get("termination_semantics") or "").strip()
-    support_confidence = rendered_prompt.get("support_confidence")
-
-    overlay_parts = [
-        f'<rect x="0" y="0" width="{width}" height="{height}" fill="rgba(2,6,23,0.06)" />',
-        f'<rect x="{title_font * 0.6:.1f}" y="{title_font * 0.45:.1f}" width="{min(width * 0.72, title_font * 24):.1f}" height="{title_font * 1.65:.1f}" rx="{title_font * 0.35:.1f}" fill="rgba(2,6,23,0.58)" />',
-        f'<text x="{title_font:.1f}" y="{title_font * 1.55:.1f}" fill="#e2e8f0" font-size="{title_font:.1f}" font-family="monospace">{escape(title)}</text>',
-    ]
-
-    valid_path = (
-        isinstance(path_uv, list)
-        and len(path_uv) >= 2
-        and all(isinstance(point, (list, tuple)) and len(point) == 2 for point in path_uv)
-    )
-
-    if prompt_type in {"arrival", "arrival_marker", "destination_marker"}:
-        overlay_parts.extend(
-            [
-                f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{marker_radius * 2.4:.1f}" fill="rgba(34,197,94,0.24)" stroke="#22c55e" stroke-width="{outline_stroke * 1.8:.1f}" />',
-                f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{marker_radius * 0.8:.1f}" fill="#22c55e" />',
-                f'<path d="M {cx - marker_radius * 1.0:.1f} {cy + marker_radius * 0.05:.1f} L {cx - marker_radius * 0.28:.1f} {cy + marker_radius * 0.75:.1f} L {cx + marker_radius * 1.15:.1f} {cy - marker_radius * 0.9:.1f}" fill="none" stroke="#ecfdf5" stroke-width="{outline_stroke * 1.7:.1f}" stroke-linecap="round" stroke-linejoin="round" />',
-                f'<text x="{cx:.1f}" y="{cy + marker_radius * 3.45:.1f}" text-anchor="middle" fill="#dcfce7" font-size="{title_font:.1f}" font-family="monospace">ARRIVED</text>',
-            ]
-        )
-    elif prompt_type in {"arrow", "arrow_path", "path_corridor"} and valid_path:
-        points = " ".join(f"{float(point[0]):.1f},{float(point[1]):.1f}" for point in path_uv)
-        overlay_parts.append(
-            f'<polyline points="{points}" fill="none" stroke="#f97316" stroke-width="{line_stroke:.1f}" stroke-linecap="round" stroke-linejoin="round" />'
-        )
-        end_x = float(path_uv[-1][0])
-        end_y = float(path_uv[-1][1])
-        prev_x = float(path_uv[-2][0])
-        prev_y = float(path_uv[-2][1])
-        vx = end_x - prev_x
-        vy = end_y - prev_y
-        norm = max((vx * vx + vy * vy) ** 0.5, 1e-6)
-        ux, uy = vx / norm, vy / norm
-        px, py = -uy, ux
-        ah = max(span * 0.16, marker_radius * 2.2)
-        ax1 = end_x - ux * ah - px * ah * 0.55
-        ay1 = end_y - uy * ah - py * ah * 0.55
-        ax2 = end_x - ux * ah + px * ah * 0.55
-        ay2 = end_y - uy * ah + py * ah * 0.55
-        overlay_parts.append(
-            f'<polygon points="{end_x:.1f},{end_y:.1f} {ax1:.1f},{ay1:.1f} {ax2:.1f},{ay2:.1f}" fill="#f97316" />'
-        )
-    elif prompt_type == "arrow":
-        overlay_parts.append(
-            f'<line x1="{anchor_x:.1f}" y1="{anchor_y:.1f}" x2="{cx:.1f}" y2="{cy:.1f}" stroke="#f97316" stroke-width="{line_stroke:.1f}" stroke-linecap="round" />'
-        )
-        norm = max((dx * dx + dy * dy) ** 0.5, 1e-6)
-        ux, uy = dx / norm, dy / norm
-        px, py = -uy, ux
-        ah = max(span * 0.16, marker_radius * 2.2)
-        ax1 = cx - ux * ah - px * ah * 0.55
-        ay1 = cy - uy * ah - py * ah * 0.55
-        ax2 = cx - ux * ah + px * ah * 0.55
-        ay2 = cy - uy * ah + py * ah * 0.55
-        overlay_parts.append(
-            f'<polygon points="{cx:.1f},{cy:.1f} {ax1:.1f},{ay1:.1f} {ax2:.1f},{ay2:.1f}" fill="#f97316" />'
-        )
-    elif prompt_type == "region":
-        overlay_parts.append(
-            f'<ellipse cx="{cx:.1f}" cy="{cy:.1f}" rx="{span * 0.55:.1f}" ry="{span * 0.32:.1f}" fill="rgba(168,85,247,0.18)" stroke="#a855f7" stroke-width="{outline_stroke * 1.5:.1f}" />'
-        )
-    else:
-        left_x = cx - span * 0.6
-        right_x = cx + span * 0.6
-        top_y = cy - span * 0.52
-        bottom_y = cy + span * 0.52
-        overlay_parts.append(
-            f'<polygon points="{anchor_x:.1f},{anchor_y:.1f} {left_x:.1f},{bottom_y:.1f} {cx:.1f},{top_y:.1f} {right_x:.1f},{bottom_y:.1f}" fill="rgba(56,189,248,0.22)" stroke="#38bdf8" stroke-width="{outline_stroke * 1.5:.1f}" />'
-        )
-
-    if prompt_type not in {"arrival", "arrival_marker", "destination_marker"}:
-        termination_label = termination_semantics[:32] if termination_semantics else ""
-        support_label = ""
-        if support_confidence is not None:
-            try:
-                support_label = f"support={float(support_confidence):.2f}"
-            except Exception:
-                support_label = ""
-        overlay_parts.extend(
-            [
-                f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{marker_radius:.1f}" fill="#e2e8f0" />',
-                f'<rect x="{cx + marker_radius * 1.4:.1f}" y="{cy - label_font * 1.45:.1f}" width="{min(width - cx - marker_radius * 2.0, max(label_font * 11.0, 1.0)):.1f}" height="{label_font * 1.7:.1f}" rx="{label_font * 0.35:.1f}" fill="rgba(2,6,23,0.58)" />',
-                f'<text x="{cx + marker_radius * 1.9:.1f}" y="{cy - label_font * 0.22:.1f}" fill="#e2e8f0" font-size="{label_font:.1f}" font-family="monospace">{escape(label[:42])}</text>',
-            ]
-        )
-        if termination_label or support_label:
-            meta_text = " | ".join(item for item in [termination_label, support_label] if item)
-            overlay_parts.extend(
-                [
-                    f'<rect x="{title_font * 0.6:.1f}" y="{title_font * 2.3:.1f}" width="{min(width * 0.78, max(len(meta_text) * label_font * 0.72, title_font * 8.0)):.1f}" height="{label_font * 1.65:.1f}" rx="{label_font * 0.35:.1f}" fill="rgba(2,6,23,0.52)" />',
-                    f'<text x="{title_font:.1f}" y="{title_font * 3.0:.1f}" fill="#bbf7d0" font-size="{label_font:.1f}" font-family="monospace">{escape(meta_text)}</text>',
-                ]
-            )
-
-    return (
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{display_width}" height="{display_height}" viewBox="0 0 {width} {height}">'
-        f"{bg}{''.join(overlay_parts)}</svg>"
-    )
 
 
-def _svg_to_data_url(svg: str) -> str:
-    return "data:image/svg+xml;utf8," + quote(svg, safe=":/?&=,+-_.!~*'()#% ")
 
 
 def _is_arrival_state(route_context: Dict[str, Any], *, threshold_m: float | None = None) -> bool:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from mcp_server.visualization.images import local_image_path_to_data_url
+
 import asyncio
 from dataclasses import dataclass, replace
 from typing import Any
@@ -3088,69 +3090,6 @@ async def analyze_image_with_llm(
     )
 
 
-def local_image_path_to_data_url(image_path: str) -> str:
-    path = Path(str(image_path or "").strip()).expanduser()
-    if not str(path):
-        raise ValueError("image_path is required")
-    if not path.exists():
-        raise FileNotFoundError(f"image_path does not exist: {path}")
-    if not path.is_file():
-        raise ValueError(f"image_path is not a file: {path}")
-
-    mime_type, _ = mimetypes.guess_type(path.name)
-    if not mime_type or not mime_type.startswith("image/"):
-        mime_type = "image/jpeg"
-    raw_bytes = path.read_bytes()
-
-    max_side_raw = os.getenv("LLM_VISION_IMAGE_MAX_SIDE", "").strip()
-    max_bytes_raw = os.getenv("LLM_VISION_IMAGE_MAX_BYTES", "").strip()
-    jpeg_quality_raw = os.getenv("LLM_VISION_IMAGE_JPEG_QUALITY", "").strip()
-    try:
-        max_side = max(512, int(max_side_raw)) if max_side_raw else 1600
-    except ValueError:
-        max_side = 1600
-    try:
-        max_bytes = max(256_000, int(max_bytes_raw)) if max_bytes_raw else 2_500_000
-    except ValueError:
-        max_bytes = 2_500_000
-    try:
-        jpeg_quality = min(max(int(jpeg_quality_raw), 40), 95) if jpeg_quality_raw else 85
-    except ValueError:
-        jpeg_quality = 85
-
-    should_optimize = len(raw_bytes) > max_bytes
-    optimized_bytes = raw_bytes
-    optimized_mime = mime_type
-
-    if Image is not None:
-        try:
-            image = Image.open(path)
-            if ImageOps is not None:
-                image = ImageOps.exif_transpose(image)
-            image = image.convert("RGB")
-            width, height = image.size
-            longest = max(width, height, 1)
-            resize_scale = min(1.0, float(max_side) / float(longest))
-            if resize_scale < 0.999:
-                image = image.resize(
-                    (
-                        max(1, int(round(width * resize_scale))),
-                        max(1, int(round(height * resize_scale))),
-                    ),
-                    Image.Resampling.LANCZOS,
-                )
-                should_optimize = True
-            if should_optimize:
-                buffer = io.BytesIO()
-                image.save(buffer, format="JPEG", quality=jpeg_quality, optimize=True)
-                optimized_bytes = buffer.getvalue()
-                optimized_mime = "image/jpeg"
-        except Exception:
-            optimized_bytes = raw_bytes
-            optimized_mime = mime_type
-
-    encoded = base64.b64encode(optimized_bytes).decode("ascii")
-    return f"data:{optimized_mime};base64,{encoded}"
 
 
 async def analyze_local_image_with_llm(

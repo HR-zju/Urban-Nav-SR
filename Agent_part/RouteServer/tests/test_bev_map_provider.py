@@ -6,7 +6,7 @@ from unittest.mock import patch
 from PIL import Image
 
 from mcp_server.route_context.bev_map_provider import BEVMapProviderSession, build_osm_bev_semantic_layers
-from mcp_server.services.visual_prompt_service import _bev_map_heading_rotation_deg, _build_bev_map_overlay_payload
+from mcp_server.visualization.map_overlay import _bev_map_heading_rotation_deg, _build_bev_map_overlay_payload
 
 
 class FakeMapClient:
@@ -129,7 +129,7 @@ class BEVMapProviderTest(unittest.IsolatedAsyncioTestCase):
             del x, y, zoom
             return Image.new("RGB", (256, 256), (210, 220, 210))
 
-        with patch("mcp_server.services.visual_prompt_service._fetch_osm_tile_image", side_effect=fake_tile):
+        with patch("mcp_server.visualization.map_overlay._fetch_osm_tile_image", side_effect=fake_tile):
             payload = _build_bev_map_overlay_payload(
                 local_bev_context={
                     "_origin_gps": {"lat": 30.0, "lng": 120.0},

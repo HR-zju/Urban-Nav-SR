@@ -439,7 +439,8 @@ async def _run_frame(
 
 def _render_overlay_from_prompt(*, image_path: Path, rendered_prompt: dict[str, Any], title: str) -> str:
     # Reuse the exact overlay rendering used by the service to keep visuals consistent.
-    from mcp_server.services.visual_prompt_service import _image_href_for_overlay, _render_prompt_overlay_svg
+    from mcp_server.visualization.images import _image_href_for_overlay
+    from mcp_server.visualization.prompt_overlay import _render_prompt_overlay_svg
 
     image_href = _image_href_for_overlay(image_path=str(image_path), image_url=None)
     # The service computes image size from file, but we can rely on the overlay helper.

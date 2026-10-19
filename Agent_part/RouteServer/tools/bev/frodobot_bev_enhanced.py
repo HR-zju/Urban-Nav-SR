@@ -34,11 +34,7 @@ sys.path.insert(0, str(project_root / "src"))
 
 from PIL import Image, ImageDraw, ImageFont
 
-from mcp_server.services.visual_prompt_service import (
-    _osm_tile_xy_float,
-    _bev_map_heading_rotation_deg,
-    _lat_lng_from_gps,
-)
+from mcp_server.visualization.map_overlay import _osm_tile_xy_float, _bev_map_heading_rotation_deg, _lat_lng_from_gps
 
 
 def _rotate_point_about_center(

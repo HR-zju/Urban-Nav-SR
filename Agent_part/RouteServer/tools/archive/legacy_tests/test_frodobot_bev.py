@@ -19,13 +19,7 @@ sys.path.insert(0, str(project_root / "src"))
 # Now import from the project
 from PIL import Image, ImageDraw
 
-from mcp_server.services.visual_prompt_service import (
-    _osm_tile_xy_float,
-    _fetch_osm_tile_image,
-    _bev_map_heading_rotation_deg,
-    _draw_bev_navigation_path,
-    _lat_lng_from_gps,
-)
+from mcp_server.visualization.map_overlay import _osm_tile_xy_float, _fetch_osm_tile_image, _bev_map_heading_rotation_deg, _draw_bev_navigation_path, _lat_lng_from_gps
 
 
 def load_gps_from_csv(csv_path: Path) -> list[dict[str, Any]]:

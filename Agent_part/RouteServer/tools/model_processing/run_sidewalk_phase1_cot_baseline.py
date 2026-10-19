@@ -47,11 +47,9 @@ if str(MODEL_PROCESSING_DIR) not in sys.path:
     sys.path.insert(0, str(MODEL_PROCESSING_DIR))
 
 from mcp_server.llm import VisionAnalyzer, local_image_path_to_data_url  # noqa: E402
-from mcp_server.services.visual_prompt_service import (  # noqa: E402
-    _build_bev_map_overlay_payload,
-    _image_href_for_overlay,
-    _render_prompt_overlay_svg,
-)
+from mcp_server.visualization.map_overlay import _build_bev_map_overlay_payload
+from mcp_server.visualization.images import _image_href_for_overlay
+from mcp_server.visualization.prompt_overlay import _render_prompt_overlay_svg
 from sidewalk_phase1_cot_teacher import (  # noqa: E402
     THINK_SECTION_TAGS,
     build_training_prompt,

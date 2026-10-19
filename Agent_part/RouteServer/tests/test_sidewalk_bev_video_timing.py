@@ -24,7 +24,7 @@ _select_indices_by_fps = _MODULE._select_indices_by_fps
 _route_path_for_bev_frame = _MODULE._route_path_for_bev_frame
 process_sidewalk_ride = _MODULE.process_sidewalk_ride
 from frodobot_bev_enhanced import _rotate_point_about_center
-from mcp_server.services.visual_prompt_service import _rotate_point_about_center as _service_rotate_point_about_center
+from mcp_server.visualization.map_overlay import _rotate_point_about_center as _service_rotate_point_about_center
 
 
 class SidewalkBevVideoTimingTest(unittest.TestCase):
