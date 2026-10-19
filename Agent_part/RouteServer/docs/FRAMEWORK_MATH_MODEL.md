@@ -1,5 +1,7 @@
 # UrbanNav Agent 框架数学模型
 
+> 历史设计记录：本文保留早期 RouteContext、Visual Prompt 与 Phase1 的数学推导。Visual Prompt 生成链及对应 CLI 已退役，旧命令仅适用于隔离 checkout `4879be4`。当前 Harness/System1/System2 的实现边界以 [architecture.md](architecture.md) 为准。
+
 本文档描述当前 Agent/RouteServer/SideWalkNav 框架的数学抽象、模块边界和数据流。它重点回答三个问题：
 
 1. 当前系统如何从自然语言、位置、路线和 FPV 图像生成导航 visual prompt。
@@ -181,7 +183,7 @@ T_{\mathrm{WGS84}\rightarrow provider}(x^{wgs84})
 }
 ```
 
-下载器的输出应兼容现有 `run_sidewalk_images_visual_prompt_pipeline.py`：
+早期下载器为已退役的 visual-prompt 流水线使用以下文件布局；当前共享读取器为 `mcp_server.visualization.frame_io`：
 
 ```text
 <WORK_DIR>/
