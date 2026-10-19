@@ -113,7 +113,7 @@ class StageIIRawTrajectoryReaderV2:
             row: Prepared source-manifest row used only for identity/stamps.
             full_horizon_required: Require raw coverage through four seconds.
                 When false, return the source-covered prefix and let the V2
-                target builder zero-pad its suffix with an explicit mask.
+                target builder pad its suffix with an explicit false mask.
 
         Returns:
             Current-origin FLU timed rows with real odometry yaw.

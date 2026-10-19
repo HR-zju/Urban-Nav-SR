@@ -150,7 +150,7 @@ def validate_stage_ii_action_mask_v2(
 
     The mask is the binary supervision gate
     ``m_t = 1[t < K]`` for the fixed ``T=32`` action horizon.  A partial row
-    therefore carries a non-empty valid prefix and an invalid zero-padded
+    therefore carries a non-empty valid prefix and an invalid padded
     suffix; no consumer infers ``K`` from trajectory values.
 
     Args:
@@ -1028,8 +1028,10 @@ class StageIITrajectoryTargetV2(BaseModel):
                 raise ValueError(
                     f"Stage II V2 trajectory row {index} must be finite [3]"
                 )
-            if not self.action_mask[index] and any(float(item) != 0.0 for item in row):
-                raise ValueError("Stage II V2 invalid suffix rows must be zero padded")
+            if not self.action_mask[index] and row not in (
+                [0.0, 0.0, 0.0], self.trajectory_ego_t[valid_count - 1]
+            ):
+                raise ValueError("Stage II V2 suffix must use zeros or the last valid pose")
         expected = stage_ii_digest_v1(
             self.model_dump(mode="json", exclude={"target_digest"})
         )

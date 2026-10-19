@@ -121,6 +121,29 @@ def test_stage_ii_action_mask_v2_owns_partial_prefix_semantics() -> None:
         )
 
 
+@pytest.mark.parametrize("padding", ["zero", "terminal_hold", "unrelated"])
+def test_v2_partial_suffix_validates_padding_values(padding: str) -> None:
+    """Accept both stored suffix encodings without admitting arbitrary targets."""
+    payload = _trajectory_v2().model_dump(mode="json", exclude={"target_digest"})
+    payload["policy"]["full_horizon_required"] = False
+    payload["action_mask"] = [True] * 8 + [False] * 24
+    payload["valid_step_count"] = 8
+    suffix = {
+        "zero": [0.0, 0.0, 0.0],
+        "terminal_hold": payload["trajectory_ego_t"][7],
+        "unrelated": [9.0, 9.0, 9.0],
+    }[padding]
+    payload["trajectory_ego_t"][8:] = [list(suffix) for _ in range(24)]
+    payload["target_digest"] = stage_ii_digest_v1(payload)
+    if padding == "unrelated":
+        with pytest.raises(ValidationError, match="last valid pose"):
+            StageIITrajectoryTargetV2.model_validate(payload)
+    else:
+        target = StageIITrajectoryTargetV2.model_validate(payload)
+        assert target.valid_step_count == 8
+        assert target.action_mask[8:] == [False] * 24
+
+
 def _trajectory_v1():
     """Return the retained clean 16-point target used by the compatibility path."""
 

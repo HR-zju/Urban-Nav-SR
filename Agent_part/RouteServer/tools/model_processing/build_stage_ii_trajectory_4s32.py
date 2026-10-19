@@ -53,7 +53,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help=(
             "Accept source-covered trajectory prefixes and emit the explicit "
-            "zero-padded timestep mask. Full-horizon admission remains the default."
+            "terminal-hold suffix with a false mask. Full-horizon admission remains the default."
         ),
     )
     return parser.parse_args(argv)

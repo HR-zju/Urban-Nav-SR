@@ -147,7 +147,7 @@ def test_v2_rejects_partial_horizon_and_invalid_current_origin() -> None:
     assert result.qc.reason_codes == ("trajectory_current_origin_pose_invalid",)
 
 
-def test_v2_partial_policy_emits_zero_padded_prefix_mask() -> None:
+def test_v2_partial_policy_emits_terminal_hold_with_false_suffix_mask() -> None:
     rows = _straight_rows(end=3.875)
     result = build_stage_ii_trajectory_target_v2(
         sample_id="sidewalk:partial",
@@ -168,7 +168,7 @@ def test_v2_partial_policy_emits_zero_padded_prefix_mask() -> None:
     assert result.target is not None
     assert result.target.valid_step_count == 31
     assert result.target.action_mask == [True] * 31 + [False]
-    assert result.target.trajectory_ego_t[-1] == [0.0, 0.0, 0.0]
+    assert result.target.trajectory_ego_t[-1] == result.target.trajectory_ego_t[-2]
     assert result.target.policy.full_horizon_required is False
     assert result.qc.target_valid_step_count == 31
 

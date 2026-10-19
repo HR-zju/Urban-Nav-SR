@@ -247,15 +247,15 @@ def build_stage_ii_trajectory_target_v2(
         raw_timestamp_unit: Raw clock unit before conversion to seconds.
         yaw_offset_deg: Odom-to-base rotation used by the raw adapter for XY.
         full_horizon_required: Require source coverage through 4 seconds when
-            true. When false, emit a zero-padded suffix and its prefix mask.
+            true. When false, hold the last valid target under a false suffix mask.
 
     Returns:
         Metric target plus QC, or one rejection report.
 
     Notes:
-        V2 never extrapolates or repeats a terminal pose. The partial-mask
-        capability keeps source-covered target times and zero-pads the suffix;
-        the default policy still requires every target time.
+        Partial targets preserve the original time grid. Repeated terminal
+        values are storage padding only; their false mask carries no stop label.
+        The default policy still requires every target time.
     """
 
     raw_rows = list(raw_trajectory or [])
@@ -328,6 +328,7 @@ def build_stage_ii_trajectory_target_v2(
             horizon_seconds=STAGE_II_HORIZON_SECONDS_V2,
             horizon_steps=STAGE_II_HORIZON_STEPS_V2,
             full_horizon_required=bool(full_horizon_required),
+            terminal_hold_padding=True,
         )
         evidence_digest = stage_ii_digest_v1(
             {
@@ -480,7 +481,7 @@ def _resample_rows(
     *,
     yaw_source: str,
 ) -> tuple[list[list[float]], list[bool]]:
-    """Interpolate onto the fixed future grid and zero-pad the invalid suffix."""
+    """Interpolate onto the V1 grid and retain its zero-padded suffix."""
 
     return _resample_rows_on_grid(
         rows,
@@ -498,6 +499,7 @@ def _resample_rows_on_grid(
     horizon_seconds: float,
     horizon_steps: int,
     full_horizon_required: bool,
+    terminal_hold_padding: bool = False,
 ) -> tuple[list[list[float]], list[bool]]:
     """Interpolate onto one explicit grid without temporal extrapolation."""
 
@@ -553,7 +555,10 @@ def _resample_rows_on_grid(
             "trajectory_full_horizon_missing",
             "interpolation did not produce every required target step",
         )
-    target.extend([[0.0, 0.0, 0.0] for _ in range(int(horizon_steps) - valid_count)])
+    # 补齐只维持张量形状；m_t=0 的位置不表示机器人真实停车。
+    # V1 的零填充合同不变；只有 V2 显式选择末端保持。
+    padding = target[-1] if terminal_hold_padding else [0.0, 0.0, 0.0]
+    target.extend([list(padding) for _ in range(int(horizon_steps) - valid_count)])
     mask = [True] * valid_count + [False] * (int(horizon_steps) - valid_count)
     return target, mask
 
