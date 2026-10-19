@@ -2,8 +2,8 @@
   "artifact_sha256": {
     "stage_i_instruction_provenance_v1.schema.json": "e6abb7c208d7e9e863f4bdb6830adb60de32b44014d1461e66b4e6ef62a33cc7",
     "stage_i_projection_drop_v1.schema.json": "e8157de6ebe28d9ae75922594df3233af013c3b5afa58fe01375f6bb779a1efc",
-    "stage_i_training_view_v1.schema.json": "64a4977651ba8ea27574d8172e2a876cd6ee5a2b31e124af7013b12d2128fbb5",
-    "stage_i_training_view_v2.schema.json": "271ba649398f47899bce5d1e93c9b974fc4c82a45a2371ba21d93eed986bf388"
+    "stage_i_training_view_v1.schema.json": "fe232e146c3652237a810cbf222f605b7458ca375d7058fb5f2ae558edc2a9f8",
+    "stage_i_training_view_v2.schema.json": "c45d7a9a32d1233c5562b3981655e3f0d75afa7e09aff889a894d904ab2ab8ee"
   },
   "canonical_source_sha256": {
     "src/mcp_server/contracts/stage_i_sft.py": "2aa3cbe5873d260f9ca78739b84017d7bc757b053b3bd70b30b019dc311ac584",

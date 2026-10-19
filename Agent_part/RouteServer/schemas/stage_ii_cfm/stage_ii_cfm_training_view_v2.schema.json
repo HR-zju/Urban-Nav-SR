@@ -213,6 +213,7 @@
       "description": "Describe one prompt-visible raw input item.\n\nArgs:\n    ref: Stable input-envelope reference.\n    modality: Input modality.\n    summary: Optional prompt-visible summary.\n    attributes: Prompt-visible producer metadata.\n    bev_route_evidence: Optional BEV presentation declaration.",
       "properties": {
         "attributes": {
+          "additionalProperties": true,
           "title": "Attributes",
           "type": "object"
         },
@@ -555,6 +556,7 @@
           "type": "string"
         },
         "generation_config": {
+          "additionalProperties": true,
           "title": "Generation Config",
           "type": "object"
         },
@@ -1381,6 +1383,7 @@
       "$ref": "#/$defs/StageIModalityStateV1"
     },
     "model_visible_context": {
+      "additionalProperties": true,
       "title": "Model Visible Context",
       "type": "object"
     },

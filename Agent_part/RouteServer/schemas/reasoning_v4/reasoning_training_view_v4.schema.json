@@ -804,6 +804,7 @@
           "enum": [
             "bev_route",
             "instruction",
+            "visual_goal",
             "none"
           ],
           "title": "Source",
@@ -1025,8 +1026,8 @@
       "type": "string"
     },
     "reasoning_contract_schema_digest": {
-      "const": "91435900c55487d4efb9379a862da17bf592651a184a21684e67c5f402eb09ac",
-      "default": "91435900c55487d4efb9379a862da17bf592651a184a21684e67c5f402eb09ac",
+      "const": "71372035983621ad380863847e2b23cf7ab81b9173c646a066a124ea48e6a4c7",
+      "default": "71372035983621ad380863847e2b23cf7ab81b9173c646a066a124ea48e6a4c7",
       "title": "Reasoning Contract Schema Digest",
       "type": "string"
     },

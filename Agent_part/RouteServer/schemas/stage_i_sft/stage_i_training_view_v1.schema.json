@@ -1925,6 +1925,7 @@
           "enum": [
             "bev_route",
             "instruction",
+            "visual_goal",
             "none"
           ],
           "title": "Source",

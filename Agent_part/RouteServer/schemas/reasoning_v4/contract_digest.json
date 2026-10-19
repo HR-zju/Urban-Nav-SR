@@ -1,47 +1,47 @@
 {
   "artifact_sha256": {
-    "reasoning_training_view_v4.schema.json": "40560a3cbf3c5a075f458a4856d3474acfc19f9ed86ea56fb53ef3bbac779000",
-    "reasoning_v4.schema.json": "8b7074da46f3989a295a93b3fef45b9396fd3e42a74ea9ce3078aa80eab49ef5",
+    "reasoning_training_view_v4.schema.json": "ffa987664b1b4b24a1a15808708fbb70837c979344ea0a8190437d159a5b61a9",
+    "reasoning_v4.schema.json": "40fb0df1dd887d223a4c93a460916c1a1c3dce14e75f10116b90daa22434761b",
     "reasoning_v4_golden_invalid.json": "912cc585002e78c38eb9781b1d413d8b8af7abf974326fa0e1ad8c9e8bf7c22d",
     "reasoning_v4_golden_valid.json": "0b56e4da1a1de34b16ad4b9fef7ac373f44923b27d15b128a8a390a959ef1cc5"
   },
   "canonical_source_sha256": {
-    "src/mcp_server/agent/reasoning_v4_prompt_policy.py": "533128f02f2a9cb35a39be1e29efa41bd313e89b95ef80d529891c04cffc1567",
+    "src/mcp_server/agent/reasoning_v4_prompt_policy.py": "48f35b90d839d10af3035bcd6337672a67ea26d11440305b68717c19919b5ce4",
     "src/mcp_server/agent/reasoning_v4_text.py": "f254b6404716ab414fa6054f8c8a9ad27022994ab7302e2a565130b28dbbee9b",
-    "src/mcp_server/agent/reasoning_v4_validation.py": "2b386233d8e8bc01aa982d390d8151a8801e1b53f34dbc2330de7776c8d77df8",
+    "src/mcp_server/agent/reasoning_v4_validation.py": "c69e15ccfce21b8ca4c21ddd01bbe6d735c51462a8dbc81fadb6d90eaf564884",
     "src/mcp_server/contracts/direction_profile.py": "72b1f82aa39133f080b9a45e971701a704e71569ee937b9c886a71820604701c",
     "src/mcp_server/contracts/reasoning_dataset_v4.py": "a4552d8a2f32a02c57f4818295eddd29428e17f26a07237de379a95bf633ebb7",
-    "src/mcp_server/contracts/reasoning_v4.py": "e7efc6e035b4875efcc943b17562213fb68aabd08fee0dc0fb69b491a8ec3535",
+    "src/mcp_server/contracts/reasoning_v4.py": "41623e8ec642b26e6484e56627d2d0ee1f5a9c07722f03386aa72c24433e9168",
     "src/mcp_server/data/canonical/direction_geometry.py": "46b8129060c7ce801f70d30e3b56595c50e87f8b8fb392fcfb39088a6078e498",
     "src/mcp_server/data/canonical/reasoning_v4_audit.py": "d5e636fb79ed47d16d4840c2f48045736fa958808f2c28ffb082ccf72cf4014e",
     "src/mcp_server/data/canonical/reasoning_v4_compact.py": "b4040ff89989f4693c128ab7e43dbc16d4744fb001f705748087042776a88819",
     "src/mcp_server/data/canonical/reasoning_v4_composer.py": "c6f14aab5188ad23995d0fe7031a96ea94179d888637211547ed1d7c877c2d26",
     "src/mcp_server/data/canonical/reasoning_v4_reconciliation.py": "cada80f960f0a02e1fb54b0e44b953b1c0101deadaa74ead59d47ba00668cd71",
     "src/mcp_server/data/canonical/reasoning_v4_review.py": "0b38a19dfad4cc3f38a5ab1fc3898dedec7a0942f132e3ad56d3354d22dbd7c5",
-    "src/mcp_server/data/canonical/reasoning_v4_source.py": "b2391058272024b62702e9921b89cdfb99b7c5b1c0bd1f56d4d92d413461d1e1",
+    "src/mcp_server/data/canonical/reasoning_v4_source.py": "31417f36ca46ced6f324282d3ebd9e35c110718a9707a2fcd8792e0508695790",
     "src/mcp_server/data/canonical/reasoning_v4_state.py": "e001a20f5546bc2a819980b8a7432db33aeca7f947923e34d7611ff0224c4f82",
     "src/mcp_server/data/canonical/reasoning_v4_task_canonicalization.py": "5b05f44a31e709b45aaf2de09db9f3f1367e82b0d187165a3d7cd3e4a0b246dd",
     "src/mcp_server/data/canonical/reasoning_v4_views.py": "8265506b185b9bb9723f198d48e554b01a0f2216f67e8648f9596cf4499c94a1",
-    "src/mcp_server/teacher/reasoning_v4_batch.py": "80c44f6fe42ffe3b71f4dc3f7cb33ced0c34b54613c6c118c404c49f3e4286f1",
+    "src/mcp_server/teacher/reasoning_v4_batch.py": "dcf101494e7b3c1b4ff7db8f5fd245c04ed568270fcf2e848764fcbab6ed1a50",
     "src/mcp_server/teacher/reasoning_v4_image_policy.py": "219de3f083a137ea0efef015f7011b08d7068d2ae078f1dc2c3976111eb8e698",
-    "src/mcp_server/teacher/reasoning_v4_profiles.py": "7e0b86b27d9fef2b4408b87cf393460f99949585f74f7d3d3449e32040a37346",
+    "src/mcp_server/teacher/reasoning_v4_profiles.py": "62c854f81df65a8ae698703c04d03106092df0d2e743813a4f2bd77e6b913416",
     "src/mcp_server/teacher/reasoning_v4_review.py": "138afd4c244f004fd3fe0148181e7b29d17bed771fa560960fdbaff101147071",
     "src/mcp_server/teacher/reasoning_v4_review_batch.py": "777be73047c6e42d103797448068e6414e714ad5f2d7c0fb9a4dc3da042736c7",
     "src/mcp_server/teacher/reasoning_v4_review_profiles.py": "bdfe8cfaaf6e05ebb49193048b7095933667db7540838e7e71b221afaaa8897b",
     "src/mcp_server/teacher/reasoning_v4_teacher.py": "22079cfbfc031720fb20725494fae9dfe52338a245046ab74b9b92425d588a48"
   },
   "prompt_policy_digests": {
-    "urbannav_reasoning_v4_6_compact_full_cot_sft_v1": "09462230ab1439971e39fe1ac957b1d5a33c00a6680335ce5fe90f6ef8eeff0c",
-    "urbannav_reasoning_v4_6_compact_full_cot_sft_v2": "4aa05c91d9998dfe4b3594621f60a0fa7ff69571123842ddb82a411a2f328982"
+    "urbannav_reasoning_v4_6_compact_full_cot_sft_v1": "99358496341f88aaa38b60f2897da2347559e07de371bfd200e6b1a6be8da960",
+    "urbannav_reasoning_v4_6_compact_full_cot_sft_v2": "69c975fa1220685ba7322d9b864c65cabea693b48bbb7024f1e5895595e6a77f"
   },
   "protocol_ids": {
-    "evidence_policy_version": "urbannav_reasoning_v4_evidence_policy_v8",
+    "evidence_policy_version": "urbannav_reasoning_v4_evidence_policy_v9",
     "parser_id": "parse_reasoning_target_v4_v6",
     "renderer_id": "render_reasoning_target_v4_v6",
     "section_definition_version": "urbannav_reasoning_v4_section_definitions_v8",
     "validator_id": "validate_reasoning_target_v4_v8",
     "wire_format_version": "urbannav_reasoning_v4_wire_v6"
   },
-  "reasoning_contract_schema_digest": "91435900c55487d4efb9379a862da17bf592651a184a21684e67c5f402eb09ac",
+  "reasoning_contract_schema_digest": "71372035983621ad380863847e2b23cf7ab81b9173c646a066a124ea48e6a4c7",
   "schema_version": "urbannav_reasoning_v4_contract_artifacts_v9"
 }

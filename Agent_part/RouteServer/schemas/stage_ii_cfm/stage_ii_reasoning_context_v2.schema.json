@@ -197,6 +197,7 @@
           "type": "string"
         },
         "generation_config": {
+          "additionalProperties": true,
           "title": "Generation Config",
           "type": "object"
         },
