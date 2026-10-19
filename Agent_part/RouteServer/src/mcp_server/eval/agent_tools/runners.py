@@ -119,7 +119,7 @@ class RouteServerTeacherRunner(AgentRunner):
 
     default teacher:
         如果没有传 teacher callable 则使用 ``RouteServerAgentTeacher``，把旧
-        IntentParser / GoalDecomposer / POI recommendation / visual prompt teacher
+        IntentParser / GoalDecomposer / POI recommendation teacher
         包装成最终 Stage2 ``AgentTrace``。
     """
 
@@ -130,7 +130,6 @@ class RouteServerTeacherRunner(AgentRunner):
         app_context: object | None = None,
         use_llm: bool = True,
         execute_tools: bool = False,
-        enable_visual_prompt: bool = False,
         enable_recommendation: bool = True,
         tool_artifact_dir: str | Path | None = None,
     ) -> None:
@@ -138,7 +137,6 @@ class RouteServerTeacherRunner(AgentRunner):
         self.app_context = app_context
         self.use_llm = bool(use_llm)
         self.execute_tools = bool(execute_tools)
-        self.enable_visual_prompt = bool(enable_visual_prompt)
         self.enable_recommendation = bool(enable_recommendation)
         self.tool_artifact_dir = tool_artifact_dir
 
@@ -153,7 +151,6 @@ class RouteServerTeacherRunner(AgentRunner):
                 config=RouteServerTeacherConfig(
                     use_llm=self.use_llm,
                     execute_tools=self.execute_tools,
-                    enable_visual_prompt=self.enable_visual_prompt,
                     enable_recommendation=self.enable_recommendation,
                     tool_artifact_dir=self.tool_artifact_dir,
                 ),

@@ -1,6 +1,5 @@
 # RouteServer
 
-> 重构状态：默认 MCP server 已移除 `run_zero_shot_visual_prompt_agent`，且不再加载旧 visual-prompt/brain 管线。下方相关示例属于待退役的历史说明，不适用于当前默认服务；历史复现请使用 Git 提交 `4879be4` 的隔离 checkout。地图、RouteSession 和 episode runtime 保留。
 
 RouteServer 是 UrbanNav 的后端导航与视觉提示服务。它通过 MCP tools 对外提供：
 
@@ -9,7 +8,6 @@ RouteServer 是 UrbanNav 的后端导航与视觉提示服务。它通过 MCP to
 - 动态途经点 route session
 - RouteContext / LocalBEVContext
 - 本地 FPV 图像理解
-- zero-shot visual prompt overlay
 - AMap 静态 BEV 路线可视化
 
 历史包名仍是 `osm-mcp-server`，但当前已经支持多地图 provider。
@@ -60,23 +58,17 @@ export LLM_API_BASE_URL=https://api.openai.com/v1
 
 ## 主链路
 
-当前推荐使用的在线主链路是：
+当前主框架是 System2 Agent、System1 连续轨迹和确定性 Episode Runtime：
 
 ```text
-user instruction + GPS + heading + FPV image
--> Route Session / Route Plan
--> RouteContext
--> mode-aware VisualPromptAgent
--> SVG visual prompt overlay
+instruction + observation + task/route/control revisions
+-> System2: tool_call / ask_user / navigate / complete_task / abort_task
+-> navigate: System1 trajectory -> validation -> short execution
+-> observation/controller feedback -> next decision
 ```
 
-BEV proposal / PoV candidates 仍然保留，但定位为：
-
-- teacher/debug prior
-- 可解释中间结果
-- 后续蒸馏数据来源
-
-它们不再是在线 visual prompt 的强制决策路径。
+地图工具、RouteSession 和 BEV 渲染提供外部状态与诊断能力。旧图像平面 visual-prompt
+生成/验证管线已经退役，不属于默认工具、teacher 或连续控制路径。
 
 更详细的数学与模块关系见：
 
@@ -171,7 +163,6 @@ export ROUTE_SESSION_STORE=memory
 
 ### Prompt / Vision
 
-- `run_zero_shot_visual_prompt_agent`
 - `analyze_image`
 - `analyze_local_image`
 
@@ -201,172 +192,7 @@ python examples/route_context_debug_client.py \
   --open
 ```
 
-带 FPV 图像时会额外调用当前 visual prompt agent：
-
-```bash
-python examples/route_context_debug_client.py \
-  --prompt "我想去西湖" \
-  --lat 30.2645 \
-  --lon 120.1180 \
-  --mode foot \
-  --radius 3000 \
-  --heading-deg 35 \
-  --lookahead-m 20 \
-  --image-path /home/ubuntu/WorkSpace/dataset/urban.jpeg
-```
-
-### Zero-shot Visual Prompt
-
-```bash
-python examples/zero_shot_visual_prompt_agent_client.py \
-  --prompt "我想去西湖" \
-  --lat 30.2645 \
-  --lon 120.1180 \
-  --mode foot \
-  --radius 3000 \
-  --heading-deg 35 \
-  --lookahead-m 20 \
-  --image-path /home/ubuntu/WorkSpace/dataset/urban.jpeg \
-  --save-overlay /tmp/visual_prompt.svg
-```
-
-使用 iPhone 原图 EXIF pose 测试固定路线：
-
-```bash
-python examples/yuquan_visual_prompt_agent_client.py \
-  --image-path /home/ubuntu/WorkSpace/project/SR/test4.jpg \
-  --save-overlay /tmp/yuquan_visual_prompt_overlay.svg
-```
-
-默认路线是 `浙江大学玉泉校区南门` 到 `浙江大学玉泉校区北门`。脚本会从图片 EXIF 读取 `lat/lon/GPSImgDirection`，并用它作为当前 FPV pose；如果只想排查路线起点附近的 prompt，可加 `--gps-source origin`。
-
-给 `yuquan_visual_prompt_agent_client.py` 接入 SAM3 可通行区域约束：
-
-```bash
-python examples/yuquan_visual_prompt_agent_client.py \
-  --image-path /home/ubuntu/WorkSpace/project/SR/test4.jpg \
-  --fpv-segmentation-npy /path/to/000005_segmentation.npy \
-  --fpv-segmentation-class-mapping /path/to/class_mapping.json \
-  --fpv-segmentation-visualization /path/to/000005_visualization.jpg \
-  --enable-segmentation-overlay-input \
-  --enforce-alignment \
-  --save-overlay /tmp/yuquan_visual_prompt_overlay.svg \
-  --save-json /tmp/yuquan_visual_prompt_result.json
-```
-
-当 `fpv_segmentation` 存在时，主链会同时：
-
-- 把 segmentation summary 提供给 visual prompt generator / verifier
-- 对最终 `rendered_prompt` 做基于可通行类别的硬校验
-- 在输出 JSON 中返回 `agent.fpv_segmentation_summary`
-
-可选三路输入与对齐参数：
-
-- `--enable-segmentation-overlay-input`：让 A/V arbiter 在主图之外再接收 segmentation overlay（默认关闭）
-- `--fpv-segmentation-overlay-image-path` / `--fpv-segmentation-overlay-image-url`：显式指定 overlay 图像输入（会透传到 MCP 参数 `fpv_segmentation_overlay_image_path/url`）
-- `--enforce-alignment` / `--no-enforce-alignment`：控制 segmentation 与图像平面对齐失败时是否继续（默认强制）
-
-如果想把 “运行 SAM3” 和 “运行 visual prompt demo” 合并成一个命令，可用：
-
-```bash
-WORK_DIR=/home/ubuntu/WorkSpace/dataset/sidewalk_he4_adapter
-OUT_DIR=/home/ubuntu/WorkSpace/dataset/sidewalk_visual_prompt_55_200_rerun
-SAM3_DIR=/home/ubuntu/WorkSpace/dataset/sidewalk_he4_adapter_sam3
-
-cd /home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer
-
-python tools/model_processing/run_sidewalk_images_visual_prompt_pipeline.py \
-  --images-dir "$WORK_DIR/images" \
-  --trajectory-json "$WORK_DIR/trajectory.json" \
-  --output-dir "$OUT_DIR" \
-  --sequence-name sidewalk_he4_adapter \
-  --camera-view camera_front \
-  --sam3-output-base-dir "$SAM3_DIR" \
-  --run-sam3 \
-  --sam3-env-name sam3 \
-  --sam3-inference-script /home/ubuntu/WorkSpace/project/SR/Code/sam3/scripts/batch_sam3_demo_260124.py \
-  --checkpoint-path /media/ubuntu/data1/checkpoints/checkpoint_35_merged.pt \
-  --gpus 0 \
-  --min-score 0.3 \
-  --frame-start 55 \
-  --frame-end 200 \
-  --frame-step 5 \
-  --enable-segmentation-overlay-input \
-  --enforce-alignment \
-  --mode foot
-
-```
-
-按下面这一版参数也可以直接运行（与上面同用途，保留你当前使用的参数写法）：
-
-```bash
-python tools/run_sam3_visual_prompt_pipeline.py \
-  --repo-root /home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer \
-  --client yuquan \
-  --run-sam3 \
-  --sam3-env-name sam3 \
-  --sam3-script prepare_frames_and_run_batch_sam3.py \
-  --rides-base-dir /home/ubuntu/WorkSpace/dataset/output_rides_0 \
-  --frames-base-dir /home/ubuntu/WorkSpace/dataset/output_rides_0_frames \
-  --sam3-output-base-dir /home/ubuntu/WorkSpace/dataset/output_rides_0_sam3_frame_results \
-  --sequence-name ride_16446_20240115041752 \
-  --camera-view camera_front \
-  --fps 1.0 \
-  --gpus 0 \
-  --min-score 0.3 \
-  --checkpoint-path checkpoint_35_merged.pt \
-  --frame-name 000005 \
-  --alignment-mode error \
-  --client-args --image-path /home/ubuntu/WorkSpace/project/SR/test4.jpg --gps-source image --enable-segmentation-overlay-input --enforce-alignment --save-overlay /tmp/yuquan_visual_prompt_overlay.svg --save-json /tmp/yuquan_visual_prompt_result.json \
-  2>&1 | tee sam3_pipeline.log
-```
-
-如果 SAM3 结果已经存在，只想直接跑 demo，可去掉 `--run-sam3` 和 SAM3 预处理参数，保留 `--sam3-output-base-dir`、`--sequence-name`、`--camera-view`、`--frame-name` 即可。
-
-如果想对整个序列逐帧输出 visual prompt（每帧读取 RGB 和 ride pose、每帧落盘 overlay/json），可用：
-
-```bash
-cd /home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer
-python tools/run_sequence_visual_prompt_pipeline.py \
-  --provider sam3 \
-  --repo-root /home/ubuntu/WorkSpace/project/SR/Code/Urban-Nav-SR/Agent_part/RouteServer \
-  --client yuquan \
-  --run-sam3 \
-  --sam3-env-name sam3 \
-  --sam3-script /home/ubuntu/WorkSpace/project/SR/Code/sam3/scripts/prepare_frames_and_run_batch_sam3.py \
-  --rides-base-dir /home/ubuntu/WorkSpace/dataset/output_rides_0 \
-  --frames-base-dir /home/ubuntu/WorkSpace/dataset/output_rides_0_frames \
-  --sam3-output-base-dir /home/ubuntu/WorkSpace/dataset/output_rides_0_sam3_frame_results \
-  --sequence-name ride_16446_20240115041752 \
-  --camera-view camera_front \
-  --frame-start 1 \
-  --frame-end 50 \
-  --frame-step 1 \
-  --pose-source ride \
-  --checkpoint-path /media/ubuntu/data1/checkpoints/checkpoint_35_merged.pt \
-  --output-dir /tmp/sequence_visual_prompt \
-  --continue-on-error \
-  --client-args --destination-name 浙江大学玉泉校区北门 杭州 --mode foot
-```
-```bash
-conda run -n UrbanNav python tools/model_processing/run_sidewalk_images_visual_prompt_pipeline.py \
-  --images-dir /home/ubuntu/WorkSpace/dataset/sidewalk_he4_adapter/images \
-  --trajectory-json /home/ubuntu/WorkSpace/dataset/sidewalk_he4_adapter/trajectory.json \
-  --sequence-name sidewalk_he4_adapter \
-  --camera-view camera_front \
-  --sam3-output-base-dir /home/ubuntu/WorkSpace/dataset/sidewalk_he4_adapter_sam3 \
-  --output-dir /home/ubuntu/WorkSpace/dataset/sidewalk_visual_prompt \
-  --frame-start 50 --frame-end 52 --frame-step 1 \
-  --enable-segmentation-overlay-input \
-  --mode foot
-```
-
-输出目录会包含：
-
-- `overlay/{frame}.svg`: 每帧叠加图
-- `json/{frame}.json`: 每帧结构化结果
-- `logs/{frame}.log`: 每帧执行日志
-- `manifest.json`: 序列级汇总（成功/失败帧统计）
+图像理解请使用独立 FPV 示例；RouteContext 调试只请求地图和路线状态。
 
 ### 动态途经点
 
@@ -482,4 +308,8 @@ uv build
 - AMap 静态图是静态 URL，不是原生导航 SDK。
 - `RouteSession` 的 JSON file store 适合单机后端；多实例部署建议替换成 Redis / DB。
 - 多目标 itinerary 当前是逐 goal 选择 + multi-leg route，尚未实现全局组合优化。
-- zero-shot visual prompt 是 teacher/agent 原型，仍需真实 FPV 数据回放验证。
+
+## 历史复现
+
+旧 visual-prompt/brain/SoM 管线及其 CLI 已从当前代码移除。历史复现使用提交
+`4879be4` 的独立 checkout；不要把该版本的工具注册回当前服务。历史结果文件仍可由诊断查看器读取。

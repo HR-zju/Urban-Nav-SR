@@ -5,7 +5,6 @@
 - ``IntentParser``: 自然语言意图解析。
 - ``GoalDecomposer``: 多目标 itinerary 拆解。
 - ``DestinationRecommendationEngine``: POI 推荐和候选排序。
-- ``run_zero_shot_visual_prompt_pipeline``: FPV visual prompt teacher。
 
 注意：这些 teacher 能力只写入 trace metadata / teacher artifact，不会作为学生
 模型可见 tool 暴露。学生仍然只学习 ``map_tool``、``image_tool``、
@@ -114,8 +113,6 @@ class RouteServerTeacherConfig:
         review 样例和单测。
     execute_tools:
         True 时会把选出的学生可见 tool call 交给 ``ToolExecutor`` 执行。
-    enable_visual_prompt:
-        True 且 case 中有 FPV、GPS、route polyline 时，调用 visual prompt teacher。
     tool_artifact_dir:
         真实 ``ToolExecutor`` 写入 image crop 等副产物的目录。None 表示只返回
         artifact metadata，不落盘裁剪图。
@@ -123,7 +120,6 @@ class RouteServerTeacherConfig:
 
     use_llm: bool = True
     execute_tools: bool = False
-    enable_visual_prompt: bool = False
     enable_recommendation: bool = True
     tool_artifact_dir: str | Path | None = None
 
@@ -155,7 +151,6 @@ class RouteServerAgentTeacher:
         intent = await self._parse_intent(case.user_request)
         goals = await self._decompose_goals(case.user_request)
         recommendation = await self._maybe_recommend(case, intent)
-        visual_prompt = await self._maybe_run_visual_prompt_teacher(case)
 
         no_tool_replay = self._uses_no_tool_replay(case)
         call = None
@@ -165,13 +160,11 @@ class RouteServerAgentTeacher:
                 intent=intent,
                 goals=goals,
                 recommendation=recommendation,
-                visual_prompt=visual_prompt,
             )
         teacher_internal = {
             "intent_parse": intent,
             "goal_decomposition": goals,
             "recommendation": _safe_summary(recommendation),
-            "visual_prompt": _safe_summary(visual_prompt),
             "selected_student_tool_call": call.to_dict() if call is not None else None,
             "tool_policy": "no_tool" if no_tool_replay else "tool",
         }
@@ -194,12 +187,10 @@ class RouteServerAgentTeacher:
                 "runner": "routeserver_teacher",
                 "use_llm": bool(self.config.use_llm),
                 "execute_tools": bool(self.config.execute_tools),
-                "enable_visual_prompt": bool(self.config.enable_visual_prompt),
             },
             intent=intent,
             tool_decision_reason=self._tool_decision_reason(call),
             recommendation=recommendation,
-            visual_prompt=visual_prompt,
             teacher_internal=teacher_internal,
             extra_metadata=extra_metadata,
         )
@@ -246,34 +237,6 @@ class RouteServerAgentTeacher:
         except Exception as exc:
             return {"status": "recommendation_error", "error": str(exc)}
 
-    async def _maybe_run_visual_prompt_teacher(self, case: AgentStage2Case) -> dict[str, Any]:
-        if not self.config.enable_visual_prompt:
-            return {"status": "skipped_disabled"}
-        observation = case.observation
-        gps = observation.get("gps") or observation.get("current_pose")
-        route_polyline = observation.get("route_polyline") or observation.get("route_polyline_gps")
-        coarse_waypoints = observation.get("coarse_waypoints") or observation.get("key_waypoints") or []
-        image_path = None
-        images = observation.get("images") or {}
-        if isinstance(images, dict):
-            image_path = images.get("fpv") or images.get("front")
-        if not gps or not route_polyline or not image_path:
-            return {"status": "skipped_missing_visual_prompt_inputs"}
-        try:
-            # Lazy import：visual prompt teacher 可能依赖图像和 LVLM 环境。
-            from mcp_server.services.visual_prompt_service import run_zero_shot_visual_prompt_pipeline
-
-            return await run_zero_shot_visual_prompt_pipeline(
-                gps=gps,
-                route_polyline=route_polyline,
-                coarse_waypoints=coarse_waypoints,
-                image_path=image_path,
-                heading_deg=observation.get("heading_deg"),
-                navigation_mode=str(observation.get("mode") or "foot"),
-                enable_verifier=False,
-            )
-        except Exception as exc:
-            return {"status": "visual_prompt_error", "error": str(exc)}
 
     async def _execute_selected_tool(self, call: ToolCall, case: AgentStage2Case) -> ToolResponse:
         from mcp_server.agent.tool_executor import ToolExecutor
@@ -311,9 +274,8 @@ class RouteServerAgentTeacher:
         intent: dict[str, Any],
         goals: dict[str, Any],
         recommendation: dict[str, Any],
-        visual_prompt: dict[str, Any],
     ) -> ToolCall:
-        del goals, visual_prompt
+        del goals
         request = case.user_request.lower()
         observation = case.observation
         session_id = str(observation.get("route_session_id") or observation.get("session_id") or "").strip()

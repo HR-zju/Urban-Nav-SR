@@ -111,18 +111,6 @@ class RouteState:
     local_bev_context: LocalBEVContext
 
 
-@dataclass
-class VisualPromptDecision:
-    selected_candidate_id: str | None
-    selected_prompt_type: str | None
-    instruction: str
-    confidence: float
-    reason: str
-    reject_all: bool
-    fallback_used: bool
-    arbiter_source: str
-    rendered_prompt: dict[str, Any] | None
-    debug: dict[str, Any]
 
 
 def route_context_to_dict(context: RouteContext) -> dict[str, Any]:
@@ -135,7 +123,3 @@ def local_bev_context_to_dict(context: LocalBEVContext) -> dict[str, Any]:
 
 def route_state_to_dict(state: RouteState) -> dict[str, Any]:
     return asdict(state)
-
-
-def visual_prompt_decision_to_dict(decision: VisualPromptDecision) -> dict[str, Any]:
-    return asdict(decision)

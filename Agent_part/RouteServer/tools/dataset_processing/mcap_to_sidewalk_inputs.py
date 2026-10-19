@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Extract RouteServer sidewalk-pipeline inputs from a single ROS2 MCAP file.
 
-The sidewalk visual-prompt batch runner consumes a deliberately small contract:
+Historical sidewalk frame review consumes a deliberately small contract:
 
     output_dir/
       images/000001.jpg
@@ -26,7 +26,7 @@ Core synchronization:
 Frames whose nearest GPS or heading sample is farther than
 ``--max-sync-delta-s`` are skipped. The resulting ``trajectory.json`` can be
 passed directly to
-``tools/model_processing/run_sidewalk_images_visual_prompt_pipeline.py``.
+``mcp_server.visualization.frame_io``.
 """
 
 from __future__ import annotations

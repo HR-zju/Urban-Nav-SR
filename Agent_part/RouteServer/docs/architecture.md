@@ -121,10 +121,10 @@ RouteServer 不实现训练器；ms-swift 不复制地图、RouteSession 或冻�
 RouteContext
 LocalBEVContext
 BEV/PoV proposals
-VisualPromptAgent / overlay
+historical image-plane overlay artifacts
 ```
 
-它们可以作为 typed tool result、teacher prior、可视化调试结果或消融输入。主闭环不能强制依赖：
+RouteContext 和 LocalBEVContext 可以作为 typed tool result 或可视化调试结果。旧 VisualPromptAgent、brain 和专用 SoM/corridor 管线已退役；历史 overlay 仅保留离线读取与渲染。主闭环不能强制依赖：
 
 ```text
 pose -> RouteContext -> handcrafted belief -> local policy

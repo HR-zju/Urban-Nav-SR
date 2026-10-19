@@ -8,20 +8,7 @@ import tempfile
 import unittest
 
 
-_MODULE_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "tools"
-    / "model_processing"
-    / "run_sidewalk_images_visual_prompt_pipeline.py"
-)
-_SPEC = importlib.util.spec_from_file_location("run_sidewalk_images_visual_prompt_pipeline", _MODULE_PATH)
-if _SPEC is None or _SPEC.loader is None:
-    raise RuntimeError(f"Unable to load module spec from {_MODULE_PATH}")
-_MODULE = importlib.util.module_from_spec(_SPEC)
-sys.modules[_SPEC.name] = _MODULE
-_SPEC.loader.exec_module(_MODULE)
-
-_write_data_url_image = _MODULE._write_data_url_image
+from mcp_server.visualization.frame_io import _write_data_url_image
 
 
 class SidewalkPipelineArtifactsTest(unittest.TestCase):

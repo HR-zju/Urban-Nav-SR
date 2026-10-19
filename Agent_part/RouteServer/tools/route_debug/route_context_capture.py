@@ -421,18 +421,6 @@ async def run_capture(
                 }
                 route_state = await call_tool_json(session, "get_route_state", state_args)
                 route_context = route_state.get("route_context", {}) or {}
-                visual_prompt = None
-                if resolved_image_path or resolved_image_url:
-                    visual_prompt = await call_tool_json(
-                        session,
-                        "run_zero_shot_visual_prompt_agent",
-                        {
-                            **state_args,
-                            "image_path": resolved_image_path,
-                            "image_url": resolved_image_url,
-                            "visual_top_k": 5,
-                        },
-                    )
                 captured_frames.append(
                     {
                         "frame_index": frame["frame_index"],
@@ -447,10 +435,6 @@ async def run_capture(
                         "debug": build_debug_frame(frame, route_context),
                         "route_context": route_context,
                         "local_bev_context": route_state.get("local_bev_context", {}),
-                        "visual_prompt_decision": (visual_prompt or {}).get("arbiter_decision", {}) or {},
-                        "visual_prompt_overlay_svg_data_url": (visual_prompt or {}).get("overlay_svg_data_url"),
-                        "visual_prompt_overlay_svg": (visual_prompt or {}).get("overlay_svg"),
-                        "prompt_generation_tool": "run_zero_shot_visual_prompt_agent" if visual_prompt else None,
                     }
                 )
 

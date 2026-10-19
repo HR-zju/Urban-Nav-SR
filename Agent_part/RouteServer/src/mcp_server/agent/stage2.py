@@ -177,13 +177,12 @@ def synthetic_tool_response(
     *,
     source: str,
     recommendation: dict[str, Any] | None = None,
-    visual_prompt: dict[str, Any] | None = None,
 ) -> ToolResponse:
     """Create a deterministic offline tool response for review/cold-start bootstrapping.
 
     输入:
         ``call`` 是学生可见工具调用；``case`` 提供当前观测和监督；可选
-        ``recommendation`` / ``visual_prompt`` 只作为 teacher internal context 摘要。
+        ``recommendation`` 只作为 teacher internal context 摘要。
 
     输出:
         ``ToolResponse``，可直接写入 trace 的 ``tool_response`` role。
@@ -202,7 +201,6 @@ def synthetic_tool_response(
             "op": op,
             "image": args.get("image") or args.get("image_path") or "fpv",
             "bbox": args.get("bbox"),
-            "visual_prompt": _compact_tool_context(visual_prompt),
             "source": source,
         }
     elif call.tool == "user_interaction_tool":

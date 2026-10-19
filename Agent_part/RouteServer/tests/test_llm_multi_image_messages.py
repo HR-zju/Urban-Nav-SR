@@ -34,20 +34,6 @@ class LlmMultiImageMessagesTest(unittest.TestCase):
         self.assertIn("extra_image_urls", _function_arg_names(build_messages))
         self.assertIn("extra_image_urls", _function_arg_names(analyze))
 
-    def test_arbiter_functions_accept_extra_image_urls(self) -> None:
-        tree = ast.parse(LLM_FILE.read_text(encoding="utf-8"))
-        arbitrate_remote = next(
-            node
-            for node in tree.body
-            if isinstance(node, ast.AsyncFunctionDef) and node.name == "arbitrate_pov_candidates_with_llm"
-        )
-        arbitrate_local = next(
-            node
-            for node in tree.body
-            if isinstance(node, ast.AsyncFunctionDef) and node.name == "arbitrate_local_pov_candidates_with_llm"
-        )
-        self.assertIn("extra_image_urls", _function_arg_names(arbitrate_remote))
-        self.assertIn("extra_image_urls", _function_arg_names(arbitrate_local))
 
     def test_vision_request_controls_are_explicit_opt_ins(self) -> None:
         settings = LLMSettings(

@@ -80,7 +80,6 @@ class AgenticStage2TraceBuilder:
         tool_decision_reason: str = "external context is required before final navigation",
         tool_decision_reason_code: str | None = None,
         recommendation: dict[str, Any] | None = None,
-        visual_prompt: dict[str, Any] | None = None,
         phase1_response: str | None = None,
         teacher_internal: dict[str, Any] | None = None,
         extra_metadata: dict[str, Any] | None = None,
@@ -93,7 +92,7 @@ class AgenticStage2TraceBuilder:
             response: 工具返回；tool 路径为空时使用 ``synthetic_tool_response``。
             tools: 学生可见工具 schema 为空时使用默认三类元工具。
             model_run: 记录 runner/teacher 配置的审计信息。
-            intent/recommendation/visual_prompt: teacher internal context 只用于摘要和合成返回。
+            intent/recommendation: teacher internal context 只用于摘要和合成返回。
             tool_decision_reason_code: 可选离散原因码；为空时由 ``stage2`` helper
                 根据 tool 类型推断，保持旧调用兼容。
             phase1_response: 已有 Phase1 CoT 为空时从 case 自动查找，再 fallback。
@@ -127,7 +126,6 @@ class AgenticStage2TraceBuilder:
                 case,
                 source=self.config.source,
                 recommendation=recommendation,
-                visual_prompt=visual_prompt,
             )
             trace.add_turn(
                 "tool_response",

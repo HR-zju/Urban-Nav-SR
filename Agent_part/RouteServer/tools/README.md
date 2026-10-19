@@ -449,7 +449,6 @@ python tools/dataset_processing/process_chunks_26_29.py \
 | `model_processing/run_sam3_som_phase.py` | 主入口，生成 fpv segmentation、SoM、route support 等 Phase2 artifacts |
 | `model_processing/run_phase_chunk0.sh` | 一键处理 chunk_0 |
 | `model_processing/run_phase_all.sh` | 一键处理 sidewalk 下所有数据 |
-| `model_processing/run_sidewalk_images_visual_prompt_pipeline.py` | sidewalk Agent expert trajectory 推理与可视化流水线；默认输出 `rendered_prompt.path_uv`，不依赖 SAM/SoM corridor |
 | `model_processing/run_sidewalk_phase1_cot_baseline.py` | 使用 Phase1 CoT v5 输入/输出格式运行 Agent baseline；支持 exporter BEV 和在线 BEV 两种输入 |
 | `model_processing/sidewalk_phase1_dataset.py` | 生成 Phase1 ms-swift source JSONL、trajectory label 和 BEV topology meta；默认使用 InternNav pose/camera 标定投影 |
 | `model_processing/sidewalk_phase1_cot_teacher.py` | 调用 Agent VLM/LLM，把 Phase1 source JSONL 升级为带 `<think>/<Scene>/<FPVScene>/<BEVContext>/<CrossView>/<Plan>/<finish>` 的 CoT SFT 数据 |
@@ -675,3 +674,5 @@ tools/docker/deploy-to-server.sh
 - EKF、坐标/角度/轨迹诊断放 `math_tools/`。
 - Docker、部署、服务器运行脚本放 `docker/`。
 - 不再维护但可能有参考价值的脚本移入 `archive/`；确认无价值的缓存和生成物直接删除，不提交。
+
+旧 visual-prompt CLI 已退役，历史复现使用独立 checkout `4879be4`。共享帧读取与图像产物写入位于 `mcp_server.visualization.frame_io`。

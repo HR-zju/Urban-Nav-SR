@@ -86,7 +86,7 @@ AFFORDANCE_CHANNELS = {
 
 
 # ============================================================================
-# SoM 配色方案（参考 mcp_server/som/overlay.py）
+# SoM 配色方案（历史参考：4879be4 的 mcp_server/som/overlay.py）
 # ============================================================================
 _SOM_PALETTE: tuple[tuple[int, int, int], ...] = (
     (34, 197, 94), (14, 165, 233), (249, 115, 22), (168, 85, 247),
@@ -368,7 +368,7 @@ def _get_affordance(class_name: str, class_config: dict[str, list[str]]) -> str:
 
 
 # ============================================================================
-# SoM 连通分量算法（参考 mcp_server/som/context.py）
+# SoM 连通分量算法（历史参考：4879be4 的 mcp_server/som/context.py）
 # ============================================================================
 def _connected_components(binary_mask: np.ndarray) -> tuple[np.ndarray, int]:
     """Find connected components in a binary mask."""
@@ -866,7 +866,7 @@ def draw_som_overlay(
 ) -> None:
     """Draw SoM visualization overlay: colored regions + numbered labels.
 
-    参考 mcp_server/som/overlay.py 的渲染方式：
+    历史参考：4879be4 的 mcp_server/som/overlay.py 的渲染方式：
     - 连通分量着色（不是边界框！）
     - 区域中心放置编号标记
     """

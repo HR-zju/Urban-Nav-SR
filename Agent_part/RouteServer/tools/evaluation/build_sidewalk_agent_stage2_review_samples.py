@@ -324,7 +324,6 @@ async def _run(args: argparse.Namespace) -> None:
         runner = RouteServerTeacherRunner(
             use_llm=bool(args.use_llm),
             execute_tools=bool(args.execute_tools),
-            enable_visual_prompt=bool(args.enable_visual_prompt),
             enable_recommendation=bool(args.enable_recommendation),
             app_context=app_context,
             tool_artifact_dir=args.tool_artifact_dir,
@@ -389,7 +388,6 @@ async def _run(args: argparse.Namespace) -> None:
         "runner": "routeserver_teacher_tool_executor" if args.execute_tools else "routeserver_teacher_offline_synthetic_tool_response",
         "tool_context": args.tool_context if args.execute_tools else "synthetic",
         "use_llm": bool(args.use_llm),
-        "enable_visual_prompt": bool(args.enable_visual_prompt),
         "enable_recommendation": bool(args.enable_recommendation),
         "outputs": {
             "stage2_cases_out": str(args.stage2_cases_out) if args.stage2_cases_out else None,
@@ -531,7 +529,6 @@ def parse_args() -> argparse.Namespace:
         help="Directory for image_tool artifacts when --execute-tools is used.",
     )
     parser.add_argument("--use-llm", action="store_true", help="Allow RouteServer teacher LLM intent/decomposition calls.")
-    parser.add_argument("--enable-visual-prompt", action="store_true")
     parser.add_argument("--enable-recommendation", action="store_true")
     parser.add_argument("--no-fail-on-invalid", dest="fail_on_invalid", action="store_false")
     parser.set_defaults(fail_on_invalid=True)

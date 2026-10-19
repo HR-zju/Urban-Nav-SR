@@ -11,7 +11,6 @@ from .schema import (
     local_bev_context_to_dict,
     route_context_to_dict,
     route_state_to_dict,
-    visual_prompt_decision_to_dict,
 )
 
 
@@ -99,5 +98,4 @@ __all__ = [
     "match_pose_to_route",
     "route_context_to_dict",
     "route_state_to_dict",
-    "visual_prompt_decision_to_dict",
 ]

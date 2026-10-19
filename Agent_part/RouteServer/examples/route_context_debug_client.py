@@ -121,7 +121,6 @@ async def run_demo(
     lookahead_m: float,
     image_path: str | None,
     image_url: str | None,
-    visual_top_k: int,
     width: int,
     height: int,
     open_svg: bool,
@@ -175,18 +174,6 @@ async def run_demo(
                     "height": height,
                 },
             )
-            visual_prompt = None
-            if image_path or image_url:
-                visual_prompt = await call_tool_json(
-                    session,
-                    "run_zero_shot_visual_prompt_agent",
-                    {
-                        **common_args,
-                        "image_path": image_path,
-                        "image_url": image_url,
-                        "visual_top_k": visual_top_k,
-                    },
-                )
 
             print("=== Route Context Debug Summary ===")
             print(
@@ -199,8 +186,6 @@ async def run_demo(
                         "corridor_type": (route_context.get("local_semantics", {}) or {}).get("corridor_type"),
                         "distance_to_next_turn_m": (route_context.get("progress", {}) or {}).get("distance_to_next_turn_m"),
                         "off_route": (route_context.get("pose_match", {}) or {}).get("off_route"),
-                        "visual_prompt_type": (((visual_prompt or {}).get("arbiter_decision", {}) or {}).get("rendered_prompt", {}) or {}).get("type"),
-                        "visual_prompt_confidence": ((visual_prompt or {}).get("arbiter_decision", {}) or {}).get("confidence"),
                         "svg_data_url": bev_patch.get("svg_data_url"),
                     },
                     indent=2,
@@ -213,9 +198,6 @@ async def run_demo(
             print("\n=== RouteState ===")
             print(json.dumps(route_state, indent=2, ensure_ascii=True))
 
-            if visual_prompt is not None:
-                print("\n=== Visual Prompt Agent ===")
-                print(json.dumps(visual_prompt.get("arbiter_decision", {}), indent=2, ensure_ascii=True))
 
             if open_svg:
                 svg_data_url = str(bev_patch.get("svg_data_url") or "").strip()
@@ -235,7 +217,6 @@ if __name__ == "__main__":
     parser.add_argument("--lookahead-m", type=float, default=20.0, help="Local segment lookahead distance in meters")
     parser.add_argument("--image-path", help="Optional local RGB/FPV image path for PromptProposal v2")
     parser.add_argument("--image-url", help="Optional image URL or data URL for PromptProposal v2")
-    parser.add_argument("--visual-top-k", type=int, default=5, help="Maximum visual candidate regions")
     parser.add_argument("--width", type=int, default=640, help="Rendered BEV SVG width")
     parser.add_argument("--height", type=int, default=640, help="Rendered BEV SVG height")
     parser.add_argument("--open", action="store_true", help="Open the rendered BEV SVG data URL")
@@ -253,7 +234,6 @@ if __name__ == "__main__":
             lookahead_m=args.lookahead_m,
             image_path=args.image_path,
             image_url=args.image_url,
-            visual_top_k=args.visual_top_k,
             width=args.width,
             height=args.height,
             open_svg=args.open,

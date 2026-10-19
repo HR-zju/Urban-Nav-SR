@@ -30,53 +30,6 @@ python examples/route_context_debug_client.py \
   --open
 ```
 
-### Visual Prompt
-
-```bash
-python examples/zero_shot_visual_prompt_agent_client.py \
-  --prompt "我想去西湖" \
-  --lat 30.2645 \
-  --lon 120.1180 \
-  --mode foot \
-  --radius 3000 \
-  --heading-deg 35 \
-  --lookahead-m 20 \
-  --image-path /home/ubuntu/WorkSpace/dataset/urban.jpeg \
-  --save-overlay /tmp/visual_prompt.svg
-```
-
-带 SAM3 segmentation 约束：
-
-```bash
-python examples/yuquan_visual_prompt_agent_client.py \
-  --image-path /home/ubuntu/WorkSpace/project/SR/test4.jpg \
-  --fpv-segmentation-npy /path/to/000005_segmentation.npy \
-  --fpv-segmentation-class-mapping /path/to/class_mapping.json \
-  --fpv-segmentation-visualization /path/to/000005_visualization.jpg \
-  --save-overlay /tmp/yuquan_visual_prompt_overlay.svg \
-  --save-json /tmp/yuquan_visual_prompt_result.json
-```
-
-单命令串联 SAM3 和 visual prompt demo：
-
-```bash
-python tools/run_sam3_visual_prompt_pipeline.py \
-  --client yuquan \
-  --run-sam3 \
-  --rides-base-dir /path/to/rides \
-  --frames-base-dir /path/to/frames \
-  --sam3-output-base-dir /path/to/sam3_outputs \
-  --sequence-name ride_16446_20240115041752 \
-  --camera-view camera_front \
-  --fps 1.0 \
-  --checkpoint-path /media/ubuntu/data1/checkpoints/checkpoint_35_merged.pt \
-  --frame-name 000005 \
-  --client-args -- \
-  --image-path /home/ubuntu/WorkSpace/project/SR/test4.jpg \
-  --save-overlay /tmp/yuquan_visual_prompt_overlay.svg \
-  --save-json /tmp/yuquan_visual_prompt_result.json
-```
-
 ### Dynamic Via Points
 
 ```bash
@@ -169,22 +122,7 @@ export AMAP_ITINERARY_STATIC_MAX_POINTS=120
 - `markers_only_image_url`
 - `leg_overlay_image_url`
 
-## 5. Visual Prompt Multi-Image Inputs
-
-默认建议：
-
-- 保留 `primary_fpv`：原始 FPV 负责真实纹理和细节判断。
-- 开启 `--enable-som-overlay-input`：编号 SoM overlay 负责可通行/障碍 grounding。
-- 开启 `--enable-bev-map-provider`：真实 OpenStreetMap raster screenshot 负责跨视角拓扑参考。
-- 仅在 debug/ablation 时开启 `--enable-sam-visualization-input`：SAM visualization 容易和 SoM 重复，也会增加 LVLM 输入成本。
-
-兼容参数：
-
-```bash
---enable-segmentation-overlay-input
-```
-
-目前等价于 `--enable-som-overlay-input`，不会自动附加 SAM visualization。
+## 5. BEV Map Heading
 
 BEV 方向校准：
 

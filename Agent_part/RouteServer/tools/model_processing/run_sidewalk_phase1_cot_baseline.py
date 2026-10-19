@@ -57,7 +57,7 @@ from sidewalk_phase1_cot_teacher import (  # noqa: E402
     parse_json_object,
     validate_tag_layout,
 )
-from run_sidewalk_images_visual_prompt_pipeline import (  # noqa: E402
+from mcp_server.visualization.frame_io import (  # noqa: E402
     _iter_selected_frame_names,
     _load_trajectory_frames,
     _write_data_url_image,
