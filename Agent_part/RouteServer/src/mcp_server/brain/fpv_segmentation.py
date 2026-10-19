@@ -233,10 +233,6 @@ def _point_list(raw_points: Any) -> list[list[float]]:
     return points
 
 
-def _class_names_for_ids(id_to_name: dict[int, str], class_ids: set[int]) -> list[str]:
-    return [id_to_name.get(int(class_id), f"unknown_{class_id}") for class_id in sorted(class_ids)]
-
-
 def _ids_for_names(id_to_name: dict[int, str], names: set[str]) -> set[int]:
     normalized = {str(name).strip().lower() for name in names}
     return {int(class_id) for class_id, class_name in id_to_name.items() if str(class_name).strip().lower() in normalized}

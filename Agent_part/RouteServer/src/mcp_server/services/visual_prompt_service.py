@@ -129,11 +129,6 @@ def _load_prompt_image(*, image_path: Optional[str], image_url: Optional[str]) -
     raise RuntimeError("Visual prompt rendering currently supports image_path or data:image URL inputs")
 
 
-def _prompt_image_size(*, image_path: Optional[str], image_url: Optional[str]) -> tuple[int, int]:
-    image = _load_prompt_image(image_path=image_path, image_url=image_url)
-    return int(image.size[0]), int(image.size[1])
-
-
 def _llm_image_limits() -> tuple[int, int, int]:
     """Resolve image compression limits for vision-model input.
 
