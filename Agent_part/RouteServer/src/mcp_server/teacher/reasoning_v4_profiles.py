@@ -100,7 +100,11 @@ Boundaries: direction must be a moving action_label; generic route-following
 text alone does not determine left/right; a clearly oriented visible BEV route
 overlay may support direction but never local safety. Use source=bev_route only
 for that visible overlay, source=instruction only for an explicit directional
-instruction, and source=none whenever status is not aligned.
+instruction. Use source=visual_goal when the instruction names a goal and the
+current FPV unambiguously locates that goal; its direction comes from the image.
+Resolve only the instructed goal, not any nearby object of the same category.
+Use not_visible or insufficient_evidence for absent or ambiguous goals, with
+source=none whenever status is not aligned.
 Example:
 {"task_direction":{"status":"aligned","source":"bev_route","direction":"left_20"}}""",
     "InteractionConstraintGrounding": """\
@@ -112,6 +116,13 @@ an empty affected list; only avoid names a non-empty subset. That subset means
 directions requiring a local detour, not forbidden directions: selecting one
 requires slow/detour, while stop safely satisfies avoid. Prefer the coarse kinds
 crossing_interaction, social_interaction, local_obstacle, and traffic_control.
+For traffic_control, establish which signal applies to the pedestrian's current
+path and its current state. Distinguish pedestrian, cycle and vehicle signals.
+A red signal for another movement does not establish a stop for this path.
+History provides context; current applicability is determined at the anchor.
+Use stop only with visible evidence of a current applicable stopping requirement;
+retain it when supported even if another section suggests moving. Omit an
+unsupported traffic restriction rather than infer it from a crossing instruction.
 Do not add generic caution.
 Example:
 {"constraints":[{"kind":"crossing_interaction","status":"applicable","effect":"yield","affected_direction_labels":[]}]}""",
@@ -126,6 +137,8 @@ alignment, but do not introduce an entity, traversability judgment, navigation
 direction, or interaction constraint absent from the validated groundings.
 Private strong direction and trajectory labels are unavailable and will be
 audited later.
+An applicable global stop constraint requires a stop/stop/stop proposal. If the
+groundings support yielding rather than stopping, use the supported moving tuple.
 Example:
 {"selected_action_label":"straight","speed":"slow","response":"yield"}""",
 }
@@ -202,6 +215,9 @@ def _profile(
         f"reasoning_v4_6_{section_name.lower()}_derivation_"
         f"v{'2' if legacy_registry else '3'}"
     )
+    if section_name in {"NavigationContextGrounding", "InteractionConstraintGrounding", "Decision"}:
+        profile_id += "_visual_goal_stop_v1"
+        derivation_version += "_visual_goal_stop_v1"
     payload = {
         "profile_id": profile_id,
         "derivation_version": derivation_version,

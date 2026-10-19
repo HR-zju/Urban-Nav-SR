@@ -30,7 +30,7 @@ REASONING_V4_SECTION_DEFINITION_VERSION = (
     "urbannav_reasoning_v4_section_definitions_v8"
 )
 REASONING_V4_EVIDENCE_POLICY_VERSION = (
-    "urbannav_reasoning_v4_evidence_policy_v8"
+    "urbannav_reasoning_v4_evidence_policy_v9"
 )
 REASONING_V4_RENDERER_ID = "render_reasoning_target_v4_v6"
 REASONING_V4_PARSER_ID = "parse_reasoning_target_v4_v6"
@@ -65,6 +65,7 @@ TaskDirectionStatusV4 = Literal[
 TaskDirectionSourceV4 = Literal[
     "bev_route",
     "instruction",
+    "visual_goal",
     "none",
 ]
 DirectionAffordanceStateV4 = Literal[

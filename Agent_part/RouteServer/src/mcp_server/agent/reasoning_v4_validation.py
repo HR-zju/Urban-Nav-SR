@@ -264,6 +264,7 @@ def validate_reasoning_section_v4(
             and task_direction.source not in {
                 "bev_route",
                 "instruction",
+                "visual_goal",
             }
         ):
             errors.append(

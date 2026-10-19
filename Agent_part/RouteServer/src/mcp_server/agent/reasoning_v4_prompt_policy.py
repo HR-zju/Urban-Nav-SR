@@ -57,7 +57,11 @@ traversability, clearance, or collision safety. Never derive direction from GPS,
 route matching, route theta, pose, pixel-goal geometry, or waypoint geometry.
 Set task_direction.source=bev_route only when that oriented overlay supports the
 direction. Set source=instruction only when the instruction itself explicitly
-states a direction. Generic route-following text is not directional evidence.
+states a direction. Use source=visual_goal when the instruction identifies a
+goal and the current FPV unambiguously locates that goal: the image supplies its
+direction, while the instruction supplies its identity. Use not_visible or
+insufficient_evidence when the goal cannot be resolved. Generic route-following
+text is not directional evidence.
 
 Use lower_snake_case open codes where the schema uses ReasonCode. Use only the
 provided action_labels and affordance_probe_labels for direction fields. Do not
