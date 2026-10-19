@@ -18,17 +18,13 @@ def _function_arg_names(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[st
 
 
 class OverlayInputContractTest(unittest.TestCase):
-    def test_server_tool_accepts_overlay_and_alignment_args(self) -> None:
+    def test_default_server_does_not_register_legacy_visual_prompt(self) -> None:
+        """The normal MCP entrypoint must not load or expose the retired policy."""
         tree = ast.parse(SERVER_FILE.read_text(encoding="utf-8"))
-        tool_fn = next(
-            node
-            for node in tree.body
-            if isinstance(node, ast.AsyncFunctionDef) and node.name == "run_zero_shot_visual_prompt_agent"
-        )
-        names = _function_arg_names(tool_fn)
-        self.assertIn("fpv_segmentation_overlay_image_path", names)
-        self.assertIn("fpv_segmentation_overlay_image_url", names)
-        self.assertIn("enforce_alignment", names)
+        names = {node.name for node in tree.body if isinstance(node, ast.AsyncFunctionDef)}
+        self.assertNotIn("run_zero_shot_visual_prompt_agent", names)
+        imports = {node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
+        self.assertNotIn("mcp_server.services.visual_prompt_service", imports)
 
     def test_clients_expose_overlay_and_alignment_cli_flags(self) -> None:
         zero_text = ZERO_FILE.read_text(encoding="utf-8")

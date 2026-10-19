@@ -1,5 +1,7 @@
 # RouteServer
 
+> 重构状态：默认 MCP server 已移除 `run_zero_shot_visual_prompt_agent`，且不再加载旧 visual-prompt/brain 管线。下方相关示例属于待退役的历史说明，不适用于当前默认服务；历史复现请使用 Git 提交 `4879be4` 的隔离 checkout。地图、RouteSession 和 episode runtime 保留。
+
 RouteServer 是 UrbanNav 的后端导航与视觉提示服务。它通过 MCP tools 对外提供：
 
 - 自然语言目的地推荐

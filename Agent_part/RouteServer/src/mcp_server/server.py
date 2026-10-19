@@ -75,7 +75,6 @@ from mcp_server.services.route_session_service import (
     _save_persisted_route_session,
 )
 from mcp_server.services.fpv_segmentation_service import segment_fpv_frame as segment_fpv_frame_service
-from mcp_server.services.visual_prompt_service import run_zero_shot_visual_prompt_pipeline
 
 # Create application context
 @dataclass
@@ -1273,94 +1272,6 @@ async def segment_fpv_frame(
     )
 
 
-@mcp.tool()
-async def run_zero_shot_visual_prompt_agent(
-    gps: Dict[str, float],
-    route_polyline: List[Dict[str, Any]] | List[List[float]],
-    coarse_waypoints: List[Dict[str, Any]],
-    ctx: Context,
-    image_path: Optional[str] = None,
-    image_url: Optional[str] = None,
-    fpv_segmentation: Optional[Dict[str, Any]] = None,
-    fpv_segmentation_overlay_image_path: Optional[str] = None,
-    fpv_segmentation_overlay_image_url: Optional[str] = None,
-    enforce_alignment: bool = True,
-    sam3_request: Optional[Dict[str, Any]] = None,
-    heading_deg: Optional[float] = None,
-    lookahead_m: float = 20.0,
-    off_route_threshold_m: float = 20.0,
-    front_extent_m: float = 30.0,
-    back_extent_m: float = 10.0,
-    side_extent_m: float = 15.0,
-    visual_top_k: int = 5,
-    candidate_top_k: int = 5,
-    llm_detail: str = "auto",
-    navigation_mode: str = "foot",
-    enable_verifier: bool = False,
-    enable_segmentation_overlay_input: bool = False,
-    enable_som_overlay_input: Optional[bool] = None,
-    enable_sam_visualization_input: bool = False,
-    enable_bev_map_provider: bool = False,
-    request_id: Optional[str] = None,
-) -> Dict[str, Any]:
-    """
-    Run a zero-shot visual prompt agent over the current FPV frame.
-
-    The online decision path is mode-aware and image-first:
-    1. build RouteContext + LocalBEVContext
-    2. pass compact RouteContext directly to the LVLM
-    3. let the LVLM render one conservative image-plane prompt from image + RouteContext
-    4. if the LVLM fails, return reject_all instead of switching to heuristic fallbacks
-
-    Core visual-prompt decision, route, overlay, segmentation, and SoM fields
-    remain available to MCP and app callers.
-    """
-    await ctx.info(
-        "Running zero-shot visual prompt agent "
-        f"heading={heading_deg if heading_deg is not None else 'none'} "
-        f"visual_top_k={visual_top_k} candidate_top_k={candidate_top_k} "
-        f"enable_verifier={enable_verifier} "
-        f"enable_segmentation_overlay_input={enable_segmentation_overlay_input} "
-        f"enable_som_overlay_input={enable_som_overlay_input} "
-        f"enable_sam_visualization_input={enable_sam_visualization_input} "
-        f"enable_bev_map_provider={enable_bev_map_provider} "
-        f"enforce_alignment={enforce_alignment}"
-    )
-    resolved_fpv_segmentation = dict(fpv_segmentation or {}) if isinstance(fpv_segmentation, dict) else None
-    if str(fpv_segmentation_overlay_image_path or "").strip() or str(fpv_segmentation_overlay_image_url or "").strip():
-        if resolved_fpv_segmentation is None:
-            resolved_fpv_segmentation = {}
-        if str(fpv_segmentation_overlay_image_path or "").strip():
-            resolved_fpv_segmentation["visualization_path"] = str(fpv_segmentation_overlay_image_path).strip()
-        if str(fpv_segmentation_overlay_image_url or "").strip():
-            resolved_fpv_segmentation["visualization_url"] = str(fpv_segmentation_overlay_image_url).strip()
-    resolved_request_id = str(request_id or uuid4())
-    return await run_zero_shot_visual_prompt_pipeline(
-        gps=gps,
-        route_polyline=route_polyline,
-        coarse_waypoints=coarse_waypoints,
-        image_path=image_path,
-        image_url=image_url,
-        fpv_segmentation=resolved_fpv_segmentation,
-        sam3_request=sam3_request,
-        heading_deg=heading_deg,
-        lookahead_m=lookahead_m,
-        off_route_threshold_m=off_route_threshold_m,
-        front_extent_m=front_extent_m,
-        back_extent_m=back_extent_m,
-        side_extent_m=side_extent_m,
-        visual_top_k=visual_top_k,
-        candidate_top_k=candidate_top_k,
-        llm_detail=llm_detail,
-        navigation_mode=navigation_mode,
-        enable_verifier=enable_verifier,
-        enable_segmentation_overlay_input=enable_segmentation_overlay_input,
-        enable_som_overlay_input=enable_som_overlay_input,
-        enable_sam_visualization_input=enable_sam_visualization_input,
-        enable_bev_map_provider=enable_bev_map_provider,
-        enforce_alignment=enforce_alignment,
-        request_id=resolved_request_id,
-    )
 
 
 @mcp.tool()
