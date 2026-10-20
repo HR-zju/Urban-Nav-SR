@@ -94,7 +94,7 @@ meta_json=<WORK_DIR>/mcap_extract_meta.json
 
 旧生成/验证流水线及 CLI 已移除，当前默认 server 和 teacher 均不提供该能力。
 历史复现应使用隔离 checkout `4879be4`，不要把旧命令指向当前 checkout。
-地图渲染使用 `mcp_server.visualization.map_overlay`；当前闭环参见 [architecture.md](architecture.md)。
+地图渲染使用 `mcp_server.visualization.map_overlay`；当前闭环参见 [architecture.md](../design/architecture.md)。
 
 ## 估算 LLM 延时拆分
 

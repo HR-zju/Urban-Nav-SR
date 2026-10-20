@@ -315,7 +315,7 @@ examples/agent_eval/sidewalk_agent_stage2_splits_review/
 对应协议文档：
 
 ```text
-docs/SIDEWALK_AGENT_EVAL_PROTOCOL.md
+docs/evaluation/SIDEWALK_AGENT_EVAL_PROTOCOL.md
 ```
 
 Archive 校验内容包括：

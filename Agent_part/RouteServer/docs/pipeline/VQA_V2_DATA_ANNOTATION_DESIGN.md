@@ -81,7 +81,7 @@ teacher、audit、review、evaluation 和 generated artifacts。`ms-swift` 只�
 ## 3. 版本与能力配置
 
 V2.0 的任务全集是 27 个原子 task。任务是否可生产不写死在 schema enum 中，而由
-[`vqa_v2_stage_a_capabilities.json`](../config/vqa_v2_stage_a_capabilities.json) 冻结：
+[`vqa_v2_stage_a_capabilities.json`](../../config/vqa_v2_stage_a_capabilities.json) 冻结：
 
 稳定的 task semantic registry `VQA_V2_TASK_SPECS` 另外为每个 task 冻结 answer model、
 required modalities、dynamic eligibility requirements、allowed label sources、private
@@ -247,7 +247,7 @@ requirement、ambiguity、surface、condition、constraint、reason codes。自�
 ## 6. Direction profile 是共享的实验合同
 
 VQA 与 Full CoT 共同引用
-[`direction_profile.py`](../src/mcp_server/contracts/direction_profile.py)，不各自复制枚举。
+[`direction_profile.py`](../../src/mcp_server/contracts/direction_profile.py)，不各自复制枚举。
 V2.0 允许两个完整 profile stamp：
 
 | Profile | Bin | 来源 | Stop rule |
@@ -275,7 +275,7 @@ training view 和 ms-swift row 不携带该 stamp，只保留最小 direction an
 
 ## 7. 当前关闭任务的接口，不是空训练样本
 
-[`vqa_dataset_v2.py`](../src/mcp_server/contracts/vqa_dataset_v2.py) 为 C2–C6、E1–E3
+[`vqa_dataset_v2.py`](../../src/mcp_server/contracts/vqa_dataset_v2.py) 为 C2–C6、E1–E3
 定义了以下 private interface：
 
 | Interface | 未来激活必须具备 |

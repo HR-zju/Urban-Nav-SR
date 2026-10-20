@@ -6,7 +6,7 @@
 `benchmark_plugin_*` 与 `citywalker_benchmark_metrics.py` 是新增的模型无关 plugin
 层：冻结数据集插件、target-free 模型适配器和指标插件三者的交换边界。它不替换现有
 Stage I/II V2 contract；详细协议见
-[`PLUGGABLE_OPENLOOP_BENCHMARK_V1.md`](../../../../docs/PLUGGABLE_OPENLOOP_BENCHMARK_V1.md)。
+[`PLUGGABLE_OPENLOOP_BENCHMARK_V1.md`](../../../../docs/evaluation/PLUGGABLE_OPENLOOP_BENCHMARK_V1.md)。
 
 `benchmark_plugin_review_base.py` 是 review-only 的可复用基类/工具层：它统一 score
 horizon 的轨迹切分，并严格解析 public-only `native_adapter_trace` sidecar。通用 HTML

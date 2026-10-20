@@ -18,8 +18,8 @@ Agent_part/
 Agent_part/RouteServer/README.md        # RouteServer 能力和 examples
 Agent_part/RouteServer/tools/README.md  # SideWalk 数据处理与模型处理命令速查
 Agent_part/RouteServer/docs/README.md   # RouteServer 文档索引和维护状态
-Agent_part/RouteServer/docs/FRAMEWORK_MATH_MODEL.md  # 当前框架数学模型和数据/地图接口边界
-Agent_part/RouteServer/docs/URBANNAV_BENCHMARK_TECHNICAL_DESIGN.md  # UrbanNav benchmark 技术设计
+Agent_part/RouteServer/docs/design/FRAMEWORK_MATH_MODEL.md  # 当前框架数学模型和数据/地图接口边界
+Agent_part/RouteServer/docs/evaluation/URBANNAV_BENCHMARK_TECHNICAL_DESIGN.md  # UrbanNav benchmark 技术设计
 Agent_part/RouteServer/docs/EVALUATION.md  # 目的地推荐和路线规划评估指标
 Agent_part/SideWalkNav/README.md        # Phase1 数据、CoT、baseline 和指标口径
 ```

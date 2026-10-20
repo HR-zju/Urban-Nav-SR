@@ -72,9 +72,9 @@ instruction + observation + task/route/control revisions
 
 更详细的数学与模块关系见：
 
-- [docs/architecture.md](docs/architecture.md)
-- [docs/FRAMEWORK_MATH_MODEL.md](docs/FRAMEWORK_MATH_MODEL.md)
-- [docs/URBANNAV_BENCHMARK_TECHNICAL_DESIGN.md](docs/URBANNAV_BENCHMARK_TECHNICAL_DESIGN.md)
+- [docs/design/architecture.md](docs/design/architecture.md)
+- [docs/design/FRAMEWORK_MATH_MODEL.md](docs/design/FRAMEWORK_MATH_MODEL.md)
+- [docs/evaluation/URBANNAV_BENCHMARK_TECHNICAL_DESIGN.md](docs/evaluation/URBANNAV_BENCHMARK_TECHNICAL_DESIGN.md)
 - [docs/EVALUATION.md](docs/EVALUATION.md)
 - [docs/README.md](docs/README.md)
 
@@ -90,7 +90,7 @@ PYTHONPATH=src python tools/evaluation/run_urbannav_module1_benchmark.py \
 
 调试工具、测试建议和性能参数见：
 
-- [docs/debugging.md](docs/debugging.md)
+- [docs/operations/debugging.md](docs/operations/debugging.md)
 
 ## Provider
 

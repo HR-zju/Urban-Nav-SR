@@ -19,7 +19,7 @@ V1 **不使用** `fpv_segmentation`、SoM 或检测框作为区域输入。几�
 
 ### 2.1 `LocalTraversabilityGeometryV1`
 
-代码：[local_traversability_geometry.py](../src/mcp_server/contracts/local_traversability_geometry.py)。
+代码：[local_traversability_geometry.py](../../src/mcp_server/contracts/local_traversability_geometry.py)。
 
 每个 region 使用归一化图像坐标的四边形：
 
@@ -42,7 +42,7 @@ near_left -> near_right -> far_right -> far_left
 
 ### 2.2 `NavigationTrainabilityFilterV1`
 
-代码：[navigation_trainability.py](../src/mcp_server/contracts/navigation_trainability.py)。
+代码：[navigation_trainability.py](../../src/mcp_server/contracts/navigation_trainability.py)。
 
 过滤由三部分组成：
 
@@ -79,8 +79,8 @@ QC 优先使用可选的 `StageIITrajectorySidecarV2`，以 `sample_id/source_gr
 
 ### 2.3 `SceneEventTagsV1`
 
-代码：[scene_event_tags.py](../src/mcp_server/contracts/scene_event_tags.py) 与
-[scene_events.py](../src/mcp_server/data/quality/scene_events.py)。该层不调用 LVLM：它只在 geometry 与
+代码：[scene_event_tags.py](../../src/mcp_server/contracts/scene_event_tags.py) 与
+[scene_events.py](../../src/mcp_server/data/quality/scene_events.py)。该层不调用 LVLM：它只在 geometry 与
 suitability 完成后，按 source fingerprint 对齐当前 sidecar，确定性写出六个**可重叠**标签的三态结果：
 
 | 标签 | `present` 的最小证据 | 不可推断的边界 |
@@ -121,7 +121,7 @@ source 或 motion summary 后会自动 cache miss；不会静默复用旧结果�
 
 ## 4. 分层 smoke
 
-脚本：[build_navigation_quality_smoke.py](../tools/model_processing/build_navigation_quality_smoke.py)。
+脚本：[build_navigation_quality_smoke.py](../../tools/model_processing/build_navigation_quality_smoke.py)。
 
 每个数据集先构造 $100$--$200$ 条 source-only smoke。默认 6 个 strata 各请求 $24$ 条，最多 $160$ 条：
 

@@ -30,7 +30,7 @@
 - `teacher/agentic_stage2_trace_builder.py` 统一生成 tool 与 no-tool 两种合法 trace；`teacher/trace_builder.py` 通过 `force_no_tool` 或 `tool_policy=no_tool` 支持确定性 no-tool replay。
 - `eval/metrics.py` 与 `eval/stage2_validator.py` 支持 tool/no-tool 两种 role sequence，并新增 `tool_result_use_validity`、`tool_decision_consistency`、`unnecessary_tool_call_rate`。
 - `tests/test_agent_eval_framework.py` 增加 tool、no-tool、failed-tool 三类 smoke，确保 trace 和 ms-swift row 都能通过 validator。
-- `docs/SIDEWALK_AGENT_EVAL_PROTOCOL.md` 更新 tool/no-tool/failed-tool 语义，强调工具 schema 顶层注入、原始 `tool_response` 不进入 assistant LM target、`<ToolResultUse>` 只记录工具结果使用结论。
+- `docs/evaluation/SIDEWALK_AGENT_EVAL_PROTOCOL.md` 更新 tool/no-tool/failed-tool 语义，强调工具 schema 顶层注入、原始 `tool_response` 不进入 assistant LM target、`<ToolResultUse>` 只记录工具结果使用结论。
 
 ## 2026-06-20
 
@@ -48,7 +48,7 @@
   - `metrics.py` 实现 `parse_success`、`tool_name_accuracy`、`tool_op_accuracy`、`argument_validity`、`finish_validity`、`stage2_role_order_valid`、`trajectory_readout_order_valid`、`final_cot_validity`、`route_update_success`。
   - `exporters.py` 将 `AgentTrace` 导出为 ms-swift agent-template JSONL，正式入口为 `trace_to_ms_swift_stage2_row` / `write_ms_swift_stage2_jsonl`，使用独立 `tool_call` / `tool_response` role，并把 `tools` 写成 JSON 字符串。
   - `stage2_validator.py` 独立验证 case、trace、ms-swift row 的 role 顺序、tool JSON、readout token 和 final CoT tags。
-- 新增 `docs/SIDEWALK_AGENT_EVAL_PROTOCOL.md`，记录 final Stage2 case、trace、metrics 和 ms-swift 导出格式。
+- 新增 `docs/evaluation/SIDEWALK_AGENT_EVAL_PROTOCOL.md`，记录 final Stage2 case、trace、metrics 和 ms-swift 导出格式。
 - 新增 `tests/test_agent_eval_framework.py`，覆盖 case JSONL、tool parser、tool schema、rule runner、metrics 和 ms-swift exporter。
 - 新增 `src/mcp_server/teacher/agentic_stage2_trace_builder.py`，集中拼装 normalized Stage2 trace；`trace_builder.py` 只负责 RouteServer teacher 侧工具选择和 teacher internal metadata。
 - 新增 `examples/agent_eval/sidewalk_agent_stage2_cases_review.jsonl`，覆盖 `search_poi`、`create_route_session`、`add_via_and_replan`、`replace_destination`、`request_clarification`、`image_tool crop` 六类 Stage2 样例。
@@ -183,7 +183,7 @@
   - 支持 `reference`、`hardlink`、`copy`、`symlink` 四种媒体归档方式；本地训练推荐 `hardlink + absolute path`，发布数据集推荐 `copy + relative path`。
 - 新增 `tools/model_processing/run_sidewalk_phase1_archive.sh` 一键入口。
 - 新增 `tests/test_sidewalk_phase1_archive.py`，覆盖有效样本归档、无效 CoT 拒绝、relative media path 三个关键行为。
-- `tools/README.md` 和 `docs/SIDEWALK_PHASE1_DATA_PIPELINE.md` 更新流程：CoT teacher 之后先 archive 判定合理性，archive manifest 才作为 ms-swift 训练输入，不再默认要求运行 ms-swift `dataset_builder` 转换。
+- `tools/README.md` 和 `docs/pipeline/SIDEWALK_PHASE1_DATA_PIPELINE.md` 更新流程：CoT teacher 之后先 archive 判定合理性，archive manifest 才作为 ms-swift 训练输入，不再默认要求运行 ms-swift `dataset_builder` 转换。
 
 ### 升级 Phase1 轨迹真值为时间条件标签
 
@@ -296,7 +296,7 @@
   - 按 timestamp 最近邻选择 BEV。
   - 在 `sidewalk_meta`、`bev_patch_meta`、QA bundle 中记录 `bev_frame_idx`、`bev_timestamp`、`bev_time_delta_ms`、`bev_mapping_source`。
   - 当原始 clip 只有 `front.mp4` 而没有 FPV JPG 时，只对最终被采样的训练帧按需抽取，避免全量复制 FPV。
-- 更新 `docs/SIDEWALK_PHASE1_DATA_PIPELINE.md` 和 `tools/README.md`，明确最终数据形态为原始视频 + 2fps BEV + JSON sidecars。
+- 更新 `docs/pipeline/SIDEWALK_PHASE1_DATA_PIPELINE.md` 和 `tools/README.md`，明确最终数据形态为原始视频 + 2fps BEV + JSON sidecars。
 - 扩展测试覆盖 20fps timestamp -> 2fps BEV index 选择和 Phase1 最近 BEV 映射。
 - 修复单 clip 最简运行时 `output_root` 不存在导致 `trajectory.json` 写入失败的问题。
 
@@ -324,7 +324,7 @@
   - 支持 retry/repair；失败后可选择 `drop`、`error` 或显式 `template` 降级。
 - 新增 `tools/model_processing/run_sidewalk_phase1_cot_teacher.sh`，封装 teacher 生成、验证报告和下一步 ms-swift 转换提示。
 - 新增 `tests/test_sidewalk_phase1_cot_teacher.py`，覆盖模板 fallback、GT 改写拒绝、训练 prompt 不泄露 geometry evidence、retry 后写出有效行。
-- 更新 `docs/SIDEWALK_PHASE1_DATA_PIPELINE.md` 和 `tools/README.md`，明确 CoT SFT 必须走 Geometry Exporter -> LLM Teacher -> Validator/Manifest Builder 三段。
+- 更新 `docs/pipeline/SIDEWALK_PHASE1_DATA_PIPELINE.md` 和 `tools/README.md`，明确 CoT SFT 必须走 Geometry Exporter -> LLM Teacher -> Validator/Manifest Builder 三段。
 
 ### 修正 SideWalk Phase1 轨迹真值生成链路
 
@@ -338,7 +338,7 @@
 - 旧 GNSS/HFOV 轨迹生成降级为显式 fallback，必须通过 `--allow-heuristic-trajectory` 或 `ALLOW_HEURISTIC_TRAJECTORY=1` 开启。
 - 输出 `trajectory_source` 元数据，用于区分 `calibrated_pose_projection`、`heuristic_pose_projection`、`heuristic_gnss_projection`。
 - 增加单测覆盖 calibrated projection、legacy fallback 和 InternNav 投影公式一致性。
-- 更新 `docs/SIDEWALK_PHASE1_DATA_PIPELINE.md`，明确正式训练数据必须优先使用标定投影。
+- 更新 `docs/pipeline/SIDEWALK_PHASE1_DATA_PIPELINE.md`，明确正式训练数据必须优先使用标定投影。
 
 ### 增加 SideWalk Phase1 ms-swift 数据生成流水线
 
@@ -352,7 +352,7 @@
   - 检查 source JSONL 引用路径、trajectory shape、归一化范围和 QA bundle schema。
   - 支持读取对齐的预测 JSONL，计算 `prediction_parse_success`、ADE、FDE。
 - 新增 `tools/model_processing/run_sidewalk_phase1_dataset.sh`，封装 Phase1 构建与审计的一键入口。
-- 新增文档 `docs/SIDEWALK_PHASE1_DATA_PIPELINE.md`，说明 Agent 仓库与 ms-swift 的数据边界、输入要求、输出结构、QA bundle 和训练前转换命令。
+- 新增文档 `docs/pipeline/SIDEWALK_PHASE1_DATA_PIPELINE.md`，说明 Agent 仓库与 ms-swift 的数据边界、输入要求、输出结构、QA bundle 和训练前转换命令。
 - 新增测试 `tests/test_sidewalk_phase1_dataset.py`，覆盖 local BEV 坐标约定、grid cell 生成和最小 clip 导出流程。
 
 ## 2026-05-19
@@ -578,7 +578,7 @@
 
 ### 增加常用运行指令文档
 
-- 新增 `docs/commands.md`。
+- 新增 `docs/operations/commands.md`。
 - 记录从 MCAP 抽取 sidewalk pipeline 输入的完整命令，包含：
   - `mcap_to_sidewalk_inputs.py` 1 FPS smoke 抽取命令
   - 图像、GNSS、heading topic 参数
@@ -606,7 +606,7 @@
   - `heading_offset_deg`
   - `compass_heading_deg`
   - `heading_rotation_deg`
-- 已更新 `docs/debugging.md`，补充推荐多图输入策略和 BEV 方向校准流程。
+- 已更新 `docs/operations/debugging.md`，补充推荐多图输入策略和 BEV 方向校准流程。
 
 ### 将伪 BEV 草图替换为真实 OSM 截图
 
@@ -702,7 +702,7 @@
 ### 增加核心注释与数学公式文档
 
 - 为 segmentation、visual prompt、route context、QA teachers 等核心模块补充文件级和函数级注释。
-- 在 `docs/architecture.md` 中整理主要数学抽象，包括：
+- 在 `docs/design/architecture.md` 中整理主要数学抽象，包括：
   - route matching
   - local BEV projection
   - visual prompt coordinate scaling

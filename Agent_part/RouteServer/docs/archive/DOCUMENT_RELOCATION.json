@@ -1,0 +1,69 @@
+{
+  "moved": {
+    "architecture.md": "design/architecture.md",
+    "FRAMEWORK_MATH_MODEL.md": "design/FRAMEWORK_MATH_MODEL.md",
+    "ROUTE_BELIEF_GUIDED_AGENT_DESIGN.md": "design/ROUTE_BELIEF_GUIDED_AGENT_DESIGN.md",
+    "URBANNAV_BENCHMARK_TECHNICAL_DESIGN.md": "evaluation/URBANNAV_BENCHMARK_TECHNICAL_DESIGN.md",
+    "SIDEWALK_AGENT_EVAL_PROTOCOL.md": "evaluation/SIDEWALK_AGENT_EVAL_PROTOCOL.md",
+    "LANGUAGE_WAYPOINT_BENCHMARK_V1.md": "evaluation/LANGUAGE_WAYPOINT_BENCHMARK_V1.md",
+    "OPENLOOP_BENCHMARK_V2_IMPLEMENTATION.md": "evaluation/OPENLOOP_BENCHMARK_V2_IMPLEMENTATION.md",
+    "PLUGGABLE_OPENLOOP_BENCHMARK_V1.md": "evaluation/PLUGGABLE_OPENLOOP_BENCHMARK_V1.md",
+    "DATASET_ANNOTATION_STATUS.md": "pipeline/DATASET_ANNOTATION_STATUS.md",
+    "DATASET_QUALITY_FILTER_V1.md": "pipeline/DATASET_QUALITY_FILTER_V1.md",
+    "HISTORY_ANNOTATION_MIGRATION.md": "pipeline/HISTORY_ANNOTATION_MIGRATION.md",
+    "HISTORY_MODELSCOPE_ARCHIVE_README.md": "pipeline/HISTORY_MODELSCOPE_ARCHIVE_README.md",
+    "HISTORY_MODELSCOPE_DATASET_README.md": "pipeline/HISTORY_MODELSCOPE_DATASET_README.md",
+    "REASONING_V4_DATA_ANNOTATION_DESIGN.md": "pipeline/REASONING_V4_DATA_ANNOTATION_DESIGN.md",
+    "SIDEWALK_PHASE1_DATA_PIPELINE.md": "pipeline/SIDEWALK_PHASE1_DATA_PIPELINE.md",
+    "TEACHER_HISTORY_TRAINING_V1.md": "pipeline/TEACHER_HISTORY_TRAINING_V1.md",
+    "URBANNAV_25K_BUILD.md": "pipeline/URBANNAV_25K_BUILD.md",
+    "URBANNAV_DATA_QUALITY_AND_COLLECTION_REQUIREMENTS.md": "pipeline/URBANNAV_DATA_QUALITY_AND_COLLECTION_REQUIREMENTS.md",
+    "VQA_V2_DATA_ANNOTATION_DESIGN.md": "pipeline/VQA_V2_DATA_ANNOTATION_DESIGN.md",
+    "YELP_INSTRUCTION_DATA_DESIGN.md": "pipeline/YELP_INSTRUCTION_DATA_DESIGN.md",
+    "sidewalk_observation_action_tool_contract.md": "contracts/sidewalk_observation_action_tool_contract.md",
+    "SIDEWALK_SYSTEM1_V2_CONTRACT.md": "contracts/SIDEWALK_SYSTEM1_V2_CONTRACT.md",
+    "STAGE_II_CACHED_TRAJ_QUERY_V2_DESIGN.md": "contracts/STAGE_II_CACHED_TRAJ_QUERY_V2_DESIGN.md",
+    "STAGE_II_CFM_DATA_CONTRACT.md": "contracts/STAGE_II_CFM_DATA_CONTRACT.md",
+    "STAGE_I_SFT_PROJECTION_CONTRACT.md": "contracts/STAGE_I_SFT_PROJECTION_CONTRACT.md",
+    "HISTORY_CANONICAL_GENERATION_20261009.md": "experiments/HISTORY_CANONICAL_GENERATION_20261009.md",
+    "HISTORY_STRICT_TRAINING_20261010.md": "experiments/HISTORY_STRICT_TRAINING_20261010.md",
+    "HISTORY_TIME_ONLY_FULL_MIGRATION_20261010.md": "experiments/HISTORY_TIME_ONLY_FULL_MIGRATION_20261010.md",
+    "QWEN122B_HISTORY_SMOKE_20261011.md": "experiments/QWEN122B_HISTORY_SMOKE_20261011.md",
+    "VLA_GAP_CLIP_20261011.md": "experiments/VLA_GAP_CLIP_20261011.md",
+    "VLA_GAP_FULL_20261011.md": "experiments/VLA_GAP_FULL_20261011.md",
+    "VLA_SECTION_REPAIR_20261013.md": "experiments/VLA_SECTION_REPAIR_20261013.md",
+    "commands.md": "operations/commands.md",
+    "debugging.md": "operations/debugging.md",
+    "change_log.md": "archive/change_log.md",
+    "SIDEWALK_AGENTIC_STAGE2_CHECKLIST.md": "archive/SIDEWALK_AGENTIC_STAGE2_CHECKLIST.md"
+  },
+  "split": {
+    "EVALUATION.md": [
+      "EVALUATION.md",
+      "evaluation/PROTOCOL.md",
+      "experiments/MODULE1_RESULTS_HISTORY.md"
+    ]
+  },
+  "notes": "Historical content retained; experiment evidence outside this repository remains at its original location.",
+  "validation": {
+    "date": "2026-10-20",
+    "moved_documents_content_preserved": 36,
+    "evaluation_sections_preserved": true,
+    "introduced_broken_links": [],
+    "preexisting_broken_links": [
+      {
+        "file": "pipeline/URBANNAV_DATA_QUALITY_AND_COLLECTION_REQUIREMENTS.md",
+        "target": "../../../../../ms-swift/docs/Experiments/stage_i_fullcot_vqa_joint_training_design_20260803.md",
+        "resolved": "/home/ubuntu/WorkSpace/project/SR/Code/ms-swift/docs/Experiments/stage_i_fullcot_vqa_joint_training_design_20260803.md"
+      },
+      {
+        "file": "pipeline/URBANNAV_DATA_QUALITY_AND_COLLECTION_REQUIREMENTS.md",
+        "target": "../../../../../ms-swift/docs/Experiments/legacy_full_cot_direction12_evaluation_audit_20260802.md",
+        "resolved": "/home/ubuntu/WorkSpace/project/SR/Code/ms-swift/docs/Experiments/legacy_full_cot_direction12_evaluation_audit_20260802.md"
+      }
+    ],
+    "git_diff_check": "passed",
+    "portfolio_doctor": "failed: existing artifact existence drift and workspace snapshot drift; unrelated state preserved",
+    "tests": "not run: documentation relocation only"
+  }
+}

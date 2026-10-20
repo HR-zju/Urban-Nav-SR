@@ -1,41 +1,28 @@
-# RouteServer Docs
+# RouteServer 文档索引
 
-本文档是 `docs/` 目录的维护入口。新增内容应优先合并到现有正式文档，避免为一次性实验单独增加长期维护文件。
+按主题归档，实验记录与评测协议分开维护。新增文档放入对应目录并更新索引。此处是旧 RouteServer 来源仓的文档；导航新实现的归属遵循工作区 UrbanNav-SR 迁移决策，归档不改变实现责任。
 
-## 正式设计
-
-| 文档 | 用途 |
+| 目录 | 用途 |
 | --- | --- |
-| [architecture.md](architecture.md) | RouteServer 模块边界、核心链路和服务结构。 |
-| [FRAMEWORK_MATH_MODEL.md](FRAMEWORK_MATH_MODEL.md) | Agent 框架数学模型、数据接口和地图接口边界。 |
-| [URBANNAV_BENCHMARK_TECHNICAL_DESIGN.md](URBANNAV_BENCHMARK_TECHNICAL_DESIGN.md) | UrbanNav benchmark 的任务定义、真值构造、采样策略、指标和 Agent baseline。 |
-| [EVALUATION.md](EVALUATION.md) | UrbanNav Module 1 一体化评测入口、prediction contract、核心指标、内部相对分数比较和扩展任务指标。 |
-| [ROUTE_BELIEF_GUIDED_AGENT_DESIGN.md](ROUTE_BELIEF_GUIDED_AGENT_DESIGN.md) | Route-Belief Guided Interactive Navigation Agent 的状态、工具、VoP 和全局-局部导航统一设计。 |
-| [YELP_INSTRUCTION_DATA_DESIGN.md](YELP_INSTRUCTION_DATA_DESIGN.md) | Yelp 需求挖掘、taxonomy 扩展和 instruction set 构造流程。 |
-| [SIDEWALK_AGENT_EVAL_PROTOCOL.md](SIDEWALK_AGENT_EVAL_PROTOCOL.md) | SideWalk Agentic Stage2 评估协议。 |
-| [SIDEWALK_PHASE1_DATA_PIPELINE.md](SIDEWALK_PHASE1_DATA_PIPELINE.md) | SideWalk Phase1 数据生成与标注流水线。 |
-| [DATASET_ANNOTATION_STATUS.md](DATASET_ANNOTATION_STATUS.md) | SideWalk、Foxglove、EgoWalk 与 FrodoBots 的 FullCoT、behavior filter、VQA 候选池、QC 和发布状态。 |
-| [REASONING_V4_DATA_ANNOTATION_DESIGN.md](REASONING_V4_DATA_ANNOTATION_DESIGN.md) | Reasoning V4 共享输入六段合同、独立 section teacher、强 sidecar 边界与 LM/System1 loss 路由。 |
-| [VQA_V2_DATA_ANNOTATION_DESIGN.md](VQA_V2_DATA_ANNOTATION_DESIGN.md) | Navigation VQA V2 的 27-task typed contract、18/9 capability gate、标签来源、可见性、LM loss、审阅与评测边界。 |
-| [STAGE_II_CFM_DATA_CONTRACT.md](STAGE_II_CFM_DATA_CONTRACT.md) | Stage II 的 2.0 秒/16 步 metric FLU trajectory、严格 mask/QC、predicted context cache 与 exchange-view 边界。 |
-| [OPENLOOP_BENCHMARK_V2_IMPLEMENTATION.md](OPENLOOP_BENCHMARK_V2_IMPLEMENTATION.md) | SideWalk Stage I/II open-loop benchmark 的跨仓 schema、投影、lineage、评测和运行入口。 |
+| [experiments/](experiments/README.md) | 实验与结果：历史运行记录、结果表与离线核验入口。实验记录保留原有结论和适用时间；当前采用哪份结果，必须绑定具体数据与评分版本。 |
+| [pipeline/](pipeline/README.md) | 数据流水线：数据构建、标注、质量筛选、迁移和发布流程。带日期或状态的段落是留存快照，执行前核验产物。 |
+| [evaluation/](evaluation/README.md) | 评测协议：任务定义、预测与评分协议、benchmark 实现说明。结果表见 experiments/。 |
+| [contracts/](contracts/README.md) | 数据与工具合同：系统接口、观测与动作、训练投影和轨迹数据合同。 |
+| [design/](design/README.md) | 架构与设计：系统架构和设计背景；每份文档自身标明的历史适用范围仍然有效。 |
+| [operations/](operations/README.md) | 运行与排错：命令与调试说明；文中相对命令默认在 RouteServer 根目录执行。 |
+| [archive/](archive/README.md) | 历史参考：历史变更、阶段 checklist 和本次文档路径迁移表。 |
 
-## 工程运行
+## 常用入口
 
-| 文档 | 用途 |
-| --- | --- |
-| [commands.md](commands.md) | 常用运行命令。 |
-| [debugging.md](debugging.md) | 调试、排错和运行状态检查。 |
-| [URBANNAV_25K_BUILD.md](URBANNAV_25K_BUILD.md) | UrbanNav final-25K 数据构建、质量约束、版本演进与验证记录。 |
+- [评测导航](EVALUATION.md)
+- [架构](design/architecture.md)
+- [评测协议](evaluation/PROTOCOL.md)
+- [实验结果与 A6 核验](experiments/README.md)
+- [SideWalk 数据流水线](pipeline/SIDEWALK_PHASE1_DATA_PIPELINE.md)
+- [标注状态](pipeline/DATASET_ANNOTATION_STATUS.md)
+- [文档旧路径映射](archive/DOCUMENT_RELOCATION.json)
 
-## 历史参考
-
-这些文档保留为实现背景或实验记录，不应作为当前 benchmark 的唯一依据：
-
-| 文档 | 状态 |
-| --- | --- |
-| [SIDEWALK_AGENTIC_STAGE2_CHECKLIST.md](SIDEWALK_AGENTIC_STAGE2_CHECKLIST.md) | Stage2 实现 checklist；长期协议以 `SIDEWALK_AGENT_EVAL_PROTOCOL.md` 为准。 |
-| [change_log.md](change_log.md) | 历史变更记录。 |
+历史路径引用可通过迁移表查找；不改写外部历史 manifest 或迁移来源哈希。`retired_module_paths.json` 保留在原位置，供现有工具读取。
 
 ## 已合并或删除
 

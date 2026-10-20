@@ -3,7 +3,7 @@
 ## 1. 文档定位
 
 本文档是 Urban-Nav-SR 侧 `cached_traj_query_v2` 的集中设计和实现边界说明。
-它补充 [STAGE_II_CFM_DATA_CONTRACT.md](./STAGE_II_CFM_DATA_CONTRACT.md) 中的
+它补充 [STAGE_II_CFM_DATA_CONTRACT.md](STAGE_II_CFM_DATA_CONTRACT.md) 中的
 Stage II canonical data contract，并与 ms-swift 的双频 runtime、训练和 native
 bundle 文档配套使用。
 

@@ -78,7 +78,7 @@ CityWalker 原生模型也可使用 `citywalker_reference_callback_v1`；callbac
 `fpv_only`、`fpv_language`、`fpv_waypoint` 与 `fpv_language_waypoint`。它要求语言文本来自
 验收的 anchor-visible annotation，waypoint 来自独立 planner/GPS route，未来 odometry 永远只写入
 hidden reference。具体 typed contracts、归一化和 CLI 见
-[LANGUAGE_WAYPOINT_BENCHMARK_V1.md](./LANGUAGE_WAYPOINT_BENCHMARK_V1.md)。该模块目前只完成
+[LANGUAGE_WAYPOINT_BENCHMARK_V1.md](LANGUAGE_WAYPOINT_BENCHMARK_V1.md)。该模块目前只完成
 preprocessing/adapter smoke；不表示已有真实 waypoint 数据或 condition-aware 模型训练结果。
 
 ## CityWalker 原生模型评测 UrbanNav

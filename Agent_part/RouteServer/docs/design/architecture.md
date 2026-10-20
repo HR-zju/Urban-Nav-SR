@@ -713,7 +713,7 @@ private strong direction + deterministic composer
 ```
 
 完整数据、teacher、audit 和 release 规则以
-`docs/REASONING_V4_DATA_ANNOTATION_DESIGN.md` 为准。canonical owner 是 RouteServer；
+`docs/pipeline/REASONING_V4_DATA_ANNOTATION_DESIGN.md` 为准。canonical owner 是 RouteServer；
 ms-swift 只消费生成的 mirror、formal training view 和 loss payload。
 
 #### 5.3.1 唯一 wire 与 section 职责
@@ -1074,7 +1074,7 @@ Eligible，以及 task canonicalization drift、equal-nearest probe loss、previ
 
 VQA V2 是与 Reasoning V4 并列的 answer-only LM contract，不是 Full CoT 的 section
 projection，也不是在线 Agent node。完整 27-task 定义、来源与 capability 状态见
-`docs/VQA_V2_DATA_ANNOTATION_DESIGN.md`。
+`docs/pipeline/VQA_V2_DATA_ANNOTATION_DESIGN.md`。
 
 架构上的核心 partition 是：
 
@@ -2478,7 +2478,7 @@ review projection 和 view 分别通过
 `export_reasoning_v4_reconciliation_review.py` 和 `export_reasoning_v4_views.py`
 处理。preview artifact 永远不可训练；只有 artifact/formal eligibility 全部通过的
 formal view 才能进入 ms-swift。完整合同和数据集 trust policy 见
-`docs/REASONING_V4_DATA_ANNOTATION_DESIGN.md`。
+`docs/pipeline/REASONING_V4_DATA_ANNOTATION_DESIGN.md`。
 
 #### 11.11.1 Legacy Evidence-conditioned Reasoning V2
 

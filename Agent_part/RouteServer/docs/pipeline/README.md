@@ -1,0 +1,22 @@
+# 数据流水线
+
+数据构建、标注、质量筛选、迁移和发布流程。带日期或状态的段落是留存快照，执行前核验产物。
+
+[返回总索引](../README.md)
+
+## 文档
+
+| 文档 | 内容 |
+| --- | --- |
+| [DATASET_ANNOTATION_STATUS.md](DATASET_ANNOTATION_STATUS.md) | UrbanNav 数据集标注状态 |
+| [DATASET_QUALITY_FILTER_V1.md](DATASET_QUALITY_FILTER_V1.md) | UrbanNav 可通行几何与训练可用性过滤 V1 |
+| [HISTORY_ANNOTATION_MIGRATION.md](HISTORY_ANNOTATION_MIGRATION.md) | 4s / 2Hz 标注迁移 |
+| [HISTORY_MODELSCOPE_ARCHIVE_README.md](HISTORY_MODELSCOPE_ARCHIVE_README.md) | UrbanNav history 4s / 2Hz — 全量分片数据集 |
+| [HISTORY_MODELSCOPE_DATASET_README.md](HISTORY_MODELSCOPE_DATASET_README.md) | UrbanNav history 4s / 2Hz dataset |
+| [REASONING_V4_DATA_ANNOTATION_DESIGN.md](REASONING_V4_DATA_ANNOTATION_DESIGN.md) | UrbanNav Reasoning V4.6 数据标注与训练合同 |
+| [SIDEWALK_PHASE1_DATA_PIPELINE.md](SIDEWALK_PHASE1_DATA_PIPELINE.md) | SideWalk Phase1 数据生成与标注流水线 |
+| [TEACHER_HISTORY_TRAINING_V1.md](TEACHER_HISTORY_TRAINING_V1.md) | Teacher-owned history training views v1 |
+| [URBANNAV_25K_BUILD.md](URBANNAV_25K_BUILD.md) | UrbanNav final-25K build record |
+| [URBANNAV_DATA_QUALITY_AND_COLLECTION_REQUIREMENTS.md](URBANNAV_DATA_QUALITY_AND_COLLECTION_REQUIREMENTS.md) | UrbanNav 数据质量问题与采集、筛选、标注需求 |
+| [VQA_V2_DATA_ANNOTATION_DESIGN.md](VQA_V2_DATA_ANNOTATION_DESIGN.md) | UrbanNav Navigation VQA V2 数据标注与训练合同 |
+| [YELP_INSTRUCTION_DATA_DESIGN.md](YELP_INSTRUCTION_DATA_DESIGN.md) | Yelp Instruction Data Design |
